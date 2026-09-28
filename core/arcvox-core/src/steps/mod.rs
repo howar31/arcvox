@@ -8,6 +8,7 @@ use crate::config::{DictionaryEntry, General, Profile};
 use crate::types::{AudioClip, Context, ErrorCode, StepName};
 
 pub mod opencc;
+pub mod rules;
 
 #[derive(Debug, Clone)]
 pub struct StepInput {
