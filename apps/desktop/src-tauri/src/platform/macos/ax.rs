@@ -3,12 +3,12 @@
 use std::ptr;
 
 use accessibility_sys::{
-    kAXErrorSuccess, kAXFocusedUIElementAttribute, kAXSelectedTextAttribute,
-    kAXTrustedCheckOptionPrompt, AXIsProcessTrustedWithOptions, AXUIElementCopyAttributeValue,
-    AXUIElementCreateApplication, AXUIElementRef, AXUIElementSetAttributeValue,
-    AXUIElementSetMessagingTimeout,
+    kAXErrorIllegalArgument, kAXErrorNoValue, kAXErrorSuccess, kAXFocusedUIElementAttribute,
+    kAXSelectedTextAttribute, kAXTrustedCheckOptionPrompt, AXError, AXIsProcessTrustedWithOptions,
+    AXUIElementCopyAttributeValue, AXUIElementCreateApplication, AXUIElementGetTypeID,
+    AXUIElementRef, AXUIElementSetAttributeValue, AXUIElementSetMessagingTimeout,
 };
-use core_foundation::base::{CFRelease, CFType, CFTypeRef, TCFType};
+use core_foundation::base::{CFGetTypeID, CFRelease, CFType, CFTypeRef, TCFType};
 use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::CFDictionary;
 use core_foundation::string::CFString;
@@ -35,35 +35,53 @@ impl AxElement {
         AxElement(el)
     }
 
-    fn copy_attribute(&self, name: &str) -> Option<CFType> {
+    fn copy_attribute(&self, name: &str) -> Result<CFType, AXError> {
         let key = CFString::new(name);
         let mut out: CFTypeRef = ptr::null();
         let err =
             unsafe { AXUIElementCopyAttributeValue(self.0, key.as_concrete_TypeRef(), &mut out) };
-        if err != kAXErrorSuccess || out.is_null() {
-            return None;
+        if err != kAXErrorSuccess {
+            return Err(err);
         }
-        Some(unsafe { CFType::wrap_under_create_rule(out) })
+        if out.is_null() {
+            return Err(kAXErrorNoValue);
+        }
+        Ok(unsafe { CFType::wrap_under_create_rule(out) })
     }
 
     pub fn attribute_string(&self, name: &str) -> Option<String> {
-        let value = self.copy_attribute(name)?;
+        let value = self.copy_attribute(name).ok()?;
         value.downcast::<CFString>().map(|s| s.to_string())
     }
 
     /// Returns the child element stored under `name` (for example the
-    /// focused element or the focused window).
-    pub fn attribute_element(&self, name: &str) -> Option<AxElement> {
+    /// focused element or the focused window). The element is checked to
+    /// really be an AXUIElement before the cast, and carries the same
+    /// messaging timeout as `application` so a hung target cannot stall
+    /// every subsequent call made through it.
+    fn attribute_element_result(&self, name: &str) -> Result<AxElement, AXError> {
         let value = self.copy_attribute(name)?;
+        if unsafe { CFGetTypeID(value.as_CFTypeRef()) } != unsafe { AXUIElementGetTypeID() } {
+            return Err(kAXErrorIllegalArgument);
+        }
+        let raw = value.as_CFTypeRef() as AXUIElementRef;
         // The value is an AXUIElement; keep it alive by taking over the
         // create-rule reference that `copy_attribute` wrapped.
-        let raw = value.as_CFTypeRef() as AXUIElementRef;
         std::mem::forget(value);
-        Some(AxElement(raw))
+        unsafe { AXUIElementSetMessagingTimeout(raw, MESSAGING_TIMEOUT_SECS) };
+        Ok(AxElement(raw))
+    }
+
+    pub fn attribute_element(&self, name: &str) -> Option<AxElement> {
+        self.attribute_element_result(name).ok()
+    }
+
+    fn focused_element_result(&self) -> Result<AxElement, AXError> {
+        self.attribute_element_result(kAXFocusedUIElementAttribute)
     }
 
     pub fn focused_element(&self) -> Option<AxElement> {
-        self.attribute_element(kAXFocusedUIElementAttribute)
+        self.focused_element_result().ok()
     }
 
     pub fn set_attribute_string(&self, name: &str, value: &str) -> Result<(), PlatformError> {
@@ -103,6 +121,6 @@ pub fn selected_text(pid: i32) -> Option<String> {
 /// Replaces the selection (or inserts at the caret) in the focused element.
 pub fn insert_at_selection(pid: i32, text: &str) -> Result<(), PlatformError> {
     let app = AxElement::application(pid);
-    let focused = app.focused_element().ok_or(PlatformError::Ax(-1))?;
+    let focused = app.focused_element_result().map_err(PlatformError::Ax)?;
     focused.set_attribute_string(kAXSelectedTextAttribute, text)
 }
