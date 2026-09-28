@@ -5,7 +5,7 @@ AI voice dictation for Traditional Chinese (Taiwan), English, and Japanese. Offl
 ## Layout
 
 - `core/` Rust core crate `kongwe-core` (Apache-2.0)
-- `apps/desktop/` Tauri 2 desktop client (planned)
+- `apps/desktop/` Tauri 2 desktop client (macOS first, Apache-2.0)
 - `apps/ios/` iOS client (planned)
 - `server/` self-hosted engine server (planned, AGPL-3.0)
 
