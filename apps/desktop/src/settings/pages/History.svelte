@@ -8,8 +8,8 @@
   async function reload() { try { rows = await listHistory(200); } catch (e) { status = errorMessage(e); } }
   onMount(reload);
   function when(ts: number) { return new Date(ts * 1000).toLocaleString(); }
-  async function remove(id: number) { await deleteHistory(id); await reload(); }
-  async function clearAll() { if (confirm(t("history.confirm_clear"))) { await clearHistory(); await reload(); } }
+  async function remove(id: number) { try { await deleteHistory(id); await reload(); } catch (e) { status = errorMessage(e); } }
+  async function clearAll() { if (confirm(t("history.confirm_clear"))) { try { await clearHistory(); await reload(); } catch (e) { status = errorMessage(e); } } }
 </script>
 
 <h2>{t("nav.history")}</h2>
