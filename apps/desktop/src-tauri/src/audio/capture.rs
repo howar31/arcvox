@@ -58,6 +58,36 @@ where
         .collect()
 }
 
+/// Builds the input stream for one concrete sample type. Shared by every
+/// `SampleFormat` arm in `CpalSource::start` so the mono-mixdown and error
+/// forwarding logic exists once.
+fn build_stream<T>(
+    device: &Device,
+    config: StreamConfig,
+    rate: u32,
+    channels: usize,
+    tx: Sender<AudioMsg>,
+) -> Result<cpal::Stream, cpal::Error>
+where
+    T: cpal::Sample + cpal::SizedSample,
+    f32: cpal::FromSample<T>,
+{
+    let err_tx = tx.clone();
+    device.build_input_stream(
+        config,
+        move |data: &[T], _| {
+            let _ = tx.send(AudioMsg::Frames {
+                rate,
+                mono: to_mono_f32(data, channels),
+            });
+        },
+        move |e: cpal::Error| {
+            let _ = err_tx.send(AudioMsg::Error(e.to_string()));
+        },
+        None,
+    )
+}
+
 impl AudioSource for CpalSource {
     fn start(
         &self,
@@ -73,44 +103,10 @@ impl AudioSource for CpalSource {
         let channels = supported.channels() as usize;
         let format = supported.sample_format();
         let config: StreamConfig = supported.into();
-        let err_tx = tx.clone();
-        let on_error = move |e: cpal::Error| {
-            let _ = err_tx.send(AudioMsg::Error(e.to_string()));
-        };
         let stream = match format {
-            SampleFormat::F32 => device.build_input_stream(
-                config,
-                move |data: &[f32], _| {
-                    let _ = tx.send(AudioMsg::Frames {
-                        rate,
-                        mono: to_mono_f32(data, channels),
-                    });
-                },
-                on_error,
-                None,
-            ),
-            SampleFormat::I16 => device.build_input_stream(
-                config,
-                move |data: &[i16], _| {
-                    let _ = tx.send(AudioMsg::Frames {
-                        rate,
-                        mono: to_mono_f32(data, channels),
-                    });
-                },
-                on_error,
-                None,
-            ),
-            SampleFormat::I32 => device.build_input_stream(
-                config,
-                move |data: &[i32], _| {
-                    let _ = tx.send(AudioMsg::Frames {
-                        rate,
-                        mono: to_mono_f32(data, channels),
-                    });
-                },
-                on_error,
-                None,
-            ),
+            SampleFormat::F32 => build_stream::<f32>(&device, config, rate, channels, tx),
+            SampleFormat::I16 => build_stream::<i16>(&device, config, rate, channels, tx),
+            SampleFormat::I32 => build_stream::<i32>(&device, config, rate, channels, tx),
             other => return Err(AudioError::UnsupportedFormat(format!("{other:?}"))),
         }
         .map_err(|e| AudioError::Other(e.to_string()))?;
