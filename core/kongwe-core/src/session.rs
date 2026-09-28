@@ -11,6 +11,29 @@ use tokio_stream::wrappers::ReceiverStream;
 use crate::protocol::Event;
 use crate::types::{ProfileId, SessionId};
 
+/// Cancellation and completion state shared between a `Session` and the
+/// `run_session` task driving it. Bundled into one struct (rather than
+/// separate `Arc<AtomicBool>` fields/parameters) to keep `run_session`'s
+/// parameter count down.
+#[derive(Debug, Default)]
+pub(crate) struct SessionFlags {
+    /// Set once, by whichever of `run_session` or `cancel` gets there first
+    /// (via a swap), so exactly one `Done` is ever sent for a session.
+    pub(crate) done_sent: AtomicBool,
+    /// Set by `cancel`. Checked by `run_session` at points where a blocking
+    /// write (history row, WAV file) is about to become visible, so a
+    /// cancelled session records nothing.
+    pub(crate) cancelled: AtomicBool,
+    /// Set by `run_session` just before it starts the non-abortable tail
+    /// (WAV write, history insert). While this is `false`, `cancel` may
+    /// abort the task outright; once it is `true`, `cancel` leaves the
+    /// task running instead, so it reaches its own `cancelled` checks and
+    /// undoes whatever it already wrote rather than being torn down
+    /// mid-write with the write left behind (tokio cannot abort a
+    /// `spawn_blocking` closure that is already running).
+    pub(crate) tail_started: AtomicBool,
+}
+
 pub struct Session {
     pub(crate) id: SessionId,
     pub(crate) profile_id: ProfileId,
@@ -19,13 +42,7 @@ pub struct Session {
     pub(crate) events_tx: mpsc::Sender<Event>,
     pub(crate) events_rx: Mutex<Option<mpsc::Receiver<Event>>>,
     pub(crate) task: Mutex<Option<JoinHandle<()>>>,
-    /// Set once, by whichever of `run_session` or `cancel` gets there first,
-    /// so exactly one `Done` is ever sent for a session.
-    pub(crate) done_sent: Arc<AtomicBool>,
-    /// Checked by `run_session` at points where a blocking write (history
-    /// row, WAV file) is about to become visible, so a cancelled session
-    /// records nothing even if it raced past `finish_tx`/`task` teardown.
-    pub(crate) cancelled: Arc<AtomicBool>,
+    pub(crate) flags: Arc<SessionFlags>,
 }
 
 impl Session {
@@ -54,14 +71,22 @@ impl Session {
     /// whether the session was still recording, running its pipeline, or
     /// already finished.
     pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
+        self.flags.cancelled.store(true, Ordering::SeqCst);
         // Dropping the sender (rather than sending) wakes a task still
         // waiting to be finished without running the pipeline.
         self.finish_tx.lock().unwrap().take();
-        if let Some(handle) = self.task.lock().unwrap().take() {
-            handle.abort();
+        // Once the tail has started, a WAV write or history insert may be
+        // in flight on the blocking thread pool, which tokio cannot abort;
+        // aborting the task here would only tear it down before it reaches
+        // its own `cancelled` checks, leaving that write behind instead of
+        // undone. So only abort while the task is still guaranteed to be
+        // somewhere abortable, i.e. before the tail starts.
+        if !self.flags.tail_started.load(Ordering::SeqCst) {
+            if let Some(handle) = self.task.lock().unwrap().take() {
+                handle.abort();
+            }
         }
-        if !self.done_sent.swap(true, Ordering::SeqCst) {
+        if !self.flags.done_sent.swap(true, Ordering::SeqCst) {
             let _ = self.events_tx.try_send(Event::Done {
                 session_id: self.id.clone(),
                 history_id: None,
