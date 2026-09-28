@@ -5,9 +5,11 @@
 #![cfg(target_os = "macos")]
 
 use arcvox_core::SecretStore;
+use arcvox_desktop::audio::{capture::CpalSource, AudioMsg, AudioSource};
 use arcvox_desktop::platform::macos::MacPlatform;
 use arcvox_desktop::platform::{ClipboardSnapshot, Platform};
 use arcvox_desktop::secrets::KeychainStore;
+use arcvox_desktop::settings::MicrophoneChoice;
 
 #[test]
 #[ignore]
@@ -63,4 +65,30 @@ fn keychain_round_trip() {
     assert_eq!(s.get(key).unwrap().as_deref(), Some("v2"));
     s.delete(key).unwrap();
     assert_eq!(s.get(key).unwrap(), None);
+}
+
+#[test]
+#[ignore]
+fn captures_half_a_second_from_the_builtin_microphone() {
+    let src = CpalSource;
+    eprintln!("devices: {:?}", src.list_devices());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = src
+        .start(&MicrophoneChoice::BuiltIn, tx)
+        .expect("stream starts");
+    let mut total = 0usize;
+    let mut rate = 0;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(600);
+    while std::time::Instant::now() < deadline {
+        if let Ok(AudioMsg::Frames { rate: r, mono }) =
+            rx.recv_timeout(std::time::Duration::from_millis(100))
+        {
+            rate = r;
+            total += mono.len();
+        }
+    }
+    handle.stop();
+    eprintln!("rate {rate}, samples {total}");
+    assert!(rate >= 16_000);
+    assert!(total as f32 > rate as f32 * 0.3);
 }
