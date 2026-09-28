@@ -15,7 +15,7 @@ use crate::audio::{AudioHandle, AudioMsg};
 use crate::context::{self, Captured};
 use crate::hotkey::{Gesture, Input, Recognizer, KEY_ESCAPE};
 use crate::i18n::Msg;
-use crate::insert::{self, Outcome, Plan, ShowReason, Situation};
+use crate::insert::{self, Outcome, ShowReason, Situation};
 use crate::platform::ModifierEvent;
 use crate::settings::ClientSettings;
 use crate::vad;
@@ -124,6 +124,7 @@ impl Controller {
             ControllerMsg::Engine { session_id, event } => self.on_engine_event(session_id, event),
             ControllerMsg::Settings(s) => {
                 if matches!(self.state, State::Idle) {
+                    self.pending_settings = None;
                     self.apply_settings(s);
                 } else {
                     self.pending_settings = Some(s);
@@ -140,8 +141,19 @@ impl Controller {
     }
 
     fn go_idle(&mut self) {
-        self.state = State::Idle;
         self.deps.ui.set_state(UiState::Idle);
+        self.settle_idle();
+    }
+
+    /// Returns to `Idle` and applies any settings queued while busy,
+    /// without emitting a `UiState::Idle` message. Used by `go_idle` and by
+    /// every other path that leaves the controller idle without a
+    /// user-visible "done" transition (armed-stream teardown, engine
+    /// unavailable, a microphone error while armed), so a settings change
+    /// sent while busy is never dropped regardless of which path returns
+    /// the controller to `Idle`.
+    fn settle_idle(&mut self) {
+        self.state = State::Idle;
         if let Some(s) = self.pending_settings.take() {
             self.apply_settings(s);
         }
@@ -166,6 +178,23 @@ impl Controller {
         let gestures = self.recognizer.on_input(input, now);
         for g in gestures {
             self.on_gesture(g);
+        }
+        // A key press while fn is down aborts and the recognizer holds
+        // `Aborted` until fn goes up, which `Gesture::Abort` handles below.
+        // But a key press that lands after fn is already up (during a tap's
+        // double-tap window) drops the recognizer straight to `Idle` with
+        // no gesture at all, so an `Armed` stream opened by the tap's
+        // `FnDown` is never closed by `on_gesture`. Close it here whenever
+        // the recognizer is fully at rest but the state machine is still
+        // `Armed`.
+        if matches!(self.state, State::Armed { .. })
+            && !self.recognizer.fn_is_down()
+            && self.recognizer.next_deadline().is_none()
+        {
+            if let State::Armed { capture } = std::mem::replace(&mut self.state, State::Idle) {
+                capture.stop();
+            }
+            self.settle_idle();
         }
     }
 
@@ -204,7 +233,7 @@ impl Controller {
             Gesture::HoldStart => self.start_recording(false),
             Gesture::DoubleTap => self.start_recording(true),
             Gesture::HoldEnd => {
-                if matches!(self.state, State::Recording { locked: false, .. }) {
+                if matches!(self.state, State::Recording { .. }) {
                     self.finish_recording();
                 }
             }
@@ -232,7 +261,7 @@ impl Controller {
             Gesture::Abort => match std::mem::replace(&mut self.state, State::Idle) {
                 State::Armed { capture } => {
                     capture.stop();
-                    self.state = State::Idle;
+                    self.settle_idle();
                 }
                 State::Recording {
                     session, capture, ..
@@ -266,7 +295,7 @@ impl Controller {
             self.deps
                 .ui
                 .message(UiMessage::error(Msg::WidgetEngineUnavailable, None));
-            self.state = State::Idle;
+            self.settle_idle();
             return;
         };
         let capture = match capture {
@@ -355,7 +384,7 @@ impl Controller {
                 match std::mem::replace(&mut self.state, State::Idle) {
                     State::Armed { capture } => {
                         capture.stop();
-                        self.state = State::Idle;
+                        self.settle_idle();
                     }
                     State::Recording {
                         session,
@@ -511,29 +540,36 @@ impl Controller {
             method,
         });
         let outcome = insert::run(&plan, &text, self.deps.platform.as_ref());
-        match outcome {
-            Outcome::Inserted => {}
+        // Only a real insertion, or a copyable show the user can act on,
+        // is worth recording as the final text; an empty result has
+        // nothing usable to record.
+        let should_record = match &outcome {
+            Outcome::Inserted => true,
             Outcome::Shown(reason) => {
                 let msg = match reason {
                     ShowReason::SecureInput => Msg::WidgetSecureInput,
                     ShowReason::AppChanged => Msg::WidgetAppChanged,
                     ShowReason::EmptyText => Msg::WidgetEmptyResult,
                 };
-                if matches!(plan, Plan::Show(ShowReason::EmptyText)) {
+                if matches!(reason, ShowReason::EmptyText) {
                     self.deps.ui.message(UiMessage::error(msg, None));
+                    false
                 } else {
                     self.deps.ui.message(UiMessage::copyable(msg, text.clone()));
+                    true
                 }
             }
-        }
-        if let Some(engine) = self.engine.clone() {
-            let id = session.id().clone();
-            let final_text = text.clone();
-            self.deps.runtime.spawn(async move {
-                if let Err(e) = engine.record_final(&id, &final_text).await {
-                    tracing::debug!(error = %e, "record_final failed");
-                }
-            });
+        };
+        if should_record {
+            if let Some(engine) = self.engine.clone() {
+                let id = session.id().clone();
+                let final_text = text.clone();
+                self.deps.runtime.spawn(async move {
+                    if let Err(e) = engine.record_final(&id, &final_text).await {
+                        tracing::debug!(error = %e, "record_final failed");
+                    }
+                });
+            }
         }
         self.go_idle();
     }
@@ -820,6 +856,31 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn locked_mode_finishes_on_a_long_press() {
+        let r = rig(fast_settings()).await;
+        mock_ok(&r, "一", "一").await;
+        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        wait_state(&r, UiState::Locked, "locked").await;
+        r.audio.speech(0.5);
+        // A press past the hold threshold while already locked must also
+        // finish the recording, not just a tap.
+        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        wait_for(
+            || r.platform.calls().contains(&"paste".to_string()),
+            "paste",
+        )
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn silence_only_cancels_without_calling_providers() {
         let r = rig(fast_settings()).await;
         r.modifier.send(ModifierEvent::FnDown).unwrap();
@@ -1053,5 +1114,50 @@ mod tests {
             "the armed stream was closed"
         );
         drop(tmp);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn tap_then_key_press_closes_the_armed_stream() {
+        let r = rig(fast_settings()).await;
+        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        r.modifier
+            .send(ModifierEvent::KeyDown { key_code: 0 })
+            .unwrap();
+        wait_for(
+            || *r.audio.stops.lock().unwrap() == 1,
+            "armed stream closed",
+        )
+        .await;
+        assert!(r.asr.received_requests().await.unwrap().is_empty());
+        assert!(!r.ui.states.lock().unwrap().contains(&UiState::Recording));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn settings_sent_while_armed_apply_after_abort() {
+        let r = rig(fast_settings()).await;
+        mock_ok(&r, "a", "b").await;
+        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        // Wait for `arm()` to actually open the stream before sending the
+        // settings change, so it is genuinely queued as pending (the
+        // controller busy, not Idle) rather than applied immediately.
+        wait_for(|| *r.audio.starts.lock().unwrap() == 1, "armed").await;
+        let mut s = fast_settings();
+        s.insertion
+            .per_app
+            .insert("com.apple.TextEdit".into(), InsertMethod::Type);
+        r.handle.update_settings(s);
+        r.modifier
+            .send(ModifierEvent::KeyDown { key_code: 0 })
+            .unwrap();
+        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        hold_and_speak(&r, 0.5).await;
+        wait_for(
+            || r.platform.calls().iter().any(|c| c.starts_with("type:")),
+            "second session types",
+        )
+        .await;
+        assert_eq!(r.platform.calls(), vec!["type:b"]);
     }
 }
