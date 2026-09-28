@@ -1,6 +1,8 @@
 //! The crate's entry point. Owns config, history, and providers; opens sessions.
 
 use std::collections::HashMap;
+#[cfg(test)]
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -16,7 +18,7 @@ use crate::protocol::{Event, PROTOCOL_VERSION};
 use crate::providers::probe::{probe_http, ProbeFailure, ProbeResult};
 use crate::providers::registry::ProviderRegistry;
 use crate::secrets::SecretStore;
-use crate::session::Session;
+use crate::session::{Session, SessionFlags};
 use crate::steps::{PipelineContext, StepError};
 use crate::types::{AppInfo, AudioClip, Context, ErrorCode, HistoryId, ProfileId, SessionId};
 use crate::SAMPLE_RATE;
@@ -64,6 +66,12 @@ struct Inner {
     /// (for example a platform hotkey callback) rather than only from
     /// inside an `async fn` already running on this runtime.
     runtime: tokio::runtime::Handle,
+    /// Test-only hook: when greater than zero, `run_session` sleeps this
+    /// many milliseconds just before the history insert, so a test can
+    /// deterministically land a `cancel()` inside the non-abortable tail
+    /// instead of racing real I/O timing.
+    #[cfg(test)]
+    pub(crate) tail_delay_ms: AtomicU64,
 }
 
 impl Engine {
@@ -104,6 +112,8 @@ impl Engine {
                 secrets,
                 sessions: Mutex::new(HashMap::new()),
                 runtime,
+                #[cfg(test)]
+                tail_delay_ms: AtomicU64::new(0),
             }),
         })
     }
@@ -142,8 +152,7 @@ impl Engine {
         let (events_tx, events_rx) = mpsc::channel(EVENT_BUFFER);
         let (finish_tx, finish_rx) = oneshot::channel();
         let audio = Arc::new(Mutex::new(Vec::<f32>::new()));
-        let done_sent = Arc::new(AtomicBool::new(false));
-        let cancelled = Arc::new(AtomicBool::new(false));
+        let flags = Arc::new(SessionFlags::default());
 
         let _ = events_tx.try_send(Event::SessionStarted {
             session_id: id.clone(),
@@ -159,8 +168,7 @@ impl Engine {
             audio.clone(),
             finish_rx,
             events_tx.clone(),
-            done_sent.clone(),
-            cancelled.clone(),
+            flags.clone(),
         ));
 
         Session {
@@ -171,8 +179,7 @@ impl Engine {
             events_tx,
             events_rx: Mutex::new(Some(events_rx)),
             task: Mutex::new(Some(task)),
-            done_sent,
-            cancelled,
+            flags,
         }
     }
 
@@ -219,10 +226,11 @@ async fn send_done_once(
     }
 }
 
-// The session id, the two cancellation-related flags, and the channels a
-// caller wired up in `start_session` are all distinct pieces of state this
-// single driver function needs; grouping them into a struct would not make
-// any of them less essential, so the lint is silenced here instead.
+// Folding done_sent/cancelled/tail_started into `SessionFlags` (one
+// parameter instead of three) brings this down from 9 to 8 arguments, still
+// one over clippy's default threshold of 7; every remaining parameter is a
+// distinct, necessary piece of state, so the lint stays silenced rather than
+// inventing a further grouping not called for elsewhere.
 #[allow(clippy::too_many_arguments)]
 async fn run_session(
     inner: Arc<Inner>,
@@ -232,11 +240,10 @@ async fn run_session(
     audio: Arc<Mutex<Vec<f32>>>,
     finish_rx: oneshot::Receiver<()>,
     tx: mpsc::Sender<Event>,
-    done_sent: Arc<AtomicBool>,
-    cancelled: Arc<AtomicBool>,
+    flags: Arc<SessionFlags>,
 ) {
     if finish_rx.await.is_err() {
-        send_done_once(&tx, &done_sent, &session_id, None).await;
+        send_done_once(&tx, &flags.done_sent, &session_id, None).await;
         return;
     }
 
@@ -255,7 +262,7 @@ async fn run_session(
                 hint: None,
             })
             .await;
-        send_done_once(&tx, &done_sent, &session_id, None).await;
+        send_done_once(&tx, &flags.done_sent, &session_id, None).await;
         return;
     }
 
@@ -284,7 +291,7 @@ async fn run_session(
                     hint: err.hint,
                 })
                 .await;
-            send_done_once(&tx, &done_sent, &session_id, None).await;
+            send_done_once(&tx, &flags.done_sent, &session_id, None).await;
             return;
         }
     };
@@ -293,15 +300,17 @@ async fn run_session(
     let outcome = match pipeline.run(clip.clone(), &ctx, &tx).await {
         Ok(o) => o,
         Err(_) => {
-            send_done_once(&tx, &done_sent, &session_id, None).await;
+            send_done_once(&tx, &flags.done_sent, &session_id, None).await;
             return;
         }
     };
 
-    // Cancel may have raced the pipeline: it already took and aborted the
-    // task handle and sent its own Done, or is about to. Either way there
-    // is nothing left to record.
-    if cancelled.load(Ordering::SeqCst) {
+    // From here on the task performs non-abortable spawn_blocking work (a
+    // WAV write, a history insert), so tell `cancel` not to abort us
+    // anymore: past this point, the `cancelled` checks below are what undo
+    // a cancel, not `Session::cancel`'s `task.abort()`.
+    flags.tail_started.store(true, Ordering::SeqCst);
+    if flags.cancelled.load(Ordering::SeqCst) {
         return;
     }
 
@@ -320,10 +329,12 @@ async fn run_session(
         None
     };
 
-    // spawn_blocking work is not cancellable, so a cancel arriving while the
-    // WAV write above was running still leaves a file on disk; remove it
-    // here rather than leave an orphan recording for a cancelled session.
-    if cancelled.load(Ordering::SeqCst) {
+    // Because `tail_started` is now set, `cancel` will not abort this task
+    // (see `Session::cancel`), so this check is guaranteed to run rather
+    // than racing an abort that could tear the task down first: if
+    // cancelled, undo the WAV write above instead of leaving an orphan
+    // recording for a cancelled session.
+    if flags.cancelled.load(Ordering::SeqCst) {
         if let Some(p) = &audio_path {
             let _ = std::fs::remove_file(p);
         }
@@ -343,14 +354,32 @@ async fn run_session(
         llm_ms: outcome.llm_ms,
     };
     let history = inner.history.clone();
-    let history_id = match tokio::task::spawn_blocking(move || history.insert(new)).await {
+    #[cfg(test)]
+    let tail_delay_ms = inner.tail_delay_ms.load(Ordering::SeqCst);
+    let history_id = match tokio::task::spawn_blocking(move || {
+        // Test-only hook: lets a test land a `cancel()` deterministically
+        // while this closure is running, instead of racing real I/O timing.
+        #[cfg(test)]
+        if tail_delay_ms > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(tail_delay_ms));
+        }
+        history.insert(new)
+    })
+    .await
+    {
         Ok(Ok(id)) => Some(id),
         _ => None,
     };
 
-    // Same reasoning as above, for the row this time: undo the insert
-    // (best effort) instead of leaving history for a cancelled session.
-    if cancelled.load(Ordering::SeqCst) {
+    // The insert has already happened (or failed); it can only be taken
+    // back with an explicit delete now, not prevented. This swap is the
+    // single point where ownership of the session's one and only Done is
+    // decided: whoever transitions `done_sent` from false to true (a
+    // `false` result here) owns reporting the real outcome; if `cancel`
+    // already claimed it (a `true` result, meaning it already sent
+    // Done(None) to the client), undo what was just written instead of
+    // reporting it as kept.
+    if flags.done_sent.swap(true, Ordering::SeqCst) {
         if let Some(id) = history_id {
             let history = inner.history.clone();
             let _ = tokio::task::spawn_blocking(move || history.delete(id)).await;
@@ -368,7 +397,14 @@ async fn run_session(
             .unwrap()
             .insert(session_id.clone(), id);
     }
-    send_done_once(&tx, &done_sent, &session_id, history_id).await;
+    // done_sent was already claimed by the swap above, so send directly
+    // rather than through send_done_once (which would just re-check it).
+    let _ = tx
+        .send(Event::Done {
+            session_id: session_id.clone(),
+            history_id,
+        })
+        .await;
 }
 
 #[cfg(test)]
@@ -643,6 +679,57 @@ mod tests {
         s.push_audio(&one_second());
         s.finish();
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        s.cancel();
+        drop(s);
+
+        let mut events = Vec::new();
+        while let Some(e) = stream.next().await {
+            events.push(e);
+        }
+
+        let dones: Vec<&Event> = events
+            .iter()
+            .filter(|e| matches!(e, Event::Done { .. }))
+            .collect();
+        assert_eq!(dones.len(), 1, "{events:?}");
+        assert!(matches!(
+            dones[0],
+            Event::Done {
+                history_id: None,
+                ..
+            }
+        ));
+        assert!(r.engine.history().list_recent(10).unwrap().is_empty());
+        let recordings = r.engine.dirs().recordings_dir();
+        let left_a_file = std::fs::read_dir(&recordings)
+            .map(|mut entries| entries.next().is_some())
+            .unwrap_or(false);
+        assert!(!left_a_file, "cancel must not leave a recording behind");
+    }
+
+    #[tokio::test]
+    async fn cancel_during_tail_records_nothing_and_emits_one_done() {
+        let r = rig(true).await;
+        mock_ok(&r, "原文", "整理後").await;
+        // Slows down the history insert so a cancel can be landed
+        // deterministically while it is running, rather than racing real
+        // I/O timing the way `cancel_while_pipeline_runs_...` does for the
+        // (already abortable) network-await window.
+        r.engine.inner.tail_delay_ms.store(300, Ordering::SeqCst);
+
+        let s = r.engine.start_session(SessionRequest::default());
+        let mut stream = s.events();
+        s.push_audio(&one_second());
+        s.finish();
+
+        // Wait for Refined: the pipeline has finished and the task is now
+        // in the (non-abortable) tail, about to write the WAV and insert
+        // the history row.
+        while let Some(e) = stream.next().await {
+            if matches!(e, Event::Refined { .. }) {
+                break;
+            }
+        }
         s.cancel();
         drop(s);
 
