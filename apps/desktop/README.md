@@ -28,11 +28,11 @@ The bundle is built into the repository root's `target/` directory, not under `a
 
 Under `~/Library/Application Support/Arcvox/`:
 
-- `config.json`: core engine configuration (providers, profiles, prompts), managed by `arcvox-core`.
-- `client.json`: client-only settings (hotkeys, insertion methods, context opt-ins, UI language), managed by the desktop client.
+- `config.json`: core engine configuration (providers, profiles, dictionary, general settings), managed by `arcvox-core`.
+- `client.json`: client-only settings (hotkeys, insertion methods, microphone choice, maximum utterance length, context opt-ins, UI language), managed by the desktop client.
 - `history.sqlite`: dictation history.
-- `prompts/`: saved prompt files referenced from profiles.
+- `prompts/base.md`: the editable base prompt sent to the LLM before the profile addition, dictionary, context, and examples; it can be restored to the shipped default from Settings > Prompt. A profile's own addition text is stored in `config.json`, not here.
 
 Under `~/Library/Caches/Arcvox/`:
 
-- `recordings/`: cached audio recordings, pruned on the configured retention schedule.
+- `recordings/`: audio recordings, written only when the "Keep audio recordings" setting is on (default off) and then pruned on the configured recording retention.
