@@ -7,6 +7,7 @@ use async_trait::async_trait;
 
 use crate::types::{AudioClip, ChatMessage, ErrorCode, Transcript};
 
+pub mod http_asr;
 pub mod http_common;
 pub mod http_llm;
 
