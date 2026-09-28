@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Classifies the change set so a documentation-only change skips the build
+  # jobs. Documentation = every changed path matches the list in the script;
+  # anything else, an empty diff or an unresolvable base counts as code and
+  # runs the full suite. The `ci` job below stays the single required check.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: classify
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -u
+          code=true
+          range=""
+          if [ "$EVENT" = "pull_request" ]; then
+            base="$(git merge-base "origin/$BASE_REF" HEAD 2>/dev/null || true)"
+            [ -n "$base" ] && range="$base HEAD"
+          elif [ -n "$BEFORE" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            range="$BEFORE HEAD"
+          fi
+          if [ -n "$range" ]; then
+            # shellcheck disable=SC2086
+            files="$(git diff --name-only $range)"
+            if [ -n "$files" ]; then
+              code=false
+              while IFS= read -r f; do
+                case "$f" in
+                  *.md|docs/*|.github/ISSUE_TEMPLATE/*|.github/PULL_REQUEST_TEMPLATE.md|LICENSE|*/LICENSE) ;;
+                  *) code=true ;;
+                esac
+              done <<< "$files"
+            fi
+          fi
+          echo "range=${range:-none}"
+          echo "code=$code"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+  core:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  ci:
+    needs: [changes, core]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - shell: bash
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          CODE: ${{ needs.changes.outputs.code }}
+          CORE: ${{ needs.core.result }}
+        run: |
+          echo "changes=$CHANGES code=$CODE core=$CORE"
+          [ "$CHANGES" = "success" ] || exit 1
+          case "$CORE" in
+            success) ;;
+            skipped) [ "$CODE" = "false" ] || exit 1 ;;
+            *) exit 1 ;;
+          esac
