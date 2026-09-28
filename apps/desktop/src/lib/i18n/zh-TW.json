@@ -40,6 +40,7 @@
   "common.days": "天",
   "common.granted": "已授權",
   "common.missing": "未授權",
+  "common.engine_error": "引擎無法啟動：{detail}",
   "general.permissions": "權限",
   "general.accessibility": "輔助使用",
   "general.request": "請求授權",

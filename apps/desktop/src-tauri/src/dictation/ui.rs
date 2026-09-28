@@ -76,16 +76,27 @@ pub mod fake {
         pub states: Mutex<Vec<UiState>>,
         pub messages: Mutex<Vec<UiMessage>>,
         pub levels: Mutex<Vec<f32>>,
+        /// Every state and message in the order it actually arrived, as
+        /// `"state:idle"` / `"message:widget.degraded"` entries. `states`
+        /// and `messages` each lose ordering relative to the other; tests
+        /// that need to prove one happened before the other read this.
+        pub log: Mutex<Vec<String>>,
     }
 
     impl Ui for FakeUi {
         fn set_state(&self, state: UiState) {
             self.states.lock().unwrap().push(state);
+            let name = format!("{state:?}").to_lowercase();
+            self.log.lock().unwrap().push(format!("state:{name}"));
         }
         fn level(&self, rms: f32) {
             self.levels.lock().unwrap().push(rms);
         }
         fn message(&self, message: UiMessage) {
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("message:{}", message.msg.key()));
             self.messages.lock().unwrap().push(message);
         }
     }

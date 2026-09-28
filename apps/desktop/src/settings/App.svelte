@@ -36,6 +36,9 @@
     {/each}
   </nav>
   <main>
+    {#if config.error}
+      <div class="engine-error">{t("common.engine_error", { detail: config.error })}</div>
+    {/if}
     {#if !ready}
       <p class="muted">{t("common.loading")}</p>
     {:else if page === "general"}<General />
@@ -55,4 +58,5 @@
   nav button { text-align: left; padding: 6px 10px; border-radius: 6px; border: 0; background: transparent; color: inherit; font: inherit; }
   nav button.active { background: var(--accent); color: white; }
   main { padding: 20px 24px; overflow: auto; }
+  .engine-error { margin-bottom: 16px; padding: 10px 14px; border-radius: 8px; background: rgba(220, 60, 60, 0.12); border: 1px solid rgba(220, 60, 60, 0.4); color: inherit; }
 </style>

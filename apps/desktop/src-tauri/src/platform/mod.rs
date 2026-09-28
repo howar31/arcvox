@@ -3,19 +3,39 @@
 //! implementation in phase 1.
 
 use std::sync::mpsc::Sender;
+use std::time::Instant;
 
 #[cfg(target_os = "macos")]
 pub mod macos;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub enum ModifierEvent {
-    FnDown,
-    FnUp,
+    FnDown {
+        at: Instant,
+    },
+    FnUp {
+        at: Instant,
+    },
     /// Any non-modifier key went down system-wide. Only the virtual key
     /// code is carried; it is never logged.
     KeyDown {
         key_code: u16,
+        at: Instant,
     },
+}
+
+impl ModifierEvent {
+    /// When the underlying OS event actually happened, as opposed to when
+    /// the controller gets around to handling it (the controller thread can
+    /// be busy, for example opening the microphone stream, for tens of
+    /// milliseconds).
+    pub fn at(&self) -> Instant {
+        match self {
+            ModifierEvent::FnDown { at }
+            | ModifierEvent::FnUp { at }
+            | ModifierEvent::KeyDown { at, .. } => *at,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

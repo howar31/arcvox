@@ -59,6 +59,13 @@ enum State {
         captured: Captured,
         refined: Option<String>,
         failure: Option<UiMessage>,
+        /// A recoverable-error notice (for example "LLM unavailable")
+        /// queued while processing. Held here instead of shown right away
+        /// because `Refined`/`Done` typically follow within milliseconds
+        /// and drive the widget into `Inserting`, which clears any message
+        /// already on screen; the notice is shown only after insertion
+        /// finishes and the widget is back at `Idle`.
+        notice: Option<UiMessage>,
     },
 }
 
@@ -160,20 +167,24 @@ impl Controller {
     }
 
     fn on_modifier(&mut self, ev: ModifierEvent) {
-        let now = Instant::now();
+        // The event's own timestamp, not `Instant::now()`: the controller
+        // thread can be busy (for example opening the microphone stream)
+        // for tens of milliseconds after the OS event actually happened,
+        // and the hold/tap thresholds must be measured from the latter.
+        let now = ev.at();
         let input = match ev {
-            ModifierEvent::FnDown => {
+            ModifierEvent::FnDown { .. } => {
                 if matches!(self.state, State::Idle) {
                     self.arm();
                 }
                 Input::FnDown
             }
-            ModifierEvent::FnUp => Input::FnUp,
-            ModifierEvent::KeyDown { key_code } if key_code == KEY_ESCAPE => {
+            ModifierEvent::FnUp { .. } => Input::FnUp,
+            ModifierEvent::KeyDown { key_code, .. } if key_code == KEY_ESCAPE => {
                 self.cancel_active();
                 Input::Escape
             }
-            ModifierEvent::KeyDown { key_code } => Input::KeyDown { key_code },
+            ModifierEvent::KeyDown { key_code, .. } => Input::KeyDown { key_code },
         };
         let gestures = self.recognizer.on_input(input, now);
         for g in gestures {
@@ -433,6 +444,7 @@ impl Controller {
                     captured,
                     refined: None,
                     failure: None,
+                    notice: None,
                 };
             }
         }
@@ -479,10 +491,17 @@ impl Controller {
             } => {
                 if !self.shown_once.contains(&code) {
                     self.shown_once.push(code);
-                    self.deps.ui.message(UiMessage::error(
-                        Msg::WidgetDegraded,
-                        hint.or(Some(message)),
-                    ));
+                    // Queued rather than shown immediately: `Refined`/`Done`
+                    // typically follow within milliseconds and drive the
+                    // widget into `Inserting`, which would wipe this notice
+                    // before anyone could read it. `on_done` shows it once
+                    // insertion has finished and the widget is idle again.
+                    if let State::Processing { notice, .. } = &mut self.state {
+                        *notice = Some(UiMessage::error(
+                            Msg::WidgetDegraded,
+                            hint.or(Some(message)),
+                        ));
+                    }
                 }
             }
             Event::Error {
@@ -512,21 +531,34 @@ impl Controller {
             captured,
             refined,
             failure,
+            notice,
         } = std::mem::replace(&mut self.state, State::Idle)
         else {
             return;
         };
         match refined {
-            Some(text) => self.insert(session, captured, text),
+            Some(text) => self.insert(session, captured, text, notice),
             None => {
                 let msg = failure.unwrap_or_else(|| UiMessage::error(Msg::WidgetEmptyResult, None));
                 self.deps.ui.message(msg);
                 self.go_idle();
+                // Shown after `go_idle()`, same as the success path in
+                // `insert`, so it is not wiped by the `Inserting`/busy
+                // states the widget just left.
+                if let Some(n) = notice {
+                    self.deps.ui.message(n);
+                }
             }
         }
     }
 
-    fn insert(&mut self, session: Session, captured: Captured, text: String) {
+    fn insert(
+        &mut self,
+        session: Session,
+        captured: Captured,
+        text: String,
+        notice: Option<UiMessage>,
+    ) {
         self.deps.ui.set_state(UiState::Inserting);
         let frontmost = self.deps.platform.frontmost_app();
         let method = self
@@ -572,6 +604,11 @@ impl Controller {
             }
         }
         self.go_idle();
+        // Shown only now: the widget just settled at `Idle`, so a message
+        // set here is not immediately wiped by the `Inserting` state above.
+        if let Some(n) = notice {
+            self.deps.ui.message(n);
+        }
     }
 }
 
@@ -605,6 +642,9 @@ mod tests {
         fail: Mutex<bool>,
         starts: Mutex<usize>,
         stops: Arc<Mutex<usize>>,
+        /// How long `start` blocks before returning, simulating a slow
+        /// microphone open. Zero by default so existing tests are unaffected.
+        delay: Mutex<Duration>,
     }
     struct FakeHandle(Arc<Mutex<usize>>);
     impl AudioHandle for FakeHandle {
@@ -620,6 +660,10 @@ mod tests {
         ) -> Result<Box<dyn AudioHandle>, AudioError> {
             if *self.fail.lock().unwrap() {
                 return Err(AudioError::NoDevice);
+            }
+            let delay = *self.delay.lock().unwrap();
+            if !delay.is_zero() {
+                std::thread::sleep(delay);
             }
             *self.starts.lock().unwrap() += 1;
             *self.tx.lock().unwrap() = Some(tx);
@@ -686,6 +730,24 @@ mod tests {
                 double_tap_window_ms: 60,
             },
             ..ClientSettings::default()
+        }
+    }
+
+    // `ModifierEvent` now carries the `Instant` the OS event happened at,
+    // rather than the controller stamping `Instant::now()` when it gets
+    // around to handling it. These helpers stamp "now" for tests that do
+    // not care about the distinction; tests that do (late-handling races)
+    // construct the event directly with an explicit `at`.
+    fn fn_down() -> ModifierEvent {
+        ModifierEvent::FnDown { at: Instant::now() }
+    }
+    fn fn_up() -> ModifierEvent {
+        ModifierEvent::FnUp { at: Instant::now() }
+    }
+    fn key_down(key_code: u16) -> ModifierEvent {
+        ModifierEvent::KeyDown {
+            key_code,
+            at: Instant::now(),
         }
     }
 
@@ -782,10 +844,10 @@ mod tests {
     }
 
     async fn hold_and_speak(r: &Rig, secs: f32) {
-        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        r.modifier.send(fn_down()).unwrap();
         wait_state(r, UiState::Recording, "recording").await;
         speak_and_wait(r, secs).await;
-        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        r.modifier.send(fn_up()).unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -836,18 +898,18 @@ mod tests {
     async fn locked_mode_finishes_on_tap() {
         let r = rig(fast_settings()).await;
         mock_ok(&r, "一", "一").await;
-        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        r.modifier.send(fn_down()).unwrap();
         tokio::time::sleep(Duration::from_millis(5)).await;
-        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        r.modifier.send(fn_up()).unwrap();
         tokio::time::sleep(Duration::from_millis(5)).await;
-        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        r.modifier.send(fn_down()).unwrap();
         tokio::time::sleep(Duration::from_millis(5)).await;
-        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        r.modifier.send(fn_up()).unwrap();
         wait_state(&r, UiState::Locked, "locked").await;
         r.audio.speech(0.5);
-        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        r.modifier.send(fn_down()).unwrap();
         tokio::time::sleep(Duration::from_millis(5)).await;
-        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        r.modifier.send(fn_up()).unwrap();
         wait_for(
             || r.platform.calls().contains(&"paste".to_string()),
             "paste",
@@ -859,20 +921,20 @@ mod tests {
     async fn locked_mode_finishes_on_a_long_press() {
         let r = rig(fast_settings()).await;
         mock_ok(&r, "一", "一").await;
-        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        r.modifier.send(fn_down()).unwrap();
         tokio::time::sleep(Duration::from_millis(5)).await;
-        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        r.modifier.send(fn_up()).unwrap();
         tokio::time::sleep(Duration::from_millis(5)).await;
-        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        r.modifier.send(fn_down()).unwrap();
         tokio::time::sleep(Duration::from_millis(5)).await;
-        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        r.modifier.send(fn_up()).unwrap();
         wait_state(&r, UiState::Locked, "locked").await;
         r.audio.speech(0.5);
         // A press past the hold threshold while already locked must also
         // finish the recording, not just a tap.
-        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        r.modifier.send(fn_down()).unwrap();
         tokio::time::sleep(Duration::from_millis(60)).await;
-        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        r.modifier.send(fn_up()).unwrap();
         wait_for(
             || r.platform.calls().contains(&"paste".to_string()),
             "paste",
@@ -883,10 +945,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn silence_only_cancels_without_calling_providers() {
         let r = rig(fast_settings()).await;
-        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        r.modifier.send(fn_down()).unwrap();
         wait_state(&r, UiState::Recording, "recording").await;
         r.audio.silence(1.0);
-        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        r.modifier.send(fn_up()).unwrap();
         wait_for(
             || {
                 r.ui.messages
@@ -907,14 +969,10 @@ mod tests {
     async fn escape_cancels_recording_and_processing() {
         let r = rig(fast_settings()).await;
         mock_ok(&r, "x", "x").await;
-        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        r.modifier.send(fn_down()).unwrap();
         wait_state(&r, UiState::Recording, "recording").await;
         r.audio.speech(0.3);
-        r.modifier
-            .send(ModifierEvent::KeyDown {
-                key_code: KEY_ESCAPE,
-            })
-            .unwrap();
+        r.modifier.send(key_down(KEY_ESCAPE)).unwrap();
         wait_for(
             || {
                 r.ui.messages
@@ -926,7 +984,7 @@ mod tests {
             "cancelled",
         )
         .await;
-        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        r.modifier.send(fn_up()).unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(r.platform.calls().is_empty());
         assert!(r.asr.received_requests().await.unwrap().is_empty());
@@ -980,7 +1038,7 @@ mod tests {
         *r.platform.secure_input.lock().unwrap() = false;
         r.ui.messages.lock().unwrap().clear();
         r.ui.states.lock().unwrap().clear();
-        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        r.modifier.send(fn_down()).unwrap();
         wait_state(&r, UiState::Recording, "recording").await;
         // The user switches apps while dictating: the target was captured at
         // the start, the frontmost app differs at insertion time.
@@ -990,7 +1048,7 @@ mod tests {
             ..Default::default()
         });
         speak_and_wait(&r, 0.5).await;
-        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        r.modifier.send(fn_up()).unwrap();
         wait_for(
             || {
                 r.ui.messages
@@ -1009,7 +1067,7 @@ mod tests {
     async fn audio_error_during_recording_finishes_early() {
         let r = rig(fast_settings()).await;
         mock_ok(&r, "a", "b").await;
-        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        r.modifier.send(fn_down()).unwrap();
         wait_state(&r, UiState::Recording, "recording").await;
         r.audio.speech(0.5);
         r.audio.error();
@@ -1018,7 +1076,7 @@ mod tests {
             "paste after device loss",
         )
         .await;
-        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        r.modifier.send(fn_up()).unwrap();
         wait_state(&r, UiState::Idle, "idle").await;
     }
 
@@ -1026,7 +1084,7 @@ mod tests {
     async fn settings_change_applies_to_next_session() {
         let r = rig(fast_settings()).await;
         mock_ok(&r, "a", "b").await;
-        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        r.modifier.send(fn_down()).unwrap();
         wait_state(&r, UiState::Recording, "recording").await;
         let mut s = fast_settings();
         s.insertion
@@ -1034,7 +1092,7 @@ mod tests {
             .insert("com.apple.TextEdit".into(), InsertMethod::Type);
         r.handle.update_settings(s);
         speak_and_wait(&r, 0.5).await;
-        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        r.modifier.send(fn_up()).unwrap();
         wait_for(
             || r.platform.calls().contains(&"paste".to_string()),
             "first session pastes",
@@ -1063,12 +1121,12 @@ mod tests {
         s.max_utterance_secs = 1;
         let r = rig(s).await;
         mock_ok(&r, "a", "b").await;
-        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        r.modifier.send(fn_down()).unwrap();
         wait_state(&r, UiState::Recording, "recording").await;
         r.audio.speech(0.6);
         r.audio.speech(0.6);
         wait_state(&r, UiState::Processing, "processing without release").await;
-        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        r.modifier.send(fn_up()).unwrap();
         wait_for(
             || r.platform.calls().contains(&"paste".to_string()),
             "paste",
@@ -1094,7 +1152,7 @@ mod tests {
             None,
         );
         let m = handle.modifier_sender();
-        m.send(ModifierEvent::FnDown).unwrap();
+        m.send(fn_down()).unwrap();
         wait_for(
             || {
                 ui.messages
@@ -1106,7 +1164,7 @@ mod tests {
             "engine unavailable",
         )
         .await;
-        m.send(ModifierEvent::FnUp).unwrap();
+        m.send(fn_up()).unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(
             *audio.stops.lock().unwrap(),
@@ -1119,12 +1177,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn tap_then_key_press_closes_the_armed_stream() {
         let r = rig(fast_settings()).await;
-        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        r.modifier.send(fn_down()).unwrap();
         tokio::time::sleep(Duration::from_millis(5)).await;
-        r.modifier.send(ModifierEvent::FnUp).unwrap();
-        r.modifier
-            .send(ModifierEvent::KeyDown { key_code: 0 })
-            .unwrap();
+        r.modifier.send(fn_up()).unwrap();
+        r.modifier.send(key_down(0)).unwrap();
         wait_for(
             || *r.audio.stops.lock().unwrap() == 1,
             "armed stream closed",
@@ -1138,7 +1194,7 @@ mod tests {
     async fn settings_sent_while_armed_apply_after_abort() {
         let r = rig(fast_settings()).await;
         mock_ok(&r, "a", "b").await;
-        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        r.modifier.send(fn_down()).unwrap();
         // Wait for `arm()` to actually open the stream before sending the
         // settings change, so it is genuinely queued as pending (the
         // controller busy, not Idle) rather than applied immediately.
@@ -1148,10 +1204,8 @@ mod tests {
             .per_app
             .insert("com.apple.TextEdit".into(), InsertMethod::Type);
         r.handle.update_settings(s);
-        r.modifier
-            .send(ModifierEvent::KeyDown { key_code: 0 })
-            .unwrap();
-        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        r.modifier.send(key_down(0)).unwrap();
+        r.modifier.send(fn_up()).unwrap();
         hold_and_speak(&r, 0.5).await;
         wait_for(
             || r.platform.calls().iter().any(|c| c.starts_with("type:")),
@@ -1159,5 +1213,78 @@ mod tests {
         )
         .await;
         assert_eq!(r.platform.calls(), vec!["type:b"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn degraded_notice_is_shown_after_insertion() {
+        let r = rig(fast_settings()).await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"text": "软件 原文"})))
+            .mount(&r.asr)
+            .await;
+        // The LLM step fails; the pipeline degrades to the ASR text and
+        // reports a recoverable error alongside it.
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&r.llm)
+            .await;
+        hold_and_speak(&r, 1.0).await;
+        wait_for(
+            || r.platform.calls().contains(&"paste".to_string()),
+            "paste",
+        )
+        .await;
+        wait_for(
+            || {
+                r.ui.messages
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|m| m.msg == Msg::WidgetDegraded)
+            },
+            "degraded notice",
+        )
+        .await;
+        let log = r.ui.log.lock().unwrap().clone();
+        let last_idle = log
+            .iter()
+            .rposition(|e| e == "state:idle")
+            .expect("an idle state was recorded");
+        let notice = log
+            .iter()
+            .position(|e| e == "message:widget.degraded")
+            .expect("the degraded notice was recorded");
+        assert!(
+            last_idle < notice,
+            "the degraded notice must be recorded after the widget went idle: {log:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn late_handled_release_stays_a_tap() {
+        let r = rig(fast_settings()).await;
+        // Simulates a controller thread that is busy (opening the
+        // microphone) for longer than the hold threshold, so the fn-up is
+        // only handled long after it actually happened.
+        *r.audio.delay.lock().unwrap() = Duration::from_millis(80);
+        let t0 = Instant::now();
+        r.modifier.send(ModifierEvent::FnDown { at: t0 }).unwrap();
+        r.modifier
+            .send(ModifierEvent::FnUp {
+                at: t0 + Duration::from_millis(5),
+            })
+            .unwrap();
+        wait_for(
+            || *r.audio.stops.lock().unwrap() == 1,
+            "armed stream closed",
+        )
+        .await;
+        assert!(
+            !r.ui.states.lock().unwrap().contains(&UiState::Recording),
+            "a release timestamped 5ms after the press must stay a tap even \
+             if the controller only gets to it 80ms later"
+        );
     }
 }

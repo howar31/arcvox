@@ -40,6 +40,7 @@
   "common.days": "days",
   "common.granted": "Granted",
   "common.missing": "Missing",
+  "common.engine_error": "The engine could not start: {detail}",
   "general.permissions": "Permissions",
   "general.accessibility": "Accessibility",
   "general.request": "Request",
