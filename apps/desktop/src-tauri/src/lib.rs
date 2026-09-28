@@ -1,6 +1,7 @@
 //! Kongwe desktop client. Everything platform-specific lives under `platform`.
 
 pub mod app;
+pub mod audio;
 pub mod context;
 pub mod hotkey;
 pub mod i18n;
