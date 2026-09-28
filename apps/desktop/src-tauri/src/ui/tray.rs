@@ -121,11 +121,25 @@ impl<R: Runtime> Tray<R> {
     }
 }
 
+/// Settings pages that can be selected through `open_settings`'s `page`
+/// argument. Anything else is ignored rather than interpolated into `eval`.
+const SETTINGS_PAGES: &[&str] = &[
+    "general",
+    "providers",
+    "profiles",
+    "prompt",
+    "dictionary",
+    "history",
+    "about",
+];
+
 /// Shows the settings window; `page` selects a page through a URL hash.
 pub fn open_settings<R: Runtime>(app: &AppHandle<R>, page: Option<&str>) {
     if let Some(w) = app.get_webview_window("settings") {
         if let Some(p) = page {
-            let _ = w.eval(format!("window.location.hash = '#{p}'"));
+            if SETTINGS_PAGES.contains(&p) {
+                let _ = w.eval(format!("window.location.hash = '#{p}'"));
+            }
         }
         let _ = w.show();
         let _ = w.set_focus();

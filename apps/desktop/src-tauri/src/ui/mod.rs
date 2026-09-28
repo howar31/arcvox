@@ -6,7 +6,7 @@ pub mod widget;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Wry};
@@ -45,6 +45,10 @@ pub struct TauriUi {
     language: Mutex<Language>,
     /// Bumped on every show; a scheduled hide fires only if unchanged.
     generation: Arc<AtomicU64>,
+    /// The latest deadline a scheduled hide is waiting for. A later
+    /// `hide_after` call yields to an already-pending later deadline
+    /// instead of cutting it short; `show` clears it outright.
+    hide_deadline: Arc<Mutex<Option<Instant>>>,
 }
 
 impl TauriUi {
@@ -55,6 +59,7 @@ impl TauriUi {
             tray,
             language: Mutex::new(language),
             generation: Arc::new(AtomicU64::new(0)),
+            hide_deadline: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -71,6 +76,7 @@ impl TauriUi {
     }
 
     fn show(&self) {
+        *self.hide_deadline.lock().unwrap() = None;
         self.generation.fetch_add(1, Ordering::SeqCst);
         let app = self.app.clone();
         let _ = self
@@ -78,13 +84,28 @@ impl TauriUi {
             .run_on_main_thread(move || widget::show_at_bottom(&app));
     }
 
+    /// Schedules a hide, but never shortens an already-pending later
+    /// deadline (e.g. a 4 s error hide must not cut a 15 s copyable-message
+    /// hide short just because `Idle` follows right after).
     fn hide_after(&self, delay: Duration) {
+        let deadline = Instant::now() + delay;
+        {
+            let mut pending = self.hide_deadline.lock().unwrap();
+            if let Some(existing) = *pending {
+                if existing > deadline {
+                    return;
+                }
+            }
+            *pending = Some(deadline);
+        }
         let gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let generation = self.generation.clone();
+        let hide_deadline = self.hide_deadline.clone();
         let app = self.app.clone();
         std::thread::spawn(move || {
             std::thread::sleep(delay);
             if generation.load(Ordering::SeqCst) == gen {
+                *hide_deadline.lock().unwrap() = None;
                 let target = app.clone();
                 let _ = app.run_on_main_thread(move || widget::hide(&target));
             }

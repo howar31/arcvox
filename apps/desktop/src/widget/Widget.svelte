@@ -3,9 +3,7 @@
   import { onWidgetLevel, onWidgetMessage, onWidgetState, uiLanguage, widgetCopy, type MessagePayload, type WidgetState } from "../lib/api";
   import { setLanguage, t, type Lang } from "../lib/i18n";
 
-  // Named `widgetState`, not `state`: a local rune-backed variable literally
-  // named `state` trips a svelte-check/svelte2tsx type-checking bug ("Block-scoped
-  // variable '$state' used before its declaration") in this toolchain version.
+  // A local named "state" collides with the $state rune during type checking.
   let widgetState = $state<WidgetState>("idle");
   let level = $state(0);
   let bars = $state<number[]>(Array(12).fill(0.1));

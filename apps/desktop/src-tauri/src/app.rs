@@ -128,23 +128,30 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         ui.set_state(UiState::Idle);
     }
 
-    start_monitor_when_trusted(app, platform, controller, ui);
+    start_monitor_when_trusted(app, platform, controller, ui, engine.is_some());
     Ok(())
 }
 
 /// Installs the fn key monitor once Accessibility is granted, polling
 /// every 5 s until then. The install itself runs on the main thread.
+/// `engine_ready` gates the state transitions this function makes: when the
+/// engine never opened, `EngineError` must stay on screen instead of being
+/// overwritten with `NoAccessibility`/`Idle`, even though the monitor is
+/// still installed once Accessibility is granted.
 fn start_monitor_when_trusted(
     app: tauri::AppHandle<Wry>,
     platform: Arc<dyn Platform>,
     controller: ControllerHandle,
     ui: Arc<TauriUi>,
+    engine_ready: bool,
 ) {
     if platform.accessibility_trusted(false) {
         install_monitor(&platform, &controller);
         return;
     }
-    ui.set_state(UiState::NoAccessibility);
+    if engine_ready {
+        ui.set_state(UiState::NoAccessibility);
+    }
     crate::ui::tray::open_settings(&app, Some("general"));
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(5));
@@ -154,7 +161,9 @@ fn start_monitor_when_trusted(
             let ui = ui.clone();
             let _ = app.run_on_main_thread(move || {
                 install_monitor(&platform, &controller);
-                ui.set_state(UiState::Idle);
+                if engine_ready {
+                    ui.set_state(UiState::Idle);
+                }
             });
             break;
         }
