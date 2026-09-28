@@ -6,6 +6,7 @@ pub mod hotkey;
 pub mod i18n;
 pub mod insert;
 pub mod platform;
+pub mod secrets;
 pub mod settings;
 pub mod vad;
 

@@ -3,6 +3,8 @@
 pub mod ax;
 pub mod frontmost;
 pub mod modifier_monitor;
+pub mod pasteboard;
+pub mod post_keys;
 pub mod secure_input;
 
 use std::sync::mpsc::Sender;
@@ -41,7 +43,7 @@ impl Platform for MacPlatform {
     }
 
     fn clipboard_text(&self) -> Option<String> {
-        unimplemented!("pasteboard and key posting are not wired yet")
+        pasteboard::text()
     }
 
     fn secure_input_active(&self) -> bool {
@@ -49,23 +51,23 @@ impl Platform for MacPlatform {
     }
 
     fn clipboard_snapshot(&self) -> ClipboardSnapshot {
-        unimplemented!("pasteboard and key posting are not wired yet")
+        pasteboard::snapshot()
     }
 
-    fn clipboard_write_text(&self, _text: &str) {
-        unimplemented!("pasteboard and key posting are not wired yet")
+    fn clipboard_write_text(&self, text: &str) {
+        pasteboard::write_text(text)
     }
 
-    fn clipboard_restore(&self, _snapshot: ClipboardSnapshot) {
-        unimplemented!("pasteboard and key posting are not wired yet")
+    fn clipboard_restore(&self, snapshot: ClipboardSnapshot) {
+        pasteboard::restore(snapshot)
     }
 
     fn post_paste(&self) {
-        unimplemented!("pasteboard and key posting are not wired yet")
+        post_keys::post_paste()
     }
 
-    fn type_unicode(&self, _text: &str) {
-        unimplemented!("pasteboard and key posting are not wired yet")
+    fn type_unicode(&self, text: &str) {
+        post_keys::type_chunks(&crate::insert::executors::chunk_utf16(text))
     }
 
     fn ax_insert(&self, pid: i32, text: &str) -> Result<(), PlatformError> {
