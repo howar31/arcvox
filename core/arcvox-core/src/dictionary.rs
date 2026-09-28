@@ -28,8 +28,10 @@ pub fn llm_terms(entries: &[DictionaryEntry]) -> Vec<String> {
     entries.iter().map(|e| e.term.clone()).collect()
 }
 
-/// Replaces every alias with its term. Longer aliases first so `台北市`
-/// wins over `台北` when both are aliases.
+/// Replaces every alias with its term, matching against the original text
+/// in a single pass so replacement output is never re-scanned. At each
+/// position the longest matching alias wins, so `台北市` wins over `台北`
+/// when both are aliases.
 pub fn apply_aliases(entries: &[DictionaryEntry], text: &str) -> String {
     let mut pairs: Vec<(&str, &str)> = entries
         .iter()
@@ -37,9 +39,22 @@ pub fn apply_aliases(entries: &[DictionaryEntry], text: &str) -> String {
         .filter(|(alias, _)| !alias.is_empty())
         .collect();
     pairs.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
-    let mut out = text.to_string();
-    for (alias, term) in pairs {
-        out = out.replace(alias, term);
+
+    let mut out = String::new();
+    let mut i = 0;
+    while i < text.len() {
+        let rest = &text[i..];
+        if let Some(&(alias, term)) = pairs.iter().find(|(alias, _)| rest.starts_with(alias)) {
+            out.push_str(term);
+            i += alias.len();
+        } else {
+            let ch = rest
+                .chars()
+                .next()
+                .expect("i < text.len() implies a char remains");
+            out.push(ch);
+            i += ch.len_utf8();
+        }
     }
     out
 }
@@ -98,5 +113,12 @@ mod tests {
     fn empty_alias_is_ignored() {
         let d = vec![entry("X", &[""], true)];
         assert_eq!(apply_aliases(&d, "abc"), "abc");
+    }
+
+    #[test]
+    fn replacement_output_is_not_rescanned() {
+        let d = vec![entry("XY", &["ABC"], true), entry("Z", &["XY"], true)];
+        assert_eq!(apply_aliases(&d, "ABC"), "XY");
+        assert_eq!(apply_aliases(&d, "XY ABC"), "Z XY");
     }
 }
