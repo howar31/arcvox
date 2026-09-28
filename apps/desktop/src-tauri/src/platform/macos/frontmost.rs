@@ -57,7 +57,7 @@ fn window_title_and_url(pid: i32, bundle_id: Option<&str>) -> (Option<String>, O
         window
             .attribute_string(AX_DOCUMENT)
             .or_else(|| window.attribute_string(AX_URL))
-            .filter(|u| u.starts_with("http"))
+            .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
     } else {
         None
     };
