@@ -1,5 +1,8 @@
 //! Arcvox dictation core.
 
+pub mod protocol;
+pub mod types;
+
 /// Sample rate every session accepts, in Hz. Mono f32 samples.
 pub const SAMPLE_RATE: u32 = 16_000;
 
