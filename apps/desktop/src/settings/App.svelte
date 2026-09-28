@@ -5,9 +5,11 @@
   import { client, config, pageFromHash, PAGES, type Page } from "../lib/store.svelte";
   import General from "./pages/General.svelte";
   import Providers from "./pages/Providers.svelte";
+  import Profiles from "./pages/Profiles.svelte";
   import Prompt from "./pages/Prompt.svelte";
+  import Dictionary from "./pages/Dictionary.svelte";
+  import History from "./pages/History.svelte";
   import About from "./pages/About.svelte";
-  import Placeholder from "./pages/Placeholder.svelte";
 
   let page = $state<Page>(pageFromHash(location.hash));
   let ready = $state(false);
@@ -38,9 +40,11 @@
       <p class="muted">{t("common.loading")}</p>
     {:else if page === "general"}<General />
     {:else if page === "providers"}<Providers />
+    {:else if page === "profiles"}<Profiles />
     {:else if page === "prompt"}<Prompt />
+    {:else if page === "dictionary"}<Dictionary />
+    {:else if page === "history"}<History />
     {:else if page === "about"}<About />
-    {:else}<Placeholder name={page} />
     {/if}
   </main>
 </div>

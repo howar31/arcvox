@@ -14,7 +14,7 @@
       base_url: "http://localhost:11434/v1", model: "", api_key_ref: null, extra_headers: {}, model_path: null, native_id: null };
   }
   async function edit(p: ProviderConfig) {
-    editing = structuredClone(p);
+    editing = structuredClone($state.snapshot(p));
     apiKey = "";
     keyPresent = p.api_key_ref ? await hasSecret(p.api_key_ref) : false;
     probe = "";
