@@ -87,11 +87,11 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "frame-boundary trim calculation differs from sample-boundary test expectation"]
     fn speech_in_the_middle_keeps_padding_on_both_sides() {
         let s = signal(16_000, 8_000, 16_000);
         let r = trim(&s, &mut PeakVad).unwrap();
-        assert_eq!(r.start, 16_000 - PAD_SAMPLES);
+        let first_speech_frame = (16_000 / FRAME_SAMPLES) * FRAME_SAMPLES;
+        assert_eq!(r.start, first_speech_frame - PAD_SAMPLES);
         let speech_end_frame = (16_000usize + 8_000).div_ceil(FRAME_SAMPLES) * FRAME_SAMPLES;
         assert_eq!(r.end, speech_end_frame + PAD_SAMPLES);
     }
