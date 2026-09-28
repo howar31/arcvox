@@ -1,0 +1,194 @@
+//! Shared HTTP behavior: base URL handling, retry policy, status mapping.
+
+use reqwest::{RequestBuilder, Response, StatusCode};
+use url::Url;
+
+use crate::providers::ProviderError;
+use crate::types::ErrorCode;
+
+/// Ensures the path ends with `/` so `Url::join("chat/completions")` appends
+/// instead of replacing the last segment (`/v1` would otherwise be dropped).
+pub fn normalize_base_url(mut url: Url) -> Url {
+    if !url.path().ends_with('/') {
+        let path = format!("{}/", url.path());
+        url.set_path(&path);
+    }
+    url
+}
+
+pub fn endpoint(base: &Url, rel: &str) -> Url {
+    normalize_base_url(base.clone())
+        .join(rel)
+        .expect("relative endpoint path is valid")
+}
+
+/// Sends the request built by `build`. One retry on connection error or 5xx.
+/// No retry on 4xx or timeout.
+pub async fn send_with_retry<F>(label: &str, build: F) -> Result<Response, ProviderError>
+where
+    F: Fn() -> RequestBuilder,
+{
+    let mut attempt = 0u8;
+    loop {
+        attempt += 1;
+        match build().send().await {
+            Ok(resp) if resp.status().is_success() => return Ok(resp),
+            Ok(resp) => {
+                let status = resp.status();
+                if status.is_server_error() && attempt < 2 {
+                    continue;
+                }
+                let body = resp.text().await.unwrap_or_default();
+                return Err(classify_status(label, status, &body));
+            }
+            Err(err) => {
+                if err.is_timeout() {
+                    return Err(ProviderError::new(
+                        ErrorCode::ProviderTimeout,
+                        format!("{label}: request timed out"),
+                    ));
+                }
+                if err.is_connect() {
+                    if attempt < 2 {
+                        continue;
+                    }
+                    return Err(ProviderError::new(
+                        ErrorCode::ProviderUnreachable,
+                        format!("{label}: {err}"),
+                    )
+                    .with_hint(format!(
+                        "check that {label} is running and the base URL is correct"
+                    )));
+                }
+                return Err(ProviderError::new(
+                    ErrorCode::ProviderError,
+                    format!("{label}: {err}"),
+                ));
+            }
+        }
+    }
+}
+
+pub fn classify_status(label: &str, status: StatusCode, body: &str) -> ProviderError {
+    let snippet: String = body.chars().take(200).collect();
+    match status.as_u16() {
+        401 | 403 => ProviderError::new(
+            ErrorCode::ProviderUnauthorized,
+            format!("{label}: HTTP {status}"),
+        )
+        .with_hint("check the API key"),
+        404 => ProviderError::new(
+            ErrorCode::ProviderError,
+            format!("{label}: HTTP 404 {snippet}"),
+        )
+        .with_hint("endpoint not found; the base URL usually ends with /v1"),
+        _ => ProviderError::new(
+            ErrorCode::ProviderError,
+            format!("{label}: HTTP {status} {snippet}"),
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn joins_paths_without_dropping_v1() {
+        for base in ["http://localhost:11434/v1", "http://localhost:11434/v1/"] {
+            let url = endpoint(&Url::parse(base).unwrap(), "chat/completions");
+            assert_eq!(
+                url.as_str(),
+                "http://localhost:11434/v1/chat/completions",
+                "base {base}"
+            );
+        }
+        let url = endpoint(
+            &Url::parse("https://generativelanguage.googleapis.com/v1beta/openai/").unwrap(),
+            "models",
+        );
+        assert_eq!(
+            url.as_str(),
+            "https://generativelanguage.googleapis.com/v1beta/openai/models"
+        );
+        let url = endpoint(
+            &Url::parse("http://localhost:8000").unwrap(),
+            "audio/transcriptions",
+        );
+        assert_eq!(url.as_str(), "http://localhost:8000/audio/transcriptions");
+    }
+
+    #[tokio::test]
+    async fn retries_once_on_5xx_then_succeeds() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/x"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/x"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        let client = reqwest::Client::new();
+        let url = format!("{}/x", server.uri());
+        let resp = send_with_retry("test", || client.get(&url)).await.unwrap();
+        assert_eq!(resp.status(), 200);
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn does_not_retry_4xx_and_maps_401() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/x"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        let client = reqwest::Client::new();
+        let url = format!("{}/x", server.uri());
+        let err = send_with_retry("test", || client.get(&url))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProviderUnauthorized);
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn timeout_maps_without_retry() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/x"))
+            .respond_with(
+                ResponseTemplate::new(200).set_delay(std::time::Duration::from_millis(300)),
+            )
+            .mount(&server)
+            .await;
+        let client = reqwest::Client::new();
+        let url = format!("{}/x", server.uri());
+        let err = send_with_retry("test", || {
+            client
+                .get(&url)
+                .timeout(std::time::Duration::from_millis(50))
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProviderTimeout);
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn unreachable_maps_with_hint_after_one_retry() {
+        // Port 9 (discard) is closed on macOS by default; connection is refused.
+        let client = reqwest::Client::new();
+        let err = send_with_retry("Ollama", || client.get("http://127.0.0.1:9/x"))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProviderUnreachable);
+        assert!(err.hint.as_deref().unwrap().contains("Ollama"));
+    }
+}

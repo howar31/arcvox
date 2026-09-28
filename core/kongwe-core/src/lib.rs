@@ -5,6 +5,7 @@ pub mod dictionary;
 pub mod paths;
 pub mod prompt;
 pub mod protocol;
+pub mod providers;
 pub mod secrets;
 pub mod steps;
 pub mod types;
