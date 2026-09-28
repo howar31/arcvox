@@ -60,12 +60,21 @@ enum State {
         refined: Option<String>,
         failure: Option<UiMessage>,
         /// A recoverable-error notice (for example "LLM unavailable")
-        /// queued while processing. Held here instead of shown right away
-        /// because `Refined`/`Done` typically follow within milliseconds
-        /// and drive the widget into `Inserting`, which clears any message
-        /// already on screen; the notice is shown only after insertion
-        /// finishes and the widget is back at `Idle`.
-        notice: Option<UiMessage>,
+        /// queued while processing, paired with the error code it came
+        /// from. Held here instead of shown right away because
+        /// `Refined`/`Done` typically follow within milliseconds and drive
+        /// the widget into `Inserting`, which clears any message already
+        /// on screen; the notice is shown only after insertion finishes
+        /// and the widget is back at `Idle`. It is also only ever shown
+        /// after a real insertion (`Outcome::Inserted`): a `Shown` outcome
+        /// or a failure already occupies the widget's one message slot
+        /// with a copyable or an error message, and showing the notice on
+        /// top of that would silently replace it. The code is added to
+        /// `shown_once` only where the notice is actually emitted, so a
+        /// session that never gets to show it (cancelled, or ends with a
+        /// `Shown`/failure outcome) leaves the code eligible again for the
+        /// next session.
+        notice: Option<(ErrorCode, UiMessage)>,
     },
 }
 
@@ -490,16 +499,20 @@ impl Controller {
                 ..
             } => {
                 if !self.shown_once.contains(&code) {
-                    self.shown_once.push(code);
                     // Queued rather than shown immediately: `Refined`/`Done`
                     // typically follow within milliseconds and drive the
                     // widget into `Inserting`, which would wipe this notice
-                    // before anyone could read it. `on_done` shows it once
-                    // insertion has finished and the widget is idle again.
+                    // before anyone could read it. `on_done`/`insert` show
+                    // it once insertion has actually finished and the
+                    // widget is idle again. `shown_once` is not updated
+                    // here: it is recorded only at the emit site, so a
+                    // session that never gets to show it does not spend
+                    // the one shot every other launch-lifetime session
+                    // would otherwise get.
                     if let State::Processing { notice, .. } = &mut self.state {
-                        *notice = Some(UiMessage::error(
-                            Msg::WidgetDegraded,
-                            hint.or(Some(message)),
+                        *notice = Some((
+                            code,
+                            UiMessage::error(Msg::WidgetDegraded, hint.or(Some(message))),
                         ));
                     }
                 }
@@ -542,12 +555,11 @@ impl Controller {
                 let msg = failure.unwrap_or_else(|| UiMessage::error(Msg::WidgetEmptyResult, None));
                 self.deps.ui.message(msg);
                 self.go_idle();
-                // Shown after `go_idle()`, same as the success path in
-                // `insert`, so it is not wiped by the `Inserting`/busy
-                // states the widget just left.
-                if let Some(n) = notice {
-                    self.deps.ui.message(n);
-                }
+                // The notice is dropped, not shown, on this failure path:
+                // `msg` above already occupies the widget's one message
+                // slot, and the code was never added to `shown_once`, so a
+                // later session that actually inserts gets the notice
+                // instead.
             }
         }
     }
@@ -557,7 +569,7 @@ impl Controller {
         session: Session,
         captured: Captured,
         text: String,
-        notice: Option<UiMessage>,
+        notice: Option<(ErrorCode, UiMessage)>,
     ) {
         self.deps.ui.set_state(UiState::Inserting);
         let frontmost = self.deps.platform.frontmost_app();
@@ -604,10 +616,17 @@ impl Controller {
             }
         }
         self.go_idle();
-        // Shown only now: the widget just settled at `Idle`, so a message
-        // set here is not immediately wiped by the `Inserting` state above.
-        if let Some(n) = notice {
-            self.deps.ui.message(n);
+        // Shown only for a real insertion: `Outcome::Shown` already used
+        // the widget's one message slot for a copyable or empty-result
+        // message above, and showing the notice on top of that would
+        // silently replace it. The code goes into `shown_once` only here,
+        // at the point it is actually shown, so a session that ends in
+        // `Outcome::Shown` leaves the code eligible for a later session.
+        if matches!(outcome, Outcome::Inserted) {
+            if let Some((code, n)) = notice {
+                self.shown_once.push(code);
+                self.deps.ui.message(n);
+            }
         }
     }
 }
@@ -1259,6 +1278,47 @@ mod tests {
         assert!(
             last_idle < notice,
             "the degraded notice must be recorded after the widget went idle: {log:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn degraded_notice_does_not_replace_copyable_text() {
+        let r = rig(fast_settings()).await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"text": "软件 原文"})))
+            .mount(&r.asr)
+            .await;
+        // The LLM step fails, same as `degraded_notice_is_shown_after_insertion`,
+        // but this time the outcome is a copyable show (Secure Input),
+        // not a real insertion: the notice must not clobber it.
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&r.llm)
+            .await;
+        *r.platform.secure_input.lock().unwrap() = true;
+        hold_and_speak(&r, 1.0).await;
+        wait_for(
+            || {
+                r.ui.messages
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|m| m.copyable.is_some())
+            },
+            "copyable",
+        )
+        .await;
+        // Give the (buggy) trailing notice emission a chance to land if
+        // the fix regresses.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let messages = r.ui.messages.lock().unwrap().clone();
+        let last = messages.last().expect("a message was recorded");
+        assert!(last.copyable.is_some(), "{messages:?}");
+        assert!(
+            !messages.iter().any(|m| m.msg == Msg::WidgetDegraded),
+            "{messages:?}"
         );
     }
 

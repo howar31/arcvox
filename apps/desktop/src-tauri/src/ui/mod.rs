@@ -4,7 +4,7 @@
 pub mod tray;
 pub mod widget;
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -49,6 +49,14 @@ pub struct TauriUi {
     /// `hide_after` call yields to an already-pending later deadline
     /// instead of cutting it short; `show` clears it outright.
     hide_deadline: Arc<Mutex<Option<Instant>>>,
+    /// Whether the widget is currently showing a copyable message (one
+    /// with a Copy button). While true, `set_state(Idle)` must leave the
+    /// panel's click-through state alone: `Idle` fires the instant
+    /// `insert()` finishes, milliseconds after the copyable message was
+    /// shown, and resetting click-through then would make the Copy button
+    /// unclickable for the rest of the message's `HIDE_AFTER_COPYABLE`
+    /// window.
+    copyable_showing: Arc<AtomicBool>,
 }
 
 impl TauriUi {
@@ -60,6 +68,7 @@ impl TauriUi {
             language: Mutex::new(language),
             generation: Arc::new(AtomicU64::new(0)),
             hide_deadline: Arc::new(Mutex::new(None)),
+            copyable_showing: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -101,13 +110,22 @@ impl TauriUi {
         let gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let generation = self.generation.clone();
         let hide_deadline = self.hide_deadline.clone();
+        let copyable_showing = self.copyable_showing.clone();
         let app = self.app.clone();
         std::thread::spawn(move || {
             std::thread::sleep(delay);
             if generation.load(Ordering::SeqCst) == gen {
                 *hide_deadline.lock().unwrap() = None;
+                // The panel is actually going away now, so whatever
+                // message (copyable or not) was showing is gone with it;
+                // click-through goes back to true so a stray click after
+                // the panel reappears never lands on the old content.
+                copyable_showing.store(false, Ordering::SeqCst);
                 let target = app.clone();
-                let _ = app.run_on_main_thread(move || widget::hide(&target));
+                let _ = app.run_on_main_thread(move || {
+                    widget::set_click_through(&target, true);
+                    widget::hide(&target);
+                });
             }
         });
     }
@@ -125,6 +143,26 @@ impl TauriUi {
     }
 }
 
+/// A `set_state` or `message` call, the two events that can change the
+/// widget's click-through state.
+enum ClickThroughEvent {
+    State(UiState),
+    Message { copyable: bool },
+}
+
+/// What click-through value to apply for `event`, or `None` to leave the
+/// panel's current click-through state alone. The only event that must be
+/// left alone is `Idle` while a copyable message is still showing (see
+/// `TauriUi::copyable_showing`); every other state resets to click-through,
+/// and a message always sets an explicit value.
+fn click_through_for(event: ClickThroughEvent, copyable_showing: bool) -> Option<bool> {
+    match event {
+        ClickThroughEvent::State(UiState::Idle) if copyable_showing => None,
+        ClickThroughEvent::State(_) => Some(true),
+        ClickThroughEvent::Message { copyable } => Some(!copyable),
+    }
+}
+
 impl Ui for TauriUi {
     fn set_state(&self, state: UiState) {
         let language = self.language();
@@ -137,12 +175,22 @@ impl Ui for TauriUi {
                 language: language.tag(),
             },
         );
-        // A plain state change never carries a copyable message, so the
-        // panel goes back to click-through every time.
-        let app = self.app.clone();
-        let _ = self
-            .app
-            .run_on_main_thread(move || widget::set_click_through(&app, true));
+        // Any state other than `Idle` starts a new session (or a
+        // permission/engine banner) and ends whatever copyable message
+        // was showing; `Idle` itself must not clear it here; `insert()`
+        // calls `go_idle()` right after showing a copyable message, and
+        // the message's own `HIDE_AFTER_COPYABLE` timer (or a later
+        // session) is what ends it instead.
+        if !matches!(state, UiState::Idle) {
+            self.copyable_showing.store(false, Ordering::SeqCst);
+        }
+        let showing = self.copyable_showing.load(Ordering::SeqCst);
+        if let Some(ignore) = click_through_for(ClickThroughEvent::State(state), showing) {
+            let app = self.app.clone();
+            let _ = self
+                .app
+                .run_on_main_thread(move || widget::set_click_through(&app, ignore));
+        }
         match state {
             UiState::Recording | UiState::Locked | UiState::Processing | UiState::Inserting => {
                 self.show()
@@ -176,16 +224,66 @@ impl Ui for TauriUi {
             },
         );
         // Only a copyable message has a Copy button to click, so only it
-        // makes the panel take mouse events.
+        // makes the panel take mouse events. Recorded before the
+        // `Idle` that typically follows right after (from `go_idle()`)
+        // so that state change knows not to undo this.
+        self.copyable_showing.store(copyable, Ordering::SeqCst);
+        let ignore = click_through_for(ClickThroughEvent::Message { copyable }, copyable)
+            .expect("a message always has an explicit click-through value");
         let app = self.app.clone();
         let _ = self
             .app
-            .run_on_main_thread(move || widget::set_click_through(&app, !copyable));
+            .run_on_main_thread(move || widget::set_click_through(&app, ignore));
         self.show();
         self.hide_after(if copyable {
             HIDE_AFTER_COPYABLE
         } else {
             HIDE_AFTER_ERROR
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn idle_with_a_copyable_message_showing_is_left_alone() {
+        assert_eq!(
+            click_through_for(ClickThroughEvent::State(UiState::Idle), true),
+            None
+        );
+    }
+
+    #[test]
+    fn idle_with_nothing_copyable_resets_to_click_through() {
+        assert_eq!(
+            click_through_for(ClickThroughEvent::State(UiState::Idle), false),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn an_active_state_resets_to_click_through() {
+        assert_eq!(
+            click_through_for(ClickThroughEvent::State(UiState::Recording), true),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn a_copyable_message_makes_the_panel_interactive() {
+        assert_eq!(
+            click_through_for(ClickThroughEvent::Message { copyable: true }, false),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn a_plain_message_stays_click_through() {
+        assert_eq!(
+            click_through_for(ClickThroughEvent::Message { copyable: false }, false),
+            Some(true)
+        );
     }
 }
