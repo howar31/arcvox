@@ -1,6 +1,7 @@
 //! The crate's entry point. Owns config, history, and providers; opens sessions.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::{mpsc, oneshot};
@@ -59,10 +60,15 @@ struct Inner {
     client: reqwest::Client,
     secrets: Arc<dyn SecretStore>,
     sessions: Mutex<HashMap<SessionId, HistoryId>>,
+    /// Used by `start_session` so it can be called from a non-runtime thread
+    /// (for example a platform hotkey callback) rather than only from
+    /// inside an `async fn` already running on this runtime.
+    runtime: tokio::runtime::Handle,
 }
 
 impl Engine {
     pub async fn open(dirs: DataDir, secrets: Arc<dyn SecretStore>) -> Result<Engine, EngineError> {
+        let runtime = tokio::runtime::Handle::current();
         dirs.ensure()?;
         let config = ConfigStore::open(&dirs)?;
         let path = dirs.history_path();
@@ -75,15 +81,16 @@ impl Engine {
         let general = config.current().general.clone();
         let recordings = dirs.recordings_dir();
         let h = history.clone();
-        tokio::task::spawn_blocking(move || {
+        // Best effort: a prune failure (or panic) must not prevent opening
+        // the engine, so its result is discarded rather than propagated.
+        let _ = tokio::task::spawn_blocking(move || {
             h.prune(
                 general.history_retention_days,
                 general.recording_retention_days,
                 &recordings,
             )
         })
-        .await
-        .expect("join")?;
+        .await;
 
         let client = reqwest::Client::builder().build().expect("reqwest client");
         let registry = ProviderRegistry::new(client.clone(), secrets.clone());
@@ -96,6 +103,7 @@ impl Engine {
                 client,
                 secrets,
                 sessions: Mutex::new(HashMap::new()),
+                runtime,
             }),
         })
     }
@@ -124,6 +132,8 @@ impl Engine {
         }
     }
 
+    /// May be called from a thread that is not running on this engine's
+    /// tokio runtime (the task is spawned via the captured `Handle`).
     pub fn start_session(&self, req: SessionRequest) -> Session {
         let config = self.inner.config.current();
         let profile =
@@ -132,6 +142,8 @@ impl Engine {
         let (events_tx, events_rx) = mpsc::channel(EVENT_BUFFER);
         let (finish_tx, finish_rx) = oneshot::channel();
         let audio = Arc::new(Mutex::new(Vec::<f32>::new()));
+        let done_sent = Arc::new(AtomicBool::new(false));
+        let cancelled = Arc::new(AtomicBool::new(false));
 
         let _ = events_tx.try_send(Event::SessionStarted {
             session_id: id.clone(),
@@ -139,7 +151,7 @@ impl Engine {
             protocol_version: PROTOCOL_VERSION,
         });
 
-        let task = tokio::spawn(run_session(
+        let task = self.inner.runtime.spawn(run_session(
             self.inner.clone(),
             id.clone(),
             profile.clone(),
@@ -147,6 +159,8 @@ impl Engine {
             audio.clone(),
             finish_rx,
             events_tx.clone(),
+            done_sent.clone(),
+            cancelled.clone(),
         ));
 
         Session {
@@ -157,6 +171,8 @@ impl Engine {
             events_tx,
             events_rx: Mutex::new(Some(events_rx)),
             task: Mutex::new(Some(task)),
+            done_sent,
+            cancelled,
         }
     }
 
@@ -183,6 +199,31 @@ impl Engine {
     }
 }
 
+/// Sends `Done` at most once per session: whichever of `run_session` or
+/// `Session::cancel` gets here first wins, and the other is a no-op. This is
+/// what keeps a cancel racing the pipeline's tail from producing a second
+/// `Done` alongside the one `cancel` already sent.
+async fn send_done_once(
+    tx: &mpsc::Sender<Event>,
+    done_sent: &AtomicBool,
+    session_id: &SessionId,
+    history_id: Option<HistoryId>,
+) {
+    if !done_sent.swap(true, Ordering::SeqCst) {
+        let _ = tx
+            .send(Event::Done {
+                session_id: session_id.clone(),
+                history_id,
+            })
+            .await;
+    }
+}
+
+// The session id, the two cancellation-related flags, and the channels a
+// caller wired up in `start_session` are all distinct pieces of state this
+// single driver function needs; grouping them into a struct would not make
+// any of them less essential, so the lint is silenced here instead.
+#[allow(clippy::too_many_arguments)]
 async fn run_session(
     inner: Arc<Inner>,
     session_id: SessionId,
@@ -191,14 +232,11 @@ async fn run_session(
     audio: Arc<Mutex<Vec<f32>>>,
     finish_rx: oneshot::Receiver<()>,
     tx: mpsc::Sender<Event>,
+    done_sent: Arc<AtomicBool>,
+    cancelled: Arc<AtomicBool>,
 ) {
-    let done = |history_id: Option<HistoryId>| Event::Done {
-        session_id: session_id.clone(),
-        history_id,
-    };
-
     if finish_rx.await.is_err() {
-        let _ = tx.send(done(None)).await;
+        send_done_once(&tx, &done_sent, &session_id, None).await;
         return;
     }
 
@@ -217,7 +255,7 @@ async fn run_session(
                 hint: None,
             })
             .await;
-        let _ = tx.send(done(None)).await;
+        send_done_once(&tx, &done_sent, &session_id, None).await;
         return;
     }
 
@@ -246,7 +284,7 @@ async fn run_session(
                     hint: err.hint,
                 })
                 .await;
-            let _ = tx.send(done(None)).await;
+            send_done_once(&tx, &done_sent, &session_id, None).await;
             return;
         }
     };
@@ -255,10 +293,17 @@ async fn run_session(
     let outcome = match pipeline.run(clip.clone(), &ctx, &tx).await {
         Ok(o) => o,
         Err(_) => {
-            let _ = tx.send(done(None)).await;
+            send_done_once(&tx, &done_sent, &session_id, None).await;
             return;
         }
     };
+
+    // Cancel may have raced the pipeline: it already took and aborted the
+    // task handle and sent its own Done, or is about to. Either way there
+    // is nothing left to record.
+    if cancelled.load(Ordering::SeqCst) {
+        return;
+    }
 
     let audio_path = if config.general.keep_recordings {
         let path = inner
@@ -275,6 +320,16 @@ async fn run_session(
         None
     };
 
+    // spawn_blocking work is not cancellable, so a cancel arriving while the
+    // WAV write above was running still leaves a file on disk; remove it
+    // here rather than leave an orphan recording for a cancelled session.
+    if cancelled.load(Ordering::SeqCst) {
+        if let Some(p) = &audio_path {
+            let _ = std::fs::remove_file(p);
+        }
+        return;
+    }
+
     let new = NewUtterance {
         ts: crate::history::now_unix(),
         profile_id: profile.id.clone(),
@@ -283,7 +338,7 @@ async fn run_session(
         refined_text: outcome.final_text.clone(),
         final_text: outcome.final_text,
         degraded: outcome.degraded,
-        audio_path,
+        audio_path: audio_path.clone(),
         asr_ms: outcome.asr_ms,
         llm_ms: outcome.llm_ms,
     };
@@ -292,6 +347,20 @@ async fn run_session(
         Ok(Ok(id)) => Some(id),
         _ => None,
     };
+
+    // Same reasoning as above, for the row this time: undo the insert
+    // (best effort) instead of leaving history for a cancelled session.
+    if cancelled.load(Ordering::SeqCst) {
+        if let Some(id) = history_id {
+            let history = inner.history.clone();
+            let _ = tokio::task::spawn_blocking(move || history.delete(id)).await;
+        }
+        if let Some(p) = &audio_path {
+            let _ = std::fs::remove_file(p);
+        }
+        return;
+    }
+
     if let Some(id) = history_id {
         inner
             .sessions
@@ -299,7 +368,7 @@ async fn run_session(
             .unwrap()
             .insert(session_id.clone(), id);
     }
-    let _ = tx.send(done(history_id)).await;
+    send_done_once(&tx, &done_sent, &session_id, history_id).await;
 }
 
 #[cfg(test)]
@@ -546,5 +615,89 @@ mod tests {
         });
         assert_eq!(s.profile_id().0, "slack");
         s.cancel();
+    }
+
+    #[tokio::test]
+    async fn cancel_while_pipeline_runs_emits_one_done_and_records_nothing() {
+        let r = rig(true).await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"text": "原文"})))
+            .mount(&r.asr)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"choices":[{"message":{"content": "整理後"}}]}))
+                    .set_delay(std::time::Duration::from_millis(500)),
+            )
+            .mount(&r.llm)
+            .await;
+
+        let s = r.engine.start_session(SessionRequest::default());
+        // Take the stream now: the channel only closes once every Sender is
+        // dropped, which includes the one `Session` itself holds, so this
+        // stream is dropped along with `s` below to let it end.
+        let mut stream = s.events();
+        s.push_audio(&one_second());
+        s.finish();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        s.cancel();
+        drop(s);
+
+        let mut events = Vec::new();
+        while let Some(e) = stream.next().await {
+            events.push(e);
+        }
+
+        let dones: Vec<&Event> = events
+            .iter()
+            .filter(|e| matches!(e, Event::Done { .. }))
+            .collect();
+        assert_eq!(dones.len(), 1, "{events:?}");
+        assert!(matches!(
+            dones[0],
+            Event::Done {
+                history_id: None,
+                ..
+            }
+        ));
+        assert!(r.engine.history().list_recent(10).unwrap().is_empty());
+        let recordings = r.engine.dirs().recordings_dir();
+        let left_a_file = std::fs::read_dir(&recordings)
+            .map(|mut entries| entries.next().is_some())
+            .unwrap_or(false);
+        assert!(!left_a_file, "cancel must not leave a recording behind");
+    }
+
+    #[tokio::test]
+    async fn cancel_after_completion_is_a_noop() {
+        let r = rig(false).await;
+        mock_ok(&r, "原文", "整理後").await;
+        let s = r.engine.start_session(SessionRequest::default());
+        let mut stream = s.events();
+        s.push_audio(&one_second());
+        s.finish();
+
+        let mut id = None;
+        while let Some(e) = stream.next().await {
+            if let Event::Done { history_id, .. } = e {
+                id = history_id;
+                break;
+            }
+        }
+        let id = id.expect("session should complete with a history id");
+
+        s.cancel();
+        s.cancel();
+
+        let result =
+            tokio::time::timeout(std::time::Duration::from_millis(100), stream.next()).await;
+        assert!(
+            matches!(result, Err(_) | Ok(None)),
+            "cancel after completion must not emit another event: {result:?}"
+        );
+        assert!(r.engine.history().get(id).unwrap().is_some());
     }
 }

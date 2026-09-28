@@ -1,6 +1,7 @@
 //! One dictation. Audio is pushed while the hotkey is held; `finish` runs
 //! the pipeline; events stream back to the client.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::{mpsc, oneshot};
@@ -18,6 +19,13 @@ pub struct Session {
     pub(crate) events_tx: mpsc::Sender<Event>,
     pub(crate) events_rx: Mutex<Option<mpsc::Receiver<Event>>>,
     pub(crate) task: Mutex<Option<JoinHandle<()>>>,
+    /// Set once, by whichever of `run_session` or `cancel` gets there first,
+    /// so exactly one `Done` is ever sent for a session.
+    pub(crate) done_sent: Arc<AtomicBool>,
+    /// Checked by `run_session` at points where a blocking write (history
+    /// row, WAV file) is about to become visible, so a cancelled session
+    /// records nothing even if it raced past `finish_tx`/`task` teardown.
+    pub(crate) cancelled: Arc<AtomicBool>,
 }
 
 impl Session {
@@ -41,20 +49,24 @@ impl Session {
         }
     }
 
-    /// Stops everything. Emits `Done` with no history id; records nothing.
+    /// Stops everything. Emits exactly one `Done` (with no history id, and
+    /// with nothing recorded) regardless of how many times it is called or
+    /// whether the session was still recording, running its pipeline, or
+    /// already finished.
     pub fn cancel(&self) {
-        let was_recording = self.finish_tx.lock().unwrap().take().is_some();
-        if was_recording {
-            // Dropping the sender wakes the task, which emits Done and exits.
-            return;
-        }
+        self.cancelled.store(true, Ordering::SeqCst);
+        // Dropping the sender (rather than sending) wakes a task still
+        // waiting to be finished without running the pipeline.
+        self.finish_tx.lock().unwrap().take();
         if let Some(handle) = self.task.lock().unwrap().take() {
             handle.abort();
         }
-        let _ = self.events_tx.try_send(Event::Done {
-            session_id: self.id.clone(),
-            history_id: None,
-        });
+        if !self.done_sent.swap(true, Ordering::SeqCst) {
+            let _ = self.events_tx.try_send(Event::Done {
+                session_id: self.id.clone(),
+                history_id: None,
+            });
+        }
     }
 
     /// The event stream. May be called once; panics on a second call.
