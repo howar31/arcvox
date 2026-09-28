@@ -46,6 +46,33 @@ pub fn run() {
             crate::commands::system::ui_language,
             crate::commands::system::widget_copy,
             crate::commands::system::system_open_settings_window,
+            crate::commands::system::system_list_microphones,
+            crate::commands::system::system_permissions,
+            crate::commands::system::system_request_accessibility,
+            crate::commands::system::system_open_privacy_pane,
+            crate::commands::system::system_running_apps,
+            crate::commands::system::system_info,
+            crate::commands::system::system_reveal,
+            crate::commands::config::config_get,
+            crate::commands::config::config_update_general,
+            crate::commands::providers::providers_upsert,
+            crate::commands::providers::providers_delete,
+            crate::commands::providers::providers_probe,
+            crate::commands::profiles::profiles_upsert,
+            crate::commands::profiles::profiles_delete,
+            crate::commands::profiles::profiles_set_default,
+            crate::commands::dictionary::dictionary_set,
+            crate::commands::prompt::prompt_get,
+            crate::commands::prompt::prompt_set,
+            crate::commands::prompt::prompt_restore,
+            crate::commands::history::history_list,
+            crate::commands::history::history_delete,
+            crate::commands::history::history_clear,
+            crate::commands::secrets::secrets_set,
+            crate::commands::secrets::secrets_has,
+            crate::commands::secrets::secrets_delete,
+            crate::commands::client::client_get,
+            crate::commands::client::client_update,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -119,6 +146,17 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         language: Mutex::new(language),
         engine_error: Mutex::new(engine_error.clone()),
     });
+
+    if let Some(e) = engine.as_ref() {
+        let mut rx = e.config().subscribe();
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            while rx.changed().await.is_ok() {
+                let cfg = rx.borrow().clone();
+                let _ = tauri::Emitter::emit_to(&app, "settings", "config-changed", (*cfg).clone());
+            }
+        });
+    }
 
     if engine.is_none() {
         tracing::error!(error = ?engine_error, "engine failed to open");
