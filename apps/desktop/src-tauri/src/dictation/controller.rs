@@ -1,0 +1,1057 @@
+//! State machine: Idle -> Armed (fn down, stream open) -> Recording ->
+//! Processing -> insertion -> Idle. See the design's section 6.2.
+
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
+use std::time::{Duration, Instant};
+
+use kongwe_core::types::{ErrorCode, SessionId};
+use kongwe_core::{Engine, Event, Session, SessionRequest};
+use tokio_stream::StreamExt;
+
+use super::ui::{UiMessage, UiState};
+use super::{ControllerMsg, Deps};
+use crate::audio::recorder::Recorder;
+use crate::audio::{AudioHandle, AudioMsg};
+use crate::context::{self, Captured};
+use crate::hotkey::{Gesture, Input, Recognizer, KEY_ESCAPE};
+use crate::i18n::Msg;
+use crate::insert::{self, Outcome, Plan, ShowReason, Situation};
+use crate::platform::ModifierEvent;
+use crate::settings::ClientSettings;
+use crate::vad;
+
+struct Capture {
+    handle: Option<Box<dyn AudioHandle>>,
+    recorder: Option<Recorder>,
+}
+
+impl Capture {
+    fn push(&mut self, rate: u32, mono: &[f32]) -> f32 {
+        self.recorder
+            .get_or_insert_with(|| Recorder::new(rate))
+            .push(mono)
+    }
+    fn secs(&self) -> f32 {
+        self.recorder.as_ref().map(|r| r.len_secs()).unwrap_or(0.0)
+    }
+    fn stop(mut self) -> Vec<f32> {
+        if let Some(h) = self.handle.take() {
+            h.stop();
+        }
+        self.recorder.take().map(|r| r.finish()).unwrap_or_default()
+    }
+}
+
+enum State {
+    Idle,
+    /// fn is down, the stream is open, the hold threshold not yet reached.
+    Armed {
+        capture: Capture,
+    },
+    Recording {
+        session: Session,
+        capture: Capture,
+        captured: Captured,
+        locked: bool,
+    },
+    Processing {
+        session: Session,
+        captured: Captured,
+        refined: Option<String>,
+        failure: Option<UiMessage>,
+    },
+}
+
+pub struct Controller {
+    deps: Deps,
+    engine: Option<Engine>,
+    settings: ClientSettings,
+    pending_settings: Option<ClientSettings>,
+    recognizer: Recognizer,
+    state: State,
+    tx: Sender<ControllerMsg>,
+    // `ErrorCode` does not derive `Hash`, so a `Vec` with a linear `contains`
+    // check stands in for a set here; the list never holds more than a
+    // handful of distinct codes.
+    shown_once: Vec<ErrorCode>,
+}
+
+impl Controller {
+    pub fn new(
+        deps: Deps,
+        settings: ClientSettings,
+        engine: Option<Engine>,
+        tx: Sender<ControllerMsg>,
+    ) -> Self {
+        let recognizer = Recognizer::new(&settings.hotkey);
+        Self {
+            deps,
+            engine,
+            settings,
+            pending_settings: None,
+            recognizer,
+            state: State::Idle,
+            tx,
+            shown_once: Vec::new(),
+        }
+    }
+
+    pub fn run(&mut self, rx: Receiver<ControllerMsg>) {
+        loop {
+            let timeout = self
+                .recognizer
+                .next_deadline()
+                .map(|d| d.saturating_duration_since(Instant::now()))
+                .unwrap_or(Duration::from_secs(3600));
+            match rx.recv_timeout(timeout) {
+                Ok(ControllerMsg::Shutdown) => break,
+                Ok(msg) => self.handle(msg),
+                Err(RecvTimeoutError::Timeout) => {
+                    let gestures = self.recognizer.on_tick(Instant::now());
+                    for g in gestures {
+                        self.on_gesture(g);
+                    }
+                }
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+        }
+    }
+
+    fn handle(&mut self, msg: ControllerMsg) {
+        match msg {
+            ControllerMsg::Modifier(ev) => self.on_modifier(ev),
+            ControllerMsg::Audio(a) => self.on_audio(a),
+            ControllerMsg::Engine { session_id, event } => self.on_engine_event(session_id, event),
+            ControllerMsg::Settings(s) => {
+                if matches!(self.state, State::Idle) {
+                    self.apply_settings(s);
+                } else {
+                    self.pending_settings = Some(s);
+                }
+            }
+            ControllerMsg::EngineReady(e) => self.engine = Some(e),
+            ControllerMsg::Shutdown => {}
+        }
+    }
+
+    fn apply_settings(&mut self, s: ClientSettings) {
+        self.recognizer = Recognizer::new(&s.hotkey);
+        self.settings = s;
+    }
+
+    fn go_idle(&mut self) {
+        self.state = State::Idle;
+        self.deps.ui.set_state(UiState::Idle);
+        if let Some(s) = self.pending_settings.take() {
+            self.apply_settings(s);
+        }
+    }
+
+    fn on_modifier(&mut self, ev: ModifierEvent) {
+        let now = Instant::now();
+        let input = match ev {
+            ModifierEvent::FnDown => {
+                if matches!(self.state, State::Idle) {
+                    self.arm();
+                }
+                Input::FnDown
+            }
+            ModifierEvent::FnUp => Input::FnUp,
+            ModifierEvent::KeyDown { key_code } if key_code == KEY_ESCAPE => {
+                self.cancel_active();
+                Input::Escape
+            }
+            ModifierEvent::KeyDown { key_code } => Input::KeyDown { key_code },
+        };
+        let gestures = self.recognizer.on_input(input, now);
+        for g in gestures {
+            self.on_gesture(g);
+        }
+    }
+
+    /// Opens the microphone stream so the first syllable is not lost while
+    /// the hold threshold elapses.
+    fn arm(&mut self) {
+        match self
+            .deps
+            .audio
+            .start(&self.settings.microphone_choice(), self.audio_tx())
+        {
+            Ok(handle) => {
+                self.state = State::Armed {
+                    capture: Capture {
+                        handle: Some(handle),
+                        recorder: None,
+                    },
+                };
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "audio start failed");
+                self.deps.ui.message(UiMessage::error(
+                    Msg::WidgetMicrophoneUnavailable,
+                    Some(e.to_string()),
+                ));
+            }
+        }
+    }
+
+    fn audio_tx(&self) -> Sender<AudioMsg> {
+        super::forward(self.tx.clone(), ControllerMsg::Audio)
+    }
+
+    fn on_gesture(&mut self, g: Gesture) {
+        match g {
+            Gesture::HoldStart => self.start_recording(false),
+            Gesture::DoubleTap => self.start_recording(true),
+            Gesture::HoldEnd => {
+                if matches!(self.state, State::Recording { locked: false, .. }) {
+                    self.finish_recording();
+                }
+            }
+            Gesture::Tap => match std::mem::replace(&mut self.state, State::Idle) {
+                State::Recording {
+                    locked: true,
+                    session,
+                    capture,
+                    captured,
+                } => {
+                    self.state = State::Recording {
+                        locked: true,
+                        session,
+                        capture,
+                        captured,
+                    };
+                    self.finish_recording();
+                }
+                State::Armed { capture } => {
+                    capture.stop();
+                    self.go_idle();
+                }
+                other => self.state = other,
+            },
+            Gesture::Abort => match std::mem::replace(&mut self.state, State::Idle) {
+                State::Armed { capture } => {
+                    capture.stop();
+                    self.state = State::Idle;
+                }
+                State::Recording {
+                    session, capture, ..
+                } => {
+                    capture.stop();
+                    session.cancel();
+                    self.deps.ui.message(UiMessage::info(Msg::WidgetCancelled));
+                    self.go_idle();
+                }
+                other => self.state = other,
+            },
+        }
+    }
+
+    fn start_recording(&mut self, locked: bool) {
+        // A double tap arrives with the stream already open from the first
+        // tap's FnDown (Armed), or from Idle when the taps were fast.
+        let capture = match std::mem::replace(&mut self.state, State::Idle) {
+            State::Armed { capture } => Some(capture),
+            State::Idle => None,
+            other => {
+                // Already recording or processing: ignore the gesture.
+                self.state = other;
+                return;
+            }
+        };
+        let Some(engine) = self.engine.clone() else {
+            if let Some(c) = capture {
+                c.stop();
+            }
+            self.deps
+                .ui
+                .message(UiMessage::error(Msg::WidgetEngineUnavailable, None));
+            self.state = State::Idle;
+            return;
+        };
+        let capture = match capture {
+            Some(c) => c,
+            None => match self
+                .deps
+                .audio
+                .start(&self.settings.microphone_choice(), self.audio_tx())
+            {
+                Ok(handle) => Capture {
+                    handle: Some(handle),
+                    recorder: None,
+                },
+                Err(e) => {
+                    self.deps.ui.message(UiMessage::error(
+                        Msg::WidgetMicrophoneUnavailable,
+                        Some(e.to_string()),
+                    ));
+                    self.state = State::Idle;
+                    return;
+                }
+            },
+        };
+        let captured = context::capture(self.deps.platform.as_ref(), &self.settings.context);
+        let session = engine.start_session(SessionRequest {
+            app: captured.app.clone(),
+            context: captured.context.clone(),
+            profile_override: None,
+        });
+        self.forward_events(&session);
+        self.deps.ui.set_state(if locked {
+            UiState::Locked
+        } else {
+            UiState::Recording
+        });
+        self.state = State::Recording {
+            session,
+            capture,
+            captured,
+            locked,
+        };
+    }
+
+    /// Streams the session's events back into this controller.
+    fn forward_events(&self, session: &Session) {
+        let mut events = session.events();
+        let id = session.id().clone();
+        let tx = self.tx.clone();
+        self.deps.runtime.spawn(async move {
+            while let Some(event) = events.next().await {
+                let done = matches!(event, Event::Done { .. });
+                if tx
+                    .send(ControllerMsg::Engine {
+                        session_id: id.clone(),
+                        event,
+                    })
+                    .is_err()
+                    || done
+                {
+                    break;
+                }
+            }
+        });
+    }
+
+    fn on_audio(&mut self, msg: AudioMsg) {
+        match msg {
+            AudioMsg::Frames { rate, mono } => {
+                let max = self.settings.max_utterance_secs as f32;
+                match &mut self.state {
+                    State::Armed { capture } => {
+                        capture.push(rate, &mono);
+                    }
+                    State::Recording { capture, .. } => {
+                        let level = capture.push(rate, &mono);
+                        self.deps.ui.level(level.min(1.0));
+                        if capture.secs() >= max {
+                            self.finish_recording();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            AudioMsg::Error(e) => {
+                tracing::warn!(error = %e, "audio stream error");
+                match std::mem::replace(&mut self.state, State::Idle) {
+                    State::Armed { capture } => {
+                        capture.stop();
+                        self.state = State::Idle;
+                    }
+                    State::Recording {
+                        session,
+                        capture,
+                        captured,
+                        locked,
+                    } => {
+                        self.state = State::Recording {
+                            session,
+                            capture,
+                            captured,
+                            locked,
+                        };
+                        self.finish_recording();
+                    }
+                    other => self.state = other,
+                }
+            }
+        }
+    }
+
+    fn finish_recording(&mut self) {
+        let State::Recording {
+            session,
+            capture,
+            captured,
+            ..
+        } = std::mem::replace(&mut self.state, State::Idle)
+        else {
+            return;
+        };
+        let samples = capture.stop();
+        let mut vad = (self.deps.vad_factory)();
+        match vad::trim(&samples, vad.as_mut()) {
+            None => {
+                session.cancel();
+                self.deps.ui.message(UiMessage::info(Msg::WidgetNoSpeech));
+                self.go_idle();
+            }
+            Some(range) => {
+                session.push_audio(&samples[range]);
+                session.finish();
+                self.deps.ui.set_state(UiState::Processing);
+                self.state = State::Processing {
+                    session,
+                    captured,
+                    refined: None,
+                    failure: None,
+                };
+            }
+        }
+    }
+
+    fn cancel_active(&mut self) {
+        match std::mem::replace(&mut self.state, State::Idle) {
+            State::Recording {
+                session, capture, ..
+            } => {
+                capture.stop();
+                session.cancel();
+                self.deps.ui.message(UiMessage::info(Msg::WidgetCancelled));
+                self.go_idle();
+            }
+            State::Processing { session, .. } => {
+                session.cancel();
+                self.deps.ui.message(UiMessage::info(Msg::WidgetCancelled));
+                self.go_idle();
+            }
+            other => self.state = other,
+        }
+    }
+
+    fn on_engine_event(&mut self, session_id: SessionId, event: Event) {
+        let State::Processing { session, .. } = &self.state else {
+            return;
+        };
+        if session.id() != &session_id {
+            return;
+        }
+        match event {
+            Event::Refined { text, .. } => {
+                if let State::Processing { refined, .. } = &mut self.state {
+                    *refined = Some(text);
+                }
+            }
+            Event::Error {
+                code,
+                message,
+                recoverable: true,
+                hint,
+                ..
+            } => {
+                if !self.shown_once.contains(&code) {
+                    self.shown_once.push(code);
+                    self.deps.ui.message(UiMessage::error(
+                        Msg::WidgetDegraded,
+                        hint.or(Some(message)),
+                    ));
+                }
+            }
+            Event::Error {
+                code,
+                message,
+                recoverable: false,
+                hint,
+                ..
+            } => {
+                let msg = match code {
+                    ErrorCode::NoSpeech | ErrorCode::NoAudio => Msg::WidgetNoSpeech,
+                    _ => Msg::WidgetEngineUnavailable,
+                };
+                let failure = UiMessage::error(msg, hint.or(Some(message)));
+                if let State::Processing { failure: f, .. } = &mut self.state {
+                    *f = Some(failure);
+                }
+            }
+            Event::Done { .. } => self.on_done(),
+            _ => {}
+        }
+    }
+
+    fn on_done(&mut self) {
+        let State::Processing {
+            session,
+            captured,
+            refined,
+            failure,
+        } = std::mem::replace(&mut self.state, State::Idle)
+        else {
+            return;
+        };
+        match refined {
+            Some(text) => self.insert(session, captured, text),
+            None => {
+                let msg = failure.unwrap_or_else(|| UiMessage::error(Msg::WidgetEmptyResult, None));
+                self.deps.ui.message(msg);
+                self.go_idle();
+            }
+        }
+    }
+
+    fn insert(&mut self, session: Session, captured: Captured, text: String) {
+        self.deps.ui.set_state(UiState::Inserting);
+        let frontmost = self.deps.platform.frontmost_app();
+        let method = self
+            .settings
+            .method_for(captured.target.bundle_id.as_deref());
+        let plan = insert::plan(&Situation {
+            text: &text,
+            target: &captured.target,
+            frontmost: frontmost.as_ref(),
+            secure_input: self.deps.platform.secure_input_active(),
+            method,
+        });
+        let outcome = insert::run(&plan, &text, self.deps.platform.as_ref());
+        match outcome {
+            Outcome::Inserted => {}
+            Outcome::Shown(reason) => {
+                let msg = match reason {
+                    ShowReason::SecureInput => Msg::WidgetSecureInput,
+                    ShowReason::AppChanged => Msg::WidgetAppChanged,
+                    ShowReason::EmptyText => Msg::WidgetEmptyResult,
+                };
+                if matches!(plan, Plan::Show(ShowReason::EmptyText)) {
+                    self.deps.ui.message(UiMessage::error(msg, None));
+                } else {
+                    self.deps.ui.message(UiMessage::copyable(msg, text.clone()));
+                }
+            }
+        }
+        if let Some(engine) = self.engine.clone() {
+            let id = session.id().clone();
+            let final_text = text.clone();
+            self.deps.runtime.spawn(async move {
+                if let Err(e) = engine.record_final(&id, &final_text).await {
+                    tracing::debug!(error = %e, "record_final failed");
+                }
+            });
+        }
+        self.go_idle();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::{AudioError, AudioSource};
+    use crate::dictation::ui::fake::FakeUi;
+    use crate::dictation::{spawn, ControllerHandle};
+    use crate::platform::fake::FakePlatform;
+    use crate::platform::FrontmostApp;
+    use crate::settings::{HotkeySettings, InsertMethod};
+    use crate::vad::Vad;
+    use kongwe_core::{DataDir, MemorySecretStore};
+    use serde_json::json;
+    use std::sync::{Arc, Mutex};
+    use url::Url;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    struct PeakVad;
+    impl Vad for PeakVad {
+        fn is_speech(&mut self, frame: &[f32]) -> bool {
+            frame.iter().any(|s| s.abs() > 0.1)
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeAudio {
+        tx: Mutex<Option<Sender<AudioMsg>>>,
+        fail: Mutex<bool>,
+        starts: Mutex<usize>,
+        stops: Arc<Mutex<usize>>,
+    }
+    struct FakeHandle(Arc<Mutex<usize>>);
+    impl AudioHandle for FakeHandle {
+        fn stop(self: Box<Self>) {
+            *self.0.lock().unwrap() += 1;
+        }
+    }
+    impl AudioSource for FakeAudio {
+        fn start(
+            &self,
+            _c: &crate::settings::MicrophoneChoice,
+            tx: Sender<AudioMsg>,
+        ) -> Result<Box<dyn AudioHandle>, AudioError> {
+            if *self.fail.lock().unwrap() {
+                return Err(AudioError::NoDevice);
+            }
+            *self.starts.lock().unwrap() += 1;
+            *self.tx.lock().unwrap() = Some(tx);
+            Ok(Box::new(FakeHandle(self.stops.clone())))
+        }
+        fn list_devices(&self) -> Vec<String> {
+            vec!["Fake".into()]
+        }
+    }
+    impl FakeAudio {
+        fn speech(&self, secs: f32) {
+            let n = (16_000.0 * secs) as usize;
+            let mono: Vec<f32> = (0..n)
+                .map(|i| if i % 2 == 0 { 0.5 } else { -0.5 })
+                .collect();
+            self.tx
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .send(AudioMsg::Frames { rate: 16_000, mono })
+                .unwrap();
+        }
+        fn silence(&self, secs: f32) {
+            let n = (16_000.0 * secs) as usize;
+            self.tx
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .send(AudioMsg::Frames {
+                    rate: 16_000,
+                    mono: vec![0.0; n],
+                })
+                .unwrap();
+        }
+        fn error(&self) {
+            self.tx
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .send(AudioMsg::Error("gone".into()))
+                .unwrap();
+        }
+    }
+
+    struct Rig {
+        _tmp: tempfile::TempDir,
+        engine: Engine,
+        asr: MockServer,
+        llm: MockServer,
+        platform: Arc<FakePlatform>,
+        audio: Arc<FakeAudio>,
+        ui: Arc<FakeUi>,
+        handle: ControllerHandle,
+        modifier: Sender<ModifierEvent>,
+    }
+
+    fn fast_settings() -> ClientSettings {
+        ClientSettings {
+            hotkey: HotkeySettings {
+                hold_threshold_ms: 30,
+                double_tap_window_ms: 60,
+            },
+            ..ClientSettings::default()
+        }
+    }
+
+    async fn rig(settings: ClientSettings) -> Rig {
+        let tmp = tempfile::tempdir().unwrap();
+        let asr = MockServer::start().await;
+        let llm = MockServer::start().await;
+        let engine = Engine::open(
+            DataDir::custom(tmp.path()),
+            Arc::new(MemorySecretStore::default()),
+        )
+        .await
+        .unwrap();
+        engine
+            .config()
+            .update(|c| {
+                c.providers[0].base_url = Some(Url::parse(&format!("{}/v1", asr.uri())).unwrap());
+                c.providers[1].base_url = Some(Url::parse(&format!("{}/v1", llm.uri())).unwrap());
+            })
+            .unwrap();
+        let platform = Arc::new(FakePlatform::new());
+        *platform.frontmost.lock().unwrap() = Some(FrontmostApp {
+            pid: 7,
+            bundle_id: Some("com.apple.TextEdit".into()),
+            name: Some("TextEdit".into()),
+            ..Default::default()
+        });
+        let audio = Arc::new(FakeAudio::default());
+        let ui = Arc::new(FakeUi::default());
+        let deps = Deps {
+            platform: platform.clone(),
+            audio: audio.clone(),
+            ui: ui.clone(),
+            vad_factory: Box::new(|| Box::new(PeakVad)),
+            runtime: tokio::runtime::Handle::current(),
+        };
+        let handle = spawn(deps, settings, Some(engine.clone()));
+        let modifier = handle.modifier_sender();
+        Rig {
+            _tmp: tmp,
+            engine,
+            asr,
+            llm,
+            platform,
+            audio,
+            ui,
+            handle,
+            modifier,
+        }
+    }
+
+    async fn mock_ok(r: &Rig, asr_text: &str, llm_text: &str) {
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"text": asr_text})))
+            .mount(&r.asr)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"choices":[{"message":{"content": llm_text}}]})),
+            )
+            .mount(&r.llm)
+            .await;
+    }
+
+    async fn wait_for(mut cond: impl FnMut() -> bool, what: &str) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !cond() {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    async fn wait_state(r: &Rig, s: UiState, what: &str) {
+        wait_for(|| r.ui.states.lock().unwrap().contains(&s), what).await;
+    }
+
+    /// Sends a speech block and waits for the controller to have actually
+    /// folded it into the recording capture (observed through a new UI
+    /// level) before returning. `AudioSource::start` and `modifier_sender`
+    /// each hand their sender to a separate forwarding thread, so sending a
+    /// speech block and the following `FnUp` back to back does not
+    /// guarantee the controller sees them in that order.
+    async fn speak_and_wait(r: &Rig, secs: f32) {
+        let before = r.ui.levels.lock().unwrap().len();
+        r.audio.speech(secs);
+        wait_for(
+            || r.ui.levels.lock().unwrap().len() > before,
+            "level update",
+        )
+        .await;
+    }
+
+    async fn hold_and_speak(r: &Rig, secs: f32) {
+        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        wait_state(r, UiState::Recording, "recording").await;
+        speak_and_wait(r, secs).await;
+        r.modifier.send(ModifierEvent::FnUp).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn push_to_talk_inserts_refined_text_and_records_final() {
+        let r = rig(fast_settings()).await;
+        mock_ok(&r, "软件 原文", "软件 整理後").await;
+        hold_and_speak(&r, 1.0).await;
+        // Wait for the clipboard restore, not just the paste: `paste()` in
+        // `insert::executors` sleeps for `PASTE_RESTORE_DELAY` between the
+        // two, so waiting only on "paste" races the assertion below.
+        wait_for(
+            || r.platform.calls().contains(&"restore".to_string()),
+            "restore",
+        )
+        .await;
+        assert_eq!(
+            r.platform.calls(),
+            vec!["snapshot", "write:軟體 整理後", "paste", "restore"]
+        );
+        wait_state(&r, UiState::Idle, "idle").await;
+        let states = r.ui.states.lock().unwrap().clone();
+        assert_eq!(
+            states,
+            vec![
+                UiState::Recording,
+                UiState::Processing,
+                UiState::Inserting,
+                UiState::Idle
+            ]
+        );
+        assert!(!r.ui.levels.lock().unwrap().is_empty());
+        wait_for(
+            || {
+                r.engine
+                    .history()
+                    .list_recent(1)
+                    .unwrap()
+                    .first()
+                    .map(|u| u.final_text == "軟體 整理後")
+                    .unwrap_or(false)
+            },
+            "record_final",
+        )
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn locked_mode_finishes_on_tap() {
+        let r = rig(fast_settings()).await;
+        mock_ok(&r, "一", "一").await;
+        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        wait_state(&r, UiState::Locked, "locked").await;
+        r.audio.speech(0.5);
+        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        wait_for(
+            || r.platform.calls().contains(&"paste".to_string()),
+            "paste",
+        )
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn silence_only_cancels_without_calling_providers() {
+        let r = rig(fast_settings()).await;
+        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        wait_state(&r, UiState::Recording, "recording").await;
+        r.audio.silence(1.0);
+        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        wait_for(
+            || {
+                r.ui.messages
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|m| m.msg == Msg::WidgetNoSpeech)
+            },
+            "no speech",
+        )
+        .await;
+        assert!(r.asr.received_requests().await.unwrap().is_empty());
+        assert!(r.platform.calls().is_empty());
+        assert_eq!(*r.audio.stops.lock().unwrap(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn escape_cancels_recording_and_processing() {
+        let r = rig(fast_settings()).await;
+        mock_ok(&r, "x", "x").await;
+        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        wait_state(&r, UiState::Recording, "recording").await;
+        r.audio.speech(0.3);
+        r.modifier
+            .send(ModifierEvent::KeyDown {
+                key_code: KEY_ESCAPE,
+            })
+            .unwrap();
+        wait_for(
+            || {
+                r.ui.messages
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|m| m.msg == Msg::WidgetCancelled)
+            },
+            "cancelled",
+        )
+        .await;
+        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(r.platform.calls().is_empty());
+        assert!(r.asr.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn empty_refined_text_shows_message_and_does_not_insert() {
+        let r = rig(fast_settings()).await;
+        mock_ok(&r, "   ", "   ").await;
+        hold_and_speak(&r, 0.5).await;
+        wait_for(|| !r.ui.messages.lock().unwrap().is_empty(), "message").await;
+        wait_state(&r, UiState::Idle, "idle").await;
+        let msgs = r.ui.messages.lock().unwrap().clone();
+        assert!(
+            msgs.iter()
+                .any(|m| m.msg == Msg::WidgetNoSpeech || m.msg == Msg::WidgetEmptyResult),
+            "{msgs:?}"
+        );
+        assert!(!r.platform.calls().contains(&"paste".to_string()));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn secure_input_and_app_change_show_copyable_text() {
+        let r = rig(fast_settings()).await;
+        mock_ok(&r, "a", "文字").await;
+        *r.platform.secure_input.lock().unwrap() = true;
+        hold_and_speak(&r, 0.5).await;
+        wait_for(
+            || {
+                r.ui.messages
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|m| m.copyable.is_some())
+            },
+            "copyable",
+        )
+        .await;
+        let m =
+            r.ui.messages
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|m| m.copyable.is_some())
+                .cloned()
+                .unwrap();
+        assert_eq!(m.msg, Msg::WidgetSecureInput);
+        assert_eq!(m.copyable.as_deref(), Some("文字"));
+        assert!(r.platform.calls().is_empty());
+
+        *r.platform.secure_input.lock().unwrap() = false;
+        r.ui.messages.lock().unwrap().clear();
+        r.ui.states.lock().unwrap().clear();
+        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        wait_state(&r, UiState::Recording, "recording").await;
+        // The user switches apps while dictating: the target was captured at
+        // the start, the frontmost app differs at insertion time.
+        *r.platform.frontmost.lock().unwrap() = Some(FrontmostApp {
+            pid: 99,
+            bundle_id: Some("com.other".into()),
+            ..Default::default()
+        });
+        speak_and_wait(&r, 0.5).await;
+        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        wait_for(
+            || {
+                r.ui.messages
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|m| m.msg == Msg::WidgetAppChanged)
+            },
+            "app changed",
+        )
+        .await;
+        assert!(r.platform.calls().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn audio_error_during_recording_finishes_early() {
+        let r = rig(fast_settings()).await;
+        mock_ok(&r, "a", "b").await;
+        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        wait_state(&r, UiState::Recording, "recording").await;
+        r.audio.speech(0.5);
+        r.audio.error();
+        wait_for(
+            || r.platform.calls().contains(&"paste".to_string()),
+            "paste after device loss",
+        )
+        .await;
+        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        wait_state(&r, UiState::Idle, "idle").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn settings_change_applies_to_next_session() {
+        let r = rig(fast_settings()).await;
+        mock_ok(&r, "a", "b").await;
+        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        wait_state(&r, UiState::Recording, "recording").await;
+        let mut s = fast_settings();
+        s.insertion
+            .per_app
+            .insert("com.apple.TextEdit".into(), InsertMethod::Type);
+        r.handle.update_settings(s);
+        speak_and_wait(&r, 0.5).await;
+        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        wait_for(
+            || r.platform.calls().contains(&"paste".to_string()),
+            "first session pastes",
+        )
+        .await;
+        wait_state(&r, UiState::Idle, "idle").await;
+        r.platform.calls.lock().unwrap().clear();
+        // `wait_state` looks for the state anywhere in the recorded history,
+        // so the `Recording` entry from the first session must be cleared
+        // too; otherwise `hold_and_speak`'s wait for `Recording` below
+        // returns immediately on that stale entry, before the second
+        // session's hold threshold has elapsed.
+        r.ui.states.lock().unwrap().clear();
+        hold_and_speak(&r, 0.5).await;
+        wait_for(
+            || r.platform.calls().iter().any(|c| c.starts_with("type:")),
+            "second session types",
+        )
+        .await;
+        assert_eq!(r.platform.calls(), vec!["type:b"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn max_utterance_length_finishes_locked_recording() {
+        let mut s = fast_settings();
+        s.max_utterance_secs = 1;
+        let r = rig(s).await;
+        mock_ok(&r, "a", "b").await;
+        r.modifier.send(ModifierEvent::FnDown).unwrap();
+        wait_state(&r, UiState::Recording, "recording").await;
+        r.audio.speech(0.6);
+        r.audio.speech(0.6);
+        wait_state(&r, UiState::Processing, "processing without release").await;
+        r.modifier.send(ModifierEvent::FnUp).unwrap();
+        wait_for(
+            || r.platform.calls().contains(&"paste".to_string()),
+            "paste",
+        )
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn no_engine_reports_and_stays_idle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let platform = Arc::new(FakePlatform::new());
+        let audio = Arc::new(FakeAudio::default());
+        let ui = Arc::new(FakeUi::default());
+        let handle = spawn(
+            Deps {
+                platform,
+                audio: audio.clone(),
+                ui: ui.clone(),
+                vad_factory: Box::new(|| Box::new(PeakVad)),
+                runtime: tokio::runtime::Handle::current(),
+            },
+            fast_settings(),
+            None,
+        );
+        let m = handle.modifier_sender();
+        m.send(ModifierEvent::FnDown).unwrap();
+        wait_for(
+            || {
+                ui.messages
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|x| x.msg == Msg::WidgetEngineUnavailable)
+            },
+            "engine unavailable",
+        )
+        .await;
+        m.send(ModifierEvent::FnUp).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            *audio.stops.lock().unwrap(),
+            1,
+            "the armed stream was closed"
+        );
+        drop(tmp);
+    }
+}
