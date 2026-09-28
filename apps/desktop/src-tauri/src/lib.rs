@@ -3,6 +3,7 @@
 pub mod app;
 pub mod context;
 pub mod hotkey;
+pub mod i18n;
 pub mod insert;
 pub mod platform;
 pub mod settings;
