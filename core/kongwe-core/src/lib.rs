@@ -1,6 +1,7 @@
 //! Kongwe dictation core.
 
 pub mod config;
+pub mod dictionary;
 pub mod paths;
 pub mod protocol;
 pub mod secrets;
