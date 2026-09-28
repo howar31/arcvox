@@ -3,6 +3,7 @@
 pub mod app;
 pub mod audio;
 pub mod context;
+pub mod dictation;
 pub mod hotkey;
 pub mod i18n;
 pub mod insert;
