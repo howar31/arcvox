@@ -10,6 +10,12 @@ Platform-independent core of Arcvox: configuration, ASR and LLM providers, the p
 - `steps`, `pipeline`: per-profile step chain (asr, opencc, llm, rules) with degradation.
 - `history`: SQLite utterance history with retention.
 - `engine`, `session`: public entry point.
+- `audio`: f32 sample buffering and WAV PCM16 encoding for HTTP providers.
+- `dictionary`: one dictionary feeding the ASR hotword prompt, LLM term list, and post-processing aliases.
+- `paths`: per-OS data, cache, and recordings directory resolution.
+- `profile`: picks a session's profile from an override, app matchers, or the default.
+- `prompt`: assembles the layered prompt (base, profile addition, context, dictionary, few-shot, utterance).
+- `secrets`: `SecretStore` trait for API keys, with an in-memory implementation for tests.
 
 ## Tests
 

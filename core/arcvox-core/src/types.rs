@@ -43,6 +43,7 @@ pub enum ErrorCode {
     ProviderError,
     InvalidConfig,
     NoAudio,
+    NoSpeech,
     Cancelled,
     Internal,
 }
