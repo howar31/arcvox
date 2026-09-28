@@ -7,6 +7,8 @@ use async_trait::async_trait;
 use crate::config::{DictionaryEntry, General, Profile};
 use crate::types::{AudioClip, Context, ErrorCode, StepName};
 
+pub mod asr;
+pub mod llm;
 pub mod opencc;
 pub mod rules;
 
