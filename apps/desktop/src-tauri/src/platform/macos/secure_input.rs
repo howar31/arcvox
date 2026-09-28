@@ -7,5 +7,7 @@ extern "C" {
 }
 
 pub fn is_active() -> bool {
+    // SAFETY: `IsSecureEventInputEnabled` takes no arguments and has no
+    // preconditions; it only reads process-wide secure-input state.
     unsafe { IsSecureEventInputEnabled() != 0 }
 }

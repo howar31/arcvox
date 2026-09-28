@@ -137,6 +137,12 @@ impl Ui for TauriUi {
                 language: language.tag(),
             },
         );
+        // A plain state change never carries a copyable message, so the
+        // panel goes back to click-through every time.
+        let app = self.app.clone();
+        let _ = self
+            .app
+            .run_on_main_thread(move || widget::set_click_through(&app, true));
         match state {
             UiState::Recording | UiState::Locked | UiState::Processing | UiState::Inserting => {
                 self.show()
@@ -169,6 +175,12 @@ impl Ui for TauriUi {
                 language: language.tag(),
             },
         );
+        // Only a copyable message has a Copy button to click, so only it
+        // makes the panel take mouse events.
+        let app = self.app.clone();
+        let _ = self
+            .app
+            .run_on_main_thread(move || widget::set_click_through(&app, !copyable));
         self.show();
         self.hide_after(if copyable {
             HIDE_AFTER_COPYABLE

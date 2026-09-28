@@ -18,7 +18,10 @@
     accessibility = (await permissions()).accessibility;
     autostart = await isEnabled();
     draft = structuredClone($state.snapshot(client.value!));
-    general = structuredClone($state.snapshot(config.value!.general));
+    // `config.value` is null when the engine failed to open; the
+    // client-settings section above still works since `client.json`
+    // loads independently, but there is no core config to read here.
+    if (config.value) general = structuredClone($state.snapshot(config.value.general));
   });
 
   async function saveClient() {

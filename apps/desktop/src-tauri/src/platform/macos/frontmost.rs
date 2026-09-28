@@ -55,8 +55,8 @@ fn window_title_and_url(pid: i32, bundle_id: Option<&str>) -> (Option<String>, O
     let title = window.attribute_string(AX_TITLE).filter(|s| !s.is_empty());
     let url = if is_browser(bundle_id) {
         window
-            .attribute_string(AX_DOCUMENT)
-            .or_else(|| window.attribute_string(AX_URL))
+            .attribute_url(AX_DOCUMENT)
+            .or_else(|| window.attribute_url(AX_URL))
             .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
     } else {
         None

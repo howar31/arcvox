@@ -59,7 +59,7 @@
     {/each}
   </tbody>
 </table>
-<button onclick={() => edit(blank())}>{t("profiles.add")}</button>
+<button onclick={() => edit(blank())} disabled={!config.value}>{t("profiles.add")}</button>
 
 {#if editing}
 <section class="form">

@@ -30,7 +30,9 @@ pub fn snapshot() -> ClipboardSnapshot {
 
 pub fn text() -> Option<String> {
     let pb = NSPasteboard::generalPasteboard();
-    // `NSPasteboardTypeString` is an extern static; reading it needs unsafe.
+    // SAFETY: `NSPasteboardTypeString` is a process-lifetime extern static;
+    // objc2 requires unsafe to read it, and the call has no other
+    // precondition.
     let s = unsafe { pb.stringForType(NSPasteboardTypeString) }?;
     Some(s.to_string())
 }
@@ -38,6 +40,9 @@ pub fn text() -> Option<String> {
 pub fn write_text(text: &str) {
     let pb = NSPasteboard::generalPasteboard();
     pb.clearContents();
+    // SAFETY: `NSPasteboardTypeString` is a valid extern static; the
+    // `NSString` argument is owned by this call and kept alive for its
+    // duration.
     unsafe {
         pb.setString_forType(&NSString::from_str(text), NSPasteboardTypeString);
     }

@@ -84,6 +84,19 @@ pub fn show_at_bottom<R: Runtime>(app: &AppHandle<R>) {
     let _ = window.show();
 }
 
+/// Toggles whether the widget panel ignores mouse events. The panel is
+/// click-through by default so it never steals clicks from the app
+/// underneath it; it becomes interactive only while a copyable message
+/// (with a Copy button) is shown. Must be called on the main thread.
+pub fn set_click_through<R: Runtime>(app: &AppHandle<R>, ignore: bool) {
+    let Some(window) = app.get_webview_window(WINDOW) else {
+        return;
+    };
+    if let Err(e) = window.set_ignore_cursor_events(ignore) {
+        tracing::debug!(error = %e, "widget click-through not applied");
+    }
+}
+
 pub fn hide<R: Runtime>(app: &AppHandle<R>) {
     #[cfg(target_os = "macos")]
     {
