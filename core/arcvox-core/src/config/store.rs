@@ -3,7 +3,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tokio::sync::watch;
 
@@ -32,6 +32,10 @@ pub enum StoreError {
 pub struct ConfigStore {
     dirs: DataDir,
     tx: watch::Sender<Arc<Config>>,
+    /// Serializes the read-modify-write sequence in `update`, `set_base_prompt`,
+    /// and `restore_base_prompt` so concurrent callers cannot compute their
+    /// `next` value from a stale snapshot and clobber each other's write.
+    write_lock: Mutex<()>,
 }
 
 impl ConfigStore {
@@ -72,6 +76,7 @@ impl ConfigStore {
         Ok(Self {
             dirs: dirs.clone(),
             tx,
+            write_lock: Mutex::new(()),
         })
     }
 
@@ -85,7 +90,11 @@ impl ConfigStore {
 
     /// Applies `f` to a copy, validates, writes atomically, then publishes.
     /// On validation failure nothing is written and the old config stays current.
+    ///
+    /// Holds `write_lock` for the whole read-modify-write-publish sequence so
+    /// concurrent callers serialize instead of racing on a stale `current()`.
     pub fn update(&self, f: impl FnOnce(&mut Config)) -> Result<Arc<Config>, StoreError> {
+        let _guard = self.write_lock.lock().unwrap();
         let mut next = (*self.current()).clone();
         f(&mut next);
         next.schema_version = SCHEMA_VERSION;
@@ -95,7 +104,10 @@ impl ConfigStore {
             serde_json::to_string_pretty(&next).unwrap().as_bytes(),
         )?;
         let next = Arc::new(next);
-        let _ = self.tx.send(next.clone());
+        // `send_replace` (unlike `send`) always publishes the new value, even
+        // when there are currently no subscribers; `current()` must reflect
+        // every successful update regardless of whether anyone is watching.
+        self.tx.send_replace(next.clone());
         Ok(next)
     }
 
@@ -111,11 +123,19 @@ impl ConfigStore {
     }
 
     pub fn set_base_prompt(&self, text: &str) -> Result<(), StoreError> {
+        let _guard = self.write_lock.lock().unwrap();
         write_atomic(&self.dirs.base_prompt_path(), text.as_bytes())
     }
 
     pub fn restore_base_prompt(&self) -> Result<String, StoreError> {
-        self.set_base_prompt(DEFAULT_BASE_PROMPT)?;
+        // Locks directly rather than calling `set_base_prompt` (which also
+        // locks `write_lock`): `Mutex` is not reentrant, so nesting would
+        // deadlock on the same thread.
+        let _guard = self.write_lock.lock().unwrap();
+        write_atomic(
+            &self.dirs.base_prompt_path(),
+            DEFAULT_BASE_PROMPT.as_bytes(),
+        )?;
         Ok(DEFAULT_BASE_PROMPT.to_string())
     }
 }
@@ -261,5 +281,43 @@ mod tests {
             .update(|c| c.profiles[0].steps = vec![StepSpec::Asr])
             .unwrap();
         assert_eq!(cfg.profiles[0].steps, vec![StepSpec::Asr]);
+    }
+
+    /// Regression test for a lost-update race: without `write_lock` serializing
+    /// `update`'s read-modify-write-publish sequence, two threads can both read
+    /// the same `current()` snapshot, and the second writer's `next` overwrites
+    /// the first writer's change instead of building on it.
+    #[test]
+    fn concurrent_updates_do_not_lose_writes() {
+        let (_tmp, store) = store();
+        let store = Arc::new(store);
+        store
+            .update(|c| c.general.history_retention_days = 0)
+            .unwrap();
+
+        const THREADS: u32 = 4;
+        const INCREMENTS_PER_THREAD: u32 = 50;
+
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let store = Arc::clone(&store);
+                std::thread::spawn(move || {
+                    for _ in 0..INCREMENTS_PER_THREAD {
+                        store
+                            .update(|c| c.general.history_retention_days += 1)
+                            .unwrap();
+                    }
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        assert_eq!(
+            store.current().general.history_retention_days,
+            THREADS * INCREMENTS_PER_THREAD
+        );
     }
 }
