@@ -51,6 +51,11 @@ pub struct PruneReport {
     pub recordings_deleted: usize,
 }
 
+/// Contract for `audio_path` on every row: it is an absolute path produced
+/// by the engine under `DataDir::recordings_dir()`. `prune` and `clear_all`
+/// compare paths exactly as given (via `Path::starts_with`) and never
+/// canonicalize them, so callers are responsible for always storing and
+/// passing absolute, already-resolved paths.
 pub struct HistoryStore {
     conn: Mutex<Connection>,
 }
@@ -142,7 +147,17 @@ impl HistoryStore {
     }
 
     /// Deletes rows older than `history_days` and recording files older than
-    /// `recording_days` (the row keeps its text; `audio_path` is cleared).
+    /// `recording_days` (the row keeps its text; `audio_path` is cleared
+    /// once the file is actually gone).
+    ///
+    /// File removal is best effort and never aborts the prune: a file that
+    /// is missing, lives outside `recordings_dir`, or fails to delete (for
+    /// example because the path is a directory) is simply left alone, and
+    /// the loop moves on to the next row. `PruneReport::recordings_deleted`
+    /// only counts files this call actually removed; a row whose recording
+    /// could not be removed keeps its `audio_path` so the reference is not
+    /// silently lost. The `DELETE FROM utterances` for expired rows always
+    /// runs, regardless of any file errors encountered along the way.
     pub fn prune(
         &self,
         history_days: u32,
@@ -164,14 +179,18 @@ impl HistoryStore {
         drop(stmt);
         for (id, path) in old {
             let p = PathBuf::from(&path);
-            if p.starts_with(recordings_dir) && p.exists() {
-                std::fs::remove_file(&p)?;
+            if p.starts_with(recordings_dir) && p.exists() && std::fs::remove_file(&p).is_ok() {
                 report.recordings_deleted += 1;
             }
-            conn.execute(
-                "UPDATE utterances SET audio_path = NULL WHERE id = ?1",
-                params![id],
-            )?;
+            // Clear the reference only once the file is confirmed gone. A
+            // failed removal, or a path outside recordings_dir that still
+            // exists, leaves the row pointing at the still-present file.
+            if !p.exists() {
+                conn.execute(
+                    "UPDATE utterances SET audio_path = NULL WHERE id = ?1",
+                    params![id],
+                )?;
+            }
         }
 
         let mut stmt = conn.prepare(
@@ -183,8 +202,7 @@ impl HistoryStore {
         drop(stmt);
         for path in doomed {
             let p = PathBuf::from(&path);
-            if p.starts_with(recordings_dir) && p.exists() {
-                std::fs::remove_file(&p)?;
+            if p.starts_with(recordings_dir) && p.exists() && std::fs::remove_file(&p).is_ok() {
                 report.recordings_deleted += 1;
             }
         }
@@ -195,19 +213,24 @@ impl HistoryStore {
         Ok(report)
     }
 
+    /// Empties the table and best-effort deletes every `*.wav` file directly
+    /// inside `recordings_dir`. The table delete always runs; a directory
+    /// that cannot be read, or an individual file that cannot be removed,
+    /// is skipped rather than aborting the call.
     pub fn clear_all(&self, recordings_dir: &Path) -> Result<(), HistoryError> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM utterances", [])?;
         if recordings_dir.is_dir() {
-            for entry in std::fs::read_dir(recordings_dir)? {
-                let entry = entry?;
-                if entry
-                    .path()
-                    .extension()
-                    .map(|e| e == "wav")
-                    .unwrap_or(false)
-                {
-                    std::fs::remove_file(entry.path())?;
+            if let Ok(entries) = std::fs::read_dir(recordings_dir) {
+                for entry in entries.flatten() {
+                    if entry
+                        .path()
+                        .extension()
+                        .map(|e| e == "wav")
+                        .unwrap_or(false)
+                    {
+                        let _ = std::fs::remove_file(entry.path());
+                    }
                 }
             }
         }
@@ -307,6 +330,62 @@ mod tests {
         );
         assert!(s.get(fresh).unwrap().is_some());
         assert_eq!(s.list_recent(10).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn prune_continues_when_a_recording_cannot_be_removed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rec = tmp.path().join("recordings");
+        std::fs::create_dir_all(&rec).unwrap();
+        // A directory named like a recording: remove_file fails on it.
+        let stuck = rec.join("stuck.wav");
+        std::fs::create_dir_all(&stuck).unwrap();
+        std::fs::write(stuck.join("inner.txt"), b"x").unwrap();
+        let old_wav = rec.join("old.wav");
+        std::fs::write(&old_wav, b"x").unwrap();
+
+        let now = now_unix();
+        let ts = now - 100 * 86_400;
+        let s = HistoryStore::open_in_memory().unwrap();
+        s.insert(new(ts, Some(stuck.clone()))).unwrap();
+        s.insert(new(ts, Some(old_wav.clone()))).unwrap();
+        s.insert(new(ts, None)).unwrap();
+
+        let report = s.prune(90, 7, &rec).unwrap();
+        assert_eq!(
+            report,
+            PruneReport {
+                rows_deleted: 3,
+                recordings_deleted: 1
+            }
+        );
+        assert!(!old_wav.exists());
+        assert!(stuck.exists(), "a removal failure must not stop the prune");
+    }
+
+    #[test]
+    fn prune_keeps_audio_path_for_files_outside_recordings_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rec = tmp.path().join("recordings");
+        std::fs::create_dir_all(&rec).unwrap();
+        let outside = tmp.path().join("outside.wav");
+        std::fs::write(&outside, b"x").unwrap();
+
+        let now = now_unix();
+        let s = HistoryStore::open_in_memory().unwrap();
+        let id = s
+            .insert(new(now - 10 * 86_400, Some(outside.clone())))
+            .unwrap();
+
+        let report = s.prune(90, 7, &rec).unwrap();
+        assert!(outside.exists());
+        let got = s.get(id).unwrap().unwrap();
+        assert_eq!(
+            got.audio_path,
+            Some(outside),
+            "reference must not be silently wiped"
+        );
+        assert_eq!(report.recordings_deleted, 0);
     }
 
     #[test]
