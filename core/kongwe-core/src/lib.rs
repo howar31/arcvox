@@ -3,15 +3,24 @@
 pub mod audio;
 pub mod config;
 pub mod dictionary;
+pub mod engine;
 pub mod history;
 pub mod paths;
 pub mod pipeline;
+pub mod profile;
 pub mod prompt;
 pub mod protocol;
 pub mod providers;
 pub mod secrets;
+pub mod session;
 pub mod steps;
 pub mod types;
+
+pub use engine::{Engine, EngineError, SessionRequest, MIN_UTTERANCE_SECS};
+pub use paths::DataDir;
+pub use protocol::{Event, PROTOCOL_VERSION};
+pub use secrets::{MemorySecretStore, SecretError, SecretStore};
+pub use session::Session;
 
 /// Sample rate every session accepts, in Hz. Mono f32 samples.
 pub const SAMPLE_RATE: u32 = 16_000;
