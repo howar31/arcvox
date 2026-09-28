@@ -4,6 +4,7 @@ pub mod audio;
 pub mod config;
 pub mod dictionary;
 pub mod paths;
+pub mod pipeline;
 pub mod prompt;
 pub mod protocol;
 pub mod providers;
