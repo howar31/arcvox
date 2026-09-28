@@ -131,6 +131,16 @@ impl HistoryStore {
         Ok(())
     }
 
+    /// Removes one row. Used to unwind a history insert for a session that
+    /// was cancelled after the row was already written.
+    pub fn delete(&self, id: HistoryId) -> Result<(), HistoryError> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM utterances WHERE id = ?1", params![id.0])?;
+        Ok(())
+    }
+
     pub fn get(&self, id: HistoryId) -> Result<Option<Utterance>, HistoryError> {
         let conn = self.conn.lock().unwrap();
         let row = conn
@@ -288,6 +298,14 @@ mod tests {
         let recent = s.list_recent(10).unwrap();
         assert_eq!(recent.iter().map(|u| u.id).collect::<Vec<_>>(), vec![b, a]);
         assert_eq!(s.get(HistoryId(999)).unwrap(), None);
+    }
+
+    #[test]
+    fn delete_removes_row() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let id = s.insert(new(1, None)).unwrap();
+        s.delete(id).unwrap();
+        assert_eq!(s.get(id).unwrap(), None);
     }
 
     #[test]
