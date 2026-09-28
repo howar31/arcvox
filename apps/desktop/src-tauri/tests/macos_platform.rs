@@ -4,8 +4,10 @@
 //! inherits the terminal's grant).
 #![cfg(target_os = "macos")]
 
+use arcvox_core::SecretStore;
 use arcvox_desktop::platform::macos::MacPlatform;
-use arcvox_desktop::platform::Platform;
+use arcvox_desktop::platform::{ClipboardSnapshot, Platform};
+use arcvox_desktop::secrets::KeychainStore;
 
 #[test]
 #[ignore]
@@ -28,4 +30,37 @@ fn secure_input_is_off_in_a_plain_terminal() {
 fn accessibility_trust_query_does_not_prompt() {
     let trusted = MacPlatform::new().accessibility_trusted(false);
     eprintln!("trusted = {trusted}");
+}
+
+#[test]
+#[ignore]
+fn pasteboard_round_trip_keeps_text() {
+    let p = MacPlatform::new();
+    // Keep the owner's real clipboard intact across this test.
+    let original = p.clipboard_snapshot();
+    p.clipboard_write_text("arcvox-test-before");
+    let snap = p.clipboard_snapshot();
+    assert!(!snap.items.is_empty());
+    p.clipboard_write_text("arcvox-test-during");
+    assert_eq!(p.clipboard_text().as_deref(), Some("arcvox-test-during"));
+    p.clipboard_restore(snap);
+    assert_eq!(p.clipboard_text().as_deref(), Some("arcvox-test-before"));
+    p.clipboard_restore(ClipboardSnapshot::default());
+    assert_eq!(p.clipboard_text(), None);
+    p.clipboard_restore(original);
+}
+
+#[test]
+#[ignore]
+fn keychain_round_trip() {
+    let s = KeychainStore::new();
+    let key = "arcvox-test-key";
+    s.delete(key).unwrap();
+    assert_eq!(s.get(key).unwrap(), None);
+    s.set(key, "v1").unwrap();
+    assert_eq!(s.get(key).unwrap().as_deref(), Some("v1"));
+    s.set(key, "v2").unwrap();
+    assert_eq!(s.get(key).unwrap().as_deref(), Some("v2"));
+    s.delete(key).unwrap();
+    assert_eq!(s.get(key).unwrap(), None);
 }

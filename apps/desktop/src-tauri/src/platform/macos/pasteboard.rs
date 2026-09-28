@@ -1,0 +1,68 @@
+//! Snapshot, write, and restore of the general pasteboard. The snapshot
+//! keeps every item and every type so a paste round trip does not lose
+//! files, rich text, or images the user had copied.
+
+use objc2::runtime::ProtocolObject;
+use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardTypeString, NSPasteboardWriting};
+use objc2_foundation::{NSArray, NSData, NSString};
+
+use crate::platform::ClipboardSnapshot;
+
+pub fn snapshot() -> ClipboardSnapshot {
+    let pb = NSPasteboard::generalPasteboard();
+    let mut items = Vec::new();
+    if let Some(list) = pb.pasteboardItems() {
+        for i in 0..list.count() {
+            let item = list.objectAtIndex(i);
+            let mut entry = Vec::new();
+            let types = item.types();
+            for t in 0..types.count() {
+                let ty = types.objectAtIndex(t);
+                if let Some(data) = item.dataForType(&ty) {
+                    entry.push((ty.to_string(), data.to_vec()));
+                }
+            }
+            items.push(entry);
+        }
+    }
+    ClipboardSnapshot { items }
+}
+
+pub fn text() -> Option<String> {
+    let pb = NSPasteboard::generalPasteboard();
+    // `NSPasteboardTypeString` is an extern static; reading it needs unsafe.
+    let s = unsafe { pb.stringForType(NSPasteboardTypeString) }?;
+    Some(s.to_string())
+}
+
+pub fn write_text(text: &str) {
+    let pb = NSPasteboard::generalPasteboard();
+    pb.clearContents();
+    unsafe {
+        pb.setString_forType(&NSString::from_str(text), NSPasteboardTypeString);
+    }
+}
+
+pub fn restore(snapshot: ClipboardSnapshot) {
+    let pb = NSPasteboard::generalPasteboard();
+    pb.clearContents();
+    if snapshot.items.is_empty() {
+        return;
+    }
+    let mut objects = Vec::new();
+    for entry in snapshot.items {
+        let item = NSPasteboardItem::new();
+        for (ty, bytes) in entry {
+            let ok = item.setData_forType(&NSData::with_bytes(&bytes), &NSString::from_str(&ty));
+            if !ok {
+                tracing::debug!(%ty, "pasteboard type could not be restored");
+            }
+        }
+        objects.push(ProtocolObject::from_retained(item));
+    }
+    let array = NSArray::from_retained_slice(&objects);
+    let array: &NSArray<ProtocolObject<dyn NSPasteboardWriting>> = &array;
+    if !pb.writeObjects(array) {
+        tracing::warn!("pasteboard restore failed");
+    }
+}
