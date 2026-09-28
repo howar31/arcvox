@@ -3,6 +3,7 @@
 pub mod audio;
 pub mod config;
 pub mod dictionary;
+pub mod history;
 pub mod paths;
 pub mod pipeline;
 pub mod prompt;
