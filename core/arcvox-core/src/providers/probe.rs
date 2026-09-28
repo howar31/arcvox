@@ -16,7 +16,7 @@ pub enum ProbeFailure {
     NotCompatible,
     MissingBaseUrl,
     MissingKey,
-    Other(String),
+    Other { message: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,7 +46,11 @@ pub async fn probe_http(
         Some(r) => match secrets.get(r) {
             Ok(Some(k)) => Some(k),
             Ok(None) => return ProbeResult::fail(ProbeFailure::MissingKey),
-            Err(e) => return ProbeResult::fail(ProbeFailure::Other(e.to_string())),
+            Err(e) => {
+                return ProbeResult::fail(ProbeFailure::Other {
+                    message: e.to_string(),
+                })
+            }
         },
         None => None,
     };
@@ -61,7 +65,9 @@ pub async fn probe_http(
     }
     match req.send().await {
         Err(e) if e.is_connect() || e.is_timeout() => ProbeResult::fail(ProbeFailure::Unreachable),
-        Err(e) => ProbeResult::fail(ProbeFailure::Other(e.to_string())),
+        Err(e) => ProbeResult::fail(ProbeFailure::Other {
+            message: e.to_string(),
+        }),
         Ok(resp) => match resp.status().as_u16() {
             401 | 403 => ProbeResult::fail(ProbeFailure::Unauthorized),
             200 => match resp.json::<serde_json::Value>().await {
@@ -161,5 +167,31 @@ mod tests {
         c.base_url = Some(Url::parse("http://127.0.0.1:9/v1").unwrap());
         let r = probe_http(&reqwest::Client::new(), &c, &secrets()).await;
         assert_eq!(r.failure, Some(ProbeFailure::Unreachable));
+    }
+
+    #[test]
+    fn probe_failure_serializes_all_variants() {
+        let variants = [
+            ProbeFailure::Unreachable,
+            ProbeFailure::Unauthorized,
+            ProbeFailure::NotCompatible,
+            ProbeFailure::MissingBaseUrl,
+            ProbeFailure::MissingKey,
+            ProbeFailure::Other {
+                message: "x".into(),
+            },
+        ];
+        for v in variants {
+            let json = serde_json::to_value(&v).unwrap();
+            let back: ProbeFailure = serde_json::from_value(json).unwrap();
+            assert_eq!(back, v);
+        }
+        assert_eq!(
+            serde_json::to_value(ProbeFailure::Other {
+                message: "x".into()
+            })
+            .unwrap(),
+            json!({"kind": "other", "message": "x"})
+        );
     }
 }

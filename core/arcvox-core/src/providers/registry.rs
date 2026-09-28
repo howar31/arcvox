@@ -16,8 +16,8 @@ use crate::types::{ErrorCode, ProviderId};
 pub struct ProviderRegistry {
     client: reqwest::Client,
     secrets: Arc<dyn SecretStore>,
-    asr: Mutex<HashMap<ProviderId, (ProviderConfig, u64, Arc<dyn AsrProvider>)>>,
-    llm: Mutex<HashMap<ProviderId, (ProviderConfig, Arc<dyn LlmProvider>)>>,
+    asr: Mutex<HashMap<ProviderId, (ProviderConfig, u64, Option<String>, Arc<dyn AsrProvider>)>>,
+    llm: Mutex<HashMap<ProviderId, (ProviderConfig, Option<String>, Arc<dyn LlmProvider>)>>,
 }
 
 impl ProviderRegistry {
@@ -53,9 +53,13 @@ impl ProviderRegistry {
         cfg: &ProviderConfig,
         general: &General,
     ) -> Result<Arc<dyn AsrProvider>, ProviderError> {
+        let key = self.resolve_key(cfg)?;
         let mut cache = self.asr.lock().unwrap();
-        if let Some((cached_cfg, cached_timeout, p)) = cache.get(&cfg.id) {
-            if cached_cfg == cfg && *cached_timeout == general.asr_timeout_secs {
+        if let Some((cached_cfg, cached_timeout, cached_key, p)) = cache.get(&cfg.id) {
+            if cached_cfg == cfg
+                && *cached_timeout == general.asr_timeout_secs
+                && *cached_key == key
+            {
                 return Ok(p.clone());
             }
         }
@@ -66,7 +70,7 @@ impl ProviderRegistry {
                     self.client.clone(),
                     base,
                     cfg.model.clone().unwrap_or_default(),
-                    self.resolve_key(cfg)?,
+                    key.clone(),
                     cfg.extra_headers.clone(),
                     cfg.label.clone(),
                     Duration::from_secs(general.asr_timeout_secs),
@@ -78,15 +82,16 @@ impl ProviderRegistry {
         };
         cache.insert(
             cfg.id.clone(),
-            (cfg.clone(), general.asr_timeout_secs, provider.clone()),
+            (cfg.clone(), general.asr_timeout_secs, key, provider.clone()),
         );
         Ok(provider)
     }
 
     pub fn llm(&self, cfg: &ProviderConfig) -> Result<Arc<dyn LlmProvider>, ProviderError> {
+        let key = self.resolve_key(cfg)?;
         let mut cache = self.llm.lock().unwrap();
-        if let Some((cached_cfg, p)) = cache.get(&cfg.id) {
-            if cached_cfg == cfg {
+        if let Some((cached_cfg, cached_key, p)) = cache.get(&cfg.id) {
+            if cached_cfg == cfg && *cached_key == key {
                 return Ok(p.clone());
             }
         }
@@ -97,14 +102,14 @@ impl ProviderRegistry {
                     self.client.clone(),
                     base,
                     cfg.model.clone().unwrap_or_default(),
-                    self.resolve_key(cfg)?,
+                    key.clone(),
                     cfg.extra_headers.clone(),
                     cfg.label.clone(),
                 ))
             }
             ProviderKind::Embedded | ProviderKind::Native => return Err(not_available(cfg)),
         };
-        cache.insert(cfg.id.clone(), (cfg.clone(), provider.clone()));
+        cache.insert(cfg.id.clone(), (cfg.clone(), key, provider.clone()));
         Ok(provider)
     }
 }
@@ -195,5 +200,26 @@ mod tests {
         ollama.kind = ProviderKind::Http;
         ollama.base_url = None;
         assert_eq!(r.llm(&ollama).err().unwrap().code, ErrorCode::InvalidConfig);
+    }
+
+    #[test]
+    fn rebuilds_when_secret_rotates() {
+        let secrets = Arc::new(MemorySecretStore::default());
+        secrets.set("gemini", "k1").unwrap();
+        let dyn_secrets: Arc<dyn SecretStore> = secrets.clone();
+        let r = ProviderRegistry::new(reqwest::Client::new(), dyn_secrets);
+        let cfg = Config::first_run();
+        let mut ollama = cfg
+            .provider(&ProviderId("local-ollama".into()))
+            .unwrap()
+            .clone();
+        ollama.api_key_ref = Some("gemini".into());
+
+        let a = r.llm(&ollama).unwrap();
+        secrets.set("gemini", "k2").unwrap();
+        let b = r.llm(&ollama).unwrap();
+        assert!(!Arc::ptr_eq(&a, &b));
+        let c = r.llm(&ollama).unwrap();
+        assert!(Arc::ptr_eq(&b, &c));
     }
 }
