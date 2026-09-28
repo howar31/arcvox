@@ -11,7 +11,7 @@ use crate::config::{Config, Profile, StepSpec};
 use crate::protocol::Event;
 use crate::providers::registry::ProviderRegistry;
 use crate::steps::asr::AsrStep;
-use crate::steps::llm::LlmStep;
+use crate::steps::llm::{LlmStep, UnavailableLlmStep};
 use crate::steps::opencc::OpenCcStep;
 use crate::steps::rules::RulesStep;
 use crate::steps::{PipelineContext, Step, StepError, StepInput};
@@ -64,11 +64,18 @@ impl Pipeline {
                             format!("llm provider {id} missing"),
                         )
                     })?;
-                    let provider = registry.llm(cfg).map_err(|e| StepError {
-                        recoverable: false,
-                        ..StepError::from(e)
-                    })?;
-                    Box::new(LlmStep::new(provider))
+                    // Unlike the ASR provider, an LLM provider that fails to build
+                    // (for example a missing API key) does not abort the whole
+                    // pipeline build: the step chain still needs an LLM slot so
+                    // `run` can degrade to the ASR text at run time instead of the
+                    // session never starting.
+                    let llm_step: Box<dyn Step> = match registry.llm(cfg) {
+                        Ok(provider) => Box::new(LlmStep::new(provider)),
+                        Err(e) => Box::new(UnavailableLlmStep {
+                            error: StepError::from(e),
+                        }),
+                    };
+                    llm_step
                 }
                 StepSpec::Rules => Box::new(RulesStep),
             };
@@ -125,6 +132,22 @@ impl Pipeline {
                             elapsed_ms: elapsed,
                         })
                         .await;
+                    // An ASR step that succeeds with only whitespace means no
+                    // speech was recognized. Sending that to the LLM would ask
+                    // it to refine nothing, so the session ends here instead.
+                    if name == StepName::Asr && text.trim().is_empty() {
+                        let err = StepError::fatal(ErrorCode::NoSpeech, "no speech recognized");
+                        let _ = events
+                            .send(Event::Error {
+                                step: Some(StepName::Asr),
+                                code: err.code,
+                                message: err.message.clone(),
+                                recoverable: err.recoverable,
+                                hint: err.hint.clone(),
+                            })
+                            .await;
+                        return Err(err);
+                    }
                 }
                 Err(err) => {
                     let _ = events
@@ -295,6 +318,70 @@ mod tests {
             }
         )));
         assert!(!events.iter().any(|e| matches!(e, Event::Refined { .. })));
+    }
+
+    #[tokio::test]
+    async fn empty_transcript_aborts_without_llm() {
+        let (tx, mut rx) = mpsc::channel(64);
+        let llm = FakeLlm::ok("x");
+        let p = pipeline(FakeAsr::ok("   "), llm.clone());
+        let err = p.run(audio(), &test_context(), &tx).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::NoSpeech);
+        let events = collect(&mut rx).await;
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Error {
+                step: Some(StepName::Asr),
+                code: ErrorCode::NoSpeech,
+                ..
+            }
+        )));
+        assert!(!events.iter().any(|e| matches!(e, Event::Refined { .. })));
+        assert!(llm.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn build_with_missing_llm_key_degrades_at_run() {
+        // The ASR provider in `first_run` is a real HTTP provider, so a
+        // `Pipeline::build`-then-`run` test would need a live server. The
+        // build-level guarantee (that a missing LLM key does not fail the
+        // build) is covered separately by `build_succeeds_when_llm_key_is_missing`;
+        // here the pipeline is constructed directly with fakes to exercise
+        // what `Pipeline::build` would have produced: an `UnavailableLlmStep`
+        // in the LLM slot.
+        let p = Pipeline {
+            steps: vec![
+                Box::new(AsrStep::new(FakeAsr::ok("原文"))),
+                Box::new(crate::steps::llm::UnavailableLlmStep {
+                    error: StepError::recoverable(ErrorCode::ProviderUnauthorized, "missing key"),
+                }),
+            ],
+        };
+        let (tx, mut rx) = mpsc::channel(64);
+        let out = p.run(audio(), &test_context(), &tx).await.unwrap();
+        assert!(out.degraded);
+        assert_eq!(out.final_text, "原文");
+        let events = collect(&mut rx).await;
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Error {
+                step: Some(StepName::Llm),
+                recoverable: true,
+                code: ErrorCode::ProviderUnauthorized,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn build_succeeds_when_llm_key_is_missing() {
+        let mut config = Config::first_run();
+        config.providers[1].api_key_ref = Some("absent".into());
+        let registry = ProviderRegistry::new(
+            reqwest::Client::new(),
+            Arc::new(crate::secrets::MemorySecretStore::default()),
+        );
+        assert!(Pipeline::build(&config, config.default_profile(), &registry).is_ok());
     }
 
     #[tokio::test]

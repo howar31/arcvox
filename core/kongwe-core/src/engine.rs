@@ -19,7 +19,7 @@ use crate::providers::probe::{probe_http, ProbeFailure, ProbeResult};
 use crate::providers::registry::ProviderRegistry;
 use crate::secrets::SecretStore;
 use crate::session::{Session, SessionFlags};
-use crate::steps::{PipelineContext, StepError};
+use crate::steps::PipelineContext;
 use crate::types::{AppInfo, AudioClip, Context, ErrorCode, HistoryId, ProfileId, SessionId};
 use crate::SAMPLE_RATE;
 
@@ -37,8 +37,6 @@ pub enum EngineError {
     Io(#[from] std::io::Error),
     #[error("unknown session `{0}`")]
     UnknownSession(SessionId),
-    #[error(transparent)]
-    Pipeline(#[from] StepError),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -411,6 +409,7 @@ async fn run_session(
 mod tests {
     use super::*;
     use crate::secrets::MemorySecretStore;
+    use crate::types::StepName;
     use serde_json::json;
     use tokio_stream::StreamExt;
     use url::Url;
@@ -730,6 +729,11 @@ mod tests {
                 break;
             }
         }
+        // Land the cancel inside the 300 ms insert delay above, rather than
+        // racing it, so this deterministically exercises the claim-loser
+        // delete path in `run_session` (the `done_sent.swap` branch that
+        // deletes an already-inserted row).
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         s.cancel();
         drop(s);
 
@@ -786,5 +790,112 @@ mod tests {
             "cancel after completion must not emit another event: {result:?}"
         );
         assert!(r.engine.history().get(id).unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn empty_transcript_ends_with_error_and_no_history() {
+        let r = rig(false).await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"text": ""})))
+            .mount(&r.asr)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"choices":[{"message":{"content": "x"}}]})),
+            )
+            .expect(0)
+            .mount(&r.llm)
+            .await;
+        let s = r.engine.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        s.finish();
+        let events = drain(&s).await;
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Error {
+                step: Some(StepName::Asr),
+                code: ErrorCode::NoSpeech,
+                ..
+            }
+        )));
+        assert!(matches!(
+            events.last(),
+            Some(Event::Done {
+                history_id: None,
+                ..
+            })
+        ));
+        assert!(r.engine.history().list_recent(10).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn missing_llm_key_degrades_to_asr_text() {
+        let r = rig(false).await;
+        r.engine
+            .config()
+            .update(|c| c.providers[1].api_key_ref = Some("absent".into()))
+            .unwrap();
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"text": "原文"})))
+            .mount(&r.asr)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"choices":[{"message":{"content": "x"}}]})),
+            )
+            .expect(0)
+            .mount(&r.llm)
+            .await;
+        let s = r.engine.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        s.finish();
+        let events = drain(&s).await;
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, Event::Refined { text, degraded: true } if text == "原文")));
+        assert!(matches!(
+            events.last(),
+            Some(Event::Done {
+                history_id: Some(_),
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn llm_5xx_degrades_with_history_row() {
+        let r = rig(false).await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"text": "原文"})))
+            .mount(&r.asr)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&r.llm)
+            .await;
+        let s = r.engine.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        s.finish();
+        let events = drain(&s).await;
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, Event::Refined { text, degraded: true } if text == "原文")));
+        let Some(Event::Done {
+            history_id: Some(id),
+            ..
+        }) = events.last()
+        else {
+            panic!("{events:?}")
+        };
+        let row = r.engine.history().get(*id).unwrap().unwrap();
+        assert!(row.degraded);
     }
 }

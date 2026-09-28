@@ -44,22 +44,7 @@ impl ConfigStore {
         dirs.ensure().map_err(|e| io_err(&dirs.config_dir, e))?;
         let path = dirs.config_path();
         let config = if path.exists() {
-            let raw = std::fs::read_to_string(&path).map_err(|e| io_err(&path, e))?;
-            match serde_json::from_str::<serde_json::Value>(&raw)
-                .map_err(|e| e.to_string())
-                .and_then(migrate)
-                .and_then(|v| serde_json::from_value::<Config>(v).map_err(|e| e.to_string()))
-            {
-                Ok(config) => {
-                    validate(&config)?;
-                    config
-                }
-                Err(reason) => {
-                    let backup = broken_backup_path(&path);
-                    std::fs::rename(&path, &backup).map_err(|e| io_err(&backup, e))?;
-                    return Err(StoreError::Broken { backup, reason });
-                }
-            }
+            load_existing(&path)?
         } else {
             let config = Config::first_run();
             write_atomic(
@@ -94,7 +79,10 @@ impl ConfigStore {
     /// Holds `write_lock` for the whole read-modify-write-publish sequence so
     /// concurrent callers serialize instead of racing on a stale `current()`.
     pub fn update(&self, f: impl FnOnce(&mut Config)) -> Result<Arc<Config>, StoreError> {
-        let _guard = self.write_lock.lock().unwrap();
+        let _guard = self
+            .write_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut next = (*self.current()).clone();
         f(&mut next);
         next.schema_version = SCHEMA_VERSION;
@@ -123,7 +111,10 @@ impl ConfigStore {
     }
 
     pub fn set_base_prompt(&self, text: &str) -> Result<(), StoreError> {
-        let _guard = self.write_lock.lock().unwrap();
+        let _guard = self
+            .write_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         write_atomic(&self.dirs.base_prompt_path(), text.as_bytes())
     }
 
@@ -131,7 +122,10 @@ impl ConfigStore {
         // Locks directly rather than calling `set_base_prompt` (which also
         // locks `write_lock`): `Mutex` is not reentrant, so nesting would
         // deadlock on the same thread.
-        let _guard = self.write_lock.lock().unwrap();
+        let _guard = self
+            .write_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         write_atomic(
             &self.dirs.base_prompt_path(),
             DEFAULT_BASE_PROMPT.as_bytes(),
@@ -140,19 +134,66 @@ impl ConfigStore {
     }
 }
 
+/// Distinguishes the two ways `migrate` can fail, so `load_existing` can
+/// leave a newer-than-supported file untouched instead of moving it aside
+/// like a genuinely broken one.
+enum MigrateError {
+    /// `schema_version` is newer than this build supports.
+    Unsupported(u32),
+    /// `schema_version` is older than this build supports and there is no
+    /// migration path for it (only version 1 exists so far).
+    NoPath(u32),
+}
+
 /// Schema ladder. Version 1 is the only one so far. A higher version is
 /// refused so an older build never rewrites a newer file; `open` moves the
 /// file aside and reports the reason.
-fn migrate(value: serde_json::Value) -> Result<serde_json::Value, String> {
+fn migrate(value: serde_json::Value) -> Result<serde_json::Value, MigrateError> {
     let version = value
         .get("schema_version")
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as u32;
     match version {
         SCHEMA_VERSION => Ok(value),
-        v if v > SCHEMA_VERSION => Err(StoreError::UnsupportedSchema(v).to_string()),
-        v => Err(format!("schema_version {v} has no migration path")),
+        v if v > SCHEMA_VERSION => Err(MigrateError::Unsupported(v)),
+        v => Err(MigrateError::NoPath(v)),
     }
+}
+
+/// Reads and parses an existing `config.json`. A newer `schema_version` is
+/// reported and left on disk untouched; any other failure (malformed JSON,
+/// a schema_version with no migration path, a shape that does not
+/// deserialize, or a validation failure) moves the file aside to
+/// `config.json.broken-<ts>` and reports the reason.
+fn load_existing(path: &Path) -> Result<Config, StoreError> {
+    let raw = std::fs::read_to_string(path).map_err(|e| io_err(path, e))?;
+
+    let mark_broken = |reason: String| -> Result<Config, StoreError> {
+        let backup = broken_backup_path(path);
+        std::fs::rename(path, &backup).map_err(|e| io_err(&backup, e))?;
+        Err(StoreError::Broken { backup, reason })
+    };
+
+    let value: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => return mark_broken(e.to_string()),
+    };
+
+    let migrated = match migrate(value) {
+        Ok(v) => v,
+        Err(MigrateError::Unsupported(v)) => return Err(StoreError::UnsupportedSchema(v)),
+        Err(MigrateError::NoPath(v)) => {
+            return mark_broken(format!("schema_version {v} has no migration path"));
+        }
+    };
+
+    let config: Config = match serde_json::from_value(migrated) {
+        Ok(c) => c,
+        Err(e) => return mark_broken(e.to_string()),
+    };
+
+    validate(&config)?;
+    Ok(config)
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
@@ -258,11 +299,12 @@ mod tests {
         let raw = r#"{"schema_version": 99}"#;
         std::fs::write(dirs.config_path(), raw).unwrap();
         let err = ConfigStore::open(&dirs).unwrap_err();
-        let StoreError::Broken { backup, reason } = err else {
-            panic!("expected Broken, got {err}")
-        };
-        assert!(reason.contains("99"), "{reason}");
-        assert_eq!(std::fs::read_to_string(backup).unwrap(), raw);
+        assert!(matches!(err, StoreError::UnsupportedSchema(99)), "{err}");
+        assert!(
+            dirs.config_path().exists(),
+            "a newer-schema file must not be moved aside"
+        );
+        assert_eq!(std::fs::read_to_string(dirs.config_path()).unwrap(), raw);
     }
 
     #[test]

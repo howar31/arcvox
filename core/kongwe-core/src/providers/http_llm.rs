@@ -47,6 +47,7 @@ struct ChatResponse {
 #[derive(Deserialize)]
 struct Choice {
     message: Msg,
+    finish_reason: Option<String>,
 }
 #[derive(Deserialize)]
 struct Msg {
@@ -88,17 +89,21 @@ impl LlmProvider for HttpLlmProvider {
                 format!("{}: bad chat response: {e}", self.label),
             )
         })?;
-        let content = parsed
-            .choices
-            .into_iter()
-            .next()
-            .and_then(|c| c.message.content)
-            .ok_or_else(|| {
-                ProviderError::new(
-                    ErrorCode::ProviderError,
-                    format!("{}: no choices in response", self.label),
-                )
-            })?;
+        let choice = parsed.choices.into_iter().next();
+        let finish_reason = choice.as_ref().and_then(|c| c.finish_reason.clone());
+        let content = choice.and_then(|c| c.message.content).ok_or_else(|| {
+            ProviderError::new(
+                ErrorCode::ProviderError,
+                format!("{}: no choices in response", self.label),
+            )
+        })?;
+        if finish_reason.as_deref() == Some("length") {
+            return Err(ProviderError::new(
+                ErrorCode::ProviderError,
+                format!("{}: completion truncated by max_tokens", self.label),
+            )
+            .with_hint("raise llm_max_tokens in settings"));
+        }
         Ok(content)
     }
 }
@@ -209,5 +214,32 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::ProviderError);
+    }
+
+    #[tokio::test]
+    async fn truncated_completion_is_an_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices":[{"message":{"role":"assistant","content":"整理"},"finish_reason":"length"}]
+            })))
+            .mount(&server)
+            .await;
+        let base = Url::parse(&format!("{}/v1", server.uri())).unwrap();
+        let p = HttpLlmProvider::new(
+            reqwest::Client::new(),
+            &base,
+            "m",
+            None,
+            BTreeMap::new(),
+            "Ollama",
+        );
+        let err = p
+            .complete(vec![ChatMessage::user("U")], &opts())
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProviderError);
+        assert!(err.message.contains("completion truncated by max_tokens"));
     }
 }

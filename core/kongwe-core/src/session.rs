@@ -66,10 +66,12 @@ impl Session {
         }
     }
 
-    /// Stops everything. Emits exactly one `Done` (with no history id, and
-    /// with nothing recorded) regardless of how many times it is called or
-    /// whether the session was still recording, running its pipeline, or
-    /// already finished.
+    /// Stops everything. Calling it any number of times is safe. If it wins
+    /// the race against `run_session` (the session was still recording,
+    /// running its pipeline, or in the middle of recording its tail), it
+    /// emits at most one `Done` with no history id and nothing is recorded.
+    /// If the session had already completed, `cancel` is a no-op: no event
+    /// is emitted, and the row already recorded for it stays.
     pub fn cancel(&self) {
         self.flags.cancelled.store(true, Ordering::SeqCst);
         // Dropping the sender (rather than sending) wakes a task still
