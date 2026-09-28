@@ -4,6 +4,7 @@ pub mod config;
 pub mod paths;
 pub mod protocol;
 pub mod secrets;
+pub mod steps;
 pub mod types;
 
 /// Sample rate every session accepts, in Hz. Mono f32 samples.
