@@ -38,7 +38,7 @@ pub fn apply_aliases(entries: &[DictionaryEntry], text: &str) -> String {
         .flat_map(|e| e.aliases.iter().map(move |a| (a.as_str(), e.term.as_str())))
         .filter(|(alias, _)| !alias.is_empty())
         .collect();
-    pairs.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    pairs.sort_by_key(|(alias, _)| std::cmp::Reverse(alias.len()));
 
     let mut out = String::new();
     let mut i = 0;
