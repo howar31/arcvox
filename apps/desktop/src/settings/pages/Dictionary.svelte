@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { errorMessage, setDictionary, type DictionaryEntry } from "../../lib/api";
   import { t } from "../../lib/i18n";
   import { config } from "../../lib/store.svelte";
@@ -7,14 +8,20 @@
   let status = $state("");
   let term = $state("");
   let aliases = $state("");
-  $effect(() => { if (config.value) entries = structuredClone($state.snapshot(config.value.dictionary)); });
+  onMount(() => { if (config.value) entries = structuredClone($state.snapshot(config.value.dictionary)); });
 
   function add() {
     if (!term.trim()) return;
     entries.push({ term: term.trim(), aliases: aliases.split(/[,，\s]+/).map((a) => a.trim()).filter(Boolean), asr_hint: true });
     term = ""; aliases = "";
   }
-  async function save() { try { await setDictionary(entries); status = t("common.saved"); } catch (e) { status = errorMessage(e); } }
+  async function save() {
+    try {
+      const result = await setDictionary(entries);
+      entries = structuredClone($state.snapshot(result.dictionary));
+      status = t("common.saved");
+    } catch (e) { status = errorMessage(e); }
+  }
 </script>
 
 <h2>{t("nav.dictionary")}</h2>
