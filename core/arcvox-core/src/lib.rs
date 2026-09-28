@@ -3,6 +3,7 @@
 pub mod config;
 pub mod dictionary;
 pub mod paths;
+pub mod prompt;
 pub mod protocol;
 pub mod secrets;
 pub mod steps;
