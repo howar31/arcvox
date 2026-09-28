@@ -15,3 +15,18 @@
 }
 body { margin: 0; background: var(--bg); color: var(--fg); }
 body.widget { background: transparent; }
+
+section { margin: 0 0 20px; }
+h2 { margin: 0 0 12px; font-size: 18px; }
+h3 { margin: 12px 0 6px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+label { display: block; margin: 4px 0; }
+input[type="text"], input[type="number"], input[type="password"], input:not([type]), select, textarea { font: inherit; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: inherit; }
+textarea { width: 100%; box-sizing: border-box; font-family: ui-monospace, monospace; }
+button { font: inherit; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: inherit; }
+button.primary { background: var(--accent); color: white; border-color: transparent; }
+.row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.muted { color: var(--muted); }
+.status { color: var(--muted); min-height: 1.2em; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border); }
+.form { padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
