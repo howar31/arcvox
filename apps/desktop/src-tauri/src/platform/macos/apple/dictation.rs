@@ -9,10 +9,11 @@ use async_trait::async_trait;
 use kongwe_core::providers::{AsrHint, AsrProvider, ProviderError};
 use kongwe_core::types::{AudioClip, ErrorCode, Transcript};
 
-use super::ffi;
+use super::{ffi, locale_for_hint};
 
 pub struct AppleAsrProvider {
-    locale: String,
+    /// `None` derives the locale from each call's language hint.
+    locale: Option<String>,
     label: String,
     timeout: Duration,
 }
@@ -21,10 +22,25 @@ impl AppleAsrProvider {
     /// `locale` is a dictation locale such as `zh_TW` (see `locale_for_hint`).
     pub fn new(locale: String, label: String, timeout: Duration) -> Self {
         Self {
-            locale,
+            locale: Some(locale),
             label,
             timeout,
         }
+    }
+
+    /// Picks the dictation locale from `AsrHint::language` at each call.
+    pub fn from_hint(label: String, timeout: Duration) -> Self {
+        Self {
+            locale: None,
+            label,
+            timeout,
+        }
+    }
+
+    fn locale_for(&self, hint: &AsrHint) -> String {
+        self.locale
+            .clone()
+            .unwrap_or_else(|| locale_for_hint(hint.language.as_deref()).to_string())
     }
 }
 
@@ -113,7 +129,7 @@ impl AsrProvider for AppleAsrProvider {
     ) -> Result<Transcript, ProviderError> {
         let samples = audio.samples.clone();
         let rate = audio.sample_rate;
-        let locale = self.locale.clone();
+        let locale = self.locale_for(hint);
         let contextual = contextual_json(hint.prompt.as_deref());
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_for_task = cancel.clone();
@@ -169,5 +185,18 @@ mod tests {
         assert_eq!(map_code(3, "Apple").code, ErrorCode::NativeUnavailable);
         assert_eq!(map_code(8, "Apple").code, ErrorCode::Cancelled);
         assert_eq!(map_code(9, "Apple").code, ErrorCode::InferenceFailed);
+    }
+
+    #[test]
+    fn locale_comes_from_the_hint_unless_fixed() {
+        let hint = AsrHint {
+            language: Some("ja".into()),
+            prompt: None,
+        };
+        let from_hint = AppleAsrProvider::from_hint("A".into(), Duration::from_secs(1));
+        assert_eq!(from_hint.locale_for(&hint), "ja_JP");
+        assert_eq!(from_hint.locale_for(&AsrHint::default()), "zh_TW");
+        let fixed = AppleAsrProvider::new("en_US".into(), "A".into(), Duration::from_secs(1));
+        assert_eq!(fixed.locale_for(&hint), "en_US");
     }
 }

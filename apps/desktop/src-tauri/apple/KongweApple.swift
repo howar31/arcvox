@@ -1,14 +1,20 @@
-// C entry points over the Speech framework's on-device dictation.
-// Every entry point returns an Int32 status: 0 ok, 1 needs download,
+// C entry points over the Speech framework's on-device dictation and the
+// Foundation Models on-device language model.
+// Dictation entry points return an Int32 status: 0 ok, 1 needs download,
 // 2 locale unsupported, 3 requires macOS 26, 8 cancelled, 9 failed.
-// Callers must not call these on the main thread: each call blocks the
-// calling thread until the async work finishes.
+// Foundation Models codes are listed above `kw_apple_fm_status`.
+// Callers must not call the blocking entry points on the main thread: each
+// call blocks the calling thread until the async work finishes.
 
 import AVFoundation
 import Foundation
 
 #if canImport(Speech)
 import Speech
+#endif
+
+#if canImport(FoundationModels)
+import FoundationModels
 #endif
 
 private func cString(_ s: String) -> UnsafeMutablePointer<CChar>? { strdup(s) }
@@ -230,4 +236,97 @@ private func convert(_ samples: [Float], sampleRate: Double, to fmt: AVAudioForm
     }
     if status == .error || err != nil { return nil }
     return outBuf
+}
+
+// Foundation Models codes: 0 ok, 1 device not eligible, 2 Apple Intelligence
+// off, 3 model not ready, 4 requires macOS 26, 5 guardrail violation,
+// 6 context window exceeded, 7 language unsupported, 9 failed.
+
+@_cdecl("kw_apple_fm_status")
+public func kw_apple_fm_status() -> Int32 {
+    if #available(macOS 26, *) {
+        switch SystemLanguageModel.default.availability {
+        case .available: return 0
+        case .unavailable(let reason):
+            switch reason {
+            case .deviceNotEligible: return 1
+            case .appleIntelligenceNotEnabled: return 2
+            case .modelNotReady: return 3
+            @unknown default: return 9
+            }
+        }
+    }
+    return 4
+}
+
+/// `maxTokens` <= 0 leaves the response length to the model.
+@_cdecl("kw_apple_fm_complete")
+public func kw_apple_fm_complete(
+    _ instructions: UnsafePointer<CChar>,
+    _ prompt: UnsafePointer<CChar>,
+    _ maxTokens: Int32,
+    _ temperature: Double,
+    _ out: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+) -> Int32 {
+    out.pointee = nil
+    if #available(macOS 26, *) {
+        let ins = String(cString: instructions)
+        let pr = String(cString: prompt)
+        let tokens = Int(maxTokens)
+        let result = runBlocking { () async -> (Int32, String) in
+            await complete(instructions: ins, prompt: pr, maxTokens: tokens, temperature: temperature)
+        }
+        guard let (code, text) = result else { return 9 }
+        if code == 0 {
+            out.pointee = cString(text)
+            if out.pointee == nil { return 9 }
+        }
+        return code
+    }
+    return 4
+}
+
+@available(macOS 26, *)
+private func complete(
+    instructions: String, prompt: String, maxTokens: Int, temperature: Double
+) async -> (Int32, String) {
+    // Report why the model is unavailable rather than the generic failure
+    // the session would throw.
+    let status = kw_apple_fm_status()
+    if status != 0 { return (status, "") }
+    // The permissive guardrails let the model rewrite the user's own text,
+    // including sensitive topics, instead of refusing it.
+    let model = SystemLanguageModel(useCase: .general, guardrails: .permissiveContentTransformations)
+    let session = LanguageModelSession(model: model, instructions: instructions)
+    var opts = GenerationOptions()
+    opts.temperature = temperature
+    opts.maximumResponseTokens = maxTokens > 0 ? maxTokens : nil
+    do {
+        let response = try await session.respond(to: prompt, options: opts)
+        return (0, response.content)
+    } catch {
+        return (fmCode(error), "")
+    }
+}
+
+@available(macOS 26, *)
+private func fmCode(_ error: any Error) -> Int32 {
+    // macOS 27 reports generation failures through `LanguageModelError`.
+    if #available(macOS 27, *), let e = error as? LanguageModelError {
+        switch e {
+        case .guardrailViolation: return 5
+        case .contextSizeExceeded: return 6
+        case .unsupportedLanguageOrLocale: return 7
+        default: return 9
+        }
+    }
+    if let e = error as? LanguageModelSession.GenerationError {
+        switch e {
+        case .guardrailViolation: return 5
+        case .exceededContextWindowSize: return 6
+        case .unsupportedLanguageOrLocale: return 7
+        default: return 9
+        }
+    }
+    return 9
 }

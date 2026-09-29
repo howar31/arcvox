@@ -1,15 +1,22 @@
-//! Apple on-device speech through the Swift bridge in `apple/KongweApple.swift`.
+//! Apple on-device speech and language model through the Swift bridge in
+//! `apple/KongweApple.swift`.
 //!
 //! The bridge calls block the calling thread, so none of these functions may
 //! run on the main thread.
 
 mod dictation;
+mod factory;
 mod ffi;
+mod foundation_models;
 
 use std::ffi::{c_void, CString};
 use std::sync::Mutex;
 
+use kongwe_core::FirstRunDefaults;
+
 pub use dictation::AppleAsrProvider;
+pub use factory::AppleFactory;
+pub use foundation_models::{flatten_for_fm, map_fm_code, AppleLlmProvider};
 
 /// Readiness of an Apple on-device model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +39,18 @@ impl NativeStatus {
             1 => Self::NeedsDownload,
             2 => Self::LocaleUnsupported,
             3 => Self::OsTooOld,
+            other => Self::Failed(other),
+        }
+    }
+
+    /// Maps a Foundation Models availability code from the bridge.
+    pub fn from_fm_code(code: i32) -> Self {
+        match code {
+            0 => Self::Ready,
+            1 => Self::NotEligible,
+            2 => Self::IntelligenceOff,
+            3 => Self::ModelNotReady,
+            4 => Self::OsTooOld,
             other => Self::Failed(other),
         }
     }
@@ -58,6 +77,22 @@ pub fn dictation_status(locale: &str) -> NativeStatus {
     let loc = c_locale(locale);
     // SAFETY: `loc` outlives the call; the bridge copies the string.
     NativeStatus::from_code(unsafe { ffi::kw_apple_dictation_status(loc.as_ptr()) })
+}
+
+/// Whether the Foundation Models system model can run now.
+pub fn fm_status() -> NativeStatus {
+    // SAFETY: takes no arguments and does not block.
+    NativeStatus::from_fm_code(unsafe { ffi::kw_apple_fm_status() })
+}
+
+/// Which Apple providers a fresh config starts with. Dictation counts when its
+/// language can be installed later. Blocks.
+pub fn first_run_defaults() -> FirstRunDefaults {
+    let dictation = dictation_status(locale_for_hint(None));
+    FirstRunDefaults {
+        apple_dictation: matches!(dictation, NativeStatus::Ready | NativeStatus::NeedsDownload),
+        apple_foundation_models: fm_status() == NativeStatus::Ready,
+    }
 }
 
 unsafe extern "C" fn progress_trampoline<F: FnMut(f64)>(fraction: f64, user: *mut c_void) {
@@ -108,5 +143,15 @@ mod tests {
         assert_eq!(NativeStatus::from_code(3), NativeStatus::OsTooOld);
         assert_eq!(NativeStatus::from_code(1), NativeStatus::NeedsDownload);
         assert_eq!(NativeStatus::from_code(42), NativeStatus::Failed(42));
+    }
+
+    #[test]
+    fn fm_status_codes_map() {
+        assert_eq!(NativeStatus::from_fm_code(0), NativeStatus::Ready);
+        assert_eq!(NativeStatus::from_fm_code(1), NativeStatus::NotEligible);
+        assert_eq!(NativeStatus::from_fm_code(2), NativeStatus::IntelligenceOff);
+        assert_eq!(NativeStatus::from_fm_code(3), NativeStatus::ModelNotReady);
+        assert_eq!(NativeStatus::from_fm_code(4), NativeStatus::OsTooOld);
+        assert_eq!(NativeStatus::from_fm_code(9), NativeStatus::Failed(9));
     }
 }
