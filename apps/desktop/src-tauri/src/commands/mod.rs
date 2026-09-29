@@ -6,6 +6,7 @@ pub mod config;
 pub mod dictionary;
 pub mod history;
 pub mod models;
+pub mod native;
 pub mod profiles;
 pub mod prompt;
 pub mod providers;

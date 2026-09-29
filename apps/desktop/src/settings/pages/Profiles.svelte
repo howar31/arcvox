@@ -83,6 +83,7 @@
   <h3>{t("profiles.providers")}</h3>
   <label>ASR <select bind:value={editing.asr_provider}>{#each asrProviders as p}<option value={p.id}>{p.label}</option>{/each}</select></label>
   <label>LLM <select bind:value={editing.llm_provider}><option value={null}>{t("profiles.none")}</option>{#each llmProviders as p}<option value={p.id}>{p.label}</option>{/each}</select></label>
+  <p class="muted">{t("profiles.provider_hint")}</p>
   <label>{t("profiles.language_hint")} <select bind:value={editing.language_hint}><option value={null}>{t("profiles.none")}</option><option value="zh-TW">zh-TW</option><option value="en">en</option><option value="ja">ja</option></select></label>
   <h3>{t("profiles.prompt_addition")}</h3>
   <textarea rows="6" bind:value={editing.prompt_addition}></textarea>

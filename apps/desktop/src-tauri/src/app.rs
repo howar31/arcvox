@@ -86,6 +86,8 @@ pub fn run() {
             crate::commands::models::models_delete,
             crate::commands::models::models_import,
             crate::commands::models::models_dir,
+            crate::commands::native::native_status,
+            crate::commands::native::native_install_language,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
