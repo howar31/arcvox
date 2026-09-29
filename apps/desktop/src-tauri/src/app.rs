@@ -77,6 +77,14 @@ pub fn run() {
             crate::commands::secrets::secrets_delete,
             crate::commands::client::client_get,
             crate::commands::client::client_update,
+            crate::commands::models::models_manifest,
+            crate::commands::models::models_installed,
+            crate::commands::models::models_download,
+            crate::commands::models::models_download_recommended,
+            crate::commands::models::models_cancel,
+            crate::commands::models::models_delete,
+            crate::commands::models::models_import,
+            crate::commands::models::models_dir,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -120,11 +128,16 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
     let ui = Arc::new(TauriUi::new(app.clone(), language)?);
 
     let secrets = Arc::new(KeychainStore::new());
+    let manifest_url = settings.manifest_url.as_deref().and_then(|raw| {
+        url::Url::parse(raw)
+            .map_err(|e| tracing::warn!(error = %e, "ignoring invalid manifest_url"))
+            .ok()
+    });
     let models = Arc::new(ModelStore::new(
         &dirs,
         reqwest::Client::new(),
         BUNDLED_MANIFEST,
-        None,
+        manifest_url,
     ));
     let (engine, engine_error, runtime) = tauri::async_runtime::block_on(async {
         let runtime = tokio::runtime::Handle::current();
@@ -163,6 +176,7 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         engine.clone(),
     );
 
+    let state_models = models.clone();
     app.manage(AppState {
         models,
         engine: Mutex::new(engine.clone()),
@@ -174,6 +188,24 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         language: Mutex::new(language),
         engine_error: Mutex::new(engine_error.clone()),
     });
+
+    {
+        let mut rx = state_models.subscribe();
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(p) => {
+                        let _ =
+                            tauri::Emitter::emit_to(&app, "settings", "model-download-progress", p);
+                    }
+                    // Dropped events are only intermediate progress; keep receiving.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+    }
 
     if let Some(e) = engine.as_ref() {
         e.warm_up_default_asr();

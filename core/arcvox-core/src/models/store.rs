@@ -14,7 +14,7 @@ use url::Url;
 const CUSTOM_DIR: &str = "custom";
 const MANIFEST_TIMEOUT: Duration = Duration::from_secs(10);
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct InstalledModel {
     /// Catalogue id, or `custom/<file name>` for an imported file.
     pub id: String,

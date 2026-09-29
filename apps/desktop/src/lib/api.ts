@@ -2,12 +2,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 // Types match the JSON shapes produced by the core crate's serde derives.
+export type Runtime = "whisper" | "llama";
 export type ProviderKind = "http" | "embedded" | "native";
 export interface Capabilities { transcribe: boolean; chat: boolean; streaming: boolean; language_hint: boolean; hotwords: boolean }
 export interface ProviderConfig {
   id: string; label: string; kind: ProviderKind; capabilities: Capabilities;
   base_url: string | null; model: string | null; api_key_ref: string | null;
   extra_headers: Record<string, string>; model_path: string | null; native_id: string | null;
+  model_id: string | null; runtime: Runtime | null;
 }
 export type StepSpec = { step: "asr" } | { step: "opencc"; config: string } | { step: "llm" } | { step: "rules" };
 export interface Example { raw: string; refined: string }
@@ -20,6 +22,7 @@ export interface DictionaryEntry { term: string; aliases: string[]; asr_hint: bo
 export interface General {
   history_retention_days: number; keep_recordings: boolean; recording_retention_days: number; context_limit_bytes: number;
   asr_timeout_secs: number; llm_timeout_secs: number; llm_temperature: number; llm_max_tokens: number | null;
+  llm_idle_unload_secs: number;
 }
 export interface Config { schema_version: number; general: General; providers: ProviderConfig[]; profiles: Profile[]; dictionary: DictionaryEntry[] }
 export interface ProbeResult { ok: boolean; failure: { kind: string; message?: string } | null }
@@ -36,6 +39,7 @@ export interface ClientSettings {
   insertion: { per_app: Record<string, InsertMethod> };
   max_utterance_secs: number;
   ui_language: "system" | "zh-tw" | "en";
+  manifest_url: string | null;
 }
 export interface Permissions { accessibility: boolean }
 export interface RunningApp { bundle_id: string; name: string }
@@ -89,4 +93,23 @@ export function onWidgetMessage(cb: (p: MessagePayload) => void): Promise<Unlist
 export function errorMessage(e: unknown): string {
   if (typeof e === "object" && e && "message" in e) return String((e as CmdError).message);
   return String(e);
+}
+
+export interface ModelEntry { id: string; runtime: Runtime; role: "asr" | "llm"; label: string; description: string; languages: string[]; url: string; sha256: string; size_bytes: number; license: string; recommended: boolean; min_ram_gb: number }
+export interface ManifestView { source: "remote" | "cached" | "bundled"; models: ModelEntry[] }
+export interface InstalledModel { id: string; runtime: Runtime; path: string; size_bytes: number; custom: boolean }
+export interface DownloadProgress { id: string; received: number; total: number; done: boolean; error: string | null }
+export const modelsManifest = () => invoke<ManifestView>("models_manifest");
+export const modelsInstalled = () => invoke<InstalledModel[]>("models_installed");
+export const modelsDownload = (id: string) => invoke<InstalledModel>("models_download", { id });
+export const modelsDownloadRecommended = () => invoke<void>("models_download_recommended");
+export const modelsCancel = (id: string) => invoke<void>("models_cancel", { id });
+export const modelsDelete = (id: string) => invoke<void>("models_delete", { id });
+export const modelsImport = (path: string) => invoke<InstalledModel>("models_import", { path });
+export const modelsDir = () => invoke<string>("models_dir");
+export function onModelDownloadProgress(cb: (p: DownloadProgress) => void): Promise<UnlistenFn> {
+  return listen<DownloadProgress>("model-download-progress", (e) => cb(e.payload));
+}
+export function formatBytes(n: number): string {
+  return n >= 1e9 ? `${(n / 1e9).toFixed(2)} GB` : `${Math.round(n / 1e6)} MB`;
 }

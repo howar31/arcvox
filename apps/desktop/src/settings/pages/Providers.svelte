@@ -13,7 +13,7 @@
 
   function blank(): ProviderConfig {
     return { id: "", label: "", kind: "http", capabilities: { transcribe: false, chat: true, streaming: false, language_hint: false, hotwords: false },
-      base_url: "http://localhost:11434/v1", model: "", api_key_ref: null, extra_headers: {}, model_path: null, native_id: null };
+      base_url: "http://localhost:11434/v1", model: "", api_key_ref: null, extra_headers: {}, model_path: null, native_id: null, model_id: null, runtime: null };
   }
   async function edit(p: ProviderConfig) {
     editing = structuredClone($state.snapshot(p));
