@@ -25,7 +25,7 @@ export interface General {
   llm_idle_unload_secs: number;
 }
 export interface Config { schema_version: number; general: General; providers: ProviderConfig[]; profiles: Profile[]; dictionary: DictionaryEntry[] }
-export interface ProbeResult { ok: boolean; failure: { kind: string; message?: string } | null }
+export interface ProbeResult { ok: boolean; failure: { kind: string; message?: string; reason?: string } | null }
 export interface Utterance {
   id: number; ts: number; profile_id: string; app_name: string | null; raw_text: string; refined_text: string; final_text: string;
   degraded: boolean; has_audio: boolean; asr_ms: number; llm_ms: number | null;
@@ -112,4 +112,11 @@ export function onModelDownloadProgress(cb: (p: DownloadProgress) => void): Prom
 }
 export function formatBytes(n: number): string {
   return n >= 1e9 ? `${(n / 1e9).toFixed(2)} GB` : `${Math.round(n / 1e6)} MB`;
+}
+export type NativeStatusKind = "ready" | "needs_download" | "locale_unsupported" | "os_too_old" | "not_eligible" | "intelligence_off" | "model_not_ready" | "failed";
+export interface NativeStatusView { status: NativeStatusKind; reason: string | null }
+export const nativeStatus = (nativeId: string, hint: string | null) => invoke<NativeStatusView>("native_status", { nativeId, languageHint: hint });
+export const nativeInstallLanguage = (hint: string | null) => invoke<void>("native_install_language", { languageHint: hint });
+export function onNativeInstallProgress(cb: (fraction: number) => void): Promise<UnlistenFn> {
+  return listen<{ fraction: number }>("native-install-progress", (e) => cb(e.payload.fraction));
 }
