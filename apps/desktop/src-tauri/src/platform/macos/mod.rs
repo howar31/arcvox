@@ -1,5 +1,6 @@
 //! macOS implementation of `Platform`.
 
+pub mod apple;
 pub mod ax;
 pub mod frontmost;
 pub mod modifier_monitor;
