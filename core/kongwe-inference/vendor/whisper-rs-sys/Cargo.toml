@@ -1,0 +1,30 @@
+[package]
+name = "whisper-rs-sys"
+version = "0.15.0"
+edition = "2021"
+rust-version = "1.88.0"
+description = "Rust bindings for whisper.cpp (FFI bindings), built against the ggml of llama-cpp-sys-2"
+license = "Unlicense"
+repository = "https://codeberg.org/tazz4843/whisper-rs"
+links = "whisper"
+
+[features]
+coreml = []
+cuda = ["llama-cpp-sys-2/cuda"]
+hipblas = ["llama-cpp-sys-2/rocm"]
+openblas = []
+metal = ["llama-cpp-sys-2/metal"]
+vulkan = ["llama-cpp-sys-2/vulkan"]
+force-debug = []
+openmp = ["llama-cpp-sys-2/openmp"]
+intel-sycl = []
+
+[dependencies]
+# Provides ggml: its headers, its CMake package, and the static archives the final link uses.
+llama-cpp-sys-2 = { version = "=0.1.157", default-features = false }
+
+[build-dependencies]
+cmake = "0.1"
+bindgen = "0.72"
+fs_extra = "1.3"
+semver = "1.0"

@@ -6,3 +6,6 @@ members = ["core/kongwe-core", "core/kongwe-inference", "apps/desktop/src-tauri"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/howar31/kongwe"
+
+[patch.crates-io]
+whisper-rs-sys = { path = "core/kongwe-inference/vendor/whisper-rs-sys" }
