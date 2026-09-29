@@ -2396,11 +2396,13 @@ name = "arcvox-desktop"
 version = "0.1.0"
 dependencies = [
  "accessibility-sys",
+ "async-trait",
  "block2",
  "core-foundation",
  "core-graphics",
  "cpal",
  "earshot",
+ "hound",
  "arcvox-core",
  "arcvox-inference",
  "libc",
