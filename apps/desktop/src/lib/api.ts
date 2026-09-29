@@ -100,6 +100,7 @@ export interface ManifestView { source: "remote" | "cached" | "bundled"; models:
 export interface InstalledModel { id: string; runtime: Runtime; path: string; size_bytes: number; custom: boolean }
 export interface DownloadProgress { id: string; received: number; total: number; done: boolean; error: string | null }
 export const modelsManifest = () => invoke<ManifestView>("models_manifest");
+export const modelsManifestNow = () => invoke<ManifestView>("models_manifest_now");
 export const modelsInstalled = () => invoke<InstalledModel[]>("models_installed");
 export const modelsDownload = (id: string) => invoke<InstalledModel>("models_download", { id });
 export const modelsDownloadRecommended = () => invoke<void>("models_download_recommended");

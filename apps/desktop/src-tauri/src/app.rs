@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use kongwe_core::models::ModelStore;
+use kongwe_core::models::{ModelStore, DEFAULT_MANIFEST_URL};
 use kongwe_core::{DataDir, Engine, EngineOptions, FirstRunDefaults};
 use tauri::{Manager, Wry};
 
@@ -79,6 +79,7 @@ pub fn run() {
             crate::commands::client::client_get,
             crate::commands::client::client_update,
             crate::commands::models::models_manifest,
+            crate::commands::models::models_manifest_now,
             crate::commands::models::models_installed,
             crate::commands::models::models_download,
             crate::commands::models::models_download_recommended,
@@ -131,27 +132,34 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
     let ui = Arc::new(TauriUi::new(app.clone(), language)?);
 
     let secrets = Arc::new(KeychainStore::new());
-    let manifest_url = settings.manifest_url.as_deref().and_then(|raw| {
-        url::Url::parse(raw)
-            .map_err(|e| tracing::warn!(error = %e, "ignoring invalid manifest_url"))
-            .ok()
-    });
+    // A stalled connection fails the read instead of hanging a download or its Cancel.
+    let client = reqwest::Client::builder()
+        .read_timeout(Duration::from_secs(30))
+        .build()?;
     let models = Arc::new(ModelStore::new(
         &dirs,
-        reqwest::Client::new(),
+        client,
         BUNDLED_MANIFEST,
-        manifest_url,
+        Some(manifest_url(settings.manifest_url.as_deref())),
     ));
+    let config_exists = dirs.config_path().exists();
     let (engine, engine_error, runtime) = tauri::async_runtime::block_on(async {
         let runtime = tokio::runtime::Handle::current();
-        // The Apple status checks block and refuse the main thread.
+        // Only a new config reads these defaults. The Apple status checks
+        // block and refuse the main thread.
         #[cfg(target_os = "macos")]
-        let first_run: FirstRunDefaults =
+        let first_run: FirstRunDefaults = if config_exists {
+            FirstRunDefaults::default()
+        } else {
             tokio::task::spawn_blocking(crate::platform::macos::apple::first_run_defaults)
                 .await
-                .unwrap_or_default();
+                .unwrap_or_default()
+        };
         #[cfg(not(target_os = "macos"))]
-        let first_run = FirstRunDefaults::default();
+        let first_run = {
+            let _ = config_exists;
+            FirstRunDefaults::default()
+        };
         match Engine::open_with(
             dirs.clone(),
             EngineOptions {
@@ -234,6 +242,17 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// The `client.json` override when it parses, else the built-in catalogue URL.
+fn manifest_url(override_url: Option<&str>) -> url::Url {
+    override_url
+        .and_then(|raw| {
+            url::Url::parse(raw)
+                .map_err(|e| tracing::warn!(error = %e, "ignoring invalid manifest_url"))
+                .ok()
+        })
+        .unwrap_or_else(|| url::Url::parse(DEFAULT_MANIFEST_URL).expect("default manifest URL"))
+}
+
 /// Installs the fn key monitor once Accessibility is granted, polling
 /// every 5 s until then. The install itself runs on the main thread.
 /// `engine_ready` gates the state transitions this function makes: when the
@@ -275,5 +294,23 @@ fn start_monitor_when_trusted(
 fn install_monitor(platform: &Arc<dyn Platform>, controller: &ControllerHandle) {
     if let Err(e) = platform.start_modifier_monitor(controller.modifier_sender()) {
         tracing::error!(error = %e, "modifier monitor not installed");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn manifest_url_uses_the_override_else_the_default() {
+        assert_eq!(manifest_url(None).as_str(), DEFAULT_MANIFEST_URL);
+        assert_eq!(
+            manifest_url(Some("not a url")).as_str(),
+            DEFAULT_MANIFEST_URL
+        );
+        assert_eq!(
+            manifest_url(Some("http://127.0.0.1:8000/m.json")).as_str(),
+            "http://127.0.0.1:8000/m.json"
+        );
     }
 }

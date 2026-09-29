@@ -61,10 +61,18 @@ impl ModelStore {
     /// Manifest for synchronous callers: the one `manifest()` settled on; before
     /// that (or while it is still fetching) the on-disk cached copy, else the bundled one.
     fn known_manifest(&self) -> Manifest {
-        if let Some((m, _)) = self.current.read().expect("manifest lock").as_ref() {
-            return m.clone();
+        self.manifest_now().0
+    }
+
+    /// The manifest available without waiting on the network, with its source.
+    pub fn manifest_now(&self) -> (Manifest, ManifestSource) {
+        if let Some(found) = self.current.read().expect("manifest lock").as_ref() {
+            return found.clone();
         }
-        self.read_cached().unwrap_or_else(|| self.bundled.clone())
+        match self.read_cached() {
+            Some(m) => (m, ManifestSource::Cached),
+            None => (self.bundled.clone(), ManifestSource::Bundled),
+        }
     }
 
     fn read_cached(&self) -> Option<Manifest> {
@@ -537,6 +545,23 @@ mod tests {
         let (m, src) = s.manifest().await;
         assert_eq!(src, ManifestSource::Cached);
         assert!(m.models.is_empty());
+    }
+
+    #[tokio::test]
+    async fn manifest_now_does_not_wait_for_the_network() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (dirs, s) = store(tmp.path());
+        assert_eq!(s.manifest_now().1, ManifestSource::Bundled);
+        std::fs::write(
+            dirs.manifest_cache_path(),
+            r#"{"schema_version":1,"models":[]}"#,
+        )
+        .unwrap();
+        let (m, src) = s.manifest_now();
+        assert_eq!(src, ManifestSource::Cached);
+        assert!(m.models.is_empty());
+        let settled = s.manifest().await;
+        assert_eq!(s.manifest_now(), settled);
     }
 
     #[tokio::test]

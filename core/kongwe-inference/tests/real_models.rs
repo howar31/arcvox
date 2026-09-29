@@ -115,7 +115,7 @@ async fn llama_small_model_completes() {
             ],
             &LlmOptions {
                 temperature: 0.0,
-                max_tokens: Some(16),
+                max_tokens: Some(64),
                 timeout: Duration::from_secs(60),
             },
         )
@@ -147,4 +147,28 @@ async fn cancel_flag_stops_generation() {
         .await
         .unwrap_err();
     assert_eq!(err.code, ErrorCode::ProviderTimeout, "{err:?}");
+}
+
+#[tokio::test]
+#[ignore]
+async fn token_limit_is_reported_as_an_error() {
+    let Some(dir) = models_dir() else { return };
+    let p = LlamaLlmProvider::new(
+        dir.join("SmolLM2-135M-Instruct-Q8_0.gguf"),
+        "small".into(),
+        true,
+    );
+    let err = p
+        .complete(
+            vec![ChatMessage::user("Write a very long story.")],
+            &LlmOptions {
+                temperature: 0.0,
+                max_tokens: Some(2),
+                timeout: Duration::from_secs(60),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::ProviderError, "{err:?}");
+    assert!(err.message.contains("token limit"), "{err:?}");
 }

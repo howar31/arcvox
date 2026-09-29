@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
-  import { errorMessage, formatBytes, modelsCancel, modelsDelete, modelsDir, modelsDownload, modelsDownloadRecommended, modelsImport, modelsInstalled, modelsManifest, onModelDownloadProgress, reveal, type DownloadProgress, type InstalledModel, type ManifestView } from "../../lib/api";
+  import { errorMessage, formatBytes, modelsCancel, modelsDelete, modelsDir, modelsDownload, modelsDownloadRecommended, modelsImport, modelsInstalled, modelsManifest, modelsManifestNow, onModelDownloadProgress, reveal, type DownloadProgress, type InstalledModel, type ManifestView } from "../../lib/api";
   import { t } from "../../lib/i18n";
   import { rowStatus } from "../../lib/models.svelte";
 
@@ -17,7 +17,11 @@
     try { installed = await modelsInstalled(); } catch (e) { status = errorMessage(e); }
   }
   async function refreshManifest() {
-    try { manifest = await modelsManifest(); } catch (e) { status = errorMessage(e); }
+    try {
+      // Render the local catalogue first; the online one can take until its fetch times out.
+      if (!manifest) manifest = await modelsManifestNow();
+      manifest = await modelsManifest();
+    } catch (e) { status = errorMessage(e); }
   }
   onMount(() => {
     refreshManifest();

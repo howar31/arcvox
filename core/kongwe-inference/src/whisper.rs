@@ -12,7 +12,7 @@ use kongwe_core::providers::{AsrHint, AsrProvider, ProviderError};
 use kongwe_core::types::{AudioClip, ErrorCode, Transcript};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
-use crate::{lang, CancelFlag};
+use crate::{lang, CancelFlag, CancelOnDrop};
 
 #[derive(Default)]
 struct SharedContext {
@@ -221,6 +221,43 @@ fn run(
     })
 }
 
+/// Runs `work` on a blocking thread, bounded by `timeout`. The flag handed to
+/// `work` is set on timeout and also when this future is dropped, so a
+/// cancelled session stops whisper.cpp at its next abort check.
+async fn run_abortable<F>(
+    label: &str,
+    timeout: Duration,
+    work: F,
+) -> Result<Transcript, ProviderError>
+where
+    F: FnOnce(CancelFlag) -> Result<Transcript, String> + Send + 'static,
+{
+    let abort = CancelFlag::default();
+    let _guard = CancelOnDrop(abort.clone());
+    let for_task = abort.clone();
+    let task = tokio::task::spawn_blocking(move || work(for_task));
+    match tokio::time::timeout(timeout, task).await {
+        Ok(Ok(Ok(t))) => Ok(t),
+        Ok(Ok(Err(msg))) => Err(ProviderError::new(
+            ErrorCode::InferenceFailed,
+            format!("{label}: {msg}"),
+        )),
+        Ok(Err(join)) => Err(ProviderError::new(
+            ErrorCode::InferenceFailed,
+            format!("{label}: {join}"),
+        )),
+        Err(_) => {
+            // The blocking task stops on its own at the next abort check.
+            abort.cancel();
+            Err(ProviderError::new(
+                ErrorCode::ProviderTimeout,
+                format!("{label}: transcription timed out"),
+            )
+            .with_hint("raise the speech recognition timeout in Settings > General"))
+        }
+    }
+}
+
 #[async_trait]
 impl AsrProvider for WhisperAsrProvider {
     async fn transcribe(
@@ -241,34 +278,12 @@ impl AsrProvider for WhisperAsrProvider {
         let samples = audio.samples.clone();
         let lang = lang::whisper_code(hint.language.as_deref());
         let prompt = hint.prompt.clone();
-        let abort = CancelFlag::default();
-        let abort_for_task = abort.clone();
         // The task owns its own Arc of the context, so unload() during a run only
         // frees the model once this task has finished with it.
-        let task = tokio::task::spawn_blocking(move || {
-            run(&ctx, &samples, lang, prompt.as_deref(), abort_for_task)
-        });
-        // Only a timeout sets the flag today; a session-owned flag would add a Cancelled outcome here.
-        match tokio::time::timeout(self.timeout, task).await {
-            Ok(Ok(Ok(t))) => Ok(t),
-            Ok(Ok(Err(msg))) => Err(ProviderError::new(
-                ErrorCode::InferenceFailed,
-                format!("{}: {msg}", self.label),
-            )),
-            Ok(Err(join)) => Err(ProviderError::new(
-                ErrorCode::InferenceFailed,
-                format!("{}: {join}", self.label),
-            )),
-            Err(_) => {
-                // The blocking task stops on its own at the next abort check.
-                abort.cancel();
-                Err(ProviderError::new(
-                    ErrorCode::ProviderTimeout,
-                    format!("{}: transcription timed out", self.label),
-                )
-                .with_hint("raise the ASR timeout in Settings > General"))
-            }
-        }
+        run_abortable(&self.label, self.timeout, move |abort| {
+            run(&ctx, &samples, lang, prompt.as_deref(), abort)
+        })
+        .await
     }
 
     async fn load(&self) -> Result<(), ProviderError> {
@@ -350,5 +365,45 @@ mod tests {
         };
         let err = p.transcribe(&clip, &AsrHint::default()).await.unwrap_err();
         assert_eq!(err.code, ErrorCode::InferenceFailed);
+    }
+
+    #[tokio::test]
+    async fn dropping_the_future_sets_the_abort_flag() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let work = move |abort: CancelFlag| {
+            tx.send(abort.clone()).unwrap();
+            while !abort.is_cancelled() {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err("aborted".to_string())
+        };
+        let dropped = tokio::time::timeout(
+            Duration::from_millis(20),
+            run_abortable("Local", Duration::from_secs(60), work),
+        )
+        .await;
+        assert!(dropped.is_err());
+        let seen = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(seen.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn timeout_sets_the_abort_flag() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let work = move |abort: CancelFlag| {
+            tx.send(abort.clone()).unwrap();
+            while !abort.is_cancelled() {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err("aborted".to_string())
+        };
+        let err = run_abortable("Local", Duration::from_millis(20), work)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProviderTimeout);
+        assert!(rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .is_cancelled());
     }
 }

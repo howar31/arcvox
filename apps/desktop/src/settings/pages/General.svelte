@@ -132,6 +132,12 @@
   <label>{t("general.history_retention")} <input type="number" min="1" bind:value={general.history_retention_days} /> {t("common.days")}</label>
   <label><input type="checkbox" bind:checked={general.keep_recordings} /> {t("general.keep_recordings")}</label>
   <label>{t("general.recording_retention")} <input type="number" min="1" bind:value={general.recording_retention_days} /> {t("common.days")}</label>
+</section>
+
+<section>
+  <label>{t("general.asr_timeout")} <input type="number" min="1" bind:value={general.asr_timeout_secs} /></label>
+  <label>{t("general.llm_timeout")} <input type="number" min="1" bind:value={general.llm_timeout_secs} /></label>
+  <label>{t("general.llm_idle_unload")} <input type="number" min="0" bind:value={general.llm_idle_unload_secs} /></label>
   <button class="primary" onclick={saveGeneral}>{t("common.save")}</button>
 </section>
 {/if}

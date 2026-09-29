@@ -11,9 +11,9 @@ AI voice dictation for Traditional Chinese (Taiwan), English, and Japanese. Offl
 
 ## Models
 
-Kongwe can run speech recognition and text rewriting on the machine with downloaded model files. Manage them in Settings > Models. On macOS 26, Apple's built-in dictation and language model can be used with no download; the language model requires Apple Intelligence to be turned on. The system downloads the Apple dictation language on first use.
+Kongwe can run speech recognition and text rewriting on the machine with downloaded model files. Manage them in Settings > Models. On macOS 26, Apple's built-in dictation and language model can be used with no download; the language model requires Apple Intelligence to be turned on. The Apple dictation language is installed from Settings > Providers with the "Install language" button and is shared with the system.
 
-Model files are stored in the models directory shown on the About page. Custom files can be imported: ggml `.bin` for speech recognition, GGUF for text. Each model's license is shown in the model list.
+Model files are stored in the models directory shown on the Models page. Custom files can be imported: ggml `.bin` for speech recognition, GGUF for text. Each model's license is shown in the model list.
 
 ## License
 

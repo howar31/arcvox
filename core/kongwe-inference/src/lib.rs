@@ -21,3 +21,14 @@ impl CancelFlag {
         self.0.load(Ordering::SeqCst)
     }
 }
+
+/// Sets the flag when dropped. Held across the await on a blocking inference
+/// task, so dropping the provider's future (a cancelled session) stops the work.
+#[derive(Debug)]
+pub struct CancelOnDrop(pub CancelFlag);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}

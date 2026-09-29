@@ -1,13 +1,13 @@
 //! `AsrProvider` over Apple's on-device dictation.
 
 use std::ffi::{c_char, CStr, CString};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use kongwe_core::providers::{AsrHint, AsrProvider, ProviderError};
 use kongwe_core::types::{AudioClip, ErrorCode, Transcript};
+use kongwe_inference::{CancelFlag, CancelOnDrop};
 
 use super::{ffi, locale_for_hint};
 
@@ -131,31 +131,43 @@ impl AsrProvider for AppleAsrProvider {
         let rate = audio.sample_rate;
         let locale = self.locale_for(hint);
         let contextual = contextual_json(hint.prompt.as_deref());
-        let cancel = Arc::new(AtomicBool::new(false));
-        let cancel_for_task = cancel.clone();
-        // The bridge blocks its thread, so it must never run on the main thread.
-        let task = tokio::task::spawn_blocking(move || {
-            run(&locale, &samples, rate, &contextual, &cancel_for_task)
-        });
-        match tokio::time::timeout(self.timeout, task).await {
-            Ok(Ok(Ok(text))) => Ok(Transcript {
-                text: text.trim().to_string(),
-                language: hint.language.clone(),
-            }),
-            Ok(Ok(Err(code))) => Err(map_code(code, &self.label)),
-            Ok(Err(join)) => Err(ProviderError::new(
-                ErrorCode::InferenceFailed,
-                format!("{}: {join}", self.label),
-            )),
-            Err(_) => {
-                // The bridge polls the flag and stops the analyzer.
-                cancel.store(true, Ordering::SeqCst);
-                Err(ProviderError::new(
-                    ErrorCode::ProviderTimeout,
-                    format!("{}: transcription timed out", self.label),
-                )
-                .with_hint("raise the ASR timeout in Settings > General"))
-            }
+        let text = run_abortable(&self.label, self.timeout, move |cancel| {
+            run(&locale, &samples, rate, &contextual, &cancel.0)
+        })
+        .await?;
+        Ok(Transcript {
+            text: text.trim().to_string(),
+            language: hint.language.clone(),
+        })
+    }
+}
+
+/// Runs `work` on a blocking thread, bounded by `timeout`. The flag handed to
+/// `work` is set on timeout and also when this future is dropped, so a
+/// cancelled session stops the analyzer (the bridge polls the flag).
+async fn run_abortable<F>(label: &str, timeout: Duration, work: F) -> Result<String, ProviderError>
+where
+    F: FnOnce(CancelFlag) -> Result<String, i32> + Send + 'static,
+{
+    let cancel = CancelFlag::default();
+    let _guard = CancelOnDrop(cancel.clone());
+    let for_task = cancel.clone();
+    // The bridge blocks its thread, so it must never run on the main thread.
+    let task = tokio::task::spawn_blocking(move || work(for_task));
+    match tokio::time::timeout(timeout, task).await {
+        Ok(Ok(Ok(text))) => Ok(text),
+        Ok(Ok(Err(code))) => Err(map_code(code, label)),
+        Ok(Err(join)) => Err(ProviderError::new(
+            ErrorCode::InferenceFailed,
+            format!("{label}: {join}"),
+        )),
+        Err(_) => {
+            cancel.cancel();
+            Err(ProviderError::new(
+                ErrorCode::ProviderTimeout,
+                format!("{label}: transcription timed out"),
+            )
+            .with_hint("raise the speech recognition timeout in Settings > General"))
         }
     }
 }
@@ -198,5 +210,45 @@ mod tests {
         assert_eq!(from_hint.locale_for(&AsrHint::default()), "zh_TW");
         let fixed = AppleAsrProvider::new("en_US".into(), "A".into(), Duration::from_secs(1));
         assert_eq!(fixed.locale_for(&hint), "en_US");
+    }
+
+    fn wait_for_flag(
+        tx: std::sync::mpsc::Sender<CancelFlag>,
+    ) -> impl FnOnce(CancelFlag) -> Result<String, i32> {
+        move |cancel| {
+            tx.send(cancel.clone()).unwrap();
+            while !cancel.is_cancelled() {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(8)
+        }
+    }
+
+    #[tokio::test]
+    async fn dropping_the_future_sets_the_cancel_flag() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let dropped = tokio::time::timeout(
+            Duration::from_millis(20),
+            run_abortable("Apple", Duration::from_secs(60), wait_for_flag(tx)),
+        )
+        .await;
+        assert!(dropped.is_err());
+        assert!(rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn timeout_sets_the_cancel_flag() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let err = run_abortable("Apple", Duration::from_millis(20), wait_for_flag(tx))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProviderTimeout);
+        assert!(rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .is_cancelled());
     }
 }
