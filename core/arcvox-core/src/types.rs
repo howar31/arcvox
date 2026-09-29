@@ -46,6 +46,10 @@ pub enum ErrorCode {
     NoSpeech,
     Cancelled,
     Internal,
+    ModelMissing,
+    ModelCorrupt,
+    NativeUnavailable,
+    InferenceFailed,
 }
 
 /// What the client knows about the frontmost application.

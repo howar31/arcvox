@@ -60,6 +60,19 @@ mod tests {
     }
 
     #[test]
+    fn error_event_model_missing_snapshot() {
+        let e = Event::Error {
+            step: Some(StepName::Asr),
+            code: ErrorCode::ModelMissing,
+            message: "model file not found".into(),
+            recoverable: false,
+            hint: Some("download the model in Settings > Models".into()),
+        };
+        let v: serde_json::Value = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["code"], "model_missing");
+    }
+
+    #[test]
     fn session_started() {
         snap(
             Event::SessionStarted {

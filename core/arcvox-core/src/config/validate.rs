@@ -1,6 +1,6 @@
 //! Structural validation of a Config. Runs on every load and every update.
 
-use crate::config::model::{Config, StepSpec};
+use crate::config::model::{Config, ProviderKind, StepSpec};
 use crate::types::{ProfileId, ProviderId};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -24,6 +24,8 @@ pub enum ConfigError {
     StepOrder { profile: ProfileId, reason: String },
     #[error("profile `{0}` has an llm step but no llm_provider")]
     MissingLlmProvider(ProfileId),
+    #[error("provider `{0}` is embedded but has no runtime or model reference")]
+    EmbeddedProviderIncomplete(ProviderId),
     #[error("general.{field} must be at least {min}")]
     GeneralRange { field: &'static str, min: u64 },
 }
@@ -33,6 +35,11 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
     for p in &config.providers {
         if !seen.insert(format!("provider:{}", p.id)) {
             return Err(ConfigError::DuplicateId(p.id.0.clone()));
+        }
+        if p.kind == ProviderKind::Embedded
+            && (p.runtime.is_none() || (p.model_id.is_none() && p.model_path.is_none()))
+        {
+            return Err(ConfigError::EmbeddedProviderIncomplete(p.id.clone()));
         }
     }
     for p in &config.profiles {
@@ -132,7 +139,9 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::model::{Capabilities, Config, Profile, ProviderConfig, ProviderKind};
+    use crate::config::model::{
+        Capabilities, Config, Profile, ProviderConfig, ProviderKind, Runtime,
+    };
 
     fn base() -> Config {
         Config::first_run()
@@ -237,6 +246,26 @@ mod tests {
     }
 
     #[test]
+    fn embedded_provider_needs_runtime_and_a_model_reference() {
+        let mut c = Config::first_run();
+        let mut p = c.providers[0].clone();
+        p.id = ProviderId("emb".into());
+        p.kind = ProviderKind::Embedded;
+        p.base_url = None;
+        p.runtime = None;
+        p.model_id = None;
+        p.model_path = None;
+        c.providers.push(p);
+        assert_eq!(
+            validate(&c).unwrap_err(),
+            ConfigError::EmbeddedProviderIncomplete(ProviderId("emb".into()))
+        );
+        c.providers.last_mut().unwrap().runtime = Some(Runtime::Whisper);
+        c.providers.last_mut().unwrap().model_id = Some("breeze-asr-25-q5_0".into());
+        assert!(validate(&c).is_ok());
+    }
+
+    #[test]
     fn provider_lookup_by_id() {
         let c = base();
         assert!(c.provider(&ProviderId("local-ollama".into())).is_some());
@@ -252,6 +281,8 @@ mod tests {
             extra_headers: Default::default(),
             model_path: None,
             native_id: None,
+            model_id: None,
+            runtime: None,
         };
         let _: &Profile = c.default_profile();
     }
