@@ -23,6 +23,9 @@ opencc-fmmseg = "0.8"
 sha2 = "0.10"
 futures-util = "0.3"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [features]
 test-util = []
 

@@ -1,11 +1,11 @@
-use super::download::DownloadProgress;
+use super::download::{self, DownloadProgress};
 use super::manifest::{safe_segment, Manifest, ManifestSource};
 use super::*;
 use crate::config::{ProviderConfig, Runtime};
 use crate::paths::DataDir;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -25,9 +25,7 @@ pub struct InstalledModel {
 }
 
 pub struct ModelStore {
-    #[allow(dead_code)]
     pub(crate) dirs: DataDir,
-    #[allow(dead_code)]
     pub(crate) client: reqwest::Client,
     bundled: Manifest,
     manifest_url: Option<Url>,
@@ -36,9 +34,7 @@ pub struct ModelStore {
     /// Serialises `manifest()`; holds whether the source order has been tried.
     resolved: tokio::sync::Mutex<bool>,
     /// Cancel flags of in-flight downloads, keyed by model id.
-    #[allow(dead_code)]
     pub(crate) downloads: Mutex<HashMap<String, Arc<AtomicBool>>>,
-    #[allow(dead_code)]
     pub(crate) progress: broadcast::Sender<DownloadProgress>,
 }
 
@@ -227,6 +223,137 @@ impl ModelStore {
         })
     }
 
+    pub fn subscribe(&self) -> broadcast::Receiver<DownloadProgress> {
+        self.progress.subscribe()
+    }
+
+    /// Requests cancellation of a running download; the partial file is kept for a later resume.
+    pub fn cancel(&self, id: &str) {
+        if let Some(c) = self.downloads.lock().expect("downloads lock").get(id) {
+            c.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// Bytes available to this user on the volume holding the model directory.
+    pub fn free_disk_bytes(&self) -> std::io::Result<u64> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let dir = self.dirs.models_dir();
+            std::fs::create_dir_all(&dir)?;
+            let c = std::ffi::CString::new(dir.as_os_str().as_bytes())
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+            let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+            // SAFETY: `c` is a valid NUL-terminated path and `st` is a writable statvfs.
+            if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok((st.f_bavail as u64).saturating_mul(st.f_frsize as u64))
+        }
+        #[cfg(not(unix))]
+        {
+            // The Windows query arrives with the Windows client.
+            Ok(u64::MAX)
+        }
+    }
+
+    /// Downloads a catalogue model into its store path. One download per id at a time.
+    pub async fn download(&self, id: &str) -> Result<InstalledModel, ModelError> {
+        let (manifest, _) = self.manifest().await;
+        let entry = manifest
+            .get(id)
+            .ok_or_else(|| ModelError::NotInCatalogue(id.into()))?
+            .clone();
+        let (cancel, guard) = {
+            let mut d = self.downloads.lock().expect("downloads lock");
+            if d.contains_key(id) {
+                return Err(ModelError::Http("already downloading".into()));
+            }
+            let c = Arc::new(AtomicBool::new(false));
+            d.insert(id.to_string(), c.clone());
+            (
+                c,
+                InFlight {
+                    map: &self.downloads,
+                    id: id.to_string(),
+                },
+            )
+        };
+        let result = self.download_inner(&manifest, &entry, cancel).await;
+        drop(guard);
+        let _ = self.progress.send(DownloadProgress {
+            id: id.into(),
+            received: if result.is_ok() { entry.size_bytes } else { 0 },
+            total: entry.size_bytes,
+            done: true,
+            error: result.as_ref().err().map(|e| e.to_string()),
+        });
+        result
+    }
+
+    async fn download_inner(
+        &self,
+        manifest: &Manifest,
+        entry: &ModelEntry,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<InstalledModel, ModelError> {
+        let dest = self.path_in(manifest, &entry.id);
+        if dest.starts_with(self.dirs.models_dir().join(".invalid")) {
+            return Err(ModelError::Manifest(format!(
+                "model `{}` has an unsafe id or file name",
+                entry.id
+            )));
+        }
+        let ext = dest.extension().and_then(|e| e.to_str()).unwrap_or("bin");
+        let part = dest.with_extension(format!("{ext}.part"));
+        let dir = dest.parent().expect("model path has a parent");
+        tokio::fs::create_dir_all(dir).await?;
+        let existing = tokio::fs::metadata(&part)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let free = self.free_disk_bytes()?;
+        // Keep headroom beyond the model itself.
+        let needed = entry
+            .size_bytes
+            .saturating_sub(existing)
+            .saturating_add(512 * 1024 * 1024);
+        if free < needed {
+            return Err(ModelError::InsufficientDisk { needed, free });
+        }
+        let tx = self.progress.clone();
+        let id = entry.id.clone();
+        download::fetch_to(&self.client, entry, &part, cancel, |received, total| {
+            let _ = tx.send(DownloadProgress {
+                id: id.clone(),
+                received,
+                total,
+                done: false,
+                error: None,
+            });
+        })
+        .await?;
+        let p = part.clone();
+        let actual = tokio::task::spawn_blocking(move || download::sha256_file(&p))
+            .await
+            .expect("hash task")?;
+        if !actual.eq_ignore_ascii_case(&entry.sha256) {
+            let _ = tokio::fs::remove_file(&part).await;
+            return Err(ModelError::Sha256Mismatch {
+                expected: entry.sha256.clone(),
+                actual,
+            });
+        }
+        tokio::fs::rename(&part, &dest).await?;
+        Ok(InstalledModel {
+            id: entry.id.clone(),
+            runtime: entry.runtime,
+            path: dest,
+            size_bytes: entry.size_bytes,
+            custom: false,
+        })
+    }
+
     /// Remote, else the last cached copy, else the bundled one. The result is kept
     /// in memory, so the network is tried once per store.
     pub async fn manifest(&self) -> (Manifest, ManifestSource) {
@@ -269,6 +396,20 @@ impl ModelStore {
         // Cache only text that parsed; a failed write only loses the offline copy.
         let _ = std::fs::write(self.dirs.manifest_cache_path(), &text);
         Some(m)
+    }
+}
+
+/// Clears a download's in-flight entry when dropped, including when the future is dropped mid-way.
+struct InFlight<'a> {
+    map: &'a Mutex<HashMap<String, Arc<AtomicBool>>>,
+    id: String,
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut d) = self.map.lock() {
+            d.remove(&self.id);
+        }
     }
 }
 
