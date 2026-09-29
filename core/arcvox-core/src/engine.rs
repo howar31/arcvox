@@ -95,10 +95,9 @@ impl Engine {
     }
 
     pub async fn open_with(dirs: DataDir, opts: EngineOptions) -> Result<Engine, EngineError> {
-        let _ = opts.first_run;
         let runtime = tokio::runtime::Handle::current();
         dirs.ensure()?;
-        let config = ConfigStore::open(&dirs)?;
+        let config = ConfigStore::open_with_defaults(&dirs, &opts.first_run)?;
         let path = dirs.history_path();
         let history = Arc::new(
             tokio::task::spawn_blocking(move || HistoryStore::open(&path))
@@ -501,6 +500,7 @@ mod tests {
         engine
             .config()
             .update(|c| {
+                *c = crate::config::Config::http_test_config();
                 c.providers[0].base_url = Some(Url::parse(&format!("{}/v1", asr.uri())).unwrap());
                 c.providers[1].base_url = Some(Url::parse(&format!("{}/v1", llm.uri())).unwrap());
                 c.general.keep_recordings = keep_recordings;

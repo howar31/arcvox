@@ -44,5 +44,6 @@ security-framework = "3"
 libc = "0.2"
 
 [dev-dependencies]
+arcvox-core = { path = "../../../core/arcvox-core", features = ["test-util"] }
 wiremock = "0.6"
 tempfile = "3"

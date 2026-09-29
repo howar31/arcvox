@@ -772,6 +772,7 @@ mod tests {
         engine
             .config()
             .update(|c| {
+                *c = arcvox_core::config::Config::http_test_config();
                 c.providers[0].base_url = Some(Url::parse(&format!("{}/v1", asr.uri())).unwrap());
                 c.providers[1].base_url = Some(Url::parse(&format!("{}/v1", llm.uri())).unwrap());
             })

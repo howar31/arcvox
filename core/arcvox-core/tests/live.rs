@@ -45,6 +45,7 @@ async fn dictation_round_trip_through_local_services() {
     engine
         .config()
         .update(|c| {
+            *c = arcvox_core::config::Config::http_test_config();
             c.providers[0].base_url =
                 Some(Url::parse(&env("ARCVOX_LIVE_ASR_URL", "http://localhost:8000/v1")).unwrap());
             c.providers[0].model = Some(env(

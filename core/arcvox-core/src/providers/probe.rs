@@ -96,7 +96,7 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn cfg(server: &MockServer, key_ref: Option<&str>) -> ProviderConfig {
-        let mut c = Config::first_run().providers.remove(1);
+        let mut c = Config::http_test_config().providers.remove(1);
         c.base_url = Some(Url::parse(&format!("{}/v1", server.uri())).unwrap());
         c.api_key_ref = key_ref.map(String::from);
         c
