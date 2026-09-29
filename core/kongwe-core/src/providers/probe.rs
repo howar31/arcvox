@@ -16,6 +16,9 @@ pub enum ProbeFailure {
     NotCompatible,
     MissingBaseUrl,
     MissingKey,
+    ModelMissing,
+    ModelCorrupt,
+    NativeUnavailable { reason: String },
     Other { message: String },
 }
 

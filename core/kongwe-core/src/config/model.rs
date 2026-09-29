@@ -31,6 +31,7 @@ pub struct General {
     pub llm_timeout_secs: u64,
     pub llm_temperature: f32,
     pub llm_max_tokens: Option<u32>,
+    pub llm_idle_unload_secs: u64,
 }
 
 impl Default for General {
@@ -44,8 +45,16 @@ impl Default for General {
             llm_timeout_secs: 20,
             llm_temperature: 0.2,
             llm_max_tokens: Some(1024),
+            llm_idle_unload_secs: 300,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Runtime {
+    Whisper,
+    Llama,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,6 +99,13 @@ pub struct ProviderConfig {
     /// Native (phase 2).
     #[serde(default)]
     pub native_id: Option<String>,
+    /// Embedded: id of a catalogue model under the models directory.
+    /// `model_path` wins when both are set.
+    #[serde(default)]
+    pub model_id: Option<String>,
+    /// Embedded: which engine loads the file.
+    #[serde(default)]
+    pub runtime: Option<Runtime>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -177,6 +193,8 @@ impl Config {
             extra_headers: BTreeMap::new(),
             model_path: None,
             native_id: None,
+            model_id: None,
+            runtime: None,
         };
         let ollama = ProviderConfig {
             id: ProviderId("local-ollama".into()),
@@ -195,6 +213,8 @@ impl Config {
             extra_headers: BTreeMap::new(),
             model_path: None,
             native_id: None,
+            model_id: None,
+            runtime: None,
         };
         let profile = Profile {
             id: ProfileId("default".into()),
@@ -247,6 +267,30 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_config_defaults_new_fields() {
+        let json = r#"{"id":"x","label":"X","kind":"http","base_url":"http://localhost:1/v1","model":"m"}"#;
+        let p: ProviderConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(p.model_id, None);
+        assert_eq!(p.runtime, None);
+    }
+
+    #[test]
+    fn runtime_serializes_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&Runtime::Whisper).unwrap(),
+            "\"whisper\""
+        );
+        assert_eq!(serde_json::to_string(&Runtime::Llama).unwrap(), "\"llama\"");
+    }
+
+    #[test]
+    fn general_defaults_idle_unload() {
+        assert_eq!(General::default().llm_idle_unload_secs, 300);
+        let g: General = serde_json::from_str("{}").unwrap();
+        assert_eq!(g.llm_idle_unload_secs, 300);
+    }
 
     #[test]
     fn step_spec_json_shape() {
