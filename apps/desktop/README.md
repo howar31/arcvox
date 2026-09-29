@@ -18,6 +18,7 @@ The bundle is built into the repository root's `target/` directory, not under `a
 - Microphone: requested by the system on the first recording; the prompt must be allowed.
 - Accessibility: grant it in System Settings > Privacy & Security > Accessibility for the built `Kongwe.app`. Without it, the client cannot detect the fn key or insert text into other applications; the tray shows a status, Settings opens to the General page, and the client rechecks accessibility every 5 seconds until it is granted.
 - fn key: set to "Do Nothing" in System Settings > Keyboard so the key reaches the client instead of being intercepted by the OS.
+- Secure Input detection relies on the terminal application enabling Secure Keyboard Entry for password prompts (Terminal.app does this on its own; other terminals may need it enabled in their settings); when the OS does not flag the field, dictated text is inserted like anywhere else.
 
 ## Tests
 

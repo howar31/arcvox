@@ -71,6 +71,7 @@ export const systemInfo = () => invoke<SystemInfo>("system_info");
 export const reveal = (path: string) => invoke<void>("system_reveal", { path });
 export const uiLanguage = () => invoke<string>("ui_language");
 export const widgetCopy = (text: string) => invoke<void>("widget_copy", { text });
+export const widgetDismiss = () => invoke<void>("widget_dismiss");
 export const openSettingsWindow = (page?: string) => invoke<void>("system_open_settings_window", { page: page ?? null });
 
 export function onConfigChanged(cb: (c: Config) => void): Promise<UnlistenFn> {

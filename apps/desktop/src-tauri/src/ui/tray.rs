@@ -1,5 +1,7 @@
 //! Menu-bar icon and menu.
 
+use std::sync::Mutex;
+
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
@@ -22,7 +24,14 @@ pub const ID_QUIT: &str = "quit";
 pub struct Tray<R: Runtime> {
     icon: TrayIcon<R>,
     status: MenuItem<R>,
+    settings: MenuItem<R>,
+    history: MenuItem<R>,
     autostart: CheckMenuItem<R>,
+    quit: MenuItem<R>,
+    /// The status label depends on both the last `UiState` and the current
+    /// language; `set_language` needs the former to re-render the label
+    /// when only the language changes.
+    last_state: Mutex<UiState>,
 }
 
 impl<R: Runtime> Tray<R> {
@@ -100,24 +109,56 @@ impl<R: Runtime> Tray<R> {
         Ok(Self {
             icon,
             status,
+            settings,
+            history,
             autostart,
+            quit,
+            last_state: Mutex::new(UiState::Idle),
         })
     }
 
     pub fn set_state(&self, state: UiState, language: Language) {
-        let (icon, msg) = match state {
-            UiState::Idle | UiState::Inserting => (ICON_IDLE, Msg::TrayStatusIdle),
-            UiState::Recording | UiState::Locked => (ICON_RECORDING, Msg::TrayStatusRecording),
-            UiState::Processing => (ICON_PROCESSING, Msg::TrayStatusProcessing),
-            UiState::NoAccessibility => (ICON_IDLE, Msg::TrayStatusNoAccessibility),
-            UiState::EngineError => (ICON_IDLE, Msg::TrayStatusEngineError),
-        };
-        let _ = self.icon.set_icon(Some(icon));
-        let _ = self.status.set_text(text(language, msg));
+        *self.last_state.lock().unwrap() = state;
+        let _ = self.icon.set_icon(Some(status_icon(state)));
+        let _ = self.status.set_text(text(language, status_msg(state)));
     }
 
     pub fn set_autostart(&self, on: bool) {
         let _ = self.autostart.set_checked(on);
+    }
+
+    /// Re-renders every menu item's label in the new language. The status
+    /// item keeps showing whatever `UiState` it last displayed; only the
+    /// wording changes.
+    pub fn set_language(&self, language: Language) {
+        let state = *self.last_state.lock().unwrap();
+        let _ = self.status.set_text(text(language, status_msg(state)));
+        let _ = self.settings.set_text(text(language, Msg::TraySettings));
+        let _ = self.history.set_text(text(language, Msg::TrayHistory));
+        let _ = self
+            .autostart
+            .set_text(text(language, Msg::TrayLaunchAtLogin));
+        let _ = self.quit.set_text(text(language, Msg::TrayQuit));
+    }
+}
+
+fn status_icon(state: UiState) -> Image<'static> {
+    match state {
+        UiState::Idle | UiState::Inserting | UiState::NoAccessibility | UiState::EngineError => {
+            ICON_IDLE
+        }
+        UiState::Recording | UiState::Locked => ICON_RECORDING,
+        UiState::Processing => ICON_PROCESSING,
+    }
+}
+
+fn status_msg(state: UiState) -> Msg {
+    match state {
+        UiState::Idle | UiState::Inserting => Msg::TrayStatusIdle,
+        UiState::Recording | UiState::Locked => Msg::TrayStatusRecording,
+        UiState::Processing => Msg::TrayStatusProcessing,
+        UiState::NoAccessibility => Msg::TrayStatusNoAccessibility,
+        UiState::EngineError => Msg::TrayStatusEngineError,
     }
 }
 
