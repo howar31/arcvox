@@ -518,10 +518,22 @@ impl Controller {
                     ErrorCode::ProviderUnreachable
                     | ErrorCode::ProviderTimeout
                     | ErrorCode::ProviderUnauthorized
-                    | ErrorCode::ProviderError => Msg::WidgetAsrFailed,
+                    | ErrorCode::ProviderError
+                    | ErrorCode::InferenceFailed => Msg::WidgetAsrFailed,
+                    ErrorCode::ModelMissing => Msg::WidgetModelMissing,
+                    ErrorCode::ModelCorrupt => Msg::WidgetModelCorrupt,
+                    ErrorCode::NativeUnavailable => Msg::WidgetNativeUnavailable,
                     _ => Msg::WidgetEngineUnavailable,
                 };
-                let failure = UiMessage::error(msg, hint.or(Some(message)));
+                let detail = hint.unwrap_or(message);
+                // These two stay until dismissed, with the detail available
+                // to copy, since the fix is a setting or a download.
+                let failure =
+                    if matches!(code, ErrorCode::ModelMissing | ErrorCode::NativeUnavailable) {
+                        UiMessage::copyable(msg, detail)
+                    } else {
+                        UiMessage::error(msg, Some(detail))
+                    };
                 if let State::Processing { failure: f, .. } = &mut self.state {
                     *f = Some(failure);
                 }
@@ -760,12 +772,99 @@ mod tests {
     }
 
     async fn rig(settings: ClientSettings) -> Rig {
+        rig_with(settings, Vec::new(), |_| {}).await
+    }
+
+    /// Factory whose ASR construction always fails with a given code, so a
+    /// session ends in the matching non-recoverable error event.
+    struct FailingAsrFactory {
+        kind: kongwe_core::config::ProviderKind,
+        code: ErrorCode,
+    }
+
+    #[async_trait::async_trait]
+    impl kongwe_core::ProviderFactory for FailingAsrFactory {
+        fn kind(&self) -> kongwe_core::config::ProviderKind {
+            self.kind
+        }
+        fn asr(
+            &self,
+            _cfg: &kongwe_core::config::ProviderConfig,
+            _general: &kongwe_core::config::General,
+        ) -> Result<
+            Arc<dyn kongwe_core::providers::AsrProvider>,
+            kongwe_core::providers::ProviderError,
+        > {
+            Err(
+                kongwe_core::providers::ProviderError::new(self.code, "provider failed")
+                    .with_hint("the hint"),
+            )
+        }
+        fn llm(
+            &self,
+            _cfg: &kongwe_core::config::ProviderConfig,
+            _general: &kongwe_core::config::General,
+        ) -> Result<
+            Arc<dyn kongwe_core::providers::LlmProvider>,
+            kongwe_core::providers::ProviderError,
+        > {
+            unreachable!("only ASR is used")
+        }
+        async fn probe(
+            &self,
+            _cfg: &kongwe_core::config::ProviderConfig,
+        ) -> kongwe_core::providers::probe::ProbeResult {
+            unreachable!("not probed")
+        }
+    }
+
+    /// A rig whose default profile uses a provider of `kind` that fails with
+    /// `code` when the session builds its ASR step.
+    async fn failing_rig(kind: kongwe_core::config::ProviderKind, code: ErrorCode) -> Rig {
+        rig_with(
+            fast_settings(),
+            vec![Arc::new(FailingAsrFactory { kind, code })],
+            move |c| {
+                use kongwe_core::config::{Capabilities, ProviderConfig, ProviderKind};
+                let caps = Capabilities {
+                    transcribe: true,
+                    chat: false,
+                    streaming: false,
+                    language_hint: false,
+                    hotwords: false,
+                };
+                let p = match kind {
+                    ProviderKind::Native => ProviderConfig::native("failing", "Failing", "x", caps),
+                    _ => ProviderConfig::embedded(
+                        "failing",
+                        "Failing",
+                        kongwe_core::config::Runtime::Whisper,
+                        "missing-model",
+                        caps,
+                    ),
+                };
+                c.providers.push(p);
+                c.profiles[0].asr_provider = kongwe_core::types::ProviderId("failing".into());
+            },
+        )
+        .await
+    }
+
+    async fn rig_with(
+        settings: ClientSettings,
+        factories: Vec<Arc<dyn kongwe_core::ProviderFactory>>,
+        tweak: impl FnOnce(&mut kongwe_core::config::Config),
+    ) -> Rig {
         let tmp = tempfile::tempdir().unwrap();
         let asr = MockServer::start().await;
         let llm = MockServer::start().await;
-        let engine = Engine::open(
+        let engine = Engine::open_with(
             DataDir::custom(tmp.path()),
-            Arc::new(MemorySecretStore::default()),
+            kongwe_core::EngineOptions {
+                secrets: Arc::new(MemorySecretStore::default()),
+                factories,
+                first_run: Default::default(),
+            },
         )
         .await
         .unwrap();
@@ -775,6 +874,7 @@ mod tests {
                 *c = kongwe_core::config::Config::http_test_config();
                 c.providers[0].base_url = Some(Url::parse(&format!("{}/v1", asr.uri())).unwrap());
                 c.providers[1].base_url = Some(Url::parse(&format!("{}/v1", llm.uri())).unwrap());
+                tweak(c);
             })
             .unwrap();
         let platform = Arc::new(FakePlatform::new());
@@ -1222,6 +1322,51 @@ mod tests {
         )
         .await;
         assert_eq!(r.platform.calls(), vec!["type:b"]);
+    }
+
+    async fn first_failure(r: &Rig) -> UiMessage {
+        hold_and_speak(r, 1.0).await;
+        wait_for(
+            || {
+                r.ui.messages
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|m| m.msg != Msg::WidgetNoSpeech)
+            },
+            "failure message",
+        )
+        .await;
+        let messages = r.ui.messages.lock().unwrap().clone();
+        messages
+            .into_iter()
+            .find(|m| m.msg != Msg::WidgetNoSpeech)
+            .expect("a message was recorded")
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn model_missing_error_shows_copyable_model_message() {
+        let r = failing_rig(
+            kongwe_core::config::ProviderKind::Embedded,
+            ErrorCode::ModelMissing,
+        )
+        .await;
+        let m = first_failure(&r).await;
+        assert_eq!(m.msg, Msg::WidgetModelMissing, "{m:?}");
+        assert_eq!(m.copyable.as_deref(), Some("the hint"), "{m:?}");
+        assert!(r.platform.calls().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn native_unavailable_error_maps_to_its_message() {
+        let r = failing_rig(
+            kongwe_core::config::ProviderKind::Native,
+            ErrorCode::NativeUnavailable,
+        )
+        .await;
+        let m = first_failure(&r).await;
+        assert_eq!(m.msg, Msg::WidgetNativeUnavailable, "{m:?}");
+        assert!(m.copyable.is_some(), "{m:?}");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

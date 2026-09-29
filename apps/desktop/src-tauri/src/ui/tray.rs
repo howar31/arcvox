@@ -18,6 +18,7 @@ const ICON_PROCESSING: Image<'static> = tauri::include_image!("./icons/tray-proc
 pub const ID_STATUS: &str = "status";
 pub const ID_SETTINGS: &str = "settings";
 pub const ID_HISTORY: &str = "history";
+pub const ID_MODELS: &str = "models";
 pub const ID_AUTOSTART: &str = "autostart";
 pub const ID_QUIT: &str = "quit";
 
@@ -26,6 +27,7 @@ pub struct Tray<R: Runtime> {
     status: MenuItem<R>,
     settings: MenuItem<R>,
     history: MenuItem<R>,
+    models: MenuItem<R>,
     autostart: CheckMenuItem<R>,
     quit: MenuItem<R>,
     /// The status label depends on both the last `UiState` and the current
@@ -57,6 +59,13 @@ impl<R: Runtime> Tray<R> {
             true,
             None::<&str>,
         )?;
+        let models = MenuItem::with_id(
+            app,
+            ID_MODELS,
+            text(language, Msg::TrayModels),
+            true,
+            None::<&str>,
+        )?;
         let autostart_on = app.autolaunch().is_enabled().unwrap_or(false);
         let autostart = CheckMenuItem::with_id(
             app,
@@ -80,6 +89,7 @@ impl<R: Runtime> Tray<R> {
                 &PredefinedMenuItem::separator(app)?,
                 &settings,
                 &history,
+                &models,
                 &autostart,
                 &PredefinedMenuItem::separator(app)?,
                 &quit,
@@ -94,6 +104,7 @@ impl<R: Runtime> Tray<R> {
             .on_menu_event(|app, event| match event.id().as_ref() {
                 ID_SETTINGS => open_settings(app, None),
                 ID_HISTORY => open_settings(app, Some("history")),
+                ID_MODELS => open_settings(app, Some("models")),
                 ID_AUTOSTART => {
                     let al = app.autolaunch();
                     let on = al.is_enabled().unwrap_or(false);
@@ -111,6 +122,7 @@ impl<R: Runtime> Tray<R> {
             status,
             settings,
             history,
+            models,
             autostart,
             quit,
             last_state: Mutex::new(UiState::Idle),
@@ -135,6 +147,7 @@ impl<R: Runtime> Tray<R> {
         let _ = self.status.set_text(text(language, status_msg(state)));
         let _ = self.settings.set_text(text(language, Msg::TraySettings));
         let _ = self.history.set_text(text(language, Msg::TrayHistory));
+        let _ = self.models.set_text(text(language, Msg::TrayModels));
         let _ = self
             .autostart
             .set_text(text(language, Msg::TrayLaunchAtLogin));
@@ -171,6 +184,7 @@ const SETTINGS_PAGES: &[&str] = &[
     "prompt",
     "dictionary",
     "history",
+    "models",
     "about",
 ];
 
