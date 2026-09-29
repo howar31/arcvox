@@ -5,6 +5,7 @@ pub mod config;
 pub mod dictionary;
 pub mod engine;
 pub mod history;
+pub mod models;
 pub mod paths;
 pub mod pipeline;
 pub mod profile;

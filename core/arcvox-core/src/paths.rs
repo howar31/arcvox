@@ -67,6 +67,7 @@ impl DataDir {
         std::fs::create_dir_all(self.config_dir.join("prompts"))?;
         std::fs::create_dir_all(&self.data_dir)?;
         std::fs::create_dir_all(self.recordings_dir())?;
+        std::fs::create_dir_all(self.models_dir())?;
         Ok(())
     }
 
@@ -81,6 +82,13 @@ impl DataDir {
     }
     pub fn recordings_dir(&self) -> PathBuf {
         self.cache_dir.join("recordings")
+    }
+    pub fn models_dir(&self) -> PathBuf {
+        self.cache_dir.join("models")
+    }
+    /// Last successfully fetched remote model manifest.
+    pub fn manifest_cache_path(&self) -> PathBuf {
+        self.config_dir.join("models-manifest.json")
     }
 }
 
@@ -110,6 +118,7 @@ mod tests {
         assert!(d.config_dir.join("prompts").is_dir());
         assert!(d.data_dir.is_dir());
         assert!(d.recordings_dir().is_dir());
+        assert!(d.models_dir().is_dir());
     }
 
     #[test]
