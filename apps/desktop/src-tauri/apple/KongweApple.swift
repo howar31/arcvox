@@ -165,50 +165,129 @@ private func transcribe(
         try await analyzer.setContext(ctx)
     }
     guard let fmt = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]),
-          let buffer = convert(samples, sampleRate: sampleRate, to: fmt)
+          let converted = convert(samples, sampleRate: sampleRate, to: fmt)
     else { return (9, "") }
 
-    let collector = Task { () throws -> String in
-        var text = ""
-        for try await result in transcriber.results where result.isFinal {
-            text += String(result.text.characters)
-        }
-        return text
+    let step: Step
+    do {
+        step = try await race(
+            analyzer: analyzer, finals: transcriber.results, buffer: converted, isCancelled: isCancelled)
+    } catch {
+        Task { await analyzer.cancelAndFinishNow() }
+        throw error
     }
-    // The analyzer has no cancel hook of its own; poll the caller's flag.
-    let watcher = Task {
-        while !Task.isCancelled {
-            if isCancelled() {
-                await analyzer.cancelAndFinishNow()
-                return
-            }
-            try? await Task.sleep(nanoseconds: 50_000_000)
+    guard case .text(let text) = step, !isCancelled() else {
+        Task { await analyzer.cancelAndFinishNow() }
+        return (8, "")
+    }
+    return (0, text)
+}
+
+/// The framework does not promise that `results` ends after a cancel, or that
+/// its awaits return promptly, so each framework await runs in its own task and
+/// is waited on through `awaitDetached`, which gives up on cancellation. Only the
+/// watcher reads the caller's flag, and the group awaits it before returning.
+@available(macOS 26, *)
+private func race(
+    analyzer: SpeechAnalyzer, finals: some AsyncSequence<DictationTranscriber.Result, any Error> & Sendable,
+    buffer: AVAudioPCMBuffer, isCancelled: @escaping @Sendable () -> Bool
+) async throws -> Step {
+    nonisolated(unsafe) let buffer = buffer
+    return try await withThrowingTaskGroup(of: Step.self) { group -> Step in
+        group.addTask {
+            .text(try await awaitDetached {
+                var text = ""
+                for try await result in finals where result.isFinal {
+                    text += String(result.text.characters)
+                }
+                return text
+            })
         }
+        group.addTask {
+            try await awaitDetached {
+                let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
+                continuation.yield(AnalyzerInput(buffer: buffer))
+                continuation.finish()
+                try await analyzer.start(inputSequence: stream)
+                try await analyzer.finalizeAndFinishThroughEndOfInput()
+            }
+            return .inputDone
+        }
+        group.addTask {
+            while !Task.isCancelled {
+                if isCancelled() { return .cancelled }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            return .inputDone
+        }
+        // Input finishing is not the end: the last results arrive after it.
+        while let next = try await group.next() {
+            if case .inputDone = next { continue }
+            group.cancelAll()
+            return next
+        }
+        return .cancelled
+    }
+}
+
+private enum Step: Sendable {
+    case text(String)
+    case inputDone
+    case cancelled
+}
+
+/// A one-shot result slot that a cancellation handler may fill before the
+/// continuation exists.
+private final class Gate<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<T, any Error>?
+    private var result: Result<T, any Error>?
+    private var done = false
+
+    func attach(_ c: CheckedContinuation<T, any Error>) {
+        lock.lock()
+        if let r = result {
+            done = true
+            lock.unlock()
+            c.resume(with: r)
+            return
+        }
+        continuation = c
+        lock.unlock()
     }
 
-    let outcome: Result<String, any Error>
-    do {
-        let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
-        continuation.yield(AnalyzerInput(buffer: buffer))
-        continuation.finish()
-        try await analyzer.start(inputSequence: stream)
-        try await analyzer.finalizeAndFinishThroughEndOfInput()
-        outcome = .success(try await collector.value)
-    } catch {
-        outcome = .failure(error)
+    func finish(_ r: Result<T, any Error>) {
+        lock.lock()
+        if done || result != nil {
+            lock.unlock()
+            return
+        }
+        guard let c = continuation else {
+            result = r
+            lock.unlock()
+            return
+        }
+        done = true
+        continuation = nil
+        lock.unlock()
+        c.resume(with: r)
     }
-    // Both tasks must have finished before returning: the watcher reads the
-    // caller's flag, which the caller frees once this call returns.
-    watcher.cancel()
-    await watcher.value
-    if case .failure = outcome {
-        await analyzer.cancelAndFinishNow()
-        collector.cancel()
-        _ = try? await collector.value
+}
+
+/// Runs `op` in an unstructured task and waits for it, returning early with
+/// `CancellationError` when the waiting task is cancelled. `op` may outlive the
+/// wait, so it must only use values it owns.
+private func awaitDetached<T: Sendable>(_ op: @escaping @Sendable () async throws -> T) async throws -> T {
+    let gate = Gate<T>()
+    let inner = Task {
+        do { gate.finish(.success(try await op())) } catch { gate.finish(.failure(error)) }
     }
-    let text = try outcome.get()
-    if isCancelled() { return (8, "") }
-    return (0, text)
+    return try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { gate.attach($0) }
+    } onCancel: {
+        inner.cancel()
+        gate.finish(.failure(CancellationError()))
+    }
 }
 
 private func convert(_ samples: [Float], sampleRate: Double, to fmt: AVAudioFormat) -> AVAudioPCMBuffer? {
