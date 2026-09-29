@@ -59,6 +59,7 @@ pub enum Msg {
     WidgetEngineUnavailable,
     WidgetDegraded,
     WidgetCopy,
+    WidgetDismiss,
 }
 
 pub const ALL_MSGS: &[Msg] = &[
@@ -85,6 +86,7 @@ pub const ALL_MSGS: &[Msg] = &[
     Msg::WidgetEngineUnavailable,
     Msg::WidgetDegraded,
     Msg::WidgetCopy,
+    Msg::WidgetDismiss,
 ];
 
 impl Msg {
@@ -114,6 +116,7 @@ impl Msg {
             Msg::WidgetEngineUnavailable => "widget.engine_unavailable",
             Msg::WidgetDegraded => "widget.degraded",
             Msg::WidgetCopy => "widget.copy",
+            Msg::WidgetDismiss => "widget.dismiss",
         }
     }
 }
@@ -170,6 +173,8 @@ pub fn text(lang: Language, msg: Msg) -> &'static str {
         (Language::En, Msg::WidgetDegraded) => "LLM unavailable; inserted the raw transcript",
         (Language::ZhTw, Msg::WidgetCopy) => "複製",
         (Language::En, Msg::WidgetCopy) => "Copy",
+        (Language::ZhTw, Msg::WidgetDismiss) => "關閉",
+        (Language::En, Msg::WidgetDismiss) => "Dismiss",
     }
 }
 

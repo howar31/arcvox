@@ -78,6 +78,7 @@ impl TauriUi {
 
     pub fn set_language(&self, language: Language) {
         *self.language.lock().unwrap() = language;
+        self.tray.set_language(language);
     }
 
     fn language(&self) -> Language {
@@ -121,13 +122,22 @@ impl TauriUi {
                 // click-through goes back to true so a stray click after
                 // the panel reappears never lands on the old content.
                 copyable_showing.store(false, Ordering::SeqCst);
-                let target = app.clone();
-                let _ = app.run_on_main_thread(move || {
-                    widget::set_click_through(&target, true);
-                    widget::hide(&target);
-                });
+                hide_panel_now(&app);
             }
         });
+    }
+
+    /// Dismisses the widget right away: clears the copyable-message flag
+    /// and hides the panel now instead of after a delay. The generation is
+    /// bumped first so a pending `hide_after` sleeper (for example the
+    /// copyable message's own timeout) finds a stale generation when it
+    /// wakes and no-ops instead of acting on a panel state that dismiss
+    /// already replaced.
+    pub fn dismiss(&self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        *self.hide_deadline.lock().unwrap() = None;
+        self.copyable_showing.store(false, Ordering::SeqCst);
+        hide_panel_now(&self.app);
     }
 
     fn state_name(state: UiState) -> &'static str {
@@ -141,6 +151,17 @@ impl TauriUi {
             UiState::EngineError => "engine_error",
         }
     }
+}
+
+/// Resets click-through to true and hides the panel. Shared by the delayed
+/// `hide_after` sleeper and by `dismiss`, which needs the same reset but
+/// right away instead of after a delay.
+fn hide_panel_now(app: &AppHandle<Wry>) {
+    let target = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        widget::set_click_through(&target, true);
+        widget::hide(&target);
+    });
 }
 
 /// A `set_state` or `message` call, the two events that can change the

@@ -22,6 +22,7 @@
   "widget.engine_unavailable": "Engine not ready; open Settings",
   "widget.degraded": "LLM unavailable; inserted the raw transcript",
   "widget.copy": "Copy",
+  "widget.dismiss": "Dismiss",
   "app.title": "Arcvox",
   "nav.general": "General",
   "nav.providers": "Providers",

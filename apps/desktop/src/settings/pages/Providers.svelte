@@ -8,6 +8,8 @@
   let keyPresent = $state(false);
   let status = $state("");
   let probe = $state("");
+  // Per-row probe result, keyed by provider id, shown next to that row.
+  let rowProbes = $state<Record<string, string>>({});
 
   function blank(): ProviderConfig {
     return { id: "", label: "", kind: "http", capabilities: { transcribe: false, chat: true, streaming: false, language_hint: false, hotwords: false },
@@ -37,11 +39,17 @@
     try { await deleteProvider(p.id); if (p.api_key_ref) await deleteSecret(p.api_key_ref); status = t("common.saved"); }
     catch (e) { status = errorMessage(e); }
   }
+  function describeProbe(r: { ok: boolean; failure: { kind: string; message?: string } | null }): string {
+    return r.ok ? t("providers.probe_ok") : `${t("providers.probe_failed")}: ${r.failure?.kind ?? ""} ${r.failure?.message ?? ""}`;
+  }
   async function runProbe() {
     if (!editing) return;
     probe = "...";
-    const r = await probeProvider(editing);
-    probe = r.ok ? t("providers.probe_ok") : `${t("providers.probe_failed")}: ${r.failure?.kind ?? ""} ${r.failure?.message ?? ""}`;
+    probe = describeProbe(await probeProvider(editing));
+  }
+  async function probeRow(p: ProviderConfig) {
+    rowProbes = { ...rowProbes, [p.id]: "..." };
+    rowProbes = { ...rowProbes, [p.id]: describeProbe(await probeProvider(p)) };
   }
 </script>
 
@@ -51,7 +59,12 @@
   <tbody>
     {#each config.value?.providers ?? [] as p}
       <tr><td>{p.label}</td><td>{p.base_url ?? ""}</td><td>{p.model ?? ""}</td>
-        <td><button onclick={() => edit(p)}>{t("common.edit")}</button> <button onclick={() => remove(p)}>{t("common.remove")}</button></td></tr>
+        <td>
+          <button onclick={() => edit(p)}>{t("common.edit")}</button>
+          <button onclick={() => probeRow(p)}>{t("providers.probe")}</button>
+          <button onclick={() => remove(p)}>{t("common.remove")}</button>
+          {#if rowProbes[p.id]}<span class="muted">{rowProbes[p.id]}</span>{/if}
+        </td></tr>
     {/each}
   </tbody>
 </table>

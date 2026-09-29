@@ -12,12 +12,14 @@
   let status = $state("");
   let draft = $state<ClientSettings | null>(null);
   let general = $state<General | null>(null);
+  let loadedUiLanguage = "";
 
   onMount(async () => {
     mics = await listMicrophones();
     accessibility = (await permissions()).accessibility;
     autostart = await isEnabled();
     draft = structuredClone($state.snapshot(client.value!));
+    loadedUiLanguage = draft.ui_language;
     // `config.value` is null when the engine failed to open; the
     // client-settings section above still works since `client.json`
     // loads independently, but there is no core config to read here.
@@ -26,7 +28,13 @@
 
   async function saveClient() {
     if (!draft) return;
-    try { await client.save(draft); status = t("common.saved"); } catch (e) { status = errorMessage(e); }
+    try {
+      await client.save(draft);
+      status = t("common.saved");
+      // The shell only reads `ui_language` at mount, so a change needs a
+      // reload for every page (including this one) to re-render in it.
+      if (draft.ui_language !== loadedUiLanguage) location.reload();
+    } catch (e) { status = errorMessage(e); }
   }
   async function saveGeneral() {
     if (!general) return;

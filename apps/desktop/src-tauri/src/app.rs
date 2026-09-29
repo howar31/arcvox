@@ -45,6 +45,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             crate::commands::system::ui_language,
             crate::commands::system::widget_copy,
+            crate::commands::system::widget_dismiss,
             crate::commands::system::system_open_settings_window,
             crate::commands::system::system_list_microphones,
             crate::commands::system::system_permissions,

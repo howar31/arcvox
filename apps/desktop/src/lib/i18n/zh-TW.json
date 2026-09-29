@@ -22,6 +22,7 @@
   "widget.engine_unavailable": "引擎尚未就緒，請開啟設定",
   "widget.degraded": "LLM 未回應，已插入原始辨識結果",
   "widget.copy": "複製",
+  "widget.dismiss": "關閉",
   "app.title": "Arcvox 語音",
   "nav.general": "一般",
   "nav.providers": "服務供應商",

@@ -16,6 +16,11 @@ pub fn widget_copy(state: State<'_, AppState>, text: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
+pub fn widget_dismiss(state: State<'_, AppState>) {
+    state.ui.dismiss();
+}
+
+#[tauri::command]
 pub fn system_open_settings_window(app: AppHandle<Wry>, page: Option<String>) {
     crate::ui::tray::open_settings(&app, page.as_deref());
 }

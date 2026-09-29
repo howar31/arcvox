@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { onWidgetLevel, onWidgetMessage, onWidgetState, uiLanguage, widgetCopy, type MessagePayload, type WidgetState } from "../lib/api";
+  import { onWidgetLevel, onWidgetMessage, onWidgetState, uiLanguage, widgetCopy, widgetDismiss, type MessagePayload, type WidgetState } from "../lib/api";
   import { setLanguage, t, type Lang } from "../lib/i18n";
 
   // A local named "state" collides with the $state rune during type checking.
@@ -28,6 +28,11 @@
       default: return "";
     }
   });
+
+  function dismiss() {
+    widgetDismiss();
+    message = null;
+  }
 </script>
 
 <div class="panel" class:error={message?.kind === "error"}>
@@ -39,6 +44,7 @@
         <div class="copy-row">
           <div class="copyable">{message.copyable}</div>
           <button onclick={() => widgetCopy(message!.copyable!)}>{t("widget.copy")}</button>
+          <button class="dismiss" onclick={dismiss} aria-label={t("widget.dismiss")}>✕</button>
         </div>
       {/if}
     </div>
@@ -64,4 +70,5 @@
   .copy-row { display: flex; align-items: center; gap: 8px; }
   .copyable { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: ui-monospace, monospace; }
   button { font: inherit; padding: 2px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.3); background: rgba(255,255,255,0.12); color: inherit; }
+  button.dismiss { padding: 2px 8px; }
 </style>
