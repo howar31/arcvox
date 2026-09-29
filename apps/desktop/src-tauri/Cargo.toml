@@ -30,8 +30,10 @@ cpal = "0.18"
 rubato = "0.16"
 earshot = "1"
 url = "2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+arcvox-inference = { path = "../../../core/arcvox-inference", features = ["metal"] }
 tauri-nspanel = "2"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSData", "NSLocale", "NSObject", "NSEnumerator"] }
@@ -42,6 +44,9 @@ core-foundation = "0.10"
 accessibility-sys = "0.2"
 security-framework = "3"
 libc = "0.2"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+arcvox-inference = { path = "../../../core/arcvox-inference" }
 
 [dev-dependencies]
 arcvox-core = { path = "../../../core/arcvox-core", features = ["test-util"] }

@@ -139,6 +139,25 @@ impl Engine {
         })
     }
 
+    /// Loads the default profile's ASR provider in the background so the
+    /// first dictation does not pay the model load. Failures are ignored:
+    /// the session reports them when it needs the provider.
+    pub fn warm_up_default_asr(&self) {
+        let inner = self.inner.clone();
+        self.inner.runtime.spawn(async move {
+            let config = inner.config.current();
+            let Some(profile) = config.profiles.iter().find(|p| p.is_default) else {
+                return;
+            };
+            let Some(cfg) = config.provider(&profile.asr_provider) else {
+                return;
+            };
+            if let Ok(p) = inner.registry.asr(cfg, &config.general) {
+                let _ = p.load().await;
+            }
+        });
+    }
+
     pub fn config(&self) -> &ConfigStore {
         &self.inner.config
     }

@@ -3,7 +3,8 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use arcvox_core::{DataDir, Engine};
+use arcvox_core::models::ModelStore;
+use arcvox_core::{DataDir, Engine, EngineOptions, FirstRunDefaults};
 use tauri::{Manager, Wry};
 
 use crate::audio::capture::CpalSource;
@@ -12,12 +13,14 @@ use crate::dictation::ui::{Ui, UiState};
 use crate::dictation::{self, ControllerHandle, Deps};
 use crate::i18n::{self, Language};
 use crate::platform::Platform;
+use crate::providers::{build_factories, BUNDLED_MANIFEST};
 use crate::secrets::KeychainStore;
 use crate::settings::ClientSettings;
 use crate::ui::TauriUi;
 use crate::vad::EarshotVad;
 
 pub struct AppState {
+    pub models: Arc<ModelStore>,
     pub engine: Mutex<Option<Engine>>,
     pub controller: ControllerHandle,
     pub platform: Arc<dyn Platform>,
@@ -117,9 +120,24 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
     let ui = Arc::new(TauriUi::new(app.clone(), language)?);
 
     let secrets = Arc::new(KeychainStore::new());
+    let models = Arc::new(ModelStore::new(
+        &dirs,
+        reqwest::Client::new(),
+        BUNDLED_MANIFEST,
+        None,
+    ));
     let (engine, engine_error, runtime) = tauri::async_runtime::block_on(async {
         let runtime = tokio::runtime::Handle::current();
-        match Engine::open(dirs.clone(), secrets).await {
+        match Engine::open_with(
+            dirs.clone(),
+            EngineOptions {
+                secrets,
+                factories: build_factories(models.clone()),
+                first_run: FirstRunDefaults::default(),
+            },
+        )
+        .await
+        {
             Ok(e) => (Some(e), None, runtime),
             Err(e) => (None, Some(e.to_string()), runtime),
         }
@@ -138,6 +156,7 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
     );
 
     app.manage(AppState {
+        models,
         engine: Mutex::new(engine.clone()),
         controller: controller.clone(),
         platform: platform.clone(),
@@ -149,6 +168,7 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
     });
 
     if let Some(e) = engine.as_ref() {
+        e.warm_up_default_asr();
         let mut rx = e.config().subscribe();
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
