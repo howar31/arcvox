@@ -6,3 +6,6 @@ members = ["core/arcvox-core", "core/arcvox-inference", "apps/desktop/src-tauri"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/howar31/arcvox"
+
+[patch.crates-io]
+whisper-rs-sys = { path = "core/arcvox-inference/vendor/whisper-rs-sys" }

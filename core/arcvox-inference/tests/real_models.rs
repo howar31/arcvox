@@ -1,7 +1,8 @@
 //! Runs against real model files. Ignored by default.
 //! ARCVOX_MODELS_DIR=/path cargo test -p arcvox-inference --features metal --test real_models -- --ignored --nocapture
-use arcvox_core::providers::{AsrHint, AsrProvider};
-use arcvox_core::types::AudioClip;
+use arcvox_core::providers::{AsrHint, AsrProvider, LlmOptions, LlmProvider};
+use arcvox_core::types::{AudioClip, ChatMessage, ErrorCode};
+use arcvox_inference::llama::LlamaLlmProvider;
 use arcvox_inference::whisper::WhisperAsrProvider;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -95,4 +96,55 @@ async fn truncated_model_is_model_corrupt() {
         arcvox_core::types::ErrorCode::ModelCorrupt,
         "{err:?}"
     );
+}
+
+#[tokio::test]
+#[ignore]
+async fn llama_small_model_completes() {
+    let Some(dir) = models_dir() else { return };
+    let p = LlamaLlmProvider::new(
+        dir.join("SmolLM2-135M-Instruct-Q8_0.gguf"),
+        "small".into(),
+        true,
+    );
+    let out = p
+        .complete(
+            vec![
+                ChatMessage::system("Reply with one word."),
+                ChatMessage::user("Say hello."),
+            ],
+            &LlmOptions {
+                temperature: 0.0,
+                max_tokens: Some(16),
+                timeout: Duration::from_secs(60),
+            },
+        )
+        .await
+        .unwrap();
+    println!("completion: {out:?}");
+    assert!(!out.trim().is_empty());
+}
+
+#[tokio::test]
+#[ignore]
+async fn cancel_flag_stops_generation() {
+    let Some(dir) = models_dir() else { return };
+    let p = LlamaLlmProvider::new(
+        dir.join("SmolLM2-135M-Instruct-Q8_0.gguf"),
+        "small".into(),
+        true,
+    );
+    p.load().await.unwrap();
+    let err = p
+        .complete(
+            vec![ChatMessage::user("Write a very long story.")],
+            &LlmOptions {
+                temperature: 0.7,
+                max_tokens: Some(4096),
+                timeout: Duration::from_millis(200),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::ProviderTimeout, "{err:?}");
 }

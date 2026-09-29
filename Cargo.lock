@@ -2431,6 +2431,7 @@ name = "arcvox-inference"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "encoding_rs",
  "hound",
  "arcvox-core",
  "llama-cpp-2",
@@ -5618,13 +5619,11 @@ dependencies = [
 [[package]]
 name = "whisper-rs-sys"
 version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6986c0fe081241d391f09b9a071fbcbb59720c3563628c3c829057cf69f2a56f"
 dependencies = [
  "bindgen",
- "cfg-if",
  "cmake",
  "fs_extra",
+ "llama-cpp-sys-2",
  "semver",
 ]
 

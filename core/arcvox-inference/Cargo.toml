@@ -14,7 +14,8 @@ cuda = ["whisper-rs/cuda", "llama-cpp-2/cuda"]
 [dependencies]
 arcvox-core = { path = "../arcvox-core" }
 whisper-rs = { version = "0.16", features = ["tracing_backend"] }
-llama-cpp-2 = "0.1.157"
+llama-cpp-2 = "=0.1.157"
+encoding_rs = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 async-trait = "0.1"
 tracing = "0.1"

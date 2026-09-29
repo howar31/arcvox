@@ -1,4 +1,5 @@
 //! In-process speech recognition and language model providers.
+pub mod chat;
 pub mod lang;
 pub mod llama;
 pub mod whisper;
