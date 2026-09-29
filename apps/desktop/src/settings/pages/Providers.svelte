@@ -42,14 +42,18 @@
   function describeProbe(r: { ok: boolean; failure: { kind: string; message?: string } | null }): string {
     return r.ok ? t("providers.probe_ok") : `${t("providers.probe_failed")}: ${r.failure?.kind ?? ""} ${r.failure?.message ?? ""}`;
   }
+  async function probeText(p: ProviderConfig): Promise<string> {
+    try { return describeProbe(await probeProvider(p)); }
+    catch (e) { return `${t("providers.probe_failed")}: ${errorMessage(e)}`; }
+  }
   async function runProbe() {
     if (!editing) return;
     probe = "...";
-    probe = describeProbe(await probeProvider(editing));
+    probe = await probeText(editing);
   }
   async function probeRow(p: ProviderConfig) {
     rowProbes = { ...rowProbes, [p.id]: "..." };
-    rowProbes = { ...rowProbes, [p.id]: describeProbe(await probeProvider(p)) };
+    rowProbes = { ...rowProbes, [p.id]: await probeText(p) };
   }
 </script>
 
