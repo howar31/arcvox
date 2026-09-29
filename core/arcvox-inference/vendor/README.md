@@ -25,6 +25,7 @@ Changes from upstream:
 - `Cargo.toml` depends on `llama-cpp-sys-2 = "=0.1.157"`, and the `metal`, `vulkan`, `cuda`, `hipblas` and
   `openmp` features forward to it.
 
-Upgrading: whisper.cpp is compiled against the ggml headers of the pinned `llama-cpp-sys-2`. Upgrade
-`llama-cpp-2` (pinned exactly in `core/arcvox-inference/Cargo.toml`) and this copy together, and rebuild
-and run the real-model tests for both engines in one binary before changing either.
+Upgrading: whisper.cpp is compiled against the ggml headers of the pinned `llama-cpp-sys-2`, and
+`whisper-rs` calls the bindings this copy generates. Both `whisper-rs` and `llama-cpp-2` are pinned exactly
+in `core/arcvox-inference/Cargo.toml`; move them together with this copy, and rebuild and run the
+real-model tests for both engines in one binary before changing any of them.

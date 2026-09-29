@@ -379,6 +379,7 @@ private func complete(
     let session = LanguageModelSession(model: model, instructions: instructions)
     var opts = GenerationOptions()
     opts.temperature = temperature
+    // The caller passes 0 for no limit; the context window then bounds the reply.
     opts.maximumResponseTokens = maxTokens > 0 ? maxTokens : nil
     do {
         let response = try await session.respond(to: prompt, options: opts)

@@ -9,6 +9,9 @@ pub mod store;
 pub use manifest::{Manifest, ManifestSource, ModelEntry, ModelRole};
 pub use store::{InstalledModel, ModelStore};
 
+/// Catalogue fetched when `client.json` sets no `manifest_url` override.
+pub const DEFAULT_MANIFEST_URL: &str = "https://arcvox.howar31.com/models/manifest.json";
+
 #[derive(Debug, thiserror::Error)]
 pub enum ModelError {
     #[error("model `{0}` is not in the catalogue")]

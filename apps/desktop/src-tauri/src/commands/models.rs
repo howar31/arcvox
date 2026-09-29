@@ -40,6 +40,17 @@ pub async fn models_manifest(state: State<'_, AppState>) -> CmdResult<ManifestVi
     })
 }
 
+/// The catalogue available without waiting on the network, so the page can
+/// render before `models_manifest` settles.
+#[tauri::command]
+pub fn models_manifest_now(state: State<'_, AppState>) -> CmdResult<ManifestView> {
+    let (manifest, source) = state.models.manifest_now();
+    Ok(ManifestView {
+        source,
+        models: manifest.models,
+    })
+}
+
 #[tauri::command]
 pub fn models_installed(state: State<'_, AppState>) -> CmdResult<Vec<InstalledModel>> {
     Ok(state.models.installed())

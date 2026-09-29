@@ -9,9 +9,6 @@ use tokio::time::Instant;
 
 use super::ffi;
 
-/// Used when the caller sets no limit.
-const DEFAULT_MAX_TOKENS: i32 = 1024;
-
 pub struct AppleLlmProvider {
     label: String,
 }
@@ -149,7 +146,7 @@ impl AppleLlmProvider {
                 ErrorCode::ProviderTimeout,
                 format!("{}: generation timed out", self.label),
             )
-            .with_hint("raise the LLM timeout in Settings > General")),
+            .with_hint("raise the rewrite timeout in Settings > General")),
         }
     }
 }
@@ -162,9 +159,9 @@ impl LlmProvider for AppleLlmProvider {
         opts: &LlmOptions,
     ) -> Result<String, ProviderError> {
         let deadline = Instant::now() + opts.timeout;
-        let max_tokens = opts
-            .max_tokens
-            .map_or(DEFAULT_MAX_TOKENS, |t| i32::try_from(t).unwrap_or(i32::MAX));
+        // No token cap: it would truncate rewrites silently, while the context window
+        // bounds the reply and `exceededContextWindowSize` is already mapped.
+        let max_tokens = 0;
         let temperature = f64::from(opts.temperature);
         let (instructions, prompt) = flatten(&messages, true);
         let mut result = self

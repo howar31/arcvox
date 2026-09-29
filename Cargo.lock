@@ -2443,7 +2443,6 @@ dependencies = [
  "llama-cpp-2",
  "reqwest 0.12.28",
  "tempfile",
- "thiserror 2.0.21",
  "tokio",
  "tracing",
  "whisper-rs",

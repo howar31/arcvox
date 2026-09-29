@@ -18,8 +18,8 @@ pub enum ModelRole {
     Llm,
 }
 
+/// Unknown fields are ignored so older builds keep reading newer catalogues.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ModelEntry {
     pub id: String,
     pub runtime: Runtime,
@@ -57,7 +57,6 @@ impl ModelEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub schema_version: u32,
     pub models: Vec<ModelEntry>,
@@ -116,6 +115,14 @@ pub(crate) mod tests {
         assert_eq!(m.get("b").unwrap().runtime, Runtime::Llama);
         assert_eq!(m.recommended(ModelRole::Asr).unwrap().id, "a");
         assert!(m.recommended(ModelRole::Llm).is_none());
+    }
+
+    #[test]
+    fn unknown_fields_are_ignored() {
+        let json = r#"{"schema_version":1,"published":"later","models":[
+          {"id":"a","runtime":"whisper","role":"asr","label":"A","url":"https://h/a.bin","sha256":"00","size_bytes":1,"license":"MIT","alternates":["https://m/a.bin"]}]}"#;
+        let m = Manifest::parse(json).unwrap();
+        assert_eq!(m.get("a").unwrap().file_name(), "a.bin");
     }
 
     #[test]

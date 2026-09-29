@@ -16,7 +16,7 @@ use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::{send_logs_to_tracing, LogOptions};
 
 use crate::chat::{self, role_name};
-use crate::CancelFlag;
+use crate::{CancelFlag, CancelOnDrop};
 
 /// Context window used for every completion.
 pub const N_CTX: u32 = 4096;
@@ -127,16 +127,6 @@ fn inference_failed(label: &str, e: impl std::fmt::Display) -> ProviderError {
     ProviderError::new(ErrorCode::InferenceFailed, format!("{label}: {e}"))
 }
 
-/// Sets the flag when the `complete` future is dropped, so an abandoned
-/// generation stops at the next token.
-struct CancelOnDrop(CancelFlag);
-
-impl Drop for CancelOnDrop {
-    fn drop(&mut self) {
-        self.0.cancel();
-    }
-}
-
 fn prompt(model: &LlamaModel, messages: &[ChatMessage]) -> String {
     let Ok(tpl) = model.chat_template(None) else {
         return chat::chatml(messages);
@@ -171,7 +161,7 @@ fn generate(
                 ErrorCode::ProviderTimeout,
                 format!("{label}: generation timed out"),
             )
-            .with_hint("raise the LLM timeout in Settings > General"));
+            .with_hint("raise the rewrite timeout in Settings > General"));
         }
         Ok(())
     };
@@ -248,7 +238,7 @@ fn generate(
         // `sample` also accepts the token into the sampler chain.
         let token = sampler.sample(&ctx, batch.n_tokens() - 1);
         if model.is_eog_token(token) {
-            break;
+            return Ok(out);
         }
         let piece = model
             .token_to_piece(token, &mut decoder, true, None)
@@ -264,7 +254,15 @@ fn generate(
         ctx.decode(&mut batch)
             .map_err(|e| inference_failed(label, e))?;
     }
-    Ok(out)
+    Err(truncated(label))
+}
+
+/// The token budget ran out before an end-of-generation token, so the reply is incomplete.
+fn truncated(label: &str) -> ProviderError {
+    ProviderError::new(
+        ErrorCode::ProviderError,
+        format!("{label}: generation hit the token limit before finishing"),
+    )
 }
 
 #[async_trait]
@@ -321,5 +319,12 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::ModelMissing);
+    }
+
+    #[test]
+    fn truncation_is_a_recoverable_provider_error() {
+        let err = truncated("Local");
+        assert_eq!(err.code, ErrorCode::ProviderError);
+        assert!(err.message.contains("token limit"));
     }
 }
