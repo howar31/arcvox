@@ -69,7 +69,7 @@ impl Pipeline {
                     // pipeline build: the step chain still needs an LLM slot so
                     // `run` can degrade to the ASR text at run time instead of the
                     // session never starting.
-                    let llm_step: Box<dyn Step> = match registry.llm(cfg) {
+                    let llm_step: Box<dyn Step> = match registry.llm(cfg, &config.general) {
                         Ok(provider) => Box::new(LlmStep::new(provider)),
                         Err(e) => Box::new(UnavailableLlmStep {
                             error: StepError::from(e),

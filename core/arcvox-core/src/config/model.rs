@@ -20,6 +20,14 @@ pub struct Config {
     pub dictionary: Vec<DictionaryEntry>,
 }
 
+/// Platform capabilities the client reports at engine start; they choose the
+/// providers a fresh config starts with.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FirstRunDefaults {
+    pub apple_dictation: bool,
+    pub apple_foundation_models: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct General {

@@ -9,12 +9,13 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::audio::encode_wav_pcm16;
-use crate::config::{ConfigStore, ProviderConfig, ProviderKind, StoreError};
+use crate::config::{ConfigStore, FirstRunDefaults, ProviderConfig, ProviderKind, StoreError};
 use crate::history::{HistoryError, HistoryStore, NewUtterance};
 use crate::paths::DataDir;
 use crate::pipeline::Pipeline;
 use crate::profile::resolve;
 use crate::protocol::{Event, PROTOCOL_VERSION};
+use crate::providers::factory::ProviderFactory;
 use crate::providers::probe::{probe_http, ProbeFailure, ProbeResult};
 use crate::providers::registry::ProviderRegistry;
 use crate::secrets::SecretStore;
@@ -72,8 +73,28 @@ struct Inner {
     pub(crate) tail_delay_ms: AtomicU64,
 }
 
+/// Everything a client supplies when it opens the engine.
+pub struct EngineOptions {
+    pub secrets: Arc<dyn SecretStore>,
+    pub factories: Vec<Arc<dyn ProviderFactory>>,
+    pub first_run: FirstRunDefaults,
+}
+
 impl Engine {
     pub async fn open(dirs: DataDir, secrets: Arc<dyn SecretStore>) -> Result<Engine, EngineError> {
+        Self::open_with(
+            dirs,
+            EngineOptions {
+                secrets,
+                factories: Vec::new(),
+                first_run: FirstRunDefaults::default(),
+            },
+        )
+        .await
+    }
+
+    pub async fn open_with(dirs: DataDir, opts: EngineOptions) -> Result<Engine, EngineError> {
+        let _ = opts.first_run;
         let runtime = tokio::runtime::Handle::current();
         dirs.ensure()?;
         let config = ConfigStore::open(&dirs)?;
@@ -99,7 +120,8 @@ impl Engine {
         .await;
 
         let client = reqwest::Client::builder().build().expect("reqwest client");
-        let registry = ProviderRegistry::new(client.clone(), secrets.clone());
+        let registry =
+            ProviderRegistry::with_factories(client.clone(), opts.secrets.clone(), opts.factories);
         Ok(Engine {
             inner: Arc::new(Inner {
                 dirs,
@@ -107,7 +129,7 @@ impl Engine {
                 history,
                 registry,
                 client,
-                secrets,
+                secrets: opts.secrets,
                 sessions: Mutex::new(HashMap::new()),
                 runtime,
                 #[cfg(test)]
@@ -131,11 +153,14 @@ impl Engine {
     pub async fn probe_provider(&self, cfg: &ProviderConfig) -> ProbeResult {
         match cfg.kind {
             ProviderKind::Http => probe_http(&self.inner.client, cfg, &self.inner.secrets).await,
-            _ => ProbeResult {
-                ok: false,
-                failure: Some(ProbeFailure::Other {
-                    message: "provider kind not available in this build".into(),
-                }),
+            kind => match self.inner.registry.factory_for(kind) {
+                Some(f) => f.probe(cfg).await,
+                None => ProbeResult {
+                    ok: false,
+                    failure: Some(ProbeFailure::Other {
+                        message: "provider kind not available in this build".into(),
+                    }),
+                },
             },
         }
     }
@@ -447,6 +472,25 @@ mod tests {
             asr,
             llm,
         }
+    }
+
+    #[tokio::test]
+    async fn probe_dispatches_to_factory_for_embedded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let e = Engine::open_with(
+            DataDir::custom(tmp.path()),
+            EngineOptions {
+                secrets: Arc::new(MemorySecretStore::default()),
+                factories: vec![Arc::new(crate::providers::registry::tests::FakeFactory)],
+                first_run: FirstRunDefaults::default(),
+            },
+        )
+        .await
+        .unwrap();
+        let r = e
+            .probe_provider(&crate::providers::registry::tests::embedded_cfg())
+            .await;
+        assert!(r.ok);
     }
 
     async fn mock_ok(rig: &Rig, asr_text: &str, llm_text: &str) {

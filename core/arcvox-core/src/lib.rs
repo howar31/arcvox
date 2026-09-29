@@ -16,9 +16,11 @@ pub mod session;
 pub mod steps;
 pub mod types;
 
-pub use engine::{Engine, EngineError, SessionRequest, MIN_UTTERANCE_SECS};
+pub use config::FirstRunDefaults;
+pub use engine::{Engine, EngineError, EngineOptions, SessionRequest, MIN_UTTERANCE_SECS};
 pub use paths::DataDir;
 pub use protocol::{Event, PROTOCOL_VERSION};
+pub use providers::factory::ProviderFactory;
 pub use secrets::{MemorySecretStore, SecretError, SecretStore};
 pub use session::Session;
 

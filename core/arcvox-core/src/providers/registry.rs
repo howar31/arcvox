@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::config::{General, ProviderConfig, ProviderKind};
+use crate::providers::factory::ProviderFactory;
 use crate::providers::http_asr::HttpAsrProvider;
 use crate::providers::http_llm::HttpLlmProvider;
 use crate::providers::{AsrProvider, LlmProvider, ProviderError};
@@ -17,17 +18,40 @@ pub struct ProviderRegistry {
     client: reqwest::Client,
     secrets: Arc<dyn SecretStore>,
     asr: Mutex<HashMap<ProviderId, (ProviderConfig, u64, Option<String>, Arc<dyn AsrProvider>)>>,
-    llm: Mutex<HashMap<ProviderId, (ProviderConfig, Option<String>, Arc<dyn LlmProvider>)>>,
+    llm: Mutex<HashMap<ProviderId, (ProviderConfig, u64, Option<String>, Arc<dyn LlmProvider>)>>,
+    factories: Vec<Arc<dyn ProviderFactory>>,
 }
 
 impl ProviderRegistry {
     pub fn new(client: reqwest::Client, secrets: Arc<dyn SecretStore>) -> Self {
+        Self::with_factories(client, secrets, Vec::new())
+    }
+
+    pub fn with_factories(
+        client: reqwest::Client,
+        secrets: Arc<dyn SecretStore>,
+        factories: Vec<Arc<dyn ProviderFactory>>,
+    ) -> Self {
         Self {
             client,
             secrets,
             asr: Mutex::new(HashMap::new()),
             llm: Mutex::new(HashMap::new()),
+            factories,
         }
+    }
+
+    pub fn factory_for(&self, kind: ProviderKind) -> Option<Arc<dyn ProviderFactory>> {
+        self.factories.iter().find(|f| f.kind() == kind).cloned()
+    }
+
+    pub fn llm_providers(&self) -> Vec<Arc<dyn LlmProvider>> {
+        self.llm
+            .lock()
+            .unwrap()
+            .values()
+            .map(|v| v.3.clone())
+            .collect()
     }
 
     pub fn resolve_key(&self, cfg: &ProviderConfig) -> Result<Option<String>, ProviderError> {
@@ -78,7 +102,12 @@ impl ProviderRegistry {
                     cfg.capabilities.hotwords,
                 ))
             }
-            ProviderKind::Embedded | ProviderKind::Native => return Err(not_available(cfg)),
+            kind @ (ProviderKind::Embedded | ProviderKind::Native) => {
+                match self.factory_for(kind) {
+                    Some(f) => f.asr(cfg, general)?,
+                    None => return Err(not_available(cfg)),
+                }
+            }
         };
         cache.insert(
             cfg.id.clone(),
@@ -87,11 +116,18 @@ impl ProviderRegistry {
         Ok(provider)
     }
 
-    pub fn llm(&self, cfg: &ProviderConfig) -> Result<Arc<dyn LlmProvider>, ProviderError> {
+    pub fn llm(
+        &self,
+        cfg: &ProviderConfig,
+        general: &General,
+    ) -> Result<Arc<dyn LlmProvider>, ProviderError> {
         let key = self.resolve_key(cfg)?;
         let mut cache = self.llm.lock().unwrap();
-        if let Some((cached_cfg, cached_key, p)) = cache.get(&cfg.id) {
-            if cached_cfg == cfg && *cached_key == key {
+        if let Some((cached_cfg, cached_timeout, cached_key, p)) = cache.get(&cfg.id) {
+            if cached_cfg == cfg
+                && *cached_timeout == general.llm_timeout_secs
+                && *cached_key == key
+            {
                 return Ok(p.clone());
             }
         }
@@ -107,9 +143,17 @@ impl ProviderRegistry {
                     cfg.label.clone(),
                 ))
             }
-            ProviderKind::Embedded | ProviderKind::Native => return Err(not_available(cfg)),
+            kind @ (ProviderKind::Embedded | ProviderKind::Native) => {
+                match self.factory_for(kind) {
+                    Some(f) => f.llm(cfg, general)?,
+                    None => return Err(not_available(cfg)),
+                }
+            }
         };
-        cache.insert(cfg.id.clone(), (cfg.clone(), key, provider.clone()));
+        cache.insert(
+            cfg.id.clone(),
+            (cfg.clone(), general.llm_timeout_secs, key, provider.clone()),
+        );
         Ok(provider)
     }
 }
@@ -134,10 +178,48 @@ fn not_available(cfg: &ProviderConfig) -> ProviderError {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::config::Config;
     use crate::secrets::MemorySecretStore;
+
+    pub(crate) struct FakeFactory;
+    #[async_trait::async_trait]
+    impl ProviderFactory for FakeFactory {
+        fn kind(&self) -> ProviderKind {
+            ProviderKind::Embedded
+        }
+        fn asr(
+            &self,
+            _cfg: &ProviderConfig,
+            _g: &General,
+        ) -> Result<Arc<dyn AsrProvider>, ProviderError> {
+            Ok(crate::steps::asr::fakes::FakeAsr::ok("hi"))
+        }
+        fn llm(
+            &self,
+            _cfg: &ProviderConfig,
+            _g: &General,
+        ) -> Result<Arc<dyn LlmProvider>, ProviderError> {
+            Ok(crate::steps::llm::fakes::FakeLlm::ok("hi"))
+        }
+        async fn probe(&self, _cfg: &ProviderConfig) -> crate::providers::probe::ProbeResult {
+            crate::providers::probe::ProbeResult {
+                ok: true,
+                failure: None,
+            }
+        }
+    }
+
+    pub(crate) fn embedded_cfg() -> ProviderConfig {
+        let mut p = Config::first_run().providers[0].clone();
+        p.id = ProviderId("emb".into());
+        p.kind = ProviderKind::Embedded;
+        p.base_url = None;
+        p.runtime = Some(crate::config::Runtime::Whisper);
+        p.model_id = Some("m".into());
+        p
+    }
 
     fn registry() -> ProviderRegistry {
         ProviderRegistry::new(
@@ -154,12 +236,12 @@ mod tests {
             .provider(&ProviderId("local-ollama".into()))
             .unwrap()
             .clone();
-        let a = r.llm(&ollama).unwrap();
-        let b = r.llm(&ollama).unwrap();
+        let a = r.llm(&ollama, &General::default()).unwrap();
+        let b = r.llm(&ollama, &General::default()).unwrap();
         assert!(Arc::ptr_eq(&a, &b));
         let mut changed = ollama.clone();
         changed.model = Some("other".into());
-        let c = r.llm(&changed).unwrap();
+        let c = r.llm(&changed, &General::default()).unwrap();
         assert!(!Arc::ptr_eq(&a, &c));
     }
 
@@ -191,15 +273,21 @@ mod tests {
             .clone();
         ollama.api_key_ref = Some("gemini".into());
         assert_eq!(
-            r.llm(&ollama).err().unwrap().code,
+            r.llm(&ollama, &General::default()).err().unwrap().code,
             ErrorCode::ProviderUnauthorized
         );
         ollama.api_key_ref = None;
         ollama.kind = ProviderKind::Embedded;
-        assert_eq!(r.llm(&ollama).err().unwrap().code, ErrorCode::InvalidConfig);
+        assert_eq!(
+            r.llm(&ollama, &General::default()).err().unwrap().code,
+            ErrorCode::InvalidConfig
+        );
         ollama.kind = ProviderKind::Http;
         ollama.base_url = None;
-        assert_eq!(r.llm(&ollama).err().unwrap().code, ErrorCode::InvalidConfig);
+        assert_eq!(
+            r.llm(&ollama, &General::default()).err().unwrap().code,
+            ErrorCode::InvalidConfig
+        );
     }
 
     #[test]
@@ -215,11 +303,61 @@ mod tests {
             .clone();
         ollama.api_key_ref = Some("gemini".into());
 
-        let a = r.llm(&ollama).unwrap();
+        let a = r.llm(&ollama, &General::default()).unwrap();
         secrets.set("gemini", "k2").unwrap();
-        let b = r.llm(&ollama).unwrap();
+        let b = r.llm(&ollama, &General::default()).unwrap();
         assert!(!Arc::ptr_eq(&a, &b));
-        let c = r.llm(&ollama).unwrap();
+        let c = r.llm(&ollama, &General::default()).unwrap();
         assert!(Arc::ptr_eq(&b, &c));
+    }
+
+    #[test]
+    fn embedded_kind_dispatches_to_its_factory_and_caches() {
+        let r = ProviderRegistry::with_factories(
+            reqwest::Client::new(),
+            Arc::new(MemorySecretStore::default()),
+            vec![Arc::new(FakeFactory)],
+        );
+        let cfg = embedded_cfg();
+        let a = r.asr(&cfg, &General::default()).unwrap();
+        let b = r.asr(&cfg, &General::default()).unwrap();
+        assert!(Arc::ptr_eq(&a, &b));
+        assert!(r.llm(&cfg, &General::default()).is_ok());
+    }
+
+    #[test]
+    fn kind_without_factory_is_invalid_config() {
+        let r = registry();
+        let err = r.asr(&embedded_cfg(), &General::default()).err().unwrap();
+        assert_eq!(err.code, ErrorCode::InvalidConfig);
+    }
+
+    #[test]
+    fn llm_providers_lists_cached_instances() {
+        let r = ProviderRegistry::with_factories(
+            reqwest::Client::new(),
+            Arc::new(MemorySecretStore::default()),
+            vec![Arc::new(FakeFactory)],
+        );
+        assert!(r.llm_providers().is_empty());
+        r.llm(&embedded_cfg(), &General::default()).unwrap();
+        assert_eq!(r.llm_providers().len(), 1);
+    }
+
+    #[test]
+    fn llm_rebuilds_when_timeout_changes() {
+        let r = registry();
+        let cfg = Config::first_run();
+        let ollama = cfg
+            .provider(&ProviderId("local-ollama".into()))
+            .unwrap()
+            .clone();
+        let g2 = General {
+            llm_timeout_secs: 5,
+            ..Default::default()
+        };
+        let a = r.llm(&ollama, &General::default()).unwrap();
+        let b = r.llm(&ollama, &g2).unwrap();
+        assert!(!Arc::ptr_eq(&a, &b));
     }
 }
