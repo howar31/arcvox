@@ -510,8 +510,15 @@ impl Controller {
                 hint,
                 ..
             } => {
+                // Non-recoverable provider errors come from the ASR step
+                // (LLM failures degrade instead); the core's hint names
+                // the provider and goes into the detail line.
                 let msg = match code {
                     ErrorCode::NoSpeech | ErrorCode::NoAudio => Msg::WidgetNoSpeech,
+                    ErrorCode::ProviderUnreachable
+                    | ErrorCode::ProviderTimeout
+                    | ErrorCode::ProviderUnauthorized
+                    | ErrorCode::ProviderError => Msg::WidgetAsrFailed,
                     _ => Msg::WidgetEngineUnavailable,
                 };
                 let failure = UiMessage::error(msg, hint.or(Some(message)));
@@ -617,6 +624,7 @@ mod tests {
     use super::*;
     use crate::audio::{AudioError, AudioSource};
     use crate::dictation::ui::fake::FakeUi;
+    use crate::dictation::ui::MessageKind;
     use crate::dictation::{spawn, ControllerHandle};
     use crate::platform::fake::FakePlatform;
     use crate::platform::FrontmostApp;
@@ -1213,6 +1221,39 @@ mod tests {
         )
         .await;
         assert_eq!(r.platform.calls(), vec!["type:b"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn asr_failure_shows_the_recognition_message_with_the_core_detail() {
+        let r = rig(fast_settings()).await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&r.asr)
+            .await;
+        hold_and_speak(&r, 1.0).await;
+        wait_for(
+            || {
+                r.ui.messages
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|m| m.kind == MessageKind::Error && m.msg != Msg::WidgetNoSpeech)
+            },
+            "asr failure message",
+        )
+        .await;
+        let messages = r.ui.messages.lock().unwrap().clone();
+        let m = messages
+            .iter()
+            .find(|m| m.kind == MessageKind::Error)
+            .expect("an error message was recorded");
+        assert_eq!(m.msg, Msg::WidgetAsrFailed, "{messages:?}");
+        assert!(
+            m.detail.as_deref().is_some_and(|d| d.contains("500")),
+            "{messages:?}"
+        );
+        assert!(r.platform.calls().is_empty(), "{:?}", r.platform.calls());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
