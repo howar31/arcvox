@@ -154,4 +154,19 @@ mod tests {
         // A second run finds both installed and downloads nothing.
         download_recommended(&store).await.unwrap();
     }
+
+    #[test]
+    fn published_manifest_matches_bundled() {
+        let bundled = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/resources/models-manifest.json"
+        ))
+        .unwrap();
+        let published = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../docs/models/manifest.json"
+        ))
+        .unwrap();
+        assert_eq!(bundled, published);
+    }
 }
