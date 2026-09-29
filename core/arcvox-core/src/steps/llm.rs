@@ -19,7 +19,7 @@ use crate::types::{ErrorCode, StepName};
 /// replies without flagging legitimate self-correction cleanup.
 const MIN_OUTPUT_RATIO: f64 = 1.0 / 3.0;
 
-/// Below this many input chars, the ratio guard is skipped: short utterances
+/// Inputs of at most this many chars skip the ratio guard: short utterances
 /// legitimately shrink a lot (e.g. a single self-correction).
 const MIN_INPUT_CHARS_FOR_RATIO_GUARD: usize = 12;
 
@@ -198,6 +198,39 @@ mod tests {
         assert_eq!(input.chars().count(), 30);
         let fake = FakeLlm::ok("好的");
         let err = LlmStep::new(fake)
+            .run(
+                StepInput {
+                    text: input,
+                    audio: None,
+                },
+                &test_context(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProviderError);
+        assert!(err.recoverable);
+    }
+
+    #[tokio::test]
+    async fn ratio_guard_skips_inputs_at_the_threshold() {
+        let input: String = "測".repeat(MIN_INPUT_CHARS_FOR_RATIO_GUARD);
+        let out = LlmStep::new(FakeLlm::ok("好"))
+            .run(
+                StepInput {
+                    text: input,
+                    audio: None,
+                },
+                &test_context(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.text, "好");
+    }
+
+    #[tokio::test]
+    async fn ratio_guard_applies_one_char_above_the_threshold() {
+        let input: String = "測".repeat(MIN_INPUT_CHARS_FOR_RATIO_GUARD + 1);
+        let err = LlmStep::new(FakeLlm::ok("好"))
             .run(
                 StepInput {
                     text: input,
