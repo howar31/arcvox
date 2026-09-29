@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["core/kongwe-core", "apps/desktop/src-tauri"]
+members = ["core/kongwe-core", "core/kongwe-inference", "apps/desktop/src-tauri"]
 
 [workspace.package]
 edition = "2021"
