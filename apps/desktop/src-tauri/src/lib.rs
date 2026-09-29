@@ -10,6 +10,7 @@ pub mod i18n;
 pub mod insert;
 pub mod logging;
 pub mod platform;
+pub mod providers;
 pub mod secrets;
 pub mod settings;
 pub mod ui;

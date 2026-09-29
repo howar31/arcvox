@@ -10,6 +10,8 @@ use crate::config::{General, ProviderConfig, ProviderKind};
 use crate::providers::probe::ProbeResult;
 use crate::providers::{AsrProvider, LlmProvider, ProviderError};
 
+/// One factory per kind; construction must be cheap and must not re-enter the
+/// registry.
 #[async_trait]
 pub trait ProviderFactory: Send + Sync {
     fn kind(&self) -> ProviderKind;
