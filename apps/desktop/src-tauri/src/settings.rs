@@ -30,6 +30,9 @@ pub struct ClientSettings {
     pub insertion: InsertionSettings,
     pub max_utterance_secs: u32,
     pub ui_language: UiLanguage,
+    /// Overrides the model catalogue location; `None` uses the built-in one.
+    #[serde(default)]
+    pub manifest_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -89,6 +92,7 @@ impl Default for ClientSettings {
             insertion: InsertionSettings::default(),
             max_utterance_secs: 300,
             ui_language: UiLanguage::System,
+            manifest_url: None,
         }
     }
 }
@@ -193,6 +197,14 @@ mod tests {
             InsertMethod::Paste
         );
         assert_eq!(s.ui_language, UiLanguage::System);
+    }
+
+    #[test]
+    fn manifest_url_defaults_to_none_and_round_trips() {
+        let s: ClientSettings =
+            serde_json::from_str(&serde_json::to_string(&ClientSettings::default()).unwrap())
+                .unwrap();
+        assert!(s.manifest_url.is_none());
     }
 
     #[test]

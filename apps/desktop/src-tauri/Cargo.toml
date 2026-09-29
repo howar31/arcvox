@@ -52,5 +52,6 @@ kongwe-inference = { path = "../../../core/kongwe-inference" }
 [dev-dependencies]
 kongwe-core = { path = "../../../core/kongwe-core", features = ["test-util"] }
 wiremock = "0.6"
+sha2 = "0.10"
 tempfile = "3"
 hound = "3"

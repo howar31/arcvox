@@ -5,6 +5,7 @@ pub mod client;
 pub mod config;
 pub mod dictionary;
 pub mod history;
+pub mod models;
 pub mod profiles;
 pub mod prompt;
 pub mod providers;

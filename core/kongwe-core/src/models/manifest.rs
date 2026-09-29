@@ -94,7 +94,8 @@ impl Manifest {
 }
 
 /// Where the manifest in use came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ManifestSource {
     Remote,
     Cached,
