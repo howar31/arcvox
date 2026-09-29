@@ -117,6 +117,7 @@ pub(crate) mod fakes {
     pub struct FakeLlm {
         pub result: Result<String, ProviderError>,
         pub calls: Mutex<Vec<Vec<ChatMessage>>>,
+        pub unloads: std::sync::atomic::AtomicUsize,
     }
 
     impl FakeLlm {
@@ -124,12 +125,14 @@ pub(crate) mod fakes {
             Arc::new(Self {
                 result: Ok(text.into()),
                 calls: Mutex::new(Vec::new()),
+                unloads: std::sync::atomic::AtomicUsize::new(0),
             })
         }
         pub fn failing(code: ErrorCode) -> Arc<Self> {
             Arc::new(Self {
                 result: Err(ProviderError::new(code, "boom")),
                 calls: Mutex::new(Vec::new()),
+                unloads: std::sync::atomic::AtomicUsize::new(0),
             })
         }
     }
@@ -143,6 +146,10 @@ pub(crate) mod fakes {
         ) -> Result<String, ProviderError> {
             self.calls.lock().unwrap().push(messages);
             self.result.clone()
+        }
+        async fn unload(&self) {
+            self.unloads
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
     }
 }
