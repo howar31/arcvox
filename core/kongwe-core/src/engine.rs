@@ -1,9 +1,7 @@
 //! The crate's entry point. Owns config, history, and providers; opens sessions.
 
 use std::collections::HashMap;
-#[cfg(test)]
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::{mpsc, oneshot};
@@ -65,6 +63,9 @@ struct Inner {
     /// (for example a platform hotkey callback) rather than only from
     /// inside an `async fn` already running on this runtime.
     runtime: tokio::runtime::Handle,
+    /// Bumped whenever a session starts or finishes, so a pending idle
+    /// unload only fires if nothing happened since it was scheduled.
+    idle_generation: AtomicU64,
     /// Test-only hook: when greater than zero, `run_session` sleeps this
     /// many milliseconds just before the history insert, so a test can
     /// deterministically land a `cancel()` inside the non-abortable tail
@@ -132,6 +133,7 @@ impl Engine {
                 secrets: opts.secrets,
                 sessions: Mutex::new(HashMap::new()),
                 runtime,
+                idle_generation: AtomicU64::new(0),
                 #[cfg(test)]
                 tail_delay_ms: AtomicU64::new(0),
             }),
@@ -168,6 +170,10 @@ impl Engine {
     /// May be called from a thread that is not running on this engine's
     /// tokio runtime (the task is spawned via the captured `Handle`).
     pub fn start_session(&self, req: SessionRequest) -> Session {
+        // Bumped here rather than inside the spawned task, so a session
+        // cancelled before its task first runs still cancels a pending
+        // unload from an earlier session.
+        self.inner.idle_generation.fetch_add(1, Ordering::SeqCst);
         let config = self.inner.config.current();
         let profile =
             Arc::new(resolve(&config.profiles, &req.app, req.profile_override.as_ref()).clone());
@@ -203,6 +209,10 @@ impl Engine {
             events_rx: Mutex::new(Some(events_rx)),
             task: Mutex::new(Some(task)),
             flags,
+            on_cancel_done: {
+                let inner = self.inner.clone();
+                Arc::new(move || inner.schedule_idle_unload())
+            },
         }
     }
 
@@ -226,6 +236,31 @@ impl Engine {
             .await
             .expect("join")?;
         Ok(())
+    }
+}
+
+impl Inner {
+    /// Arms a timer that unloads every cached LLM provider once the engine
+    /// has been idle for `llm_idle_unload_secs`. Zero disables it.
+    fn schedule_idle_unload(self: &Arc<Self>) {
+        let secs = self.config.current().general.llm_idle_unload_secs;
+        if secs == 0 {
+            return;
+        }
+        let generation = self.idle_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let inner = self.clone();
+        self.runtime.spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+            if inner.idle_generation.load(Ordering::SeqCst) == generation {
+                inner.unload_idle_llms().await;
+            }
+        });
+    }
+
+    pub(crate) async fn unload_idle_llms(&self) {
+        for p in self.registry.llm_providers() {
+            p.unload().await;
+        }
     }
 }
 
@@ -267,6 +302,7 @@ async fn run_session(
 ) {
     if finish_rx.await.is_err() {
         send_done_once(&tx, &flags.done_sent, &session_id, None).await;
+        inner.schedule_idle_unload();
         return;
     }
 
@@ -286,6 +322,7 @@ async fn run_session(
             })
             .await;
         send_done_once(&tx, &flags.done_sent, &session_id, None).await;
+        inner.schedule_idle_unload();
         return;
     }
 
@@ -315,6 +352,7 @@ async fn run_session(
                 })
                 .await;
             send_done_once(&tx, &flags.done_sent, &session_id, None).await;
+            inner.schedule_idle_unload();
             return;
         }
     };
@@ -324,6 +362,7 @@ async fn run_session(
         Ok(o) => o,
         Err(_) => {
             send_done_once(&tx, &flags.done_sent, &session_id, None).await;
+            inner.schedule_idle_unload();
             return;
         }
     };
@@ -428,6 +467,7 @@ async fn run_session(
             history_id,
         })
         .await;
+    inner.schedule_idle_unload();
 }
 
 #[cfg(test)]
@@ -491,6 +531,128 @@ mod tests {
             .probe_provider(&crate::providers::registry::tests::embedded_cfg())
             .await;
         assert!(r.ok);
+    }
+
+    async fn idle_rig() -> (
+        Arc<crate::steps::llm::fakes::FakeLlm>,
+        tempfile::TempDir,
+        Engine,
+    ) {
+        use crate::config::General;
+        use crate::config::Runtime;
+        use crate::providers::{AsrProvider, LlmProvider, ProviderError};
+        use crate::steps::llm::fakes::FakeLlm;
+
+        // One shared fake LLM so the test can count unloads.
+        struct F(Arc<FakeLlm>);
+        #[async_trait::async_trait]
+        impl ProviderFactory for F {
+            fn kind(&self) -> ProviderKind {
+                ProviderKind::Embedded
+            }
+            fn asr(
+                &self,
+                _: &ProviderConfig,
+                _: &General,
+            ) -> Result<Arc<dyn AsrProvider>, ProviderError> {
+                Ok(crate::steps::asr::fakes::FakeAsr::ok("原文"))
+            }
+            fn llm(
+                &self,
+                _: &ProviderConfig,
+                _: &General,
+            ) -> Result<Arc<dyn LlmProvider>, ProviderError> {
+                Ok(self.0.clone())
+            }
+            async fn probe(&self, _: &ProviderConfig) -> ProbeResult {
+                ProbeResult {
+                    ok: true,
+                    failure: None,
+                }
+            }
+        }
+
+        let fake = FakeLlm::ok("ok");
+        let tmp = tempfile::tempdir().unwrap();
+        let e = Engine::open_with(
+            DataDir::custom(tmp.path()),
+            EngineOptions {
+                secrets: Arc::new(MemorySecretStore::default()),
+                factories: vec![Arc::new(F(fake.clone()))],
+                first_run: FirstRunDefaults::default(),
+            },
+        )
+        .await
+        .unwrap();
+        e.config()
+            .update(|c| {
+                c.general.llm_idle_unload_secs = 2;
+                for p in &mut c.providers {
+                    p.kind = ProviderKind::Embedded;
+                    p.base_url = None;
+                    p.runtime = Some(Runtime::Llama);
+                    p.model_id = Some("m".into());
+                }
+            })
+            .unwrap();
+
+        (fake, tmp, e)
+    }
+
+    async fn settle_and_expect_one_unload(fake: &crate::steps::llm::fakes::FakeLlm) {
+        use std::time::Duration;
+        // Let the timer be armed before the clock moves.
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::advance(Duration::from_secs(3)).await;
+        // Let the timer task observe the advanced clock.
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(fake.unloads.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn llm_is_unloaded_after_idle_period() {
+        let (fake, _tmp, e) = idle_rig().await;
+        let s = e.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        s.finish();
+        drain(&s).await;
+        assert_eq!(fake.unloads.load(Ordering::SeqCst), 0);
+        settle_and_expect_one_unload(&fake).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn llm_is_unloaded_after_a_cancelled_session() {
+        let (fake, _tmp, e) = idle_rig().await;
+        // A full session first, so the LLM provider is built and cached.
+        let warm = e.start_session(SessionRequest::default());
+        warm.push_audio(&one_second());
+        warm.finish();
+        drain(&warm).await;
+        let s = e.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        s.cancel();
+        drain(&s).await;
+        assert_eq!(fake.unloads.load(Ordering::SeqCst), 0);
+        settle_and_expect_one_unload(&fake).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn llm_is_unloaded_after_a_too_short_session() {
+        let (fake, _tmp, e) = idle_rig().await;
+        // A full session first, so the LLM provider is built and cached.
+        let warm = e.start_session(SessionRequest::default());
+        warm.push_audio(&one_second());
+        warm.finish();
+        drain(&warm).await;
+        let s = e.start_session(SessionRequest::default());
+        s.push_audio(&[0.0; 100]);
+        s.finish();
+        drain(&s).await;
+        settle_and_expect_one_unload(&fake).await;
     }
 
     async fn mock_ok(rig: &Rig, asr_text: &str, llm_text: &str) {

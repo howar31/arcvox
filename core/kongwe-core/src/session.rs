@@ -43,6 +43,9 @@ pub struct Session {
     pub(crate) events_rx: Mutex<Option<mpsc::Receiver<Event>>>,
     pub(crate) task: Mutex<Option<JoinHandle<()>>>,
     pub(crate) flags: Arc<SessionFlags>,
+    /// Runs when `cancel` is the one that sends `Done`, so the engine's idle
+    /// timer restarts on that path as well.
+    pub(crate) on_cancel_done: Arc<dyn Fn() + Send + Sync>,
 }
 
 impl Session {
@@ -93,6 +96,7 @@ impl Session {
                 session_id: self.id.clone(),
                 history_id: None,
             });
+            (self.on_cancel_done)();
         }
     }
 
