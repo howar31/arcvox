@@ -12,6 +12,17 @@ use crate::providers::{LlmOptions, LlmProvider};
 use crate::steps::{PipelineContext, Step, StepError, StepInput, StepOutput};
 use crate::types::{ErrorCode, StepName};
 
+/// Below this ratio of output chars to input chars, the output is treated as
+/// a conversational reply rather than a rewrite and rejected. A self
+/// correction shortens the text (dropping the retracted phrase) but a chat
+/// reply ("好的") collapses it far more, so a generous ratio still catches
+/// replies without flagging legitimate self-correction cleanup.
+const MIN_OUTPUT_RATIO: f64 = 1.0 / 3.0;
+
+/// Below this many input chars, the ratio guard is skipped: short utterances
+/// legitimately shrink a lot (e.g. a single self-correction).
+const MIN_INPUT_CHARS_FOR_RATIO_GUARD: usize = 12;
+
 pub struct LlmStep {
     provider: Arc<dyn LlmProvider>,
 }
@@ -50,6 +61,16 @@ impl Step for LlmStep {
             return Err(StepError::recoverable(
                 ErrorCode::ProviderError,
                 "llm returned empty output",
+            ));
+        }
+        let input_chars = input.text.chars().count();
+        let output_chars = text.chars().count();
+        if input_chars > MIN_INPUT_CHARS_FOR_RATIO_GUARD
+            && (output_chars as f64) < (input_chars as f64) * MIN_OUTPUT_RATIO
+        {
+            return Err(StepError::recoverable(
+                ErrorCode::ProviderError,
+                "llm output rejected as a reply rather than a rewrite",
             ));
         }
         Ok(StepOutput {
@@ -148,7 +169,10 @@ mod tests {
         assert_eq!(out.text, "整理後");
         let calls = fake.calls.lock().unwrap();
         assert!(calls[0][0].content.starts_with("你是口述文字整理員"));
-        assert_eq!(calls[0].last().unwrap().content, "原文");
+        assert_eq!(
+            calls[0].last().unwrap().content,
+            crate::prompt::frame_utterance("原文")
+        );
     }
 
     #[tokio::test]
@@ -166,6 +190,41 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::ProviderError);
         assert!(err.recoverable);
+    }
+
+    #[tokio::test]
+    async fn reply_like_output_is_rejected() {
+        let input: String = "測試句".repeat(10); // 30 chars
+        assert_eq!(input.chars().count(), 30);
+        let fake = FakeLlm::ok("好的");
+        let err = LlmStep::new(fake)
+            .run(
+                StepInput {
+                    text: input,
+                    audio: None,
+                },
+                &test_context(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProviderError);
+        assert!(err.recoverable);
+    }
+
+    #[tokio::test]
+    async fn self_correction_shortening_is_accepted() {
+        let fake = FakeLlm::ok("今天下午四點要開會，記得帶筆電。");
+        let out = LlmStep::new(fake)
+            .run(
+                StepInput {
+                    text: "今天下午三點要開會不對是四點記得帶筆電".into(),
+                    audio: None,
+                },
+                &test_context(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.text, "今天下午四點要開會，記得帶筆電。");
     }
 
     #[tokio::test]
