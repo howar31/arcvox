@@ -20,6 +20,7 @@
   "widget.accessibility_required": "請在系統設定允許 Kongwe 的輔助使用權限",
   "widget.microphone_unavailable": "無法使用麥克風",
   "widget.engine_unavailable": "引擎尚未就緒，請開啟設定",
+  "widget.asr_failed": "語音辨識失敗，未插入文字",
   "widget.degraded": "LLM 未回應，已插入原始辨識結果",
   "widget.copy": "複製",
   "widget.dismiss": "關閉",
