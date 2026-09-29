@@ -69,12 +69,10 @@ enum State {
         /// after a real insertion (`Outcome::Inserted`): a `Shown` outcome
         /// or a failure already occupies the widget's one message slot
         /// with a copyable or an error message, and showing the notice on
-        /// top of that would silently replace it. The code is added to
-        /// `shown_once` only where the notice is actually emitted, so a
-        /// session that never gets to show it (cancelled, or ends with a
-        /// `Shown`/failure outcome) leaves the code eligible again for the
-        /// next session.
-        notice: Option<(ErrorCode, UiMessage)>,
+        /// top of that would silently replace it. Every degraded insertion
+        /// shows it again, so the user always learns why the inserted text
+        /// is the raw transcript.
+        notice: Option<UiMessage>,
     },
 }
 
@@ -86,10 +84,6 @@ pub struct Controller {
     recognizer: Recognizer,
     state: State,
     tx: Sender<ControllerMsg>,
-    // `ErrorCode` does not derive `Hash`, so a `Vec` with a linear `contains`
-    // check stands in for a set here; the list never holds more than a
-    // handful of distinct codes.
-    shown_once: Vec<ErrorCode>,
 }
 
 impl Controller {
@@ -108,7 +102,6 @@ impl Controller {
             recognizer,
             state: State::Idle,
             tx,
-            shown_once: Vec::new(),
         }
     }
 
@@ -492,29 +485,22 @@ impl Controller {
                 }
             }
             Event::Error {
-                code,
                 message,
                 recoverable: true,
                 hint,
                 ..
             } => {
-                if !self.shown_once.contains(&code) {
-                    // Queued rather than shown immediately: `Refined`/`Done`
-                    // typically follow within milliseconds and drive the
-                    // widget into `Inserting`, which would wipe this notice
-                    // before anyone could read it. `on_done`/`insert` show
-                    // it once insertion has actually finished and the
-                    // widget is idle again. `shown_once` is not updated
-                    // here: it is recorded only at the emit site, so a
-                    // session that never gets to show it does not spend
-                    // the one shot every other launch-lifetime session
-                    // would otherwise get.
-                    if let State::Processing { notice, .. } = &mut self.state {
-                        *notice = Some((
-                            code,
-                            UiMessage::error(Msg::WidgetDegraded, hint.or(Some(message))),
-                        ));
-                    }
+                // Queued rather than shown immediately: `Refined`/`Done`
+                // typically follow within milliseconds and drive the
+                // widget into `Inserting`, which would wipe this notice
+                // before anyone could read it. `on_done`/`insert` show
+                // it once insertion has actually finished and the
+                // widget is idle again.
+                if let State::Processing { notice, .. } = &mut self.state {
+                    *notice = Some(UiMessage::error(
+                        Msg::WidgetDegraded,
+                        hint.or(Some(message)),
+                    ));
                 }
             }
             Event::Error {
@@ -557,9 +543,7 @@ impl Controller {
                 self.go_idle();
                 // The notice is dropped, not shown, on this failure path:
                 // `msg` above already occupies the widget's one message
-                // slot, and the code was never added to `shown_once`, so a
-                // later session that actually inserts gets the notice
-                // instead.
+                // slot.
             }
         }
     }
@@ -569,7 +553,7 @@ impl Controller {
         session: Session,
         captured: Captured,
         text: String,
-        notice: Option<(ErrorCode, UiMessage)>,
+        notice: Option<UiMessage>,
     ) {
         self.deps.ui.set_state(UiState::Inserting);
         let frontmost = self.deps.platform.frontmost_app();
@@ -619,12 +603,9 @@ impl Controller {
         // Shown only for a real insertion: `Outcome::Shown` already used
         // the widget's one message slot for a copyable or empty-result
         // message above, and showing the notice on top of that would
-        // silently replace it. The code goes into `shown_once` only here,
-        // at the point it is actually shown, so a session that ends in
-        // `Outcome::Shown` leaves the code eligible for a later session.
+        // silently replace it.
         if matches!(outcome, Outcome::Inserted) {
-            if let Some((code, n)) = notice {
-                self.shown_once.push(code);
+            if let Some(n) = notice {
                 self.deps.ui.message(n);
             }
         }
@@ -1279,6 +1260,56 @@ mod tests {
             last_idle < notice,
             "the degraded notice must be recorded after the widget went idle: {log:?}"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn degraded_notice_is_shown_on_every_degraded_insertion() {
+        let r = rig(fast_settings()).await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"text": "软件 原文"})))
+            .mount(&r.asr)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&r.llm)
+            .await;
+        let degraded_count = || {
+            r.ui.messages
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|m| m.msg == Msg::WidgetDegraded)
+                .count()
+        };
+        hold_and_speak(&r, 1.0).await;
+        wait_for(|| degraded_count() == 1, "first degraded notice").await;
+        // `hold_and_speak` waits for the first `Recording` entry, which is
+        // already there, so the second session waits for its own entry
+        // before the speech block is sent.
+        r.modifier.send(fn_down()).unwrap();
+        wait_for(
+            || {
+                r.ui.states
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|s| **s == UiState::Recording)
+                    .count()
+                    == 2
+            },
+            "second recording",
+        )
+        .await;
+        speak_and_wait(&r, 1.0).await;
+        r.modifier.send(fn_up()).unwrap();
+        wait_for(
+            || r.platform.calls().iter().filter(|c| *c == "paste").count() == 2,
+            "second paste",
+        )
+        .await;
+        wait_for(|| degraded_count() == 2, "second degraded notice").await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
