@@ -2282,6 +2282,7 @@ dependencies = [
  "futures-util",
  "hound",
  "arcvox-core",
+ "libc",
  "opencc-fmmseg",
  "reqwest 0.12.28",
  "rusqlite",
