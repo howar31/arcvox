@@ -128,12 +128,20 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
     ));
     let (engine, engine_error, runtime) = tauri::async_runtime::block_on(async {
         let runtime = tokio::runtime::Handle::current();
+        // The Apple status checks block and refuse the main thread.
+        #[cfg(target_os = "macos")]
+        let first_run: FirstRunDefaults =
+            tokio::task::spawn_blocking(crate::platform::macos::apple::first_run_defaults)
+                .await
+                .unwrap_or_default();
+        #[cfg(not(target_os = "macos"))]
+        let first_run = FirstRunDefaults::default();
         match Engine::open_with(
             dirs.clone(),
             EngineOptions {
                 secrets,
                 factories: build_factories(models.clone()),
-                first_run: FirstRunDefaults::default(),
+                first_run,
             },
         )
         .await

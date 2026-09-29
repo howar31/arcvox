@@ -9,7 +9,14 @@ use arcvox_inference::factory::EmbeddedFactory;
 pub const BUNDLED_MANIFEST: &str = include_str!("../resources/models-manifest.json");
 
 pub fn build_factories(store: Arc<ModelStore>) -> Vec<Arc<dyn ProviderFactory>> {
-    vec![Arc::new(EmbeddedFactory::new(store, true))]
+    let v: Vec<Arc<dyn ProviderFactory>> = vec![Arc::new(EmbeddedFactory::new(store, true))];
+    #[cfg(target_os = "macos")]
+    let v = {
+        let mut v = v;
+        v.push(Arc::new(crate::platform::macos::apple::AppleFactory));
+        v
+    };
+    v
 }
 
 #[cfg(test)]
@@ -31,5 +38,7 @@ mod tests {
         ));
         let kinds: Vec<ProviderKind> = build_factories(store).iter().map(|f| f.kind()).collect();
         assert!(kinds.contains(&ProviderKind::Embedded));
+        #[cfg(target_os = "macos")]
+        assert!(kinds.contains(&ProviderKind::Native));
     }
 }

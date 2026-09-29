@@ -223,3 +223,36 @@ async fn apple_dictation_timeout_cancels_cleanly() {
     // Let the abandoned bridge calls wind down inside the process.
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 }
+
+#[tokio::test]
+#[ignore]
+async fn apple_fm_completes() {
+    use arcvox_core::providers::{LlmOptions, LlmProvider};
+    use arcvox_core::types::ChatMessage;
+    use arcvox_desktop::platform::macos::apple::{fm_status, AppleLlmProvider, NativeStatus};
+    let status = fm_status();
+    eprintln!("foundation models status: {status:?}");
+    if status != NativeStatus::Ready {
+        eprintln!("Foundation Models not ready; skipping");
+        return;
+    }
+    let p = AppleLlmProvider::new("Apple".into());
+    let text = p
+        .complete(
+            vec![
+                ChatMessage::system(
+                    "Rewrite the dictated text as clean Traditional Chinese. Apply the speaker's self-corrections. Output only the rewritten text.",
+                ),
+                ChatMessage::user("我今天下午三點要開會，不對，是四點"),
+            ],
+            &LlmOptions {
+                temperature: 0.2,
+                max_tokens: None,
+                timeout: std::time::Duration::from_secs(60),
+            },
+        )
+        .await
+        .unwrap();
+    eprintln!("response: {text}");
+    assert!(!text.trim().is_empty());
+}
