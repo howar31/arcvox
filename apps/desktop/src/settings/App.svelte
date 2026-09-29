@@ -5,6 +5,7 @@
   import { client, config, pageFromHash, PAGES, type Page } from "../lib/store.svelte";
   import General from "./pages/General.svelte";
   import Providers from "./pages/Providers.svelte";
+  import Models from "./pages/Models.svelte";
   import Profiles from "./pages/Profiles.svelte";
   import Prompt from "./pages/Prompt.svelte";
   import Dictionary from "./pages/Dictionary.svelte";
@@ -43,6 +44,7 @@
       <p class="muted">{t("common.loading")}</p>
     {:else if page === "general"}<General />
     {:else if page === "providers"}<Providers />
+    {:else if page === "models"}<Models />
     {:else if page === "profiles"}<Profiles />
     {:else if page === "prompt"}<Prompt />
     {:else if page === "dictionary"}<Dictionary />
