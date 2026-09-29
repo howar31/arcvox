@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn build_succeeds_when_llm_key_is_missing() {
-        let mut config = Config::first_run();
+        let mut config = Config::http_test_config();
         config.providers[1].api_key_ref = Some("absent".into());
         let registry = ProviderRegistry::new(
             reqwest::Client::new(),
@@ -386,7 +386,7 @@ mod tests {
 
     #[tokio::test]
     async fn build_from_first_run_config_succeeds_and_rejects_bad_opencc() {
-        let config = Config::first_run();
+        let config = Config::http_test_config();
         let registry = ProviderRegistry::new(
             reqwest::Client::new(),
             Arc::new(crate::secrets::MemorySecretStore::default()),

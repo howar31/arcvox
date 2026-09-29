@@ -212,7 +212,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn embedded_cfg() -> ProviderConfig {
-        let mut p = Config::first_run().providers[0].clone();
+        let mut p = Config::http_test_config().providers[0].clone();
         p.id = ProviderId("emb".into());
         p.kind = ProviderKind::Embedded;
         p.base_url = None;
@@ -231,7 +231,7 @@ pub(crate) mod tests {
     #[test]
     fn caches_by_id_and_rebuilds_on_config_change() {
         let r = registry();
-        let cfg = Config::first_run();
+        let cfg = Config::http_test_config();
         let ollama = cfg
             .provider(&ProviderId("local-ollama".into()))
             .unwrap()
@@ -248,7 +248,7 @@ pub(crate) mod tests {
     #[test]
     fn asr_rebuilds_when_timeout_changes() {
         let r = registry();
-        let cfg = Config::first_run();
+        let cfg = Config::http_test_config();
         let sp = cfg
             .provider(&ProviderId("local-speaches".into()))
             .unwrap()
@@ -266,7 +266,7 @@ pub(crate) mod tests {
     #[test]
     fn missing_key_and_unavailable_kinds_are_errors() {
         let r = registry();
-        let cfg = Config::first_run();
+        let cfg = Config::http_test_config();
         let mut ollama = cfg
             .provider(&ProviderId("local-ollama".into()))
             .unwrap()
@@ -296,7 +296,7 @@ pub(crate) mod tests {
         secrets.set("gemini", "k1").unwrap();
         let dyn_secrets: Arc<dyn SecretStore> = secrets.clone();
         let r = ProviderRegistry::new(reqwest::Client::new(), dyn_secrets);
-        let cfg = Config::first_run();
+        let cfg = Config::http_test_config();
         let mut ollama = cfg
             .provider(&ProviderId("local-ollama".into()))
             .unwrap()
@@ -347,7 +347,7 @@ pub(crate) mod tests {
     #[test]
     fn llm_rebuilds_when_timeout_changes() {
         let r = registry();
-        let cfg = Config::first_run();
+        let cfg = Config::http_test_config();
         let ollama = cfg
             .provider(&ProviderId("local-ollama".into()))
             .unwrap()

@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
 
 use crate::config::base_prompt::DEFAULT_BASE_PROMPT;
-use crate::config::model::{Config, SCHEMA_VERSION};
+use crate::config::model::{Config, FirstRunDefaults, SCHEMA_VERSION};
 use crate::config::validate::{validate, ConfigError};
 use crate::paths::DataDir;
 
@@ -41,12 +41,21 @@ pub struct ConfigStore {
 impl ConfigStore {
     /// Loads `config.json`, writing the first-run config when it is missing.
     pub fn open(dirs: &DataDir) -> Result<Self, StoreError> {
+        Self::open_with_defaults(dirs, &FirstRunDefaults::default())
+    }
+
+    /// Like `open`, but a missing config file is created from `defaults`. An
+    /// existing file is never rewritten.
+    pub fn open_with_defaults(
+        dirs: &DataDir,
+        defaults: &FirstRunDefaults,
+    ) -> Result<Self, StoreError> {
         dirs.ensure().map_err(|e| io_err(&dirs.config_dir, e))?;
         let path = dirs.config_path();
         let config = if path.exists() {
             load_existing(&path)?
         } else {
-            let config = Config::first_run();
+            let config = Config::first_run_with(defaults);
             write_atomic(
                 &path,
                 serde_json::to_string_pretty(&config).unwrap().as_bytes(),
@@ -360,6 +369,31 @@ mod tests {
         assert_eq!(
             store.current().general.history_retention_days,
             THREADS * INCREMENTS_PER_THREAD
+        );
+    }
+
+    #[test]
+    fn open_with_defaults_writes_the_native_pair_on_first_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = DataDir::custom(tmp.path());
+        dirs.ensure().unwrap();
+        let store = ConfigStore::open_with_defaults(
+            &dirs,
+            &FirstRunDefaults {
+                apple_dictation: true,
+                apple_foundation_models: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            store.current().profiles[0].asr_provider.0,
+            "apple-dictation"
+        );
+        // An existing file is never rewritten by defaults.
+        let again = ConfigStore::open_with_defaults(&dirs, &FirstRunDefaults::default()).unwrap();
+        assert_eq!(
+            again.current().profiles[0].asr_provider.0,
+            "apple-dictation"
         );
     }
 }

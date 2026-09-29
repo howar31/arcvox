@@ -44,5 +44,6 @@ security-framework = "3"
 libc = "0.2"
 
 [dev-dependencies]
+kongwe-core = { path = "../../../core/kongwe-core", features = ["test-util"] }
 wiremock = "0.6"
 tempfile = "3"

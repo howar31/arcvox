@@ -144,11 +144,12 @@ mod tests {
     };
 
     fn base() -> Config {
-        Config::first_run()
+        Config::http_test_config()
     }
 
     #[test]
     fn first_run_config_is_valid() {
+        assert_eq!(validate(&Config::first_run()), Ok(()));
         assert_eq!(validate(&base()), Ok(()));
     }
 

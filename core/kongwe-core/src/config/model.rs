@@ -10,6 +10,11 @@ use crate::types::{ProfileId, ProviderId};
 
 pub const SCHEMA_VERSION: u32 = 1;
 
+pub const MODEL_ID_DEFAULT_ASR: &str = "breeze-asr-25-q5_0";
+pub const MODEL_ID_DEFAULT_LLM: &str = "gemma-3-4b-it-q4_k_m";
+pub const NATIVE_APPLE_DICTATION: &str = "apple.dictation";
+pub const NATIVE_APPLE_FM: &str = "apple.foundation_models";
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -181,56 +186,87 @@ fn default_true() -> bool {
 }
 
 impl Config {
-    /// The config written on first launch: two local HTTP providers and one
-    /// default profile using the default step chain.
+    /// The config written on first launch without any native provider.
     pub fn first_run() -> Self {
-        let speaches = ProviderConfig {
-            id: ProviderId("local-speaches".into()),
-            label: "Speaches (local)".into(),
-            kind: ProviderKind::Http,
-            capabilities: Capabilities {
+        Self::first_run_with(&FirstRunDefaults::default())
+    }
+
+    /// The config written on first launch: the embedded providers, plus the
+    /// native ones the platform reports, and one default profile that prefers
+    /// the native providers.
+    pub fn first_run_with(d: &FirstRunDefaults) -> Self {
+        let mut providers = Vec::new();
+        if d.apple_dictation {
+            providers.push(ProviderConfig::native(
+                "apple-dictation",
+                "Apple Dictation",
+                NATIVE_APPLE_DICTATION,
+                Capabilities {
+                    transcribe: true,
+                    chat: false,
+                    streaming: false,
+                    language_hint: true,
+                    hotwords: true,
+                },
+            ));
+        }
+        if d.apple_foundation_models {
+            providers.push(ProviderConfig::native(
+                "apple-fm",
+                "Apple Foundation Models",
+                NATIVE_APPLE_FM,
+                Capabilities {
+                    transcribe: false,
+                    chat: true,
+                    streaming: false,
+                    language_hint: false,
+                    hotwords: false,
+                },
+            ));
+        }
+        providers.push(ProviderConfig::embedded(
+            "local-whisper",
+            "Local speech model",
+            Runtime::Whisper,
+            MODEL_ID_DEFAULT_ASR,
+            Capabilities {
                 transcribe: true,
                 chat: false,
                 streaming: false,
                 language_hint: true,
                 hotwords: true,
             },
-            base_url: Some(Url::parse("http://localhost:8000/v1").unwrap()),
-            model: Some("Systran/faster-whisper-large-v3".into()),
-            api_key_ref: None,
-            extra_headers: BTreeMap::new(),
-            model_path: None,
-            native_id: None,
-            model_id: None,
-            runtime: None,
-        };
-        let ollama = ProviderConfig {
-            id: ProviderId("local-ollama".into()),
-            label: "Ollama (local)".into(),
-            kind: ProviderKind::Http,
-            capabilities: Capabilities {
+        ));
+        providers.push(ProviderConfig::embedded(
+            "local-llama",
+            "Local language model",
+            Runtime::Llama,
+            MODEL_ID_DEFAULT_LLM,
+            Capabilities {
                 transcribe: false,
                 chat: true,
-                streaming: true,
+                streaming: false,
                 language_hint: false,
                 hotwords: false,
             },
-            base_url: Some(Url::parse("http://localhost:11434/v1").unwrap()),
-            model: Some("gemma3".into()),
-            api_key_ref: None,
-            extra_headers: BTreeMap::new(),
-            model_path: None,
-            native_id: None,
-            model_id: None,
-            runtime: None,
+        ));
+        let asr = if d.apple_dictation {
+            "apple-dictation"
+        } else {
+            "local-whisper"
+        };
+        let llm = if d.apple_foundation_models {
+            "apple-fm"
+        } else {
+            "local-llama"
         };
         let profile = Profile {
             id: ProfileId("default".into()),
             name: "Default".into(),
             is_default: true,
             matcher: Matcher::default(),
-            asr_provider: speaches.id.clone(),
-            llm_provider: Some(ollama.id.clone()),
+            asr_provider: ProviderId(asr.into()),
+            llm_provider: Some(ProviderId(llm.into())),
             language_hint: Some("zh-TW".into()),
             prompt_addition: String::new(),
             few_shot: Vec::new(),
@@ -239,10 +275,35 @@ impl Config {
         Self {
             schema_version: SCHEMA_VERSION,
             general: General::default(),
-            providers: vec![speaches, ollama],
+            providers,
             profiles: vec![profile],
             dictionary: Vec::new(),
         }
+    }
+
+    /// A first-run config whose providers are two HTTP endpoints
+    /// (`local-speaches` for ASR, `local-ollama` for chat) that the default
+    /// profile uses.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn http_test_config() -> Self {
+        let mut c = Self::first_run();
+        c.providers = vec![
+            ProviderConfig::http_test_provider(
+                "local-speaches",
+                "http://localhost:8000/v1",
+                true,
+                false,
+            ),
+            ProviderConfig::http_test_provider(
+                "local-ollama",
+                "http://localhost:11434/v1",
+                false,
+                true,
+            ),
+        ];
+        c.profiles[0].asr_provider = ProviderId("local-speaches".into());
+        c.profiles[0].llm_provider = Some(ProviderId("local-ollama".into()));
+        c
     }
 
     pub fn default_steps() -> Vec<StepSpec> {
@@ -269,6 +330,72 @@ impl Config {
             .iter()
             .find(|p| p.is_default)
             .expect("validated config has exactly one default profile")
+    }
+}
+
+impl ProviderConfig {
+    pub fn embedded(
+        id: &str,
+        label: &str,
+        runtime: Runtime,
+        model_id: &str,
+        capabilities: Capabilities,
+    ) -> Self {
+        Self {
+            id: ProviderId(id.into()),
+            label: label.into(),
+            kind: ProviderKind::Embedded,
+            capabilities,
+            base_url: None,
+            model: None,
+            api_key_ref: None,
+            extra_headers: BTreeMap::new(),
+            model_path: None,
+            native_id: None,
+            model_id: Some(model_id.into()),
+            runtime: Some(runtime),
+        }
+    }
+
+    pub fn native(id: &str, label: &str, native_id: &str, capabilities: Capabilities) -> Self {
+        Self {
+            id: ProviderId(id.into()),
+            label: label.into(),
+            kind: ProviderKind::Native,
+            capabilities,
+            base_url: None,
+            model: None,
+            api_key_ref: None,
+            extra_headers: BTreeMap::new(),
+            model_path: None,
+            native_id: Some(native_id.into()),
+            model_id: None,
+            runtime: None,
+        }
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn http_test_provider(id: &str, base: &str, transcribe: bool, chat: bool) -> Self {
+        Self {
+            id: ProviderId(id.into()),
+            label: id.into(),
+            kind: ProviderKind::Http,
+            capabilities: Capabilities {
+                transcribe,
+                chat,
+                streaming: false,
+                language_hint: transcribe,
+                hotwords: transcribe,
+            },
+            base_url: Some(Url::parse(base).unwrap()),
+            model: Some("model".into()),
+            api_key_ref: None,
+            extra_headers: BTreeMap::new(),
+            model_path: None,
+            native_id: None,
+            model_id: None,
+            runtime: None,
+        }
     }
 }
 
@@ -340,5 +467,82 @@ mod tests {
         let e: DictionaryEntry = serde_json::from_str(r#"{"term":"Kongwe"}"#).unwrap();
         assert!(e.asr_hint);
         assert!(e.aliases.is_empty());
+    }
+
+    #[test]
+    fn no_native_picks_embedded_pair() {
+        let c = Config::first_run_with(&FirstRunDefaults::default());
+        let ids: Vec<&str> = c.providers.iter().map(|p| p.id.0.as_str()).collect();
+        assert_eq!(ids, ["local-whisper", "local-llama"]);
+        let d = c.profiles.iter().find(|p| p.is_default).unwrap();
+        assert_eq!(d.asr_provider.0, "local-whisper");
+        assert_eq!(d.llm_provider.as_ref().unwrap().0, "local-llama");
+        let w = c.provider(&ProviderId("local-whisper".into())).unwrap();
+        assert_eq!(w.kind, ProviderKind::Embedded);
+        assert_eq!(w.runtime, Some(Runtime::Whisper));
+        assert_eq!(w.model_id.as_deref(), Some("breeze-asr-25-q5_0"));
+        assert!(
+            w.capabilities.transcribe
+                && w.capabilities.language_hint
+                && w.capabilities.hotwords
+                && !w.capabilities.chat
+        );
+        let l = c.provider(&ProviderId("local-llama".into())).unwrap();
+        assert_eq!(l.model_id.as_deref(), Some("gemma-3-4b-it-q4_k_m"));
+        assert!(l.capabilities.chat && !l.capabilities.transcribe);
+    }
+
+    #[test]
+    fn both_native_picks_apple_pair_and_keeps_embedded() {
+        let c = Config::first_run_with(&FirstRunDefaults {
+            apple_dictation: true,
+            apple_foundation_models: true,
+        });
+        let ids: Vec<&str> = c.providers.iter().map(|p| p.id.0.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "apple-dictation",
+                "apple-fm",
+                "local-whisper",
+                "local-llama"
+            ]
+        );
+        let d = c.profiles.iter().find(|p| p.is_default).unwrap();
+        assert_eq!(d.asr_provider.0, "apple-dictation");
+        assert_eq!(d.llm_provider.as_ref().unwrap().0, "apple-fm");
+        let a = c.provider(&ProviderId("apple-dictation".into())).unwrap();
+        assert_eq!(a.kind, ProviderKind::Native);
+        assert_eq!(a.native_id.as_deref(), Some("apple.dictation"));
+        assert_eq!(
+            c.provider(&ProviderId("apple-fm".into()))
+                .unwrap()
+                .native_id
+                .as_deref(),
+            Some("apple.foundation_models")
+        );
+    }
+
+    #[test]
+    fn dictation_only_mixes_apple_asr_with_embedded_llm() {
+        let c = Config::first_run_with(&FirstRunDefaults {
+            apple_dictation: true,
+            apple_foundation_models: false,
+        });
+        let d = c.profiles.iter().find(|p| p.is_default).unwrap();
+        assert_eq!(d.asr_provider.0, "apple-dictation");
+        assert_eq!(d.llm_provider.as_ref().unwrap().0, "local-llama");
+        assert!(c.provider(&ProviderId("apple-fm".into())).is_none());
+    }
+
+    #[test]
+    fn every_first_run_variant_validates() {
+        for (a, f) in [(false, false), (true, false), (false, true), (true, true)] {
+            let c = Config::first_run_with(&FirstRunDefaults {
+                apple_dictation: a,
+                apple_foundation_models: f,
+            });
+            crate::config::validate(&c).unwrap();
+        }
     }
 }
