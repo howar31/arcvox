@@ -62,6 +62,23 @@ impl Engine {
         clip: Arc<AudioClip>,
         cold: bool,
     ) -> BenchRun {
+        self.mark_busy();
+        let run = self.run_asr(provider, clip, cold).await;
+        self.touch_idle();
+        run
+    }
+
+    /// Refines `transcript` with the prompt a session under the default
+    /// profile would send, without app context. `cold` unloads the provider
+    /// first so `load_ms` includes the model load.
+    pub async fn bench_llm(&self, provider: &ProviderId, transcript: &str, cold: bool) -> BenchRun {
+        self.mark_busy();
+        let run = self.run_llm(provider, transcript, cold).await;
+        self.touch_idle();
+        run
+    }
+
+    async fn run_asr(&self, provider: &ProviderId, clip: Arc<AudioClip>, cold: bool) -> BenchRun {
         let role = BenchRole::Asr;
         let config = self.config().current();
         let Some(cfg) = config.provider(provider) else {
@@ -94,7 +111,6 @@ impl Engine {
         let t1 = Instant::now();
         let result = p.transcribe(&clip, &hint).await;
         let infer_ms = millis(t1);
-        self.touch_idle();
         let (output, error) = match result {
             Ok(t) => (t.text, None),
             Err(e) => (String::new(), Some(e.message)),
@@ -110,10 +126,7 @@ impl Engine {
         }
     }
 
-    /// Refines `transcript` with the prompt a session under the default
-    /// profile would send, without app context. `cold` unloads the provider
-    /// first so `load_ms` includes the model load.
-    pub async fn bench_llm(&self, provider: &ProviderId, transcript: &str, cold: bool) -> BenchRun {
+    async fn run_llm(&self, provider: &ProviderId, transcript: &str, cold: bool) -> BenchRun {
         let role = BenchRole::Llm;
         let config = self.config().current();
         let Some(cfg) = config.provider(provider) else {
@@ -162,7 +175,6 @@ impl Engine {
         let t1 = Instant::now();
         let result = p.complete(messages, &opts).await;
         let infer_ms = millis(t1);
-        self.touch_idle();
         let (output, error) = match result {
             Ok(text) => (text.trim().to_string(), None),
             Err(e) => (String::new(), Some(e.message)),
@@ -184,7 +196,9 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     use super::*;
-    use crate::engine::tests::{idle_rig, one_second};
+    use crate::engine::tests::{drain_session, idle_rig, idle_rig_with, one_second};
+    use crate::engine::SessionRequest;
+    use crate::steps::llm::fakes::FakeLlm;
     use crate::SAMPLE_RATE;
 
     fn one_second_clip() -> AudioClip {
@@ -242,5 +256,24 @@ mod tests {
         let run = e.bench_asr(&id, Arc::new(one_second_clip()), false).await;
         assert_eq!(run.output, "原文");
         assert_eq!(run.role, BenchRole::Asr);
+    }
+
+    // The session arms a 2 s idle unload; the 3 s completion must not be
+    // interrupted by it, because the bench counts as activity from its start.
+    #[tokio::test(start_paused = true)]
+    async fn idle_unload_does_not_fire_during_a_run() {
+        let (fake, _tmp, e) = idle_rig_with(FakeLlm::slow("ok", Duration::from_secs(3))).await;
+        let s = e.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        s.finish();
+        drain_session(&s).await;
+        let id = e.config().current().profiles[0]
+            .llm_provider
+            .clone()
+            .unwrap();
+        let run = e.bench_llm(&id, "原文", false).await;
+        assert_eq!(fake.unloads.load(Ordering::SeqCst), 0);
+        assert!(run.error.is_none());
+        assert_eq!(run.output, "ok");
     }
 }
