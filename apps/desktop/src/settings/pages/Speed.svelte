@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { benchCancel, benchClipFromHistory, benchClipStatus, benchHistoryCandidates, benchRecordStart, benchRecordStop, benchStart, errorMessage, onBenchDone, onBenchLevel, onBenchProgress, type BenchRun, type ClipCandidate, type ClipStatus, type ProviderConfig } from "../../lib/api";
+  import { formatDateTime } from "../../lib/format";
   import { t } from "../../lib/i18n";
   import { defaultProfile, providerLabel } from "../../lib/labels";
   import { config } from "../../lib/store.svelte";
@@ -45,7 +46,7 @@
   }
   const fail = (e: unknown) => { toast.error(speedError(e)); };
 
-  function when(ts: number) { return new Date(ts * 1000).toLocaleString(); }
+  const when = formatDateTime;
   function secs(ms: number) { return (ms / 1000).toFixed(2); }
   function truncate(text: string, max = 40) { return text.length > max ? `${text.slice(0, max)}…` : text; }
 
@@ -238,8 +239,8 @@
           {#if run.error}<small class="out error" title={run.error}>{run.error}</small>
           {:else}<small class="out" title={run.output}>{run.output}</small>{/if}
         </div>
-        <span class="val num" aria-label={t("speed.col.load")}>{secs(run.load_ms)}</span>
-        <span class="val num" aria-label={t("speed.col.infer")}>{secs(run.infer_ms)}</span>
+        <span class="val num"><span class="sr-only">{t("speed.col.load")} </span>{secs(run.load_ms)}</span>
+        <span class="val num"><span class="sr-only">{t("speed.col.infer")} </span>{secs(run.infer_ms)}</span>
       </Row>
     {/each}
   </Group>

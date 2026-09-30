@@ -2,8 +2,8 @@
   import { onMount } from "svelte";
   import { clearHistory, deleteHistory, errorMessage, listHistory, widgetCopy, type Utterance } from "../../lib/api";
   import { groupByDay, seconds, showsRaw } from "../../lib/historyView";
-  import { currentLanguage, t } from "../../lib/i18n";
-  import { profileName } from "../../lib/labels";
+  import { formatDateTime, formatDay, formatTime } from "../../lib/format";
+  import { t } from "../../lib/i18n";
   import { config } from "../../lib/store.svelte";
   import Empty from "../../lib/ui/Empty.svelte";
   import Group from "../../lib/ui/Group.svelte";
@@ -39,36 +39,29 @@
   });
 
   const groups = $derived(groupByDay(rows ?? [], now));
-  const locale = $derived(currentLanguage() === "zh-TW" ? "zh-TW" : "en");
-
   function dayTitle(key: string): string {
     if (key === "today" || key === "yesterday") return t(`history.${key}`);
     const [y, m, d] = key.split("-").map(Number);
-    const date = new Date(y, m - 1, d);
-    const opts: Intl.DateTimeFormatOptions = { month: "long", day: "numeric", weekday: "short" };
-    if (y !== now.getFullYear()) opts.year = "numeric";
-    return date.toLocaleDateString(locale, opts);
+    return formatDay(new Date(y, m - 1, d), now);
   }
 
-  function time(ts: number): { short: string; full: string } {
-    const d = new Date(ts * 1000);
-    return {
-      short: d.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }),
-      full: d.toLocaleString(locale),
-    };
+  /** The profile's name; for a profile that no longer exists, its id and a deleted marker. */
+  function profileOf(id: string): { name: string; deleted: boolean } {
+    const p = config.value?.profiles.find((x) => x.id === id);
+    return p ? { name: p.name, deleted: false } : { name: id, deleted: !!config.value && !!id };
   }
-
-  const sep = () => t("home.meta_sep");
-  function source(u: Utterance): string {
-    return [u.app_name, profileName(config.value, u.profile_id)].filter(Boolean).join(sep());
-  }
-  function timings(u: Utterance): string {
+  type Part = { kind: "text"; text: string } | { kind: "profile"; name: string; deleted: boolean } | { kind: "degraded" };
+  /** The meta line: application, profile, the not-rewritten tag, and the step timings. */
+  function parts(u: Utterance): Part[] {
+    const out: Part[] = [];
+    if (u.app_name) out.push({ kind: "text", text: u.app_name });
+    if (u.profile_id) out.push({ kind: "profile", ...profileOf(u.profile_id) });
+    if (u.degraded) out.push({ kind: "degraded" });
     const asr = seconds(u.asr_ms);
     const llm = seconds(u.llm_ms);
-    return [
-      asr === null ? null : t("history.asr_secs", { secs: asr }),
-      llm === null ? null : t("history.llm_secs", { secs: llm }),
-    ].filter(Boolean).join(sep());
+    if (asr !== null) out.push({ kind: "text", text: t("history.asr_secs", { secs: asr }) });
+    if (llm !== null) out.push({ kind: "text", text: t("history.llm_secs", { secs: llm }) });
+    return out;
   }
 
   async function copy(text: string) {
@@ -112,20 +105,21 @@
   {#each groups as g (g.key)}
     <Group title={dayTitle(g.key)}>
       {#each g.rows as u (u.id)}
-        {@const at = time(u.ts)}
         <Row>
-          <span class="time" title={at.full}>{at.short}</span>
+          <span class="time" title={formatDateTime(u.ts)}>{formatTime(u.ts)}</span>
           <span class="body">
             <span class="final">{u.final_text}</span>
             {#if showsRaw(u)}<span class="raw">{t("history.raw_line", { text: u.raw_text.trim() })}</span>{/if}
             <span class="meta">
-              {#if u.degraded}
-                <span class="meta-text">{source(u)}</span>
-                <Tag tone="warn">{t("history.not_rewritten")}</Tag>
-                <span class="meta-text">{timings(u)}</span>
-              {:else}
-                <span class="meta-text">{[source(u), timings(u)].filter(Boolean).join(sep())}</span>
-              {/if}
+              {#each parts(u) as part, j (j)}
+                <!-- The separator stays with the part after it when the line wraps. -->
+                <span class="part">
+                  {#if j > 0}<span class="dot" aria-hidden="true">·</span>{/if}
+                  {#if part.kind === "degraded"}<Tag tone="warn">{t("history.not_rewritten")}</Tag>
+                  {:else if part.kind === "profile"}<span class="meta-text">{part.name}{#if part.deleted}<span class="deleted">{t("history.deleted_profile")}</span>{/if}</span>
+                  {:else}<span class="meta-text">{part.text}</span>{/if}
+                </span>
+              {/each}
             </span>
           </span>
           <span class="tools">
@@ -155,8 +149,11 @@
   .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 2px 0; }
   .final { line-height: 1.55; overflow-wrap: anywhere; white-space: pre-line; }
   .raw { color: var(--ink-2); font-size: 12px; overflow-wrap: anywhere; }
-  .meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; color: var(--ink-2); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .meta { display: flex; align-items: center; gap: 2px 6px; flex-wrap: wrap; color: var(--ink-2); font-size: 12px; font-variant-numeric: tabular-nums; }
   .meta-text { min-width: 0; overflow-wrap: anywhere; }
+  .part { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+  .dot { color: var(--ink-3); }
+  .deleted { margin-left: 3px; color: var(--ink-3); }
   .tools { flex: none; align-self: flex-start; display: flex; gap: 2px; margin-right: -6px; }
   .icon-btn { width: 26px; padding: 0; color: var(--ink-2); }
   .icon-btn:hover { color: var(--ink); }
