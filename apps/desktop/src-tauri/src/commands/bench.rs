@@ -70,6 +70,17 @@ pub struct BenchState {
     task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
 }
 
+impl BenchState {
+    /// Stops a recording in progress and drops its audio, so the microphone
+    /// is released.
+    pub fn discard_recording(&self) {
+        let rec = self.recording.lock().unwrap().take();
+        if let Some(rec) = rec {
+            let _ = rec.finish();
+        }
+    }
+}
+
 /// A microphone capture feeding a worker thread that resamples to 16 kHz
 /// and reports each block's level.
 pub struct Recording {
@@ -247,6 +258,9 @@ pub async fn run_all(
             emit(run);
         }
     }
+    if !asr.is_empty() {
+        engine.unload_unreferenced_asr().await;
+    }
     let transcript = transcript.unwrap_or(fallback);
     for id in &llm {
         for cold in [true, false] {
@@ -267,9 +281,7 @@ pub fn bench_clip_status(state: State<'_, AppState>) -> CmdResult<ClipStatus> {
 /// Starts recording a new clip, replacing any recording in progress.
 #[tauri::command]
 pub async fn bench_record_start(app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
-    if let Some(old) = state.bench.recording.lock().unwrap().take() {
-        let _ = old.finish();
-    }
+    state.bench.discard_recording();
     let choice = ClientSettings::load(&state.dirs.config_dir).microphone_choice();
     let rec = Recording::start(state.audio.as_ref(), &choice, move |rms| {
         let _ = app.emit_to(SETTINGS_WINDOW, "bench-level", BenchLevel { rms });
@@ -358,11 +370,15 @@ pub fn bench_start(
     Ok(())
 }
 
-/// Stops a run in progress; the provider call in flight is dropped.
+/// Stops a run in progress; the provider call in flight is dropped and the
+/// speech models loaded only for the test are freed.
 #[tauri::command]
 pub fn bench_cancel(app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
     if let Some(task) = state.bench.task.lock().unwrap().take() {
         task.abort();
+        if let Ok(engine) = engine(&state) {
+            tauri::async_runtime::spawn(async move { engine.unload_unreferenced_asr().await });
+        }
     }
     let _ = app.emit_to(SETTINGS_WINDOW, "bench-done", BenchDone {});
     Ok(())
@@ -396,10 +412,13 @@ mod tests {
     #[derive(Default)]
     struct FakeAudio {
         tx: Mutex<Option<Sender<AudioMsg>>>,
+        stops: Arc<std::sync::atomic::AtomicUsize>,
     }
-    struct FakeHandle;
+    struct FakeHandle(Arc<std::sync::atomic::AtomicUsize>);
     impl AudioHandle for FakeHandle {
-        fn stop(self: Box<Self>) {}
+        fn stop(self: Box<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
     }
     impl AudioSource for FakeAudio {
         fn start(
@@ -408,7 +427,7 @@ mod tests {
             tx: Sender<AudioMsg>,
         ) -> Result<Box<dyn AudioHandle>, AudioError> {
             *self.tx.lock().unwrap() = Some(tx);
-            Ok(Box::new(FakeHandle))
+            Ok(Box::new(FakeHandle(self.stops.clone())))
         }
         fn list_devices(&self) -> Vec<String> {
             vec!["Fake".into()]
@@ -437,7 +456,7 @@ mod tests {
         }
     }
 
-    struct FakeAsr;
+    struct FakeAsr(Arc<std::sync::atomic::AtomicUsize>);
     #[async_trait]
     impl AsrProvider for FakeAsr {
         async fn transcribe(
@@ -449,6 +468,9 @@ mod tests {
                 text: "原文".into(),
                 language: None,
             })
+        }
+        async fn unload(&self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
         }
     }
 
@@ -468,7 +490,7 @@ mod tests {
         }
     }
 
-    struct Factory(Arc<FakeLlm>);
+    struct Factory(Arc<FakeLlm>, Arc<std::sync::atomic::AtomicUsize>);
     #[async_trait]
     impl ProviderFactory for Factory {
         fn kind(&self) -> ProviderKind {
@@ -479,7 +501,7 @@ mod tests {
             _: &ProviderConfig,
             _: &General,
         ) -> Result<Arc<dyn AsrProvider>, ProviderError> {
-            Ok(Arc::new(FakeAsr))
+            Ok(Arc::new(FakeAsr(self.1.clone())))
         }
         fn llm(
             &self,
@@ -502,14 +524,16 @@ mod tests {
         Arc<FakeLlm>,
         ProviderId,
         ProviderId,
+        Arc<std::sync::atomic::AtomicUsize>,
     ) {
         let tmp = tempfile::tempdir().unwrap();
         let llm = Arc::new(FakeLlm::default());
+        let asr_unloads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let engine = Engine::open_with(
             DataDir::custom(tmp.path()),
             EngineOptions {
                 secrets: Arc::new(MemorySecretStore::default()),
-                factories: vec![Arc::new(Factory(llm.clone()))],
+                factories: vec![Arc::new(Factory(llm.clone(), asr_unloads.clone()))],
                 first_run: FirstRunDefaults::default(),
             },
         )
@@ -518,7 +542,7 @@ mod tests {
         let profile = engine.config().current().profiles[0].clone();
         let asr = profile.asr_provider.clone();
         let llm_id = profile.llm_provider.clone().unwrap();
-        (tmp, engine, llm, asr, llm_id)
+        (tmp, engine, llm, asr, llm_id, asr_unloads)
     }
 
     fn one_second_clip() -> AudioClip {
@@ -570,6 +594,21 @@ mod tests {
     }
 
     #[test]
+    fn discarding_the_recording_stops_the_capture() {
+        let audio = FakeAudio::default();
+        let state = BenchState::default();
+        let rec = Recording::start(&audio, &MicrophoneChoice::SystemDefault, |_| {}).unwrap();
+        audio.speech(1.0);
+        *state.recording.lock().unwrap() = Some(rec);
+        state.discard_recording();
+        assert_eq!(audio.stops.load(Ordering::SeqCst), 1);
+        assert!(state.recording.lock().unwrap().is_none());
+        // Nothing to stop the second time.
+        state.discard_recording();
+        assert_eq!(audio.stops.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
     fn recording_is_capped_at_thirty_seconds() {
         let audio = FakeAudio::default();
         let rec = Recording::start(&audio, &MicrophoneChoice::SystemDefault, |_| {}).unwrap();
@@ -590,7 +629,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_all_emits_cold_and_warm_rows_in_order_and_feeds_the_llm() {
-        let (_tmp, engine, llm, asr_id, llm_id) = rig().await;
+        let (_tmp, engine, llm, asr_id, llm_id, _) = rig().await;
         let runs = Arc::new(Mutex::new(Vec::new()));
         let r2 = runs.clone();
         run_all(
@@ -631,8 +670,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_all_frees_speech_providers_no_profile_uses() {
+        let (_tmp, engine, _llm, asr_id, _llm_id, unloads) = rig().await;
+        let spare = ProviderId("spare-asr".into());
+        engine
+            .config()
+            .update(|c| {
+                let mut extra = c.provider(&asr_id).unwrap().clone();
+                extra.id = spare.clone();
+                c.providers.push(extra);
+            })
+            .unwrap();
+        let runs = Arc::new(Mutex::new(Vec::new()));
+        let r2 = runs.clone();
+        run_all(
+            &engine,
+            Arc::new(one_second_clip()),
+            vec![asr_id.clone(), spare.clone()],
+            vec![],
+            "fallback".into(),
+            move |run, _| r2.lock().unwrap().push(run),
+        )
+        .await;
+        assert_eq!(runs.lock().unwrap().len(), 4);
+        // One unload per cold run, plus the spare one freed at the end.
+        assert_eq!(unloads.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
     async fn run_all_uses_fallback_text_when_no_asr_selected() {
-        let (_tmp, engine, llm, _asr_id, llm_id) = rig().await;
+        let (_tmp, engine, llm, _asr_id, llm_id, _) = rig().await;
         let runs = Arc::new(Mutex::new(Vec::new()));
         let r2 = runs.clone();
         run_all(
