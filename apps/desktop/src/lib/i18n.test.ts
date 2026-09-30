@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { keysOf, setLanguage, t } from "./i18n";
+import { has, keysOf, setLanguage, t } from "./i18n";
 
 test("both tables have identical key sets", () => {
   const zh = keysOf("zh-TW").sort();
@@ -14,4 +14,13 @@ test("no value is empty and interpolation works", () => {
   }
   setLanguage("en");
   expect(t("missing.key")).toBe("missing.key");
+});
+
+test("has tells whether a key is translated", () => {
+  for (const lang of ["zh-TW", "en"] as const) {
+    setLanguage(lang);
+    expect(has("common.save")).toBe(true);
+    expect(has("missing.key")).toBe(false);
+  }
+  setLanguage("en");
 });

@@ -1,12 +1,12 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import {
     deleteProvider, deleteSecret, errorMessage, hasSecret, nativeInstallLanguage, nativeStatus, onNativeInstallProgress, probeProvider, setSecret,
     upsertProvider, type InstalledModel, type ManifestView, type NativeStatusView, type ProviderConfig, type ProviderKind, type Runtime,
   } from "../../lib/api";
   import { blankForRole, freshId, hasRole, type Role } from "../../lib/engines";
   import { t } from "../../lib/i18n";
-  import { defaultProfile } from "../../lib/labels";
+  import { defaultProfile, modelLabel } from "../../lib/labels";
   import { baseName, capsForNative, capsForRuntime, describeProbe, NATIVE_DICTATION, NATIVE_FM } from "../../lib/providerForm";
   import { config } from "../../lib/store.svelte";
   import Modal from "../../lib/ui/Modal.svelte";
@@ -38,6 +38,15 @@
   let installing = $state(false);
   let installFraction = $state(0);
   let busy = $state(false);
+  // Deleting asks first, in place of the form's buttons.
+  let confirmDelete = $state(false);
+  let keepButton: HTMLButtonElement | undefined = $state();
+
+  async function askDelete() {
+    confirmDelete = true;
+    await tick();
+    keepButton?.focus();
+  }
 
   const uid = Math.random().toString(36).slice(2);
   const defaultHint = $derived(defaultProfile(config.value)?.language_hint ?? null);
@@ -49,9 +58,6 @@
   const kinds = $derived(
     (["embedded", "native", "http"] as const).map((k) => ({ value: k as ProviderKind, label: t("engines.kind." + k) })),
   );
-
-  const optionLabel = (m: InstalledModel): string =>
-    m.custom ? baseName(m.path) : (manifest?.models.find((e) => e.id === m.id)?.label ?? m.id);
 
   onMount(() => {
     let unlisten: (() => void) | undefined;
@@ -109,7 +115,7 @@
     if (value.startsWith("custom:")) { editing.model_path = value.slice("custom:".length); editing.model_id = null; }
     else { editing.model_id = value || null; editing.model_path = null; }
     const m = installed.find((x) => (x.custom ? `custom:${x.path}` : x.id) === value);
-    if (m && !editing.label.trim()) editing.label = optionLabel(m);
+    if (m && !editing.label.trim()) editing.label = modelLabel(manifest, m);
   }
 
   async function installLanguage() {
@@ -126,7 +132,7 @@
     if (p.kind === "native") return t("engines.native." + (p.native_id === NATIVE_FM ? "apple_foundation_models" : "apple_dictation"));
     if (p.kind === "http") return p.model || p.base_url || t("engines.kind.http");
     const m = installed.find((x) => (p.model_path ? x.path === p.model_path : x.id === p.model_id));
-    return m ? optionLabel(m) : (p.model_id ?? baseName(p.model_path));
+    return m ? modelLabel(manifest, m) : (p.model_id ?? baseName(p.model_path));
   }
 
   async function save() {
@@ -153,6 +159,7 @@
 
   async function remove() {
     if (!initial) return;
+    confirmDelete = false;
     busy = true;
     try {
       // The core refuses to delete an engine a profile still uses; its message explains which.
@@ -175,80 +182,89 @@
   }
 </script>
 
-<Modal bind:open title={isNew ? t("engines.add") : t("engines.edit_title")}>
-  <div class="form">
-    <div><Segmented options={kinds} bind:value={() => editing.kind, (k) => setKind(k)} label={t("engines.kind")} /></div>
+<Modal bind:open title={confirmDelete ? t("engines.delete_title") : isNew ? t("engines.add") : t("engines.edit_title")}>
+  {#if confirmDelete}
+    <p>{t("engines.delete_body", { name: initial?.label ?? "" })}</p>
+  {:else}
+    <div class="form">
+      <div><Segmented options={kinds} bind:value={() => editing.kind, (k) => setKind(k)} label={t("engines.kind")} /></div>
 
-    <div class="fields">
-      <label for="f-label-{uid}">{t("engines.label")}</label>
-      <input id="f-label-{uid}" type="text" bind:value={editing.label} />
+      <div class="fields">
+        <label for="f-label-{uid}">{t("engines.label")}</label>
+        <input id="f-label-{uid}" type="text" bind:value={editing.label} />
 
-      {#if editing.kind === "embedded"}
-        <label for="f-model-{uid}">{t("engines.model")}</label>
-        <select id="f-model-{uid}" value={selectedModel} onchange={(e) => setModel(e.currentTarget.value)}>
-          <option value=""></option>
-          {#each candidates as m (m.path)}<option value={m.custom ? `custom:${m.path}` : m.id}>{optionLabel(m)}</option>{/each}
-        </select>
-        {#if candidates.length === 0}<p class="note">{t("engines.no_models_hint")}</p>
-        {:else if missingModel}<p class="note">{t("engines.model_required")}</p>{/if}
-      {:else if editing.kind === "native"}
-        <label for="f-native-{uid}">{t("engines.native_id")}</label>
-        <select id="f-native-{uid}" value={editing.native_id} onchange={(e) => setNativeId(e.currentTarget.value)}>
-          <option value={NATIVE_DICTATION}>{t("engines.native.apple_dictation")}</option>
-          <option value={NATIVE_FM}>{t("engines.native.apple_foundation_models")}</option>
-        </select>
-        <span class="lbl">{t("engines.native.status")}</span>
-        <div class="status">
-          {#if native}
-            <Ring tone={native.status === "ready" ? "ok" : "off"} size="sm" />
-            <span class="grow">{t("engines.native." + native.status)}{native.reason ? ` (${native.reason})` : ""}</span>
-          {:else}
-            <span class="grow">{t("common.loading")}</span>
-          {/if}
-          {#if editing.native_id === NATIVE_DICTATION && native?.status === "needs_download"}
-            <button type="button" class="btn" onclick={installLanguage} disabled={installing}>
-              {installing ? t("engines.installing", { percent: `${Math.round(installFraction * 100)}%` }) : t("engines.install_language")}
-            </button>
-          {/if}
-        </div>
-      {:else}
-        <label for="f-url-{uid}">{t("engines.base_url")}</label>
-        <input id="f-url-{uid}" type="url" bind:value={editing.base_url} placeholder="http://localhost:11434/v1" />
-        <label for="f-remote-model-{uid}">{t("engines.model")}</label>
-        <input id="f-remote-model-{uid}" type="text" bind:value={editing.model} />
-        <label for="f-key-{uid}">{t("engines.api_key")}</label>
-        <input id="f-key-{uid}" type="password" bind:value={apiKey} placeholder={keyPresent ? t("engines.key_present") : ""} autocomplete="off" />
-      {/if}
-    </div>
-
-    <details>
-      <summary>{t("engines.advanced")}</summary>
-      <div class="fields adv">
         {#if editing.kind === "embedded"}
-          <label for="f-runtime-{uid}">{t("engines.runtime")}</label>
-          <select id="f-runtime-{uid}" value={editing.runtime} onchange={(e) => setRuntime(e.currentTarget.value as Runtime)}>
-            {#each ["whisper", "llama"] as r (r)}<option value={r}>{t("engines.runtime." + r)}</option>{/each}
+          <label for="f-model-{uid}">{t("engines.model")}</label>
+          <select id="f-model-{uid}" value={selectedModel} onchange={(e) => setModel(e.currentTarget.value)}>
+            <option value=""></option>
+            {#each candidates as m (m.path)}<option value={m.custom ? `custom:${m.path}` : m.id}>{modelLabel(manifest, m)}</option>{/each}
           </select>
+          {#if candidates.length === 0}<p class="note">{t("engines.no_models_hint")}</p>
+          {:else if missingModel}<p class="note">{t("engines.model_required")}</p>{/if}
+        {:else if editing.kind === "native"}
+          <label for="f-native-{uid}">{t("engines.native_id")}</label>
+          <select id="f-native-{uid}" value={editing.native_id} onchange={(e) => setNativeId(e.currentTarget.value)}>
+            <option value={NATIVE_DICTATION}>{t("engines.native.apple_dictation")}</option>
+            <option value={NATIVE_FM}>{t("engines.native.apple_foundation_models")}</option>
+          </select>
+          <span class="lbl">{t("engines.native.status")}</span>
+          <div class="status">
+            {#if native}
+              <Ring tone={native.status === "ready" ? "ok" : "off"} size="sm" />
+              <span class="grow">{t("engines.native." + native.status)}{native.reason ? ` (${native.reason})` : ""}</span>
+            {:else}
+              <span class="grow">{t("common.loading")}</span>
+            {/if}
+            {#if editing.native_id === NATIVE_DICTATION && native?.status === "needs_download"}
+              <button type="button" class="btn" onclick={installLanguage} disabled={installing}>
+                {installing ? t("engines.installing", { percent: `${Math.round(installFraction * 100)}%` }) : t("engines.install_language")}
+              </button>
+            {/if}
+          </div>
+        {:else}
+          <label for="f-url-{uid}">{t("engines.base_url")}</label>
+          <input id="f-url-{uid}" type="url" bind:value={editing.base_url} placeholder="http://localhost:11434/v1" />
+          <label for="f-remote-model-{uid}">{t("engines.model")}</label>
+          <input id="f-remote-model-{uid}" type="text" bind:value={editing.model} />
+          <label for="f-key-{uid}">{t("engines.api_key")}</label>
+          <input id="f-key-{uid}" type="password" bind:value={apiKey} placeholder={keyPresent ? t("engines.key_present") : ""} autocomplete="off" />
         {/if}
-        <span class="lbl">{t("engines.capabilities")}</span>
-        <div class="caps">
-          <label><input type="checkbox" bind:checked={editing.capabilities.transcribe} /> {t("engines.cap_transcribe")}</label>
-          <label><input type="checkbox" bind:checked={editing.capabilities.chat} /> {t("engines.cap_chat")}</label>
-          <label><input type="checkbox" bind:checked={editing.capabilities.language_hint} /> {t("engines.cap_language_hint")}</label>
-          <label><input type="checkbox" bind:checked={editing.capabilities.hotwords} /> {t("engines.cap_hotwords")}</label>
-        </div>
       </div>
-    </details>
-    {#if noRole}<p class="note-bad" role="alert">{t("engines.no_role_help")}</p>{/if}
 
-    {#if probe}<p class="probe {probe.state}" role="status">{probe.text}</p>{/if}
-  </div>
+      <details>
+        <summary>{t("engines.advanced")}</summary>
+        <div class="fields adv">
+          {#if editing.kind === "embedded"}
+            <label for="f-runtime-{uid}">{t("engines.runtime")}</label>
+            <select id="f-runtime-{uid}" value={editing.runtime} onchange={(e) => setRuntime(e.currentTarget.value as Runtime)}>
+              {#each ["whisper", "llama"] as r (r)}<option value={r}>{t("engines.runtime." + r)}</option>{/each}
+            </select>
+          {/if}
+          <span class="lbl">{t("engines.capabilities")}</span>
+          <div class="caps">
+            <label><input type="checkbox" bind:checked={editing.capabilities.transcribe} /> {t("engines.cap_transcribe")}</label>
+            <label><input type="checkbox" bind:checked={editing.capabilities.chat} /> {t("engines.cap_chat")}</label>
+            <label><input type="checkbox" bind:checked={editing.capabilities.language_hint} /> {t("engines.cap_language_hint")}</label>
+            <label><input type="checkbox" bind:checked={editing.capabilities.hotwords} /> {t("engines.cap_hotwords")}</label>
+          </div>
+        </div>
+      </details>
+      {#if noRole}<p class="note-bad" role="alert">{t("engines.no_role_help")}</p>{/if}
+
+      {#if probe}<p class="probe {probe.state}" role="status">{probe.text}</p>{/if}
+    </div>
+  {/if}
 
   {#snippet actions()}
-    {#if !isNew}<button type="button" class="btn quiet danger delete" onclick={remove} disabled={busy}>{t("engines.delete")}</button>{/if}
-    <button type="button" class="btn" onclick={runProbe} disabled={busy || probe?.state === "wait"}>{t("engines.test")}</button>
-    <button type="button" class="btn" onclick={() => (open = false)}>{t("common.cancel")}</button>
-    <button type="button" class="btn primary" onclick={save} disabled={busy || missingModel || noRole || !keyKnown}>{t("common.save")}</button>
+    {#if confirmDelete}
+      <button type="button" class="btn" bind:this={keepButton} onclick={() => (confirmDelete = false)}>{t("common.cancel")}</button>
+      <button type="button" class="btn danger" onclick={remove} disabled={busy}>{t("engines.delete")}</button>
+    {:else}
+      {#if !isNew}<button type="button" class="btn quiet danger delete" onclick={askDelete} disabled={busy}>{t("engines.delete")}</button>{/if}
+      <button type="button" class="btn" onclick={runProbe} disabled={busy || probe?.state === "wait"}>{t("engines.test")}</button>
+      <button type="button" class="btn" onclick={() => (open = false)}>{t("common.cancel")}</button>
+      <button type="button" class="btn primary" onclick={save} disabled={busy || missingModel || noRole || !keyKnown}>{t("common.save")}</button>
+    {/if}
   {/snippet}
 </Modal>
 

@@ -21,6 +21,11 @@ export function t(key: string, vars: Record<string, string> = {}): string {
   return raw.replace(/\{(\w+)\}/g, (_, name: string) => vars[name] ?? `{${name}}`);
 }
 
+/** Whether `key` has a translation (in the current language or in English). */
+export function has(key: string): boolean {
+  return key in tables[current] || key in tables.en;
+}
+
 export function keysOf(lang: Lang): string[] {
   return Object.keys(tables[lang]);
 }
