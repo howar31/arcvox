@@ -12,6 +12,5 @@
 <style>
   h2 { font: 600 12px/1 var(--font); color: var(--ink-2); margin: 22px 2px 8px; }
   .untitled { margin-top: 16px; }
-  .untitled:first-child { margin-top: 0; }
   .group { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
 </style>

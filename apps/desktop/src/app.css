@@ -79,6 +79,7 @@ input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="
 }
 
 /* Pages not yet moved to the component set keep their earlier look. */
+.legacy { --muted: var(--ink-2); --border: var(--line-strong); }
 .legacy section { margin: 0 0 20px; }
 .legacy h2 { margin: 0 0 12px; font: 600 21px/1.2 var(--font-round); }
 .legacy h3 { margin: 16px 0 6px; font-size: 12px; font-weight: 600; color: var(--ink-2); }

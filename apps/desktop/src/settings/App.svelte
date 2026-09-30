@@ -123,7 +123,7 @@
   .shell { display: grid; grid-template-columns: 196px minmax(0, 1fr); height: 100vh; }
   .sidebar { background: var(--sidebar); border-right: 1px solid var(--line); padding: 14px 10px; display: flex; flex-direction: column; gap: 2px; min-height: 0; overflow-y: auto; }
   nav { display: flex; flex-direction: column; gap: 2px; }
-  .nav-group { font-size: 11px; font-weight: 600; color: var(--ink-3); padding: 14px 10px 4px; }
+  .nav-group { font-size: 11px; font-weight: 600; color: var(--ink-2); padding: 14px 10px 4px; }
   .nav { display: flex; align-items: center; gap: 9px; height: 30px; padding: 0 10px; border-radius: 7px; border: 0; background: none; color: var(--ink); text-align: left; cursor: default; white-space: nowrap; }
   .nav span { overflow: hidden; text-overflow: ellipsis; }
   .nav :global(.icon) { opacity: .75; }
@@ -131,7 +131,7 @@
   .nav.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   .nav.on :global(.icon) { opacity: 1; }
   .state { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 10px; font-size: 12px; color: var(--ink-2); line-height: 1.35; }
-  .state-link { border: 0; background: none; padding: 0; color: var(--live); text-align: left; cursor: default; }
+  .state-link { border: 0; background: none; padding: 0; color: var(--ink-2); text-align: left; cursor: default; }
   .state-link:hover { text-decoration: underline; }
   .main { overflow: auto; min-width: 0; }
   .page { padding: 26px 32px 80px; max-width: 664px; min-height: 100%; }

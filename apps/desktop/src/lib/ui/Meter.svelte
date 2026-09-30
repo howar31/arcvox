@@ -1,5 +1,5 @@
 <script lang="ts">
-  /** Level bars; each value is clamped to 0..1. */
+  /** Level bars; each value is clamped to 0.08..1 so silent bars stay visible. */
   let { levels }: { levels: number[] } = $props();
 </script>
 
