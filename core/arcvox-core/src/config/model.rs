@@ -250,16 +250,11 @@ impl Config {
                 hotwords: false,
             },
         ));
-        let asr = if d.apple_dictation {
-            "apple-dictation"
-        } else {
-            "local-whisper"
-        };
-        let llm = if d.apple_foundation_models {
-            "apple-fm"
-        } else {
-            "local-llama"
-        };
+        // The local pair is the default everywhere: the platform providers are
+        // created when available but stay optional (single-language dictation
+        // and a slower rewrite model on the platform side).
+        let asr = "local-whisper";
+        let llm = "local-llama";
         let profile = Profile {
             id: ProfileId("default".into()),
             name: "Default".into(),
@@ -493,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn both_native_picks_apple_pair_and_keeps_embedded() {
+    fn both_native_creates_apple_providers_but_defaults_to_the_local_pair() {
         let c = Config::first_run_with(&FirstRunDefaults {
             apple_dictation: true,
             apple_foundation_models: true,
@@ -509,8 +504,8 @@ mod tests {
             ]
         );
         let d = c.profiles.iter().find(|p| p.is_default).unwrap();
-        assert_eq!(d.asr_provider.0, "apple-dictation");
-        assert_eq!(d.llm_provider.as_ref().unwrap().0, "apple-fm");
+        assert_eq!(d.asr_provider.0, "local-whisper");
+        assert_eq!(d.llm_provider.as_ref().unwrap().0, "local-llama");
         let a = c.provider(&ProviderId("apple-dictation".into())).unwrap();
         assert_eq!(a.kind, ProviderKind::Native);
         assert_eq!(a.native_id.as_deref(), Some("apple.dictation"));
@@ -524,14 +519,15 @@ mod tests {
     }
 
     #[test]
-    fn dictation_only_mixes_apple_asr_with_embedded_llm() {
+    fn dictation_only_creates_the_dictation_provider_and_keeps_the_local_pair() {
         let c = Config::first_run_with(&FirstRunDefaults {
             apple_dictation: true,
             apple_foundation_models: false,
         });
         let d = c.profiles.iter().find(|p| p.is_default).unwrap();
-        assert_eq!(d.asr_provider.0, "apple-dictation");
+        assert_eq!(d.asr_provider.0, "local-whisper");
         assert_eq!(d.llm_provider.as_ref().unwrap().0, "local-llama");
+        assert!(c.provider(&ProviderId("apple-dictation".into())).is_some());
         assert!(c.provider(&ProviderId("apple-fm".into())).is_none());
     }
 

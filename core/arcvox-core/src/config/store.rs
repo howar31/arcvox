@@ -385,15 +385,11 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(
-            store.current().profiles[0].asr_provider.0,
-            "apple-dictation"
-        );
+        let has_apple = |c: &Config| c.providers.iter().any(|p| p.id.0 == "apple-dictation");
+        assert!(has_apple(&store.current()));
+        assert_eq!(store.current().profiles[0].asr_provider.0, "local-whisper");
         // An existing file is never rewritten by defaults.
         let again = ConfigStore::open_with_defaults(&dirs, &FirstRunDefaults::default()).unwrap();
-        assert_eq!(
-            again.current().profiles[0].asr_provider.0,
-            "apple-dictation"
-        );
+        assert!(has_apple(&again.current()));
     }
 }
