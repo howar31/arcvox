@@ -5,7 +5,7 @@
   import { guard } from "../../lib/guard.svelte";
   import { t } from "../../lib/i18n";
   import { defaultProfile } from "../../lib/labels";
-  import { blankProfile, moveStep, slugId, withLlm } from "../../lib/profileEdit";
+  import { blankProfile, moveStep, NEW_PROFILE, slugId, withLlm } from "../../lib/profileEdit";
   import { go } from "../../lib/route";
   import { config } from "../../lib/store.svelte";
   import Chip from "../../lib/ui/Chip.svelte";
@@ -20,10 +20,10 @@
   import { toast } from "../../lib/ui/toast.svelte";
   import AddPerApp from "./AddPerApp.svelte";
 
-  /** A profile id, or "new" for a profile that is not saved yet. */
+  /** A profile id, or NEW_PROFILE for a profile that is not saved yet. */
   let { arg }: { arg: string } = $props();
 
-  const isNew = untrack(() => arg === "new");
+  const isNew = untrack(() => arg === NEW_PROFILE);
   const LANGS = ["zh-TW", "en", "ja"];
   const LANG_KEYS: Record<string, string> = { "zh-TW": "profiles.lang.zh_tw", en: "profiles.lang.en", ja: "profiles.lang.ja" };
 
@@ -84,7 +84,13 @@
   });
   $effect(() => { if (draft) ensureAppNames(draft.matcher.app_ids); });
 
-  const known = (id: string | null, list: { id: string }[]) => id === null || list.some((p) => p.id === id);
+  /** Whether the stored engine exists and can do this job; "No rewriting" (null) is always usable. */
+  function engineState(id: string | null, role: "transcribe" | "chat"): "ok" | "missing" | "unusable" {
+    if (id === null) return "ok";
+    const p = providers.find((x) => x.id === id);
+    if (!p) return "missing";
+    return p.capabilities[role] ? "ok" : "unusable";
+  }
   const title = $derived(draft?.name.trim() || (isNew ? t("profiles.new_title") : (source?.name ?? "")));
 
   function revert() {
@@ -177,8 +183,9 @@
   }
 </script>
 
-{#snippet missing(label: string)}
-  <option value={label} disabled>{t("profiles.not_found_option", { id: label })}</option>
+{#snippet missing(id: string, state: "missing" | "unusable")}
+  {#if state === "missing"}<option value={id} disabled>{t("profiles.not_found_option", { id })}</option>
+  {:else}<option value={id} disabled>{t("profiles.unusable_option", { name: providers.find((p) => p.id === id)?.label ?? id })}</option>{/if}
 {/snippet}
 
 {#if !config.value || gone}
@@ -224,10 +231,6 @@
         </div>
       </Row>
       <AddPerApp onadd={addApp} />
-      <Row label={t("profiles.urls")} help={t("profiles.urls_help")}>
-        <input type="text" class="url" bind:value={newUrl} placeholder={t("profiles.url_placeholder")} aria-label={t("profiles.urls")} onkeydown={(e) => { if (e.key === "Enter") addUrl(); }} />
-        <button type="button" class="btn" disabled={!newUrl.trim()} onclick={addUrl}><Icon name="plus" size={14} />{t("common.add")}</button>
-      </Row>
       {#if draft.matcher.url_patterns.length}
         <Row>
           <div class="chips">
@@ -235,21 +238,27 @@
           </div>
         </Row>
       {/if}
+      <Row label={t("profiles.urls")} help={t("profiles.urls_help")}>
+        <input type="text" class="url" bind:value={newUrl} placeholder={t("profiles.url_placeholder")} aria-label={t("profiles.urls")} onkeydown={(e) => { if (e.key === "Enter") addUrl(); }} />
+        <button type="button" class="btn" disabled={!newUrl.trim()} onclick={addUrl}><Icon name="plus" size={14} />{t("common.add")}</button>
+      </Row>
     </Group>
   {/if}
 
   <Group title={t("profiles.engines")}>
+    {@const asrState = engineState(draft.asr_provider, "transcribe")}
+    {@const llmState = engineState(draft.llm_provider, "chat")}
     <Row label={t("profiles.asr")}>
-      <select class="field" class:unknown={!known(draft.asr_provider, asrChoices)} bind:value={draft.asr_provider} aria-label={t("profiles.asr")}>
+      <select class="field" class:unknown={asrState !== "ok"} bind:value={draft.asr_provider} aria-label={t("profiles.asr")}>
         {#each asrChoices as p (p.id)}<option value={p.id}>{p.label}</option>{/each}
-        {#if !known(draft.asr_provider, asrChoices)}{@render missing(draft.asr_provider)}{/if}
+        {#if asrState !== "ok"}{@render missing(draft.asr_provider, asrState)}{/if}
       </select>
     </Row>
     <Row label={t("profiles.llm")}>
-      <select class="field" class:unknown={!known(draft.llm_provider, llmChoices)} value={draft.llm_provider ?? ""} aria-label={t("profiles.llm")} onchange={(e) => setLlm(e.currentTarget.value)}>
+      <select class="field" class:unknown={llmState !== "ok"} value={draft.llm_provider ?? ""} aria-label={t("profiles.llm")} onchange={(e) => setLlm(e.currentTarget.value)}>
         {#each llmChoices as p (p.id)}<option value={p.id}>{p.label}</option>{/each}
         <option value="">{t("home.no_rewrite")}</option>
-        {#if draft.llm_provider !== null && !known(draft.llm_provider, llmChoices)}{@render missing(draft.llm_provider)}{/if}
+        {#if draft.llm_provider !== null && llmState !== "ok"}{@render missing(draft.llm_provider, llmState)}{/if}
       </select>
     </Row>
     <Row label={t("profiles.language_hint")} help={t("profiles.language_help")}>

@@ -3,7 +3,7 @@
   import { errorMessage, profilesAddPreset, profilesPresets, type PresetView, type Profile } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { t } from "../../lib/i18n";
-  import { appsSummary } from "../../lib/profileEdit";
+  import { appsSummary, NEW_PROFILE } from "../../lib/profileEdit";
   import { go } from "../../lib/route";
   import { config } from "../../lib/store.svelte";
   import Group from "../../lib/ui/Group.svelte";
@@ -42,7 +42,7 @@
 
   function addBlank() {
     adding = false;
-    go("profiles", "new");
+    go("profiles", NEW_PROFILE);
   }
 
   async function addPreset(id: string) {
@@ -50,6 +50,8 @@
     const before = new Set((config.value?.profiles ?? []).map((p) => p.id));
     try {
       const next = await profilesAddPreset(id, t(`profiles.preset.${id}`));
+      // Store the result first so the detail page finds the new profile without waiting for the change event.
+      config.value = next;
       // The backend suffixes the id when it is taken, so the new profile is the one that was not there before.
       const created = next.profiles.find((p) => !before.has(p.id));
       adding = false;
@@ -96,13 +98,16 @@
 {/if}
 
 <Modal bind:open={adding} title={t("profiles.add")}>
-  <div class="choices">
+  <div class="choices" class:busy inert={busy} aria-busy={busy}>
     <Row label={t("profiles.blank")} help={t("profiles.blank.desc")} onclick={addBlank} />
     {#each presets as p (p.id)}
-      <Row label={t(`profiles.preset.${p.id}`)} help={t(`profiles.preset.${p.id}.desc`)} onclick={() => { if (!busy) addPreset(p.id); }} />
+      <Row label={t(`profiles.preset.${p.id}`)} help={t(`profiles.preset.${p.id}.desc`)} onclick={() => addPreset(p.id)} />
     {/each}
   </div>
-  {#snippet actions()}<button type="button" class="btn" onclick={() => (adding = false)}>{t("common.cancel")}</button>{/snippet}
+  {#snippet actions()}
+    {#if busy}<span class="adding" role="status">{t("profiles.adding")}</span>{/if}
+    <button type="button" class="btn" disabled={busy} onclick={() => (adding = false)}>{t("common.cancel")}</button>
+  {/snippet}
 </Modal>
 
 <style>
@@ -114,5 +119,7 @@
   .eng { display: flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0; max-width: 50%; }
   .arrow { flex: none; color: var(--ink-3); }
   .unknown { color: var(--warn); }
+  .choices.busy { opacity: .55; }
+  .adding { margin-right: auto; align-self: center; color: var(--ink-2); font-size: 12px; }
   .choices { margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink); }
 </style>

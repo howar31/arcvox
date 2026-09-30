@@ -7,7 +7,7 @@
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { currentLanguage, t } from "../../lib/i18n";
   import { defaultProfile, profileName } from "../../lib/labels";
-  import { appsSummary, engineMeta, withLlm } from "../../lib/profileEdit";
+  import { appsSummary, engineMeta, NEW_PROFILE, withLlm } from "../../lib/profileEdit";
   import { go } from "../../lib/route";
   import { client, config } from "../../lib/store.svelte";
   import Empty from "../../lib/ui/Empty.svelte";
@@ -209,7 +209,7 @@
       </Row>
     {:else}
       <Empty text={t("home.by_app_empty")}>
-        {#snippet action()}<button type="button" class="btn" onclick={() => go("profiles", "new")}>{t("home.add_profile")}</button>{/snippet}
+        {#snippet action()}<button type="button" class="btn" onclick={() => go("profiles", NEW_PROFILE)}>{t("home.add_profile")}</button>{/snippet}
       </Empty>
     {/each}
   </Group>
