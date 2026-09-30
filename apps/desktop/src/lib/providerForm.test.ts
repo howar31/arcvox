@@ -14,9 +14,9 @@ describe("providerForm", () => {
   });
   it("describeProbe names model and native failures", () => {
     const t = (k: string) => k;
-    expect(describeProbe({ ok: false, failure: { kind: "model_missing" } }, t)).toBe("providers.probe_failed: providers.failure.model_missing");
+    expect(describeProbe({ ok: false, failure: { kind: "model_missing" } }, t)).toBe("engines.probe_failed: engines.failure.model_missing");
     expect(describeProbe({ ok: false, failure: { kind: "native_unavailable", reason: "off" } }, t)).toContain("off");
-    expect(describeProbe({ ok: false, failure: { kind: "native_unavailable", reason: "off" } }, t)).toBe("providers.probe_failed: providers.failure.native_unavailable (off)");
-    expect(describeProbe({ ok: true, failure: null }, t)).toBe("providers.probe_ok");
+    expect(describeProbe({ ok: false, failure: { kind: "native_unavailable", reason: "off" } }, t)).toBe("engines.probe_failed: engines.failure.native_unavailable (off)");
+    expect(describeProbe({ ok: true, failure: null }, t)).toBe("engines.probe_ok");
   });
 });

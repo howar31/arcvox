@@ -11,8 +11,7 @@
   import Toasts from "../lib/ui/Toasts.svelte";
   import Home from "./pages/Home.svelte";
   import General from "./pages/General.svelte";
-  import Providers from "./pages/Providers.svelte";
-  import Models from "./pages/Models.svelte";
+  import Engines from "./pages/Engines.svelte";
   import Profiles from "./pages/Profiles.svelte";
   import Prompt from "./pages/Prompt.svelte";
   import Dictionary from "./pages/Dictionary.svelte";
@@ -93,10 +92,10 @@
         {#if route.page === "home"}<Home />
         {:else if route.page === "general"}<General />
         {:else if route.page === "about"}<About />
+        {:else if route.page === "engines"}<Engines arg={route.arg} />
         {:else}
           <div class="legacy">
-            {#if route.page === "engines"}<Providers /><Models />
-            {:else if route.page === "profiles"}<Profiles />
+            {#if route.page === "profiles"}<Profiles />
             {:else if route.page === "prompt"}<Prompt />
             {:else if route.page === "dictionary"}<Dictionary />
             {:else if route.page === "history"}<History />

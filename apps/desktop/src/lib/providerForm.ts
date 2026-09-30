@@ -24,10 +24,10 @@ export function blankFor(kind: ProviderKind): ProviderConfig {
 }
 
 export function describeProbe(r: ProbeResult, t: (k: string) => string): string {
-  if (r.ok) return t("providers.probe_ok");
+  if (r.ok) return t("engines.probe_ok");
   const f = r.failure;
   const extra = f?.reason ?? f?.message ?? "";
-  return `${t("providers.probe_failed")}: ${t("providers.failure." + (f?.kind ?? "other"))}${extra ? " (" + extra + ")" : ""}`;
+  return `${t("engines.probe_failed")}: ${t("engines.failure." + (f?.kind ?? "other"))}${extra ? " (" + extra + ")" : ""}`;
 }
 
 /** File name of a model path, for table display. */
