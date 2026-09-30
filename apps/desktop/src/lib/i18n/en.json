@@ -374,5 +374,9 @@
   "history.delete": "Delete",
   "history.clear_body": "Every entry and its recording is deleted from this Mac. This cannot be undone.",
   "history.cleared": "History cleared",
-  "history.empty": "Nothing here yet. Hold fn and speak; each dictation is listed here."
+  "history.empty": "Nothing here yet. Hold fn and speak; each dictation is listed here.",
+  "dictionary.remove_term": "Remove {term}",
+  "dictionary.remove_blank": "Remove empty entry",
+  "history.load_failed": "History could not be loaded.",
+  "history.retry": "Retry"
 }
