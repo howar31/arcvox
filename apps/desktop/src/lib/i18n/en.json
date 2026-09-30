@@ -262,5 +262,6 @@
   "general.llm_idle_unload_help": "0 means never",
   "about.version": "Version {version}",
   "about.locations": "Data locations",
-  "about.licenses": "Licenses"
+  "about.licenses": "Licenses",
+  "general.launch_at_login": "Launch at login"
 }

@@ -262,5 +262,6 @@
   "general.llm_idle_unload_help": "0 表示永不卸載",
   "about.version": "版本 {version}",
   "about.locations": "資料位置",
-  "about.licenses": "授權"
+  "about.licenses": "授權",
+  "general.launch_at_login": "登入時啟動"
 }

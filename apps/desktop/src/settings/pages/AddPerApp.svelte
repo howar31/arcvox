@@ -28,6 +28,6 @@
 </Row>
 
 <style>
-  .apps { width: 170px; flex: none; }
+  .apps { width: 150px; flex: none; }
   .bundle { flex: 1; min-width: 0; }
 </style>

@@ -56,7 +56,7 @@
   }
 
   async function checkAccess() {
-    accessibility = (await permissions()).accessibility;
+    try { accessibility = (await permissions()).accessibility; } catch { accessibility = null; }
   }
 
   onMount(() => {
@@ -92,13 +92,16 @@
     saving = true;
     try {
       const languageChanged = clientDirty && draft!.ui_language !== JSON.parse(baseClient).ui_language;
-      if (clientDirty) {
-        await client.save($state.snapshot(draft!));
-        baseClient = JSON.stringify(draft);
-      }
+      // Core settings first: a language change reloads the window, so the
+      // client save (which may carry it) goes last and only after the core
+      // save succeeded.
       if (generalDirty) {
         config.value = await updateGeneral($state.snapshot(general!));
         baseGeneral = JSON.stringify(general);
+      }
+      if (clientDirty) {
+        await client.save($state.snapshot(draft!));
+        baseClient = JSON.stringify(draft);
       }
       // The shell reads the language once at start, so a change needs a
       // reload for every page to render in it.
@@ -117,7 +120,8 @@
     } catch (e) {
       toast.error(errorMessage(e));
     }
-    autostart = await isEnabled().catch(() => !on);
+    // Show the real state whether or not the change went through.
+    try { autostart = await isEnabled(); } catch { autostart = !on; }
   }
 
   async function askAccessibility() {
@@ -201,8 +205,8 @@
         <option value="en">English</option>
       </select>
     </Row>
-    <Row label={t("tray.launch_at_login")} help={t("general.applies_now")}>
-      <Switch checked={autostart} label={t("tray.launch_at_login")} onchange={setAutostart} />
+    <Row label={t("general.launch_at_login")} help={t("general.applies_now")}>
+      <Switch bind:checked={autostart} label={t("general.launch_at_login")} onchange={setAutostart} />
     </Row>
   </Group>
 {/if}
