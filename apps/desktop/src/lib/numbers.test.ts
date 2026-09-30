@@ -7,3 +7,9 @@ it("flags empty and out-of-range numbers", () => {
     { key: "d", value: NaN }, { key: "e", value: 9, max: 8 },
   ])).toEqual(["b", "c", "d", "e"]);
 });
+
+it("flags fractions only for integer fields", () => {
+  expect(invalidFields([
+    { key: "a", value: 2.5, integer: true }, { key: "b", value: 2.5 }, { key: "c", value: 3, integer: true },
+  ])).toEqual(["a"]);
+});
