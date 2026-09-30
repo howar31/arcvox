@@ -1,6 +1,7 @@
 //! Arcvox dictation core.
 
 pub mod audio;
+pub mod bench;
 pub mod config;
 pub mod dictionary;
 pub mod engine;
