@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Profile, ProviderConfig, StepSpec } from "./api";
-import { appsSummary, engineMeta, withLlm } from "./profileEdit";
+import { appsSummary, blankProfile, engineMeta, moveStep, slugId, withLlm } from "./profileEdit";
 
 const profile = (steps: StepSpec[], llm: string | null = "llm-a"): Profile => ({
   id: "p", name: "P", is_default: true, matcher: { app_ids: [], url_patterns: [] }, asr_provider: "asr-a", llm_provider: llm,
@@ -71,5 +71,54 @@ describe("engineMeta", () => {
   it("names the host of an http engine", () => {
     const http = { ...base, kind: "http" as const, model_id: null, base_url: "http://localhost:11434/v1" };
     expect(engineMeta(http, new Set())).toEqual({ kind: "external", ready: true, detail: "localhost:11434" });
+  });
+});
+
+describe("blankProfile", () => {
+  it("copies the engines, language and steps of the base and nothing else", () => {
+    const base: Profile = { ...profile(full, "llm-a"), id: "default", name: "Default", language_hint: "ja", prompt_addition: "x",
+      few_shot: [{ raw: "a", refined: "b" }], matcher: { app_ids: ["com.example.a"], url_patterns: ["example.com"] } };
+    const blank = blankProfile(base);
+    expect(blank).toEqual({
+      id: "", name: "", is_default: false, matcher: { app_ids: [], url_patterns: [] }, asr_provider: "asr-a", llm_provider: "llm-a",
+      language_hint: "ja", prompt_addition: "", few_shot: [], steps: full,
+    });
+    blank.steps.push({ step: "rules" });
+    expect(base.steps).toEqual(full);
+  });
+});
+
+describe("slugId", () => {
+  it("makes an ASCII slug from the name", () => {
+    expect(slugId("Formal Mail!", [])).toBe("formal-mail");
+    expect(slugId("  Code comments (EN) ", [])).toBe("code-comments-en");
+  });
+  it("falls back to a numbered id for a name without ASCII letters or digits", () => {
+    expect(slugId("郵件正式", [])).toBe("profile-1");
+    expect(slugId("郵件正式", ["profile-1", "profile-2"])).toBe("profile-3");
+  });
+  it("adds a suffix when the id is taken", () => {
+    expect(slugId("Mail", ["mail"])).toBe("mail-2");
+    expect(slugId("Mail", ["mail", "mail-2"])).toBe("mail-3");
+  });
+});
+
+describe("moveStep", () => {
+  it("swaps a step with its neighbour", () => {
+    expect(moveStep(full, 2, 1).map((s) => s.step)).toEqual(["asr", "opencc", "opencc", "llm", "rules"]);
+    expect(moveStep(full, 2, -1).map((s) => s.step)).toEqual(["asr", "llm", "opencc", "opencc", "rules"]);
+  });
+  it("ignores moves past either end", () => {
+    expect(moveStep(full, 4, 1)).toEqual(full);
+    expect(moveStep(full, 9, -1)).toEqual(full);
+  });
+  it("keeps speech recognition first", () => {
+    expect(moveStep(full, 1, -1)).toEqual(full);
+    expect(moveStep(full, 0, 1)).toEqual(full);
+  });
+  it("does not change its input", () => {
+    const steps = full.map((s) => ({ ...s }));
+    moveStep(steps, 2, 1);
+    expect(steps).toEqual(full);
   });
 });

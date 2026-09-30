@@ -46,3 +46,39 @@ function hostOf(url: string | null): string | null {
   if (!url) return null;
   try { return new URL(url).host || url; } catch { return url; }
 }
+
+/** A new profile that starts from the engines, language and steps of `base`. */
+export function blankProfile(base: Profile): Profile {
+  return {
+    id: "", name: "", is_default: false, matcher: { app_ids: [], url_patterns: [] },
+    asr_provider: base.asr_provider, llm_provider: base.llm_provider, language_hint: base.language_hint,
+    prompt_addition: "", few_shot: [], steps: base.steps.map((s) => ({ ...s })),
+  };
+}
+
+/**
+ * An id for a new profile: the lowercase ASCII words of the name joined by dashes, with a
+ * numeric suffix when taken. A name without ASCII letters or digits becomes `profile-<n>`.
+ */
+export function slugId(name: string, taken: string[]): string {
+  const used = new Set(taken);
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  if (slug && !used.has(slug)) return slug;
+  const stem = slug || "profile";
+  let n = slug ? 2 : 1;
+  while (used.has(`${stem}-${n}`)) n++;
+  return `${stem}-${n}`;
+}
+
+/**
+ * Returns a copy of the steps with the step at `index` moved by `delta` places. Moves past either
+ * end, and moves that would take speech recognition out of the first place, return the steps unchanged.
+ */
+export function moveStep(steps: StepSpec[], index: number, delta: number): StepSpec[] {
+  const next = steps.map((s) => ({ ...s }));
+  const to = index + delta;
+  if (index < 0 || index >= next.length || to < 0 || to >= next.length) return next;
+  if (next[index].step === "asr" || next[to].step === "asr") return next;
+  [next[index], next[to]] = [next[to], next[index]];
+  return next;
+}
