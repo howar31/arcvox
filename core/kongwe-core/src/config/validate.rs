@@ -75,8 +75,13 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
     }
 
     for e in &config.dictionary {
-        if e.term.contains('\n') && !e.aliases.iter().any(|a| !a.trim().is_empty()) {
-            let first = e.term.lines().next().unwrap_or("").to_string();
+        if crate::dictionary::is_snippet(e) && !e.aliases.iter().any(|a| !a.trim().is_empty()) {
+            let first = e
+                .term
+                .lines()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("")
+                .to_string();
             return Err(ConfigError::SnippetWithoutAlias(first));
         }
     }
@@ -288,6 +293,17 @@ mod tests {
             Err(ConfigError::SnippetWithoutAlias("a".into()))
         );
         c.dictionary[0].aliases = vec!["k".into()];
+        assert!(validate(&c).is_ok());
+        c.dictionary[0] = DictionaryEntry {
+            term: "\nA\nB".into(),
+            aliases: Vec::new(),
+            asr_hint: true,
+        };
+        assert_eq!(
+            validate(&c),
+            Err(ConfigError::SnippetWithoutAlias("A".into()))
+        );
+        c.dictionary[0].term = "Kongwe\n".into();
         assert!(validate(&c).is_ok());
     }
 
