@@ -6,7 +6,7 @@ use crate::config::DictionaryEntry;
 /// A term spanning several lines is a snippet: its aliases are the spoken
 /// keywords and the whole term is what gets inserted.
 pub fn is_snippet(entry: &DictionaryEntry) -> bool {
-    entry.term.contains('\n')
+    entry.term.trim().contains('\n')
 }
 
 /// Hinted items, comma-joined, cut at whole items to fit `budget_bytes`.
@@ -144,7 +144,7 @@ mod tests {
     fn snippet_hint_uses_aliases_and_llm_terms_skip_it() {
         let d = vec![
             entry("Arcvox", &[], true),
-            entry("Best regards,\nHowar", &["簽名檔", "signature"], true),
+            entry("Best regards,\nThe team", &["簽名檔", "signature"], true),
             entry("line one\nline two", &["片段"], false),
         ];
         assert!(is_snippet(&d[1]));
@@ -154,7 +154,17 @@ mod tests {
             Some("Arcvox, 簽名檔, signature")
         );
         assert_eq!(llm_terms(&d), vec!["Arcvox"]);
-        assert_eq!(apply_aliases(&d, "附上簽名檔"), "附上Best regards,\nHowar");
+        assert_eq!(
+            apply_aliases(&d, "附上簽名檔"),
+            "附上Best regards,\nThe team"
+        );
+    }
+
+    #[test]
+    fn surrounding_newlines_do_not_make_a_snippet() {
+        assert!(!is_snippet(&entry("Arcvox\n", &[], true)));
+        assert!(!is_snippet(&entry("\n Arcvox \n", &[], true)));
+        assert!(is_snippet(&entry("\nA\nB", &["k"], true)));
     }
 
     #[test]

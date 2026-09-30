@@ -3,6 +3,7 @@
   import { errorMessage, setDictionary, type DictionaryEntry } from "../../lib/api";
   import { t } from "../../lib/i18n";
   import { config } from "../../lib/store.svelte";
+  import { trimEntries } from "../../lib/dictionary";
 
   let entries = $state<DictionaryEntry[]>([]);
   let status = $state("");
@@ -22,7 +23,7 @@
   }
   async function save() {
     try {
-      const result = await setDictionary(entries);
+      const result = await setDictionary(trimEntries($state.snapshot(entries)));
       entries = structuredClone($state.snapshot(result.dictionary));
       status = t("common.saved");
     } catch (e) { status = errorMessage(e); }
