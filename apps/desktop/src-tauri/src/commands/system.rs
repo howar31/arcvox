@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::Serialize;
 use tauri::{AppHandle, State, Wry};
 
@@ -101,6 +103,43 @@ pub fn system_running_apps() -> Vec<RunningApp> {
     }
 }
 
+/// Display name of the installed application with this bundle id, or `None`
+/// when no such application is installed (or off macOS).
+pub fn app_name(bundle_id: &str) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_foundation::{NSFileManager, NSString};
+        if bundle_id.is_empty() {
+            return None;
+        }
+        let ws = objc2_app_kit::NSWorkspace::sharedWorkspace();
+        let url = ws.URLForApplicationWithBundleIdentifier(&NSString::from_str(bundle_id))?;
+        let path = url.path()?;
+        let display = NSFileManager::defaultManager()
+            .displayNameAtPath(&path)
+            .to_string();
+        // The display name carries the extension when Finder shows all extensions.
+        let name = display.strip_suffix(".app").unwrap_or(&display).trim();
+        (!name.is_empty()).then(|| name.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = bundle_id;
+        None
+    }
+}
+
+#[tauri::command]
+pub fn system_app_names(bundle_ids: Vec<String>) -> HashMap<String, Option<String>> {
+    bundle_ids
+        .into_iter()
+        .map(|id| {
+            let name = app_name(&id);
+            (id, name)
+        })
+        .collect()
+}
+
 #[tauri::command]
 pub fn system_info(app: AppHandle<Wry>, state: State<'_, AppState>) -> SystemInfo {
     SystemInfo {
@@ -118,4 +157,26 @@ pub fn system_reveal(path: String) -> CmdResult<()> {
         .arg(path)
         .spawn()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn app_name_resolves_an_installed_app() {
+        assert!(app_name("com.apple.finder").is_some_and(|n| !n.is_empty()));
+    }
+
+    #[test]
+    fn app_name_is_none_for_an_unknown_bundle_id() {
+        assert_eq!(app_name("invalid.bundle.id.zz"), None);
+    }
+
+    #[test]
+    fn app_names_keys_every_requested_id() {
+        let names = system_app_names(vec!["invalid.bundle.id.zz".into()]);
+        assert_eq!(names.get("invalid.bundle.id.zz"), Some(&None));
+    }
 }

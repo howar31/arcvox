@@ -71,6 +71,7 @@ export const permissions = () => invoke<Permissions>("system_permissions");
 export const requestAccessibility = () => invoke<boolean>("system_request_accessibility");
 export const openPrivacyPane = (pane: "accessibility" | "microphone") => invoke<void>("system_open_privacy_pane", { pane });
 export const runningApps = () => invoke<RunningApp[]>("system_running_apps");
+export const appNames = (bundleIds: string[]) => invoke<Record<string, string | null>>("system_app_names", { bundleIds });
 export const systemInfo = () => invoke<SystemInfo>("system_info");
 export const reveal = (path: string) => invoke<void>("system_reveal", { path });
 export const uiLanguage = () => invoke<string>("ui_language");
