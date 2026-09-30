@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use kongwe_core::models::{
     InstalledModel, ManifestSource, ModelEntry, ModelError, ModelRole, ModelStore,
 };
+use kongwe_core::Engine;
 use serde::Serialize;
 use tauri::State;
 
@@ -72,9 +73,20 @@ pub fn models_cancel(id: String, state: State<'_, AppState>) -> CmdResult<()> {
     Ok(())
 }
 
+/// Deletes the model file, then drops and unloads every cached provider
+/// that loaded it so its memory is freed now.
+pub async fn delete(store: &ModelStore, engine: Option<&Engine>, id: &str) -> CmdResult<()> {
+    store.delete(id)?;
+    if let Some(e) = engine {
+        e.evict_model(id).await;
+    }
+    Ok(())
+}
+
 #[tauri::command]
-pub fn models_delete(id: String, state: State<'_, AppState>) -> CmdResult<()> {
-    Ok(state.models.delete(&id)?)
+pub async fn models_delete(id: String, state: State<'_, AppState>) -> CmdResult<()> {
+    let engine = state.engine.lock().unwrap().clone();
+    delete(&state.models, engine.as_ref(), &id).await
 }
 
 #[tauri::command]
@@ -164,6 +176,117 @@ mod tests {
         assert_eq!(ids, ["a", "b"]);
         // A second run finds both installed and downloads nothing.
         download_recommended(&store).await.unwrap();
+    }
+
+    #[derive(Default)]
+    struct CountingLlm {
+        unloads: std::sync::atomic::AtomicUsize,
+    }
+    #[async_trait::async_trait]
+    impl kongwe_core::providers::LlmProvider for CountingLlm {
+        async fn complete(
+            &self,
+            _: Vec<kongwe_core::types::ChatMessage>,
+            _: &kongwe_core::providers::LlmOptions,
+        ) -> Result<String, kongwe_core::providers::ProviderError> {
+            Ok("ok".into())
+        }
+        async fn unload(&self) {
+            self.unloads
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    struct CountingFactory(std::sync::Arc<CountingLlm>);
+    #[async_trait::async_trait]
+    impl kongwe_core::ProviderFactory for CountingFactory {
+        fn kind(&self) -> kongwe_core::config::ProviderKind {
+            kongwe_core::config::ProviderKind::Embedded
+        }
+        fn asr(
+            &self,
+            _: &kongwe_core::config::ProviderConfig,
+            _: &kongwe_core::config::General,
+        ) -> Result<
+            std::sync::Arc<dyn kongwe_core::providers::AsrProvider>,
+            kongwe_core::providers::ProviderError,
+        > {
+            Err(kongwe_core::providers::ProviderError::new(
+                kongwe_core::types::ErrorCode::Internal,
+                "no speech model in this test",
+            ))
+        }
+        fn llm(
+            &self,
+            _: &kongwe_core::config::ProviderConfig,
+            _: &kongwe_core::config::General,
+        ) -> Result<
+            std::sync::Arc<dyn kongwe_core::providers::LlmProvider>,
+            kongwe_core::providers::ProviderError,
+        > {
+            Ok(self.0.clone())
+        }
+        async fn probe(
+            &self,
+            _: &kongwe_core::config::ProviderConfig,
+        ) -> kongwe_core::providers::probe::ProbeResult {
+            kongwe_core::providers::probe::ProbeResult {
+                ok: true,
+                failure: None,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_evicts_the_loaded_provider() {
+        use std::sync::atomic::Ordering;
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = DataDir::custom(tmp.path().join("data"));
+        let llm = std::sync::Arc::new(CountingLlm::default());
+        let engine = kongwe_core::Engine::open_with(
+            dirs.clone(),
+            kongwe_core::EngineOptions {
+                secrets: std::sync::Arc::new(kongwe_core::MemorySecretStore::default()),
+                factories: vec![std::sync::Arc::new(CountingFactory(llm.clone()))],
+                first_run: kongwe_core::FirstRunDefaults::default(),
+            },
+        )
+        .await
+        .unwrap();
+        let store = ModelStore::new(
+            &dirs,
+            reqwest::Client::new(),
+            crate::providers::BUNDLED_MANIFEST,
+            None,
+        );
+        let source = tmp.path().join("x.gguf");
+        std::fs::write(&source, b"GGUF\x03\x00\x00\x00weights").unwrap();
+        let installed = store.import(&source).unwrap();
+        assert_eq!(installed.id, "custom/x.gguf");
+        let file = dirs.models_dir().join("custom").join("x.gguf");
+        assert!(file.is_file());
+
+        let llm_id = engine.config().current().profiles[0]
+            .llm_provider
+            .clone()
+            .unwrap();
+        engine
+            .config()
+            .update(|c| {
+                let p = c.providers.iter_mut().find(|p| p.id == llm_id).unwrap();
+                p.model_path = Some(file.clone());
+                p.model_id = None;
+            })
+            .unwrap();
+        let run = engine.bench_llm(&llm_id, "text", false).await;
+        assert!(run.error.is_none(), "{:?}", run.error);
+        assert_eq!(llm.unloads.load(Ordering::SeqCst), 0);
+
+        delete(&store, Some(&engine), "custom/x.gguf")
+            .await
+            .unwrap();
+        assert_eq!(llm.unloads.load(Ordering::SeqCst), 1);
+        assert!(!file.exists());
     }
 
     #[test]

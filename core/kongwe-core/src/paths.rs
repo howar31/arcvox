@@ -14,7 +14,7 @@ pub struct DataDir {
     pub config_dir: PathBuf,
     /// `history.sqlite`.
     pub data_dir: PathBuf,
-    /// `recordings/`, `models/`.
+    /// `recordings/`, `models/`, `bench/`.
     pub cache_dir: PathBuf,
 }
 
@@ -68,6 +68,7 @@ impl DataDir {
         std::fs::create_dir_all(&self.data_dir)?;
         std::fs::create_dir_all(self.recordings_dir())?;
         std::fs::create_dir_all(self.models_dir())?;
+        std::fs::create_dir_all(self.cache_dir.join("bench"))?;
         Ok(())
     }
 
@@ -85,6 +86,10 @@ impl DataDir {
     }
     pub fn models_dir(&self) -> PathBuf {
         self.cache_dir.join("models")
+    }
+    /// The clip the speed test replays, recorded or copied from history.
+    pub fn bench_clip_path(&self) -> PathBuf {
+        self.cache_dir.join("bench").join("clip.wav")
     }
     /// Last successfully fetched remote model manifest.
     pub fn manifest_cache_path(&self) -> PathBuf {
@@ -119,6 +124,16 @@ mod tests {
         assert!(d.data_dir.is_dir());
         assert!(d.recordings_dir().is_dir());
         assert!(d.models_dir().is_dir());
+        assert!(d.bench_clip_path().parent().unwrap().is_dir());
+    }
+
+    #[test]
+    fn bench_clip_lives_in_the_cache() {
+        let d = DataDir::custom("/tmp/kw");
+        assert_eq!(
+            d.bench_clip_path(),
+            PathBuf::from("/tmp/kw/cache/bench/clip.wav")
+        );
     }
 
     #[test]

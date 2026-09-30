@@ -9,6 +9,7 @@ use tauri::{Manager, Wry};
 
 use crate::audio::capture::CpalSource;
 use crate::audio::AudioSource;
+use crate::commands::bench::BenchState;
 use crate::dictation::ui::{Ui, UiState};
 use crate::dictation::{self, ControllerHandle, Deps};
 use crate::i18n::{self, Language};
@@ -29,6 +30,7 @@ pub struct AppState {
     pub dirs: DataDir,
     pub language: Mutex<Language>,
     pub engine_error: Mutex<Option<String>>,
+    pub bench: BenchState,
 }
 
 pub fn run() {
@@ -66,6 +68,8 @@ pub fn run() {
             crate::commands::profiles::profiles_upsert,
             crate::commands::profiles::profiles_delete,
             crate::commands::profiles::profiles_set_default,
+            crate::commands::profiles::profiles_presets,
+            crate::commands::profiles::profiles_add_preset,
             crate::commands::dictionary::dictionary_set,
             crate::commands::prompt::prompt_get,
             crate::commands::prompt::prompt_set,
@@ -89,6 +93,13 @@ pub fn run() {
             crate::commands::models::models_dir,
             crate::commands::native::native_status,
             crate::commands::native::native_install_language,
+            crate::commands::bench::bench_clip_status,
+            crate::commands::bench::bench_record_start,
+            crate::commands::bench::bench_record_stop,
+            crate::commands::bench::bench_clip_from_history,
+            crate::commands::bench::bench_history_candidates,
+            crate::commands::bench::bench_start,
+            crate::commands::bench::bench_cancel,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -202,6 +213,7 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         dirs,
         language: Mutex::new(language),
         engine_error: Mutex::new(engine_error.clone()),
+        bench: BenchState::default(),
     });
 
     {
