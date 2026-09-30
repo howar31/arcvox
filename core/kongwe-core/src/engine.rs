@@ -256,6 +256,16 @@ impl Engine {
         Ok(())
     }
 
+    pub(crate) fn registry(&self) -> &ProviderRegistry {
+        &self.inner.registry
+    }
+
+    /// Counts as activity for the idle LLM unload and rearms its timer.
+    pub(crate) fn touch_idle(&self) {
+        self.inner.idle_generation.fetch_add(1, Ordering::SeqCst);
+        self.inner.schedule_idle_unload();
+    }
+
     /// Drops every cached provider that loads the model `id` and unloads it,
     /// so a deleted file frees its memory now and the next session reports
     /// the missing model instead of using the copy still in memory.
@@ -525,7 +535,7 @@ async fn run_session(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::secrets::MemorySecretStore;
     use crate::types::StepName;
@@ -588,7 +598,7 @@ mod tests {
         assert!(r.ok);
     }
 
-    async fn idle_rig() -> (
+    pub(crate) async fn idle_rig() -> (
         Arc<crate::steps::llm::fakes::FakeLlm>,
         tempfile::TempDir,
         Engine,
@@ -767,7 +777,7 @@ mod tests {
         out
     }
 
-    fn one_second() -> Vec<f32> {
+    pub(crate) fn one_second() -> Vec<f32> {
         vec![0.05; SAMPLE_RATE as usize]
     }
 
