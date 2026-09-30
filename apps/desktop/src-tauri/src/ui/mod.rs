@@ -31,6 +31,12 @@ struct LevelPayload {
 }
 
 #[derive(Serialize, Clone)]
+struct TranscriptPayload {
+    text: String,
+    language: &'static str,
+}
+
+#[derive(Serialize, Clone)]
 struct MessagePayload {
     kind: &'static str,
     key: &'static str,
@@ -225,6 +231,18 @@ impl Ui for TauriUi {
         let _ = self
             .app
             .emit_to(widget::WINDOW, "widget-level", LevelPayload { rms });
+    }
+
+    fn transcript(&self, text: String) {
+        let language = self.language();
+        let _ = self.app.emit_to(
+            widget::WINDOW,
+            "widget-transcript",
+            TranscriptPayload {
+                text,
+                language: language.tag(),
+            },
+        );
     }
 
     fn message(&self, message: UiMessage) {

@@ -64,6 +64,8 @@ pub trait Ui: Send + Sync {
     /// RMS of the latest audio block, 0.0 to 1.0, while recording.
     fn level(&self, rms: f32);
     fn message(&self, message: UiMessage);
+    /// The final ASR text, sent while the rewrite step is still running.
+    fn transcript(&self, text: String);
 }
 
 #[cfg(test)]
@@ -81,6 +83,7 @@ pub mod fake {
         /// and `messages` each lose ordering relative to the other; tests
         /// that need to prove one happened before the other read this.
         pub log: Mutex<Vec<String>>,
+        pub transcripts: Mutex<Vec<String>>,
     }
 
     impl Ui for FakeUi {
@@ -98,6 +101,10 @@ pub mod fake {
                 .unwrap()
                 .push(format!("message:{}", message.msg.key()));
             self.messages.lock().unwrap().push(message);
+        }
+        fn transcript(&self, text: String) {
+            self.log.lock().unwrap().push(format!("transcript:{text}"));
+            self.transcripts.lock().unwrap().push(text);
         }
     }
 }
