@@ -1,8 +1,10 @@
 <script lang="ts">
   import { t } from "../i18n";
-  let { dirty, saving = false, onsave, onrevert, message }: {
+  let { dirty, saving = false, canSave = true, onsave, onrevert, message }: {
     dirty: boolean;
     saving?: boolean;
+    /** False keeps Save disabled (Revert stays available). */
+    canSave?: boolean;
     onsave: () => void;
     onrevert: () => void;
     /** Replaces the default "unsaved changes" line, e.g. with a validation error. */
@@ -14,7 +16,7 @@
   <div class="savebar" role="region" aria-label={t("common.unsaved")}>
     <span class="message">{message ?? t("common.unsaved")}</span>
     <button type="button" class="btn" disabled={saving} onclick={onrevert}>{t("common.revert")}</button>
-    <button type="button" class="btn primary" disabled={saving} onclick={onsave}>{t("common.save")}</button>
+    <button type="button" class="btn primary" disabled={saving || !canSave} onclick={onsave}>{t("common.save")}</button>
   </div>
 {/if}
 

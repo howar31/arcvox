@@ -33,3 +33,13 @@ export function routeHash(page: Page, arg?: string | null): string {
 export function go(page: Page, arg?: string | null): void {
   location.hash = routeHash(page, arg);
 }
+
+export type Route = ReturnType<typeof parseRoute>;
+
+/**
+ * Whether a hash change that did not go through the guard (for example one from the tray)
+ * has to wait for the user: only when the page has unsaved changes and the route really changes.
+ */
+export function shouldIntercept(dirty: boolean, current: Route, next: Route): boolean {
+  return dirty && (current.page !== next.page || current.arg !== next.arg);
+}

@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
   import { errorMessage, listMicrophones, openPrivacyPane, permissions, requestAccessibility, updateGeneral, type ClientSettings, type General, type InsertMethod } from "../../lib/api";
+  import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { t } from "../../lib/i18n";
   import { client, config } from "../../lib/store.svelte";
   import { invalidFields } from "../../lib/numbers";
@@ -27,10 +28,16 @@
   let baseGeneral = $state("");
   let saving = $state(false);
   let problem = $state<string | undefined>(undefined);
+  // A bundle id chosen or typed but not added yet: counts as a change, and Save adds it first.
+  let newApp = $state("");
 
   const clientDirty = $derived(draft !== null && JSON.stringify(draft) !== baseClient);
   const generalDirty = $derived(general !== null && JSON.stringify(general) !== baseGeneral);
-  const dirty = $derived(clientDirty || generalDirty);
+  const dirty = $derived(clientDirty || generalDirty || newApp.trim() !== "");
+  // The stored device is not connected now: still shown, as the selected option.
+  const micAbsent = $derived(!!draft && draft.microphone !== "builtin" && draft.microphone !== "default" && !mics.includes(draft.microphone));
+
+  $effect(() => { if (draft) ensureAppNames(Object.keys(draft.insertion.per_app)); });
 
   $effect(() => {
     guard.set(dirty);
@@ -43,6 +50,7 @@
   });
 
   function reset() {
+    newApp = "";
     const c = structuredClone($state.snapshot(client.value!));
     draft = c;
     baseClient = JSON.stringify(c);
@@ -89,6 +97,7 @@
   async function save() {
     const bad = invalid();
     if (bad.length) { problem = t("common.invalid_number", { field: t(bad[0]) }); return; }
+    if (newApp.trim()) { addApp(newApp.trim()); newApp = ""; }
     saving = true;
     try {
       const languageChanged = clientDirty && draft!.ui_language !== JSON.parse(baseClient).ui_language;
@@ -125,7 +134,15 @@
   }
 
   async function askAccessibility() {
-    accessibility = await requestAccessibility();
+    try { accessibility = await requestAccessibility(); } catch (e) { toast.error(errorMessage(e)); }
+  }
+
+  async function openPane(pane: "accessibility" | "microphone") {
+    try { await openPrivacyPane(pane); } catch (e) { toast.error(errorMessage(e)); }
+  }
+
+  function addApp(id: string) {
+    if (draft && !(id in draft.insertion.per_app)) draft.insertion.per_app[id] = "paste";
   }
 
   function setMethod(bundle: string, method: string) {
@@ -140,14 +157,14 @@
     {#snippet leading()}<Ring tone={accessibility === null ? "off" : accessibility ? "ok" : "live"} />{/snippet}
     {#if accessibility === false}
       <button type="button" class="btn" onclick={askAccessibility}>{t("general.request")}</button>
-      <button type="button" class="btn quiet" onclick={() => openPrivacyPane("accessibility")}>{t("general.open_system_settings")}</button>
+      <button type="button" class="btn quiet" onclick={() => openPane("accessibility")}>{t("general.open_system_settings")}</button>
     {:else if accessibility}
       <span class="value">{t("common.granted")}</span>
     {/if}
   </Row>
   <Row label={t("general.microphone_permission")}>
     {#snippet leading()}<span class="ring-space"></span>{/snippet}
-    <button type="button" class="btn quiet" onclick={() => openPrivacyPane("microphone")}>{t("general.open_system_settings")}</button>
+    <button type="button" class="btn quiet" onclick={() => openPane("microphone")}>{t("general.open_system_settings")}</button>
   </Row>
 </Group>
 
@@ -170,6 +187,7 @@
         <option value="builtin">{t("general.mic_builtin")}</option>
         <option value="default">{t("general.mic_default")}</option>
         {#each mics as m (m)}<option value={m}>{m}</option>{/each}
+        {#if micAbsent}<option value={draft.microphone} disabled>{draft.microphone}</option>{/if}
       </select>
     </Row>
   </Group>
@@ -185,21 +203,21 @@
   <Group title={t("general.insertion")} help={t("general.insertion_note")}>
     {#each Object.entries(draft.insertion.per_app) as [bundle, method] (bundle)}
       <Row>
-        <code class="bundle" title={bundle}>{bundle}</code>
+        <span class="bundle" title={bundle}>{appName(bundle)}</span>
         <select class="method" value={method} onchange={(e) => setMethod(bundle, e.currentTarget.value)} aria-label={t("general.method")}>
           <option value="paste">{t("general.method_paste")}</option>
           <option value="type">{t("general.method_type")}</option>
           <option value="ax">{t("general.method_ax")}</option>
         </select>
-        <button type="button" class="btn quiet danger icon" onclick={() => { delete draft!.insertion.per_app[bundle]; }} aria-label={t("common.remove")} title={t("common.remove")}><Icon name="trash" size={14} /></button>
+        <button type="button" class="btn quiet icon-btn" onclick={() => { delete draft!.insertion.per_app[bundle]; }} aria-label={t("common.remove")} title={t("common.remove")}><Icon name="trash" /></button>
       </Row>
     {/each}
-    <AddPerApp onadd={(id) => { draft!.insertion.per_app[id] = "paste"; }} />
+    <AddPerApp onadd={addApp} bind:value={newApp} />
   </Group>
 
   <Group title={t("general.app_group")}>
     <Row label={t("general.language")}>
-      <select bind:value={draft.ui_language} aria-label={t("general.language")}>
+      <select class="wide" bind:value={draft.ui_language} aria-label={t("general.language")}>
         <option value="system">{t("general.lang_system")}</option>
         <option value="zh-tw">繁體中文</option>
         <option value="en">English</option>
@@ -242,8 +260,10 @@
 <style>
   .value { color: var(--ink-2); }
   .ring-space { width: 14px; flex: none; }
-  .wide { width: 240px; }
+  /* The selects of the value column share one width. */
+  .wide { width: 200px; }
   .method { width: 150px; }
   .bundle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .icon { width: 26px; padding: 0; }
+  .icon-btn { width: 26px; padding: 0; margin-right: -6px; color: var(--ink-2); }
+  .icon-btn:hover { color: var(--ink); }
 </style>
