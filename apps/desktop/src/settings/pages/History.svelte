@@ -2,6 +2,8 @@
   import { onMount } from "svelte";
   import { clearHistory, deleteHistory, errorMessage, listHistory, widgetCopy, type Utterance } from "../../lib/api";
   import { t } from "../../lib/i18n";
+  import { profileName } from "../../lib/labels";
+  import { config } from "../../lib/store.svelte";
 
   let rows = $state<Utterance[]>([]);
   let status = $state("");
@@ -15,11 +17,11 @@
 <h2>{t("nav.history")}</h2>
 <div class="row"><button onclick={reload}>{t("history.reload")}</button><button onclick={clearAll}>{t("history.clear_all")}</button><span class="status">{status}</span></div>
 <table>
-  <thead><tr><th>{t("history.time")}</th><th>{t("history.app")}</th><th>{t("history.raw")}</th><th>{t("history.final")}</th><th></th></tr></thead>
+  <thead><tr><th>{t("history.time")}</th><th>{t("history.app")}</th><th>{t("history.profile")}</th><th>{t("history.raw")}</th><th>{t("history.final")}</th><th></th></tr></thead>
   <tbody>
     {#each rows as u}
       <tr class:degraded={u.degraded}>
-        <td>{when(u.ts)}</td><td>{u.app_name ?? ""}</td><td>{u.raw_text}</td><td>{u.final_text}</td>
+        <td>{when(u.ts)}</td><td>{u.app_name ?? ""}</td><td>{profileName(config.value, u.profile_id)}</td><td>{u.raw_text}</td><td>{u.final_text}</td>
         <td><button onclick={() => widgetCopy(u.final_text)}>{t("widget.copy")}</button> <button onclick={() => remove(u.id)}>{t("common.remove")}</button></td>
       </tr>
     {/each}

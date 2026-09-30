@@ -6,6 +6,7 @@
   } from "../../lib/api";
   import { t } from "../../lib/i18n";
   import { config } from "../../lib/store.svelte";
+  import { usedBy } from "../../lib/labels";
   import { baseName, blankFor, capsForNative, capsForRuntime, describeProbe, NATIVE_DICTATION, NATIVE_FM } from "../../lib/providerForm";
 
   let editing = $state<ProviderConfig | null>(null);
@@ -136,11 +137,13 @@
 </script>
 
 <h2>{t("nav.providers")}</h2>
+<p class="muted">{t("providers.change_hint")}</p>
 <table>
-  <thead><tr><th>{t("providers.label")}</th><th>{t("providers.kind")}</th><th>{t("providers.model")}</th><th></th></tr></thead>
+  <thead><tr><th>{t("providers.label")}</th><th>{t("providers.kind")}</th><th>{t("providers.model")}</th><th>{t("providers.used_by")}</th><th></th></tr></thead>
   <tbody>
     {#each config.value?.providers ?? [] as p}
       <tr><td>{p.label}</td><td>{t("providers.kind." + p.kind)}</td><td>{modelColumn(p)}</td>
+        <td>{usedBy(config.value, p.id).map((u) => (u.isDefault ? `${u.name} (${t("profiles.default")})` : u.name)).join(", ")}</td>
         <td>
           <button onclick={() => edit(p)}>{t("common.edit")}</button>
           <button onclick={() => probeRow(p)}>{t("providers.probe")}</button>

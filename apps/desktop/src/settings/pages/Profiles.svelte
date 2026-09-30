@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { deleteProfile, errorMessage, runningApps, setDefaultProfile, upsertProfile, type Profile, type RunningApp, type StepSpec } from "../../lib/api";
+  import { deleteProfile, errorMessage, profilesAddPreset, profilesPresets, runningApps, setDefaultProfile, upsertProfile, type PresetView, type Profile, type RunningApp, type StepSpec } from "../../lib/api";
+  import { defaultProfile, isKnownProvider, providerLabel } from "../../lib/labels";
   import { t } from "../../lib/i18n";
   import { config } from "../../lib/store.svelte";
 
@@ -11,8 +12,14 @@
   let newUrl = $state("");
   let newRaw = $state("");
   let newRefined = $state("");
+  let presets = $state<PresetView[]>([]);
 
-  onMount(async () => { apps = await runningApps(); });
+  onMount(async () => {
+    profilesPresets().then((p) => { presets = p; }).catch((e) => { status = errorMessage(e); });
+    apps = await runningApps();
+  });
+
+  const current = $derived(defaultProfile(config.value));
 
   const asrProviders = $derived((config.value?.providers ?? []).filter((p) => p.capabilities.transcribe));
   const llmProviders = $derived((config.value?.providers ?? []).filter((p) => p.capabilities.chat));
@@ -31,6 +38,16 @@
     if (p.language_hint === "") p.language_hint = null;
     try { await upsertProfile(p); status = t("common.saved"); editing = null; } catch (e) { status = errorMessage(e); }
   }
+  async function addPreset(id: string) {
+    const before = new Set((config.value?.profiles ?? []).map((p) => p.id));
+    try {
+      const next = await profilesAddPreset(id, t("profiles.preset." + id));
+      // The backend suffixes the id when it is taken, so pick the profile that was not there before.
+      const created = next.profiles.find((p) => !before.has(p.id)) ?? next.profiles.filter((p) => p.id.startsWith(id)).pop();
+      if (created) edit(created);
+      status = t("common.saved");
+    } catch (e) { status = errorMessage(e); }
+  }
   async function remove(p: Profile) { try { await deleteProfile(p.id); } catch (e) { status = errorMessage(e); } }
   async function makeDefault(p: Profile) { try { await setDefaultProfile(p.id); } catch (e) { status = errorMessage(e); } }
   function stepLabel(s: StepSpec) { return s.step === "opencc" ? `opencc (${s.config})` : s.step; }
@@ -44,13 +61,20 @@
 </script>
 
 <h2>{t("nav.profiles")}</h2>
+{#if current}
+  <p class="muted">{t("profiles.summary", { profile: current.name, asr: providerLabel(config.value, current.asr_provider),
+    llm: current.llm_provider === null ? t("profiles.none") : providerLabel(config.value, current.llm_provider) })}</p>
+{/if}
 <table>
-  <thead><tr><th>{t("profiles.name")}</th><th>{t("profiles.matcher")}</th><th></th></tr></thead>
+  <thead><tr><th>{t("profiles.name")}</th><th>{t("profiles.matcher")}</th><th>{t("profiles.asr")}</th><th>{t("profiles.llm")}</th><th></th></tr></thead>
   <tbody>
     {#each config.value?.profiles ?? [] as p}
       <tr>
         <td>{p.name}{p.is_default ? ` (${t("profiles.default")})` : ""}</td>
         <td>{[...p.matcher.app_ids, ...p.matcher.url_patterns].join(", ")}</td>
+        {#each [p.asr_provider, p.llm_provider] as id}
+          <td>{#if id === null}{t("profiles.none")}{:else if isKnownProvider(config.value, id)}{providerLabel(config.value, id)}{:else}<span class="muted" title={t("profiles.unknown_provider")}>{id}</span>{/if}</td>
+        {/each}
         <td>
           <button onclick={() => edit(p)}>{t("common.edit")}</button>
           {#if !p.is_default}<button onclick={() => makeDefault(p)}>{t("profiles.make_default")}</button> <button onclick={() => remove(p)}>{t("common.remove")}</button>{/if}
@@ -60,6 +84,12 @@
   </tbody>
 </table>
 <button onclick={() => edit(blank())} disabled={!config.value}>{t("profiles.add")}</button>
+{#if presets.length}
+  <div class="row">
+    <span>{t("profiles.add_preset")}</span>
+    {#each presets as p (p.id)}<button onclick={() => addPreset(p.id)} disabled={!config.value}>{t("profiles.preset." + p.id)}</button>{/each}
+  </div>
+{/if}
 
 {#if editing}
 <section class="form">
