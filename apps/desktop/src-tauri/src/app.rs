@@ -58,6 +58,7 @@ pub fn run() {
             crate::commands::system::system_request_accessibility,
             crate::commands::system::system_open_privacy_pane,
             crate::commands::system::system_running_apps,
+            crate::commands::system::system_app_names,
             crate::commands::system::system_info,
             crate::commands::system::system_reveal,
             crate::commands::config::config_get,
