@@ -1,6 +1,7 @@
 //! Tauri IPC. Every command is a thin wrapper over a plain function so the
 //! logic is testable without Tauri.
 
+pub mod bench;
 pub mod client;
 pub mod config;
 pub mod dictionary;
