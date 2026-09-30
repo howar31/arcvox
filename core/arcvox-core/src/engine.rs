@@ -255,6 +255,42 @@ impl Engine {
             .expect("join")?;
         Ok(())
     }
+
+    /// Drops every cached provider that loads the model `id` and unloads it,
+    /// so a deleted file frees its memory now and the next session reports
+    /// the missing model instead of using the copy still in memory.
+    pub async fn evict_model(&self, id: &str) {
+        let (asr, llm) = self
+            .inner
+            .registry
+            .evict_where(model_predicate(&self.inner.dirs, id));
+        for p in asr {
+            p.unload().await;
+        }
+        for p in llm {
+            p.unload().await;
+        }
+    }
+}
+
+/// Which embedded provider configs load the model `id` names: a catalogue id,
+/// or `custom/<file>` for an imported file under the models directory.
+pub(crate) fn model_predicate(dirs: &DataDir, id: &str) -> impl Fn(&ProviderConfig) -> bool {
+    let custom_dir = dirs.models_dir().join("custom");
+    let custom_name = id.strip_prefix("custom/").map(str::to_string);
+    let id = id.to_string();
+    move |cfg| {
+        if cfg.kind != ProviderKind::Embedded {
+            return false;
+        }
+        match &custom_name {
+            Some(name) => cfg.model_path.as_deref().is_some_and(|p| {
+                p.parent() == Some(custom_dir.as_path())
+                    && p.file_name().is_some_and(|f| f == name.as_str())
+            }),
+            None => cfg.model_id.as_deref() == Some(id.as_str()),
+        }
+    }
 }
 
 impl Inner {
@@ -672,6 +708,34 @@ mod tests {
         s.finish();
         drain(&s).await;
         settle_and_expect_one_unload(&fake).await;
+    }
+
+    // Paused clock keeps the idle unload timer from adding to the count.
+    #[tokio::test(start_paused = true)]
+    async fn evict_model_unloads_matching_llm() {
+        let (fake, _tmp, e) = idle_rig().await;
+        let s = e.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        s.finish();
+        drain(&s).await;
+        e.evict_model("other").await;
+        assert_eq!(fake.unloads.load(Ordering::SeqCst), 0);
+        e.evict_model("m").await;
+        assert_eq!(fake.unloads.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn custom_model_predicate_matches_file_under_custom_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = DataDir::custom(tmp.path());
+        let mut cfg = crate::providers::registry::tests::embedded_cfg();
+        cfg.model_id = None;
+        cfg.model_path = Some(dirs.models_dir().join("custom").join("x.gguf"));
+        assert!(model_predicate(&dirs, "custom/x.gguf")(&cfg));
+        assert!(!model_predicate(&dirs, "custom/y.gguf")(&cfg));
+        assert!(!model_predicate(&dirs, "x.gguf")(&cfg));
+        cfg.model_path = Some(tmp.path().join("x.gguf"));
+        assert!(!model_predicate(&dirs, "custom/x.gguf")(&cfg));
     }
 
     async fn mock_ok(rig: &Rig, asr_text: &str, llm_text: &str) {
