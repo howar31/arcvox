@@ -15,6 +15,11 @@
     entries.push({ term: term.trim(), aliases: aliases.split(/[,，\s]+/).map((a) => a.trim()).filter(Boolean), asr_hint: true });
     term = ""; aliases = "";
   }
+  // Grow with the number of lines, up to six.
+  function fit(ev: Event) {
+    const el = ev.currentTarget as HTMLTextAreaElement;
+    el.rows = Math.min(6, el.value.split("\n").length);
+  }
   async function save() {
     try {
       const result = await setDictionary(entries);
@@ -31,7 +36,7 @@
   <tbody>
     {#each entries as e, i}
       <tr>
-        <td><input bind:value={e.term} /></td>
+        <td><textarea rows={Math.min(6, e.term.split("\n").length)} bind:value={e.term} oninput={fit}></textarea></td>
         <td><input value={e.aliases.join(", ")} onchange={(ev) => { e.aliases = (ev.currentTarget as HTMLInputElement).value.split(/[,，\s]+/).map((a) => a.trim()).filter(Boolean); }} /></td>
         <td><input type="checkbox" bind:checked={e.asr_hint} /></td>
         <td><button onclick={() => entries.splice(i, 1)}>{t("common.remove")}</button></td>
@@ -40,8 +45,12 @@
   </tbody>
 </table>
 <div class="row">
-  <input placeholder={t("dictionary.term")} bind:value={term} />
+  <textarea rows="1" placeholder={t("dictionary.term")} bind:value={term} oninput={fit}></textarea>
   <input placeholder={t("dictionary.aliases_placeholder")} bind:value={aliases} />
   <button onclick={add}>{t("common.add")}</button>
 </div>
 <div class="row"><button class="primary" onclick={save}>{t("common.save")}</button><span class="status">{status}</span></div>
+
+<style>
+  textarea { white-space: pre; resize: vertical; }
+</style>
