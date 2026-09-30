@@ -272,6 +272,19 @@ impl Engine {
         self.inner.schedule_idle_unload();
     }
 
+    /// Drops and unloads every cached speech provider no profile uses, so a
+    /// model loaded only to be timed does not stay in memory.
+    pub async fn unload_unreferenced_asr(&self) {
+        let config = self.inner.config.current();
+        let evicted = self
+            .inner
+            .registry
+            .evict_asr_where(|cfg| !config.profiles.iter().any(|p| p.asr_provider == cfg.id));
+        for p in evicted {
+            p.unload().await;
+        }
+    }
+
     /// Drops every cached provider that loads the model `id` and unloads it,
     /// so a deleted file frees its memory now and the next session reports
     /// the missing model instead of using the copy still in memory.
@@ -680,7 +693,7 @@ pub(crate) mod tests {
         (fake, tmp, e)
     }
 
-    async fn settle_and_expect_one_unload(fake: &crate::steps::llm::fakes::FakeLlm) {
+    pub(crate) async fn settle_and_expect_one_unload(fake: &crate::steps::llm::fakes::FakeLlm) {
         use std::time::Duration;
         // Let the timer be armed before the clock moves.
         for _ in 0..10 {
@@ -748,6 +761,33 @@ pub(crate) mod tests {
         assert_eq!(fake.unloads.load(Ordering::SeqCst), 0);
         e.evict_model("m").await;
         assert_eq!(fake.unloads.load(Ordering::SeqCst), 1);
+    }
+
+    // The fake factory hands out a fresh provider per build, so a provider
+    // that was evicted comes back as a different instance.
+    #[tokio::test(start_paused = true)]
+    async fn unload_unreferenced_asr_evicts_only_unreferenced_providers() {
+        let (_fake, _tmp, e) = idle_rig().await;
+        let used = e.config().current().profiles[0].asr_provider.clone();
+        let spare = crate::types::ProviderId("spare-asr".into());
+        e.config()
+            .update(|c| {
+                let mut extra = c.provider(&used).unwrap().clone();
+                extra.id = spare.clone();
+                c.providers.push(extra);
+            })
+            .unwrap();
+        let build = |id: &crate::types::ProviderId| {
+            let config = e.config().current();
+            e.registry()
+                .asr(config.provider(id).unwrap(), &config.general)
+                .unwrap()
+        };
+        let used_before = build(&used);
+        let spare_before = build(&spare);
+        e.unload_unreferenced_asr().await;
+        assert!(Arc::ptr_eq(&used_before, &build(&used)));
+        assert!(!Arc::ptr_eq(&spare_before, &build(&spare)));
     }
 
     #[test]
