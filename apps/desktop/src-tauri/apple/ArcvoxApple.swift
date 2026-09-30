@@ -391,7 +391,9 @@ private func complete(
 
 @available(macOS 26, *)
 private func fmCode(_ error: any Error) -> Int32 {
-    // macOS 27 reports generation failures through `LanguageModelError`.
+    // macOS 27 reports generation failures through `LanguageModelError`,
+    // which only the SDK shipped with Swift 6.4 or newer declares.
+    #if compiler(>=6.4)
     if #available(macOS 27, *), let e = error as? LanguageModelError {
         switch e {
         case .guardrailViolation: return 5
@@ -400,6 +402,7 @@ private func fmCode(_ error: any Error) -> Int32 {
         default: return 9
         }
     }
+    #endif
     if let e = error as? LanguageModelSession.GenerationError {
         switch e {
         case .guardrailViolation: return 5
