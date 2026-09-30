@@ -2,11 +2,11 @@
   import { onMount } from "svelte";
   import { onWidgetLevel, onWidgetMessage, onWidgetState, onWidgetTranscript, uiLanguage, widgetCopy, widgetDismiss, type MessagePayload, type WidgetState } from "../lib/api";
   import { setLanguage, t, type Lang } from "../lib/i18n";
+  import Icon from "../lib/ui/Icon.svelte";
 
   // A local named "state" collides with the $state rune during type checking.
   let widgetState = $state<WidgetState>("idle");
   let level = $state(0);
-  let bars = $state<number[]>(Array(12).fill(0.1));
   let message = $state<MessagePayload | null>(null);
   // Raw transcript shown while the rewrite runs.
   let transcript = $state("");
@@ -19,16 +19,27 @@
         widgetState = p.state;
         if (p.state !== "idle") message = null;
         if (p.state !== "processing" && p.state !== "inserting") transcript = "";
+        if (p.state !== "recording" && p.state !== "locked") level = 0;
       }),
-      onWidgetLevel((p) => { level = p.rms; bars = [...bars.slice(1), Math.min(1, 0.1 + p.rms * 4)]; }),
+      onWidgetLevel((p) => { level = p.rms; }),
       onWidgetMessage((p) => { setLanguage(p.language); message = p; transcript = ""; }),
       onWidgetTranscript((p) => { transcript = p.text; }),
     ];
     return () => { unsubs.forEach((u) => u.then((f) => f())); };
   });
 
+  const listening = $derived(widgetState === "recording" || widgetState === "locked");
+  // Halo around the live ring, in px: grows with the input level, clamped.
+  const halo = $derived(listening ? 2 + 7 * Math.min(1, Math.max(0, level * 4)) : 0);
+  const tone = $derived.by(() => {
+    if (message) return message.kind === "error" ? "live" : "accent";
+    if (listening) return "live";
+    if (widgetState === "processing") return "think";
+    if (widgetState === "inserting") return "accent";
+    return "off";
+  });
   const label = $derived.by(() => {
-    if ((widgetState === "processing" || widgetState === "inserting") && transcript) return transcript;
+    if (widgetState === "processing" && transcript) return transcript;
     switch (widgetState) {
       case "recording": return t("widget.listening");
       case "locked": return t("widget.locked");
@@ -44,40 +55,45 @@
   }
 </script>
 
-<div class="panel" class:error={message?.kind === "error"}>
+<div class="pill">
+  <span class="ring {tone}" style:--halo="{halo}px" aria-hidden="true"></span>
   {#if message}
-    <div class="message">
-      <div class="text">{t(message.key)}</div>
-      {#if message.detail}<div class="detail">{message.detail}</div>{/if}
-      {#if message.copyable}
-        <div class="copy-row">
-          <div class="copyable">{message.copyable}</div>
-          <button onclick={() => widgetCopy(message!.copyable!)}>{t("widget.copy")}</button>
-          <button class="dismiss" onclick={dismiss} aria-label={t("widget.dismiss")}>✕</button>
-        </div>
-      {/if}
+    {@const second = message.copyable ?? message.detail}
+    <div class="text">
+      <span class="line wrap" title={t(message.key)}>{t(message.key)}</span>
+      {#if second}<small class:mono={!!message.copyable} title={second}>{second}</small>{/if}
     </div>
+    {#if message.copyable}
+      <button type="button" class="copy" onclick={() => widgetCopy(message!.copyable!)}>{t("widget.copy")}</button>
+      <button type="button" class="close" onclick={dismiss} aria-label={t("widget.dismiss")} title={t("widget.dismiss")}><Icon name="x" size={14} /></button>
+    {/if}
   {:else}
-    <div class="meter" class:live={widgetState === "recording" || widgetState === "locked"}>
-      {#each bars as b}<span style="height: {Math.round(b * 100)}%"></span>{/each}
+    <div class="text">
+      <span class="line" title={widgetState === "processing" && transcript ? transcript : undefined}>{label}</span>
     </div>
-    <div class="label" class:busy={widgetState === "processing" || widgetState === "inserting"} title={transcript || undefined}>{label}</div>
   {/if}
 </div>
 
 <style>
-  .panel { box-sizing: border-box; width: 100vw; height: 100vh; padding: 10px 14px; border-radius: 14px; background: var(--panel); color: var(--panel-fg); display: flex; align-items: center; gap: 12px; font-size: 13px; overflow: hidden; }
-  .panel.error { background: rgba(120, 30, 30, 0.94); }
-  .meter { display: flex; align-items: center; gap: 3px; height: 28px; width: 72px; }
-  .meter span { flex: 1; background: rgba(255, 255, 255, 0.35); border-radius: 2px; transition: height 60ms linear; }
-  .meter.live span { background: #34c759; }
-  .label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .label.busy { opacity: 0.8; animation: pulse 1.2s ease-in-out infinite; }
-  @keyframes pulse { 50% { opacity: 0.4; } }
-  .message { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-  .detail { font-size: 11px; opacity: 0.75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .copy-row { display: flex; align-items: center; gap: 8px; }
-  .copyable { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: ui-monospace, monospace; }
-  button { font: inherit; padding: 2px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.3); background: rgba(255,255,255,0.12); color: inherit; }
-  button.dismiss { padding: 2px 8px; }
+  .pill { width: 100vw; height: 100vh; border-radius: 32px; padding: 0 16px 0 22px; display: flex; align-items: center; gap: 12px; overflow: hidden; background: var(--pill-bg); color: var(--pill-ink); box-shadow: inset 0 0 0 1px var(--pill-line); font-size: 13px; line-height: 1.35; }
+  .ring { flex: none; width: 20px; height: 20px; border-radius: 50%; border: 3px solid var(--pill-ink-2); }
+  .ring.live { border-color: var(--pill-live); box-shadow: 0 0 0 var(--halo) var(--pill-live-halo); transition: box-shadow 80ms linear; }
+  .ring.accent { border-color: var(--pill-accent); }
+  .ring.think { border-color: var(--pill-accent); border-right-color: transparent; animation: spin .9s linear infinite; }
+  .text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .line, small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* A message may take two lines; the pill has room for them and the detail. */
+  .line.wrap { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; line-height: 1.3; }
+  small { font-size: 11px; color: var(--pill-ink-2); }
+  small.mono { font-family: var(--font-mono); }
+  button { flex: none; display: inline-flex; align-items: center; justify-content: center; height: 26px; border: 0; border-radius: 13px; background: var(--pill-button); color: var(--pill-ink); cursor: default; }
+  button:hover { background: var(--pill-button-hover); }
+  button:focus-visible { outline-color: var(--pill-accent); }
+  .copy { padding: 0 12px; }
+  .close { width: 26px; margin-left: -4px; background: none; color: var(--pill-ink-2); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    .ring.think { animation: none; }
+    .ring.live { box-shadow: 0 0 0 5px var(--pill-live-halo); transition: none; }
+  }
 </style>
