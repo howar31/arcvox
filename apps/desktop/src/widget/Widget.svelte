@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { onWidgetLevel, onWidgetMessage, onWidgetState, uiLanguage, widgetCopy, widgetDismiss, type MessagePayload, type WidgetState } from "../lib/api";
+  import { onWidgetLevel, onWidgetMessage, onWidgetState, onWidgetTranscript, uiLanguage, widgetCopy, widgetDismiss, type MessagePayload, type WidgetState } from "../lib/api";
   import { setLanguage, t, type Lang } from "../lib/i18n";
 
   // A local named "state" collides with the $state rune during type checking.
@@ -8,18 +8,27 @@
   let level = $state(0);
   let bars = $state<number[]>(Array(12).fill(0.1));
   let message = $state<MessagePayload | null>(null);
+  // Raw transcript shown while the rewrite runs.
+  let transcript = $state("");
 
   onMount(() => {
     uiLanguage().then((l) => setLanguage(l as Lang));
     const unsubs = [
-      onWidgetState((p) => { setLanguage(p.language); widgetState = p.state; if (p.state !== "idle") message = null; }),
+      onWidgetState((p) => {
+        setLanguage(p.language);
+        widgetState = p.state;
+        if (p.state !== "idle") message = null;
+        if (p.state !== "processing" && p.state !== "inserting") transcript = "";
+      }),
       onWidgetLevel((p) => { level = p.rms; bars = [...bars.slice(1), Math.min(1, 0.1 + p.rms * 4)]; }),
-      onWidgetMessage((p) => { setLanguage(p.language); message = p; }),
+      onWidgetMessage((p) => { setLanguage(p.language); message = p; transcript = ""; }),
+      onWidgetTranscript((p) => { transcript = p.text; }),
     ];
     return () => { unsubs.forEach((u) => u.then((f) => f())); };
   });
 
   const label = $derived.by(() => {
+    if ((widgetState === "processing" || widgetState === "inserting") && transcript) return transcript;
     switch (widgetState) {
       case "recording": return t("widget.listening");
       case "locked": return t("widget.locked");
@@ -52,7 +61,7 @@
     <div class="meter" class:live={widgetState === "recording" || widgetState === "locked"}>
       {#each bars as b}<span style="height: {Math.round(b * 100)}%"></span>{/each}
     </div>
-    <div class="label" class:busy={widgetState === "processing" || widgetState === "inserting"}>{label}</div>
+    <div class="label" class:busy={widgetState === "processing" || widgetState === "inserting"} title={transcript || undefined}>{label}</div>
   {/if}
 </div>
 

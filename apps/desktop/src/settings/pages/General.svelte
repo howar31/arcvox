@@ -4,6 +4,7 @@
   import { errorMessage, listMicrophones, openPrivacyPane, permissions, requestAccessibility, updateGeneral, type ClientSettings, type General } from "../../lib/api";
   import { t } from "../../lib/i18n";
   import { client, config } from "../../lib/store.svelte";
+  import { invalidFields } from "../../lib/numbers";
   import AddPerApp from "./AddPerApp.svelte";
 
   let mics = $state<string[]>([]);
@@ -28,6 +29,12 @@
 
   async function saveClient() {
     if (!draft) return;
+    const bad = invalidFields([
+      { key: "general.hold_threshold", value: draft.hotkey.hold_threshold_ms, min: 100, max: 1000 },
+      { key: "general.double_tap_window", value: draft.hotkey.double_tap_window_ms, min: 150, max: 1000 },
+      { key: "general.max_utterance", value: draft.max_utterance_secs, min: 10, max: 1800 },
+    ]);
+    if (bad.length) { status = t("common.invalid_number", { field: t(bad[0]) }); return; }
     try {
       await client.save(draft);
       status = t("common.saved");
@@ -38,6 +45,14 @@
   }
   async function saveGeneral() {
     if (!general) return;
+    const bad = invalidFields([
+      { key: "general.history_retention", value: general.history_retention_days, min: 1 },
+      { key: "general.recording_retention", value: general.recording_retention_days, min: 1 },
+      { key: "general.asr_timeout", value: general.asr_timeout_secs, min: 1 },
+      { key: "general.llm_timeout", value: general.llm_timeout_secs, min: 1 },
+      { key: "general.llm_idle_unload", value: general.llm_idle_unload_secs, min: 0 },
+    ]);
+    if (bad.length) { status = t("common.invalid_number", { field: t(bad[0]) }); return; }
     try { await updateGeneral(general); status = t("common.saved"); } catch (e) { status = errorMessage(e); }
   }
   async function toggleAutostart() {
@@ -135,6 +150,7 @@
 </section>
 
 <section>
+  <h3>{t("general.processing")}</h3>
   <label>{t("general.asr_timeout")} <input type="number" min="1" bind:value={general.asr_timeout_secs} /></label>
   <label>{t("general.llm_timeout")} <input type="number" min="1" bind:value={general.llm_timeout_secs} /></label>
   <label>{t("general.llm_idle_unload")} <input type="number" min="0" bind:value={general.llm_idle_unload_secs} /></label>
