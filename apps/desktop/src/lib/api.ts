@@ -121,3 +121,29 @@ export const nativeInstallLanguage = (hint: string | null) => invoke<void>("nati
 export function onNativeInstallProgress(cb: (fraction: number) => void): Promise<UnlistenFn> {
   return listen<{ fraction: number }>("native-install-progress", (e) => cb(e.payload.fraction));
 }
+
+export interface PresetView { id: string; app_ids: string[] }
+export interface ClipStatus { present: boolean; secs: number; recorded_at: number | null }
+export interface ClipCandidate { id: number; ts: number; raw_text: string }
+export type BenchRole = "asr" | "llm";
+export interface BenchRun { provider_id: string; role: BenchRole; cold: boolean; load_ms: number; infer_ms: number; output: string; error: string | null }
+export const profilesPresets = () => invoke<PresetView[]>("profiles_presets");
+export const profilesAddPreset = (presetId: string, name: string) => invoke<Config>("profiles_add_preset", { presetId, name });
+export const benchClipStatus = () => invoke<ClipStatus>("bench_clip_status");
+export const benchRecordStart = () => invoke<void>("bench_record_start");
+export const benchRecordStop = () => invoke<ClipStatus>("bench_record_stop");
+export const benchClipFromHistory = (id: number) => invoke<ClipStatus>("bench_clip_from_history", { id });
+export const benchHistoryCandidates = () => invoke<ClipCandidate[]>("bench_history_candidates");
+export const benchStart = (asr: string[], llm: string[], fallbackText: string) => invoke<void>("bench_start", { asr, llm, fallbackText });
+export const benchCancel = () => invoke<void>("bench_cancel");
+export function onBenchLevel(cb: (rms: number) => void): Promise<UnlistenFn> {
+  return listen<{ rms: number }>("bench-level", (e) => cb(e.payload.rms));
+}
+export function onBenchProgress(cb: (p: { run: BenchRun; remaining: number }) => void): Promise<UnlistenFn> {
+  return listen<{ run: BenchRun; remaining: number }>("bench-progress", (e) => cb(e.payload));
+}
+export function onBenchDone(cb: () => void): Promise<UnlistenFn> {
+  return listen<Record<string, never>>("bench-done", () => cb());
+}
+export interface TranscriptPayload { text: string; language: "zh-TW" | "en" }
+export function onWidgetTranscript(cb: (p: TranscriptPayload) => void): Promise<UnlistenFn> { return listen<TranscriptPayload>("widget-transcript", (e) => cb(e.payload)); }
