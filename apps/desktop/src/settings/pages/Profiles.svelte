@@ -1,140 +1,118 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { deleteProfile, errorMessage, profilesAddPreset, profilesPresets, runningApps, setDefaultProfile, upsertProfile, type PresetView, type Profile, type RunningApp, type StepSpec } from "../../lib/api";
-  import { defaultProfile, isKnownProvider, providerLabel } from "../../lib/labels";
+  import { errorMessage, profilesAddPreset, profilesPresets, type PresetView, type Profile } from "../../lib/api";
+  import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { t } from "../../lib/i18n";
+  import { appsSummary } from "../../lib/profileEdit";
+  import { go } from "../../lib/route";
   import { config } from "../../lib/store.svelte";
+  import Group from "../../lib/ui/Group.svelte";
+  import Icon from "../../lib/ui/Icon.svelte";
+  import Modal from "../../lib/ui/Modal.svelte";
+  import PageHead from "../../lib/ui/PageHead.svelte";
+  import Ring from "../../lib/ui/Ring.svelte";
+  import Row from "../../lib/ui/Row.svelte";
+  import Tag from "../../lib/ui/Tag.svelte";
+  import { toast } from "../../lib/ui/toast.svelte";
 
-  let editing = $state<Profile | null>(null);
-  let status = $state("");
-  let apps = $state<RunningApp[]>([]);
-  let newAppId = $state("");
-  let newUrl = $state("");
-  let newRaw = $state("");
-  let newRefined = $state("");
   let presets = $state<PresetView[]>([]);
+  let adding = $state(false);
+  let busy = $state(false);
 
-  onMount(async () => {
-    profilesPresets().then((p) => { presets = p; }).catch((e) => { status = errorMessage(e); });
-    apps = await runningApps();
+  onMount(() => {
+    profilesPresets().then((p) => { presets = p; }).catch((e) => toast.error(t("profiles.presets_failed", { detail: errorMessage(e) })));
   });
 
-  const current = $derived(defaultProfile(config.value));
+  // The default profile first, the others in their stored order.
+  const profiles = $derived([...(config.value?.profiles ?? [])].sort((a, b) => Number(b.is_default) - Number(a.is_default)));
+  const providers = $derived(config.value?.providers ?? []);
 
-  const asrProviders = $derived((config.value?.providers ?? []).filter((p) => p.capabilities.transcribe));
-  const llmProviders = $derived((config.value?.providers ?? []).filter((p) => p.capabilities.chat));
+  $effect(() => { ensureAppNames(profiles.flatMap((p) => p.matcher.app_ids)); });
 
-  function blank(): Profile {
-    const base = config.value!.profiles.find((p) => p.is_default)!;
-    return { id: "", name: "", is_default: false, matcher: { app_ids: [], url_patterns: [] }, asr_provider: base.asr_provider,
-      llm_provider: base.llm_provider, language_hint: "zh-TW", prompt_addition: "", few_shot: [], steps: structuredClone($state.snapshot(base.steps)) };
+  const label = (id: string | null) => (id === null ? t("home.no_rewrite") : providers.find((p) => p.id === id)?.label ?? null);
+
+  function appsLine(p: Profile): string {
+    if (p.is_default) return t("profiles.everywhere");
+    const names = [...p.matcher.app_ids.map(appName), ...p.matcher.url_patterns];
+    if (names.length === 0) return t("profiles.no_apps");
+    const { shown, more } = appsSummary(names);
+    const list = shown.join(t("home.list_sep"));
+    return more > 0 ? t("home.apps_more", { names: list, count: String(more) }) : list;
   }
-  function edit(p: Profile) { editing = structuredClone($state.snapshot(p)); status = ""; }
-  async function save() {
-    if (!editing) return;
-    const p = editing;
-    if (!p.id) p.id = p.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `profile-${Date.now()}`;
-    if (p.llm_provider === "") p.llm_provider = null;
-    if (p.language_hint === "") p.language_hint = null;
-    try { await upsertProfile(p); status = t("common.saved"); editing = null; } catch (e) { status = errorMessage(e); }
+
+  function addBlank() {
+    adding = false;
+    go("profiles", "new");
   }
+
   async function addPreset(id: string) {
+    busy = true;
     const before = new Set((config.value?.profiles ?? []).map((p) => p.id));
     try {
-      const next = await profilesAddPreset(id, t("profiles.preset." + id));
-      // The backend suffixes the id when it is taken, so pick the profile that was not there before.
-      const created = next.profiles.find((p) => !before.has(p.id)) ?? next.profiles.filter((p) => p.id.startsWith(id)).pop();
-      if (created) edit(created);
-      status = t("common.saved");
-    } catch (e) { status = errorMessage(e); }
-  }
-  async function remove(p: Profile) { try { await deleteProfile(p.id); } catch (e) { status = errorMessage(e); } }
-  async function makeDefault(p: Profile) { try { await setDefaultProfile(p.id); } catch (e) { status = errorMessage(e); } }
-  function stepLabel(s: StepSpec) { return s.step === "opencc" ? `opencc (${s.config})` : s.step; }
-  function moveStep(i: number, d: number) {
-    const s = editing!.steps; const j = i + d; if (j < 0 || j >= s.length) return; [s[i], s[j]] = [s[j], s[i]];
-  }
-  function addStep(kind: string) {
-    const s: StepSpec = kind === "opencc" ? { step: "opencc", config: "s2twp" } : kind === "llm" ? { step: "llm" } : { step: "rules" };
-    editing!.steps.push(s);
+      const next = await profilesAddPreset(id, t(`profiles.preset.${id}`));
+      // The backend suffixes the id when it is taken, so the new profile is the one that was not there before.
+      const created = next.profiles.find((p) => !before.has(p.id));
+      adding = false;
+      toast.ok(t("common.saved"));
+      if (created) go("profiles", created.id);
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      busy = false;
+    }
   }
 </script>
 
-<h2>{t("nav.profiles")}</h2>
-{#if current}
-  <p class="muted">{t("profiles.summary", { profile: current.name, asr: providerLabel(config.value, current.asr_provider),
-    llm: current.llm_provider === null ? t("profiles.none") : providerLabel(config.value, current.llm_provider) })}</p>
-{/if}
-<table>
-  <thead><tr><th>{t("profiles.name")}</th><th>{t("profiles.matcher")}</th><th>{t("profiles.asr")}</th><th>{t("profiles.llm")}</th><th></th></tr></thead>
-  <tbody>
-    {#each config.value?.profiles ?? [] as p}
-      <tr>
-        <td>{p.name}{p.is_default ? ` (${t("profiles.default")})` : ""}</td>
-        <td>{[...p.matcher.app_ids, ...p.matcher.url_patterns].join(", ")}</td>
-        {#each [p.asr_provider, p.llm_provider] as id}
-          <td>{#if id === null}{t("profiles.none")}{:else if isKnownProvider(config.value, id)}{providerLabel(config.value, id)}{:else}<span class="muted" title={t("profiles.unknown_provider")}>{id}</span>{/if}</td>
-        {/each}
-        <td>
-          <button onclick={() => edit(p)}>{t("common.edit")}</button>
-          {#if !p.is_default}<button onclick={() => makeDefault(p)}>{t("profiles.make_default")}</button> <button onclick={() => remove(p)}>{t("common.remove")}</button>{/if}
-        </td>
-      </tr>
+{#snippet engineName(id: string | null)}
+  {@const name = label(id)}
+  <span class="eng">
+    {#if name === null}<span class="line unknown">{id}</span><Tag tone="warn">{t("home.not_found")}</Tag>
+    {:else}<span class="line">{name}</span>{/if}
+  </span>
+{/snippet}
+
+<PageHead title={t("nav.profiles")} description={t("profiles.description")}>
+  {#snippet actions()}
+    <button type="button" class="btn primary" disabled={!config.value} onclick={() => (adding = true)}><Icon name="plus" size={14} />{t("profiles.add")}</button>
+  {/snippet}
+</PageHead>
+
+{#if config.value}
+  <Group help={profiles.length < 2 ? t("profiles.only_default") : undefined}>
+    {#each profiles as p (p.id)}
+      <Row onclick={() => go("profiles", p.id)}>
+        {#snippet leading()}<Ring tone={p.is_default ? "accent" : "off"} />{/snippet}
+        <span class="who">
+          <span class="title">
+            <span class="name line">{p.name}</span>
+            {#if p.is_default}<Tag tone="accent">{t("profiles.default")}</Tag>{/if}
+          </span>
+          <span class="sub line">{appsLine(p)}</span>
+        </span>
+        <span class="pair">{@render engineName(p.asr_provider)}<span class="arrow" aria-hidden="true">→</span>{@render engineName(p.llm_provider)}</span>
+      </Row>
     {/each}
-  </tbody>
-</table>
-<button onclick={() => edit(blank())} disabled={!config.value}>{t("profiles.add")}</button>
-{#if presets.length}
-  <div class="row">
-    <span>{t("profiles.add_preset")}</span>
-    {#each presets as p (p.id)}<button onclick={() => addPreset(p.id)} disabled={!config.value}>{t("profiles.preset." + p.id)}</button>{/each}
-  </div>
+  </Group>
 {/if}
 
-{#if editing}
-<section class="form">
-  <label>{t("profiles.name")} <input bind:value={editing.name} /></label>
-  <h3>{t("profiles.matcher")}</h3>
-  {#each editing.matcher.app_ids as id, i}
-    <div class="row"><code>{id}</code><button onclick={() => editing!.matcher.app_ids.splice(i, 1)}>{t("common.remove")}</button></div>
-  {/each}
-  <div class="row">
-    <select bind:value={newAppId}><option value="">{t("general.pick_app")}</option>{#each apps as a}<option value={a.bundle_id}>{a.name}</option>{/each}</select>
-    <input placeholder="com.example.app" bind:value={newAppId} />
-    <button onclick={() => { if (newAppId) { editing!.matcher.app_ids.push(newAppId); newAppId = ""; } }}>{t("common.add")}</button>
+<Modal bind:open={adding} title={t("profiles.add")}>
+  <div class="choices">
+    <Row label={t("profiles.blank")} help={t("profiles.blank.desc")} onclick={addBlank} />
+    {#each presets as p (p.id)}
+      <Row label={t(`profiles.preset.${p.id}`)} help={t(`profiles.preset.${p.id}.desc`)} onclick={() => { if (!busy) addPreset(p.id); }} />
+    {/each}
   </div>
-  {#each editing.matcher.url_patterns as u, i}
-    <div class="row"><code>{u}</code><button onclick={() => editing!.matcher.url_patterns.splice(i, 1)}>{t("common.remove")}</button></div>
-  {/each}
-  <div class="row">
-    <input placeholder="github.com" bind:value={newUrl} />
-    <button onclick={() => { if (newUrl) { editing!.matcher.url_patterns.push(newUrl); newUrl = ""; } }}>{t("profiles.add_url")}</button>
-  </div>
-  <h3>{t("profiles.providers")}</h3>
-  <label>ASR <select bind:value={editing.asr_provider}>{#each asrProviders as p}<option value={p.id}>{p.label}</option>{/each}</select></label>
-  <label>LLM <select bind:value={editing.llm_provider}><option value={null}>{t("profiles.none")}</option>{#each llmProviders as p}<option value={p.id}>{p.label}</option>{/each}</select></label>
-  <p class="muted">{t("profiles.provider_hint")}</p>
-  <label>{t("profiles.language_hint")} <select bind:value={editing.language_hint}><option value={null}>{t("profiles.none")}</option><option value="zh-TW">zh-TW</option><option value="en">en</option><option value="ja">ja</option></select></label>
-  <h3>{t("profiles.prompt_addition")}</h3>
-  <textarea rows="6" bind:value={editing.prompt_addition}></textarea>
-  <h3>{t("profiles.few_shot")}</h3>
-  {#each editing.few_shot as ex, i}
-    <div class="row"><span>{ex.raw}</span><span>→</span><span>{ex.refined}</span><button onclick={() => editing!.few_shot.splice(i, 1)}>{t("common.remove")}</button></div>
-  {/each}
-  <div class="row">
-    <input placeholder={t("profiles.raw")} bind:value={newRaw} /><input placeholder={t("profiles.refined")} bind:value={newRefined} />
-    <button onclick={() => { if (newRaw && newRefined) { editing!.few_shot.push({ raw: newRaw, refined: newRefined }); newRaw = ""; newRefined = ""; } }}>{t("common.add")}</button>
-  </div>
-  <h3>{t("profiles.steps")}</h3>
-  {#each editing.steps as s, i}
-    <div class="row"><code>{stepLabel(s)}</code>
-      {#if s.step !== "asr"}<button onclick={() => moveStep(i, -1)}>↑</button><button onclick={() => moveStep(i, 1)}>↓</button><button onclick={() => editing!.steps.splice(i, 1)}>{t("common.remove")}</button>{/if}
-    </div>
-  {/each}
-  <div class="row">
-    <button onclick={() => addStep("opencc")}>+ opencc</button><button onclick={() => addStep("llm")}>+ llm</button><button onclick={() => addStep("rules")}>+ rules</button>
-  </div>
-  <div class="row"><button class="primary" onclick={save}>{t("common.save")}</button><button onclick={() => (editing = null)}>{t("common.cancel")}</button></div>
-</section>
-{/if}
-<p class="status">{status}</p>
+  {#snippet actions()}<button type="button" class="btn" onclick={() => (adding = false)}>{t("common.cancel")}</button>{/snippet}
+</Modal>
+
+<style>
+  .who { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+  .title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The two engine names share the space; each truncates on its own. */
+  .pair { display: flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0; max-width: 52%; color: var(--ink-2); }
+  .eng { display: flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0; max-width: 50%; }
+  .arrow { flex: none; color: var(--ink-3); }
+  .unknown { color: var(--warn); }
+  .choices { margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink); }
+</style>
