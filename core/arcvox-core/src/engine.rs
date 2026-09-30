@@ -260,6 +260,12 @@ impl Engine {
         &self.inner.registry
     }
 
+    /// Counts as activity for the idle LLM unload, so a timer armed earlier
+    /// cannot fire while the caller is using a provider.
+    pub(crate) fn mark_busy(&self) {
+        self.inner.idle_generation.fetch_add(1, Ordering::SeqCst);
+    }
+
     /// Counts as activity for the idle LLM unload and rearms its timer.
     pub(crate) fn touch_idle(&self) {
         self.inner.idle_generation.fetch_add(1, Ordering::SeqCst);
@@ -603,6 +609,17 @@ pub(crate) mod tests {
         tempfile::TempDir,
         Engine,
     ) {
+        idle_rig_with(crate::steps::llm::fakes::FakeLlm::ok("ok")).await
+    }
+
+    /// `idle_rig` with a caller-supplied shared LLM fake.
+    pub(crate) async fn idle_rig_with(
+        fake: Arc<crate::steps::llm::fakes::FakeLlm>,
+    ) -> (
+        Arc<crate::steps::llm::fakes::FakeLlm>,
+        tempfile::TempDir,
+        Engine,
+    ) {
         use crate::config::General;
         use crate::config::Runtime;
         use crate::providers::{AsrProvider, LlmProvider, ProviderError};
@@ -637,7 +654,6 @@ pub(crate) mod tests {
             }
         }
 
-        let fake = FakeLlm::ok("ok");
         let tmp = tempfile::tempdir().unwrap();
         let e = Engine::open_with(
             DataDir::custom(tmp.path()),
@@ -775,6 +791,10 @@ pub(crate) mod tests {
             }
         }
         out
+    }
+
+    pub(crate) async fn drain_session(session: &Session) -> Vec<Event> {
+        drain(session).await
     }
 
     pub(crate) fn one_second() -> Vec<f32> {

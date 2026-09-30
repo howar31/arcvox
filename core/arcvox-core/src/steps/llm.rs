@@ -118,6 +118,8 @@ pub(crate) mod fakes {
         pub result: Result<String, ProviderError>,
         pub calls: Mutex<Vec<Vec<ChatMessage>>>,
         pub unloads: std::sync::atomic::AtomicUsize,
+        /// When set, `complete` sleeps this long before answering.
+        pub delay: Option<Duration>,
     }
 
     impl FakeLlm {
@@ -126,6 +128,15 @@ pub(crate) mod fakes {
                 result: Ok(text.into()),
                 calls: Mutex::new(Vec::new()),
                 unloads: std::sync::atomic::AtomicUsize::new(0),
+                delay: None,
+            })
+        }
+        pub fn slow(text: &str, delay: Duration) -> Arc<Self> {
+            Arc::new(Self {
+                result: Ok(text.into()),
+                calls: Mutex::new(Vec::new()),
+                unloads: std::sync::atomic::AtomicUsize::new(0),
+                delay: Some(delay),
             })
         }
         pub fn failing(code: ErrorCode) -> Arc<Self> {
@@ -133,6 +144,7 @@ pub(crate) mod fakes {
                 result: Err(ProviderError::new(code, "boom")),
                 calls: Mutex::new(Vec::new()),
                 unloads: std::sync::atomic::AtomicUsize::new(0),
+                delay: None,
             })
         }
     }
@@ -145,6 +157,9 @@ pub(crate) mod fakes {
             _opts: &LlmOptions,
         ) -> Result<String, ProviderError> {
             self.calls.lock().unwrap().push(messages);
+            if let Some(d) = self.delay {
+                tokio::time::sleep(d).await;
+            }
             self.result.clone()
         }
         async fn unload(&self) {
