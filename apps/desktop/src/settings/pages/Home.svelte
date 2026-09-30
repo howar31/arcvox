@@ -29,12 +29,16 @@
     try { access = (await permissions()).accessibility; } catch { access = null; }
   }
 
+  async function loadRecent() {
+    try { recent = await listHistory(3); } catch (e) { recent ??= []; toast.error(errorMessage(e)); }
+  }
+
   onMount(() => {
     checkAccess();
     listMicrophones().then((m) => { mics = m; }).catch(() => { mics = []; });
     modelsInstalled().then((m) => { installedIds = new Set(m.map((x) => x.id)); }).catch(() => { installedIds = null; });
-    listHistory(3).then((h) => { recent = h; }).catch((e) => { recent = []; toast.error(errorMessage(e)); });
-    const onFocus = () => { checkAccess(); };
+    loadRecent();
+    const onFocus = () => { checkAccess(); loadRecent(); };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   });
@@ -62,7 +66,7 @@
   function engineLine(id: string | null): { name: string; known: boolean; meta: string; missing: boolean } {
     if (id === null) return { name: t("home.no_rewrite"), known: true, meta: t("home.no_rewrite_meta"), missing: false };
     const p = find(id);
-    if (!p) return { name: id, known: false, meta: t("home.meta.not_found"), missing: false };
+    if (!p) return { name: id, known: false, meta: "", missing: false };
     const m = engineMeta(p, installedIds ?? new Set());
     if (m.kind === "builtin") return { name: p.label, known: true, meta: t("home.meta.builtin"), missing: false };
     if (m.kind === "external") return { name: p.label, known: true, meta: m.detail ?? t("home.meta.external"), missing: false };
@@ -72,17 +76,30 @@
 
   const hasOpencc = $derived(!!profile?.steps.some((s) => s.step === "opencc"));
 
-  async function saveProfile(next: Profile) {
-    try { await upsertProfile($state.snapshot(next) as Profile); toast.ok(t("common.saved")); } catch (e) { toast.error(errorMessage(e)); }
-  }
-  function changeEngine(role: Role, value: string) {
+  // The selects are one-way bound: after a failed save the element is put back on the stored value,
+  // so the menu shows what is in use and choosing the same option again fires a change.
+  async function changeEngine(role: Role, select: HTMLSelectElement) {
     if (!profile) return;
-    if (role === "asr") saveProfile({ ...profile, asr_provider: value });
-    else saveProfile(withLlm(profile, value === "" ? null : value));
+    const value = select.value;
+    const next = role === "asr" ? { ...profile, asr_provider: value } : withLlm(profile, value === "" ? null : value);
+    try {
+      await upsertProfile($state.snapshot(next) as Profile);
+      toast.ok(t("common.saved"));
+    } catch (e) {
+      const current = defaultProfile(config.value);
+      select.value = (role === "asr" ? current?.asr_provider : current?.llm_provider) ?? "";
+      toast.error(errorMessage(e));
+    }
   }
-  async function changeMic(value: string) {
+  async function changeMic(select: HTMLSelectElement) {
     if (!client.value) return;
-    try { await client.save({ ...$state.snapshot(client.value), microphone: value }); toast.ok(t("common.saved")); } catch (e) { toast.error(errorMessage(e)); }
+    try {
+      await client.save({ ...$state.snapshot(client.value), microphone: select.value });
+      toast.ok(t("common.saved"));
+    } catch (e) {
+      select.value = client.value?.microphone ?? "builtin";
+      toast.error(errorMessage(e));
+    }
   }
 
   function appsLine(p: Profile): string {
@@ -109,7 +126,10 @@
 </script>
 
 {#snippet engineName(id: string | null)}
-  {#if id !== null && !find(id)}<span class="unknown">{id}</span> <Tag tone="warn">{t("home.not_found")}</Tag>{:else}{id === null ? t("home.no_rewrite") : find(id)?.label}{/if}
+  <span class="eng">
+    {#if id !== null && !find(id)}<span class="line unknown">{id}</span><Tag tone="warn">{t("home.not_found")}</Tag>
+    {:else}<span class="line">{id === null ? t("home.no_rewrite") : find(id)?.label}</span>{/if}
+  </span>
 {/snippet}
 
 <PageHead title={t("nav.home")} description={t("home.description")} />
@@ -136,7 +156,7 @@
       <div class="meta" class:warn={micAbsent}>{micMeta}</div>
       <span class="menu act">
         <span class="btn quiet" aria-hidden="true">{t("home.change")}</span>
-        <select value={mic} aria-label={t("home.change_mic")} onchange={(e) => changeMic(e.currentTarget.value)}>
+        <select value={mic} aria-label={t("home.change_mic")} onchange={(e) => changeMic(e.currentTarget)}>
           <option value="builtin">{t("general.mic_builtin")}</option>
           <option value="default">{t("general.mic_default")}</option>
           {#each mics as m (m)}<option value={m}>{m}</option>{/each}
@@ -158,7 +178,7 @@
         {:else}
           <span class="menu act">
             <span class="btn quiet" aria-hidden="true">{t("home.change")}</span>
-            <select value={id ?? ""} aria-label={t(`home.change_${role}`)} onchange={(e) => changeEngine(role, e.currentTarget.value)}>
+            <select value={id ?? ""} aria-label={t(`home.change_${role}`)} onchange={(e) => changeEngine(role, e.currentTarget)}>
               {#if role === "llm"}<option value="">{t("home.no_rewrite")}</option>{/if}
               {#each choices[role] as p (p.id)}<option value={p.id}>{p.label}</option>{/each}
               {#if id !== null && !choices[role].some((p) => p.id === id)}<option value={id} disabled>{id}</option>{/if}
@@ -184,7 +204,7 @@
           <span class="name line">{p.name}</span>
           <span class="sub line">{appsLine(p)}</span>
         </span>
-        <span class="pair line">{@render engineName(p.asr_provider)} <span class="arrow" aria-hidden="true">→</span> {@render engineName(p.llm_provider)}</span>
+        <span class="pair">{@render engineName(p.asr_provider)}<span class="arrow" aria-hidden="true">→</span>{@render engineName(p.llm_provider)}</span>
       </Row>
     {:else}
       <Empty text={t("home.by_app_empty")}>
@@ -257,8 +277,10 @@
 
   .who { display: flex; flex-direction: column; flex: 1; min-width: 0; }
   .line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .pair { flex: 0 1 auto; max-width: 48%; color: var(--ink-2); }
-  .arrow { color: var(--ink-3); }
+  /* The two engine names share the space; each truncates on its own. */
+  .pair { display: flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0; max-width: 52%; color: var(--ink-2); }
+  .eng { display: flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0; max-width: 50%; }
+  .arrow { flex: none; color: var(--ink-3); }
   .final { line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
   .time { width: 44px; flex: none; align-self: flex-start; padding-top: 1px; color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums; }
   .titled :global(.section.untitled) { margin-top: 0; }
