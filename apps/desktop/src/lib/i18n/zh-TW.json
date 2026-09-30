@@ -287,7 +287,6 @@
   "home.meta.local_missing": "本機模型，尚未下載",
   "home.meta.builtin": "系統內建",
   "home.meta.external": "外部服務",
-  "home.meta.not_found": "找不到這個引擎",
   "home.not_found": "找不到",
   "home.no_rewrite": "不改寫",
   "home.no_rewrite_meta": "直接使用辨識結果",
@@ -303,7 +302,7 @@
   "home.meta_sep": "，",
   "home.recent": "最近的口述",
   "home.see_all": "查看全部",
-  "home.recent_empty": "還沒有口述紀錄。按住 fn 開始說話。",
+  "home.recent_empty": "按住 fn 說話，口述的內容會出現在這裡。",
   "home.copied": "已複製",
   "home.mic.builtin_name": "內建麥克風"
 }

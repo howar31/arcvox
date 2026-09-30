@@ -287,7 +287,6 @@
   "home.meta.local_missing": "Local model, not downloaded",
   "home.meta.builtin": "Built into the system",
   "home.meta.external": "External service",
-  "home.meta.not_found": "Engine not found",
   "home.not_found": "Not found",
   "home.no_rewrite": "No rewriting",
   "home.no_rewrite_meta": "Recognized text is used as is",
@@ -303,7 +302,7 @@
   "home.meta_sep": ", ",
   "home.recent": "Recent dictation",
   "home.see_all": "See all",
-  "home.recent_empty": "Nothing dictated yet. Hold fn to speak.",
+  "home.recent_empty": "Hold fn and speak; your dictation appears here.",
   "home.copied": "Copied",
   "home.mic.builtin_name": "Built-in mic"
 }

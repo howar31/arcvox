@@ -129,7 +129,7 @@ pub fn app_name(bundle_id: &str) -> Option<String> {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn system_app_names(bundle_ids: Vec<String>) -> HashMap<String, Option<String>> {
     bundle_ids
         .into_iter()
