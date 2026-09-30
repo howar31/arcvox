@@ -188,18 +188,39 @@ const SETTINGS_PAGES: &[&str] = &[
     "dictionary",
     "history",
     "models",
+    "speed",
     "about",
 ];
 
 /// Shows the settings window; `page` selects a page through a URL hash.
+/// While the window is open the app uses the regular activation policy so it
+/// has a Dock icon and appears in the application switcher.
 pub fn open_settings<R: Runtime>(app: &AppHandle<R>, page: Option<&str>) {
-    if let Some(w) = app.get_webview_window("settings") {
-        if let Some(p) = page {
-            if SETTINGS_PAGES.contains(&p) {
+    let page = page
+        .filter(|p| SETTINGS_PAGES.contains(p))
+        .map(str::to_string);
+    let handle = app.clone();
+    // Activation policy and window calls must run on the main thread.
+    let _ = app.run_on_main_thread(move || {
+        #[cfg(target_os = "macos")]
+        let _ = handle.set_activation_policy(tauri::ActivationPolicy::Regular);
+        if let Some(w) = handle.get_webview_window("settings") {
+            if let Some(p) = page {
                 let _ = w.eval(format!("window.location.hash = '#{p}'"));
             }
+            let _ = w.show();
+            let _ = w.set_focus();
         }
-        let _ = w.show();
-        let _ = w.set_focus();
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn speed_page_is_reachable_and_unknown_pages_are_not() {
+        assert!(SETTINGS_PAGES.contains(&"speed"));
+        assert!(!SETTINGS_PAGES.contains(&"javascript:alert(1)"));
     }
 }
