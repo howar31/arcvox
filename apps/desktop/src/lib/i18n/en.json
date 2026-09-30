@@ -300,7 +300,7 @@
   "engines.create": "Create engine",
   "engines.created": "Engine created",
   "engines.catalogue": "Local models to download",
-  "engines.model_meta": "{size}, {license}",
+  "engines.model_meta": "{size}, {license}, {languages}",
   "engines.download": "Download",
   "engines.delete_model": "Delete",
   "engines.model_deleted": "Model deleted",
@@ -316,7 +316,9 @@
   "engines.source.cached": "Catalogue: cached copy",
   "engines.source.bundled": "Catalogue: built-in",
   "engines.refresh": "Refresh",
-  "engines.model_meta_desc": "{size}, {license}. {description}",
   "engines.default_user": "{name} (default)",
-  "engines.desc.custom": "Imported file {file}"
+  "engines.desc.custom": "Imported file {file}",
+  "engines.no_role": "No role",
+  "engines.file_missing": "File missing",
+  "engines.no_role_help": "Choose Transcribe or Rewrite text under Advanced; an engine needs at least one."
 }

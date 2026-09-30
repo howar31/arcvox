@@ -30,11 +30,15 @@ export interface EngineMeta {
   detail: string | null;
 }
 
-/** Where an engine runs and whether it can run now. */
-export function engineMeta(provider: ProviderConfig, installedIds: Set<string>): EngineMeta {
+/**
+ * Where an engine runs and whether it can run now. `installedPaths`, when given, also checks an imported
+ * file by path; without it a set path counts as ready.
+ */
+export function engineMeta(provider: ProviderConfig, installedIds: Set<string>, installedPaths?: Set<string>): EngineMeta {
   if (provider.kind === "native") return { kind: "builtin", ready: true, detail: null };
   if (provider.kind === "http") return { kind: "external", ready: true, detail: hostOf(provider.base_url) };
-  const ready = provider.model_id ? installedIds.has(provider.model_id) : provider.model_path !== null;
+  const path = provider.model_path;
+  const ready = provider.model_id ? installedIds.has(provider.model_id) : path !== null && (!installedPaths || installedPaths.has(path));
   return { kind: "local", ready, detail: null };
 }
 

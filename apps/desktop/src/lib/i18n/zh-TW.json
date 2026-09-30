@@ -300,7 +300,7 @@
   "engines.create": "建立引擎",
   "engines.created": "已建立引擎",
   "engines.catalogue": "可下載的本機模型",
-  "engines.model_meta": "{size}，{license}",
+  "engines.model_meta": "{size}，{license}，{languages}",
   "engines.download": "下載",
   "engines.delete_model": "刪除",
   "engines.model_deleted": "已刪除模型",
@@ -316,7 +316,9 @@
   "engines.source.cached": "模型目錄：快取副本",
   "engines.source.bundled": "模型目錄：內建",
   "engines.refresh": "重新整理",
-  "engines.model_meta_desc": "{size}，{license}。{description}",
   "engines.default_user": "{name}（預設）",
-  "engines.desc.custom": "匯入的模型檔 {file}"
+  "engines.desc.custom": "匯入的模型檔 {file}",
+  "engines.no_role": "未指定用途",
+  "engines.file_missing": "找不到檔案",
+  "engines.no_role_help": "請在「進階」裡勾選「語音轉文字」或「改寫文字」，引擎至少要有一種用途。"
 }

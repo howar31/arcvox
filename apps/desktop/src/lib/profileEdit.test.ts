@@ -58,6 +58,13 @@ describe("engineMeta", () => {
     expect(engineMeta(base, new Set(["m1"]))).toEqual({ kind: "local", ready: true, detail: null });
     expect(engineMeta(base, new Set())).toEqual({ kind: "local", ready: false, detail: null });
   });
+  it("checks an imported file against the installed paths", () => {
+    const file = { ...base, model_id: null, model_path: "/models/custom/a.bin" };
+    expect(engineMeta(file, new Set(), new Set(["/models/custom/a.bin"])).ready).toBe(true);
+    expect(engineMeta(file, new Set(), new Set(["/models/custom/b.bin"])).ready).toBe(false);
+    // Without the installed paths a set path counts as ready.
+    expect(engineMeta(file, new Set()).ready).toBe(true);
+  });
   it("reports a native engine as built in", () => {
     expect(engineMeta({ ...base, kind: "native", model_id: null, native_id: "apple.dictation" }, new Set())).toEqual({ kind: "builtin", ready: true, detail: null });
   });

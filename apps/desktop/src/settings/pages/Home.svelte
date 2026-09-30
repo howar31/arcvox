@@ -23,6 +23,7 @@
   let access = $state<boolean | null>(null);
   let mics = $state<string[]>([]);
   let installedIds = $state<Set<string> | null>(null);
+  let installedPaths = $state<Set<string>>(new Set());
   let recent = $state<Utterance[] | null>(null);
 
   async function checkAccess() {
@@ -36,7 +37,7 @@
   onMount(() => {
     checkAccess();
     listMicrophones().then((m) => { mics = m; }).catch(() => { mics = []; });
-    modelsInstalled().then((m) => { installedIds = new Set(m.map((x) => x.id)); }).catch(() => { installedIds = null; });
+    modelsInstalled().then((m) => { installedIds = new Set(m.map((x) => x.id)); installedPaths = new Set(m.map((x) => x.path)); }).catch(() => { installedIds = null; });
     loadRecent();
     const onFocus = () => { checkAccess(); loadRecent(); };
     window.addEventListener("focus", onFocus);
@@ -67,7 +68,7 @@
     if (id === null) return { name: t("home.no_rewrite"), known: true, meta: t("home.no_rewrite_meta"), missing: false };
     const p = find(id);
     if (!p) return { name: id, known: false, meta: "", missing: false };
-    const m = engineMeta(p, installedIds ?? new Set());
+    const m = engineMeta(p, installedIds ?? new Set(), installedIds ? installedPaths : undefined);
     if (m.kind === "builtin") return { name: p.label, known: true, meta: t("home.meta.builtin"), missing: false };
     if (m.kind === "external") return { name: p.label, known: true, meta: m.detail ?? t("home.meta.external"), missing: false };
     if (installedIds === null) return { name: p.label, known: true, meta: t("home.meta.local"), missing: false };

@@ -6,7 +6,7 @@
     modelsManifest, modelsManifestNow, onModelDownloadProgress, probeProvider, reveal, upsertProvider,
     type DownloadProgress, type InstalledModel, type ManifestView, type ModelEntry, type ProviderConfig,
   } from "../../lib/api";
-  import { engineFromModel, enginesOf, recommendedMissing, runtimeFor, unusedModels, type Role } from "../../lib/engines";
+  import { engineFromModel, enginesOf, hasRole, recommendedMissing, runtimeFor, unusedModels, type Role } from "../../lib/engines";
   import { t } from "../../lib/i18n";
   import { usedBy } from "../../lib/labels";
   import { rowStatus } from "../../lib/models.svelte";
@@ -46,6 +46,7 @@
   const providers = $derived(config.value?.providers ?? []);
   const engines = $derived(enginesOf(config.value, role));
   const installedIds = $derived(new Set(installed.map((m) => m.id)));
+  const installedPaths = $derived(new Set(installed.map((m) => m.path)));
   const catalogue = $derived((manifest?.models ?? []).filter((m) => m.role === role));
   const unused = $derived(unusedModels(installed, providers, role));
   const imported = $derived(installed.filter((m) => m.custom && m.runtime === runtimeFor(role)));
@@ -150,10 +151,8 @@
     } catch (e) { toast.error(errorMessage(e)); }
   }
   const percent = (received: number, total: number): number => (total > 0 ? Math.min(100, Math.floor((received / total) * 100)) : 0);
-  function entryMeta(m: ModelEntry): string {
-    const vars = { size: formatBytes(m.size_bytes), license: m.license, description: m.description };
-    return t(m.description ? "engines.model_meta_desc" : "engines.model_meta", vars);
-  }
+  const entryMeta = (m: ModelEntry): string =>
+    t("engines.model_meta", { size: formatBytes(m.size_bytes), license: m.license, languages: m.languages.join(t("engines.list_sep")) });
 </script>
 
 <PageHead title={t("nav.engines")} description={t("engines.description")}>
@@ -171,7 +170,7 @@
 
 <Group title={t("engines.configured")}>
   {#each engines as p (p.id)}
-    {@const meta = engineMeta(p, installedIds)}
+    {@const meta = engineMeta(p, installedIds, installedPaths)}
     {@const probe = rowProbes[p.id]}
     <Row>
       {#snippet leading()}<Ring tone={usedBy(config.value, p.id).length > 0 ? "accent" : "off"} />{/snippet}
@@ -180,7 +179,9 @@
           <span class="name">{p.label}</span>
           <Tag>{t("engines.tag." + p.kind)}</Tag>
           {#if recommended(p)}<Tag tone="accent">{t("engines.recommended")}</Tag>{/if}
-          {#if meta.kind === "local" && !meta.ready && (p.model_id || p.model_path)}<Tag tone="warn">{t("engines.not_downloaded")}</Tag>{/if}
+          {#if !hasRole(p)}<Tag tone="warn">{t("engines.no_role")}</Tag>{/if}
+          {#if meta.kind === "local" && !meta.ready && p.model_id}<Tag tone="warn">{t("engines.not_downloaded")}</Tag>
+          {:else if meta.kind === "local" && !meta.ready && p.model_path}<Tag tone="warn">{t("engines.file_missing")}</Tag>{/if}
         </div>
         <small>{describe(p)}</small>
         <small>{usersLine(p)}</small>
@@ -214,7 +215,8 @@
           <span class="name">{m.label}</span>
           {#if m.recommended}<Tag tone="accent">{t("engines.recommended")}</Tag>{/if}
         </div>
-        <small>{entryMeta(m)}</small>
+        <small class="line" title={entryMeta(m)}>{entryMeta(m)}</small>
+        {#if m.description}<small>{m.description}</small>{/if}
         {#if s.kind === "error"}<small class="probe bad">{s.message}</small>{/if}
       </div>
       {#if s.kind === "missing"}
@@ -271,6 +273,7 @@
   .title { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 6px; min-width: 0; }
   .title .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
   .info small { display: block; color: var(--ink-2); font-size: 12px; overflow-wrap: anywhere; }
+  .info small.line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .probe.ok { color: var(--ok); }
   .probe.bad { color: var(--live); }
   .bar { width: 96px; height: 4px; border-radius: 2px; background: var(--sunken); overflow: hidden; flex: none; }

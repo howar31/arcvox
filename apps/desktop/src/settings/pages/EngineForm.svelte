@@ -4,7 +4,7 @@
     deleteProvider, deleteSecret, errorMessage, hasSecret, nativeInstallLanguage, nativeStatus, onNativeInstallProgress, probeProvider, setSecret,
     upsertProvider, type InstalledModel, type ManifestView, type NativeStatusView, type ProviderConfig, type ProviderKind, type Runtime,
   } from "../../lib/api";
-  import { blankForRole, freshId, type Role } from "../../lib/engines";
+  import { blankForRole, freshId, hasRole, type Role } from "../../lib/engines";
   import { t } from "../../lib/i18n";
   import { defaultProfile } from "../../lib/labels";
   import { baseName, capsForNative, capsForRuntime, describeProbe, NATIVE_DICTATION, NATIVE_FM } from "../../lib/providerForm";
@@ -30,6 +30,9 @@
   let editing = $state<ProviderConfig>(initial ? structuredClone($state.snapshot(initial)) : blankForRole("embedded", role));
   let apiKey = $state("");
   let keyPresent = $state(false);
+  // Save waits until the stored key's presence is known, so a slow check cannot drop the key.
+  // svelte-ignore state_referenced_locally
+  let keyKnown = $state(!initial?.api_key_ref);
   let probe = $state<{ state: "wait" | "ok" | "bad"; text: string } | null>(null);
   let native = $state<NativeStatusView | null>(null);
   let installing = $state(false);
@@ -42,6 +45,7 @@
   // The select value encodes either a catalogue id or `custom:<path>`.
   const selectedModel = $derived(editing.model_path ? `custom:${editing.model_path}` : (editing.model_id ?? ""));
   const missingModel = $derived(editing.kind === "embedded" && !editing.model_id && !editing.model_path);
+  const noRole = $derived(!hasRole(editing));
   const kinds = $derived(
     (["embedded", "native", "http"] as const).map((k) => ({ value: k as ProviderKind, label: t("engines.kind." + k) })),
   );
@@ -55,7 +59,10 @@
     onNativeInstallProgress((f) => (installFraction = f)).then((u) => { if (disposed) u(); else unlisten = u; });
     if (editing.kind === "native") refreshNative();
     if (editing.api_key_ref) {
-      hasSecret(editing.api_key_ref).then((v) => { keyPresent = v; }).catch(() => { keyPresent = false; });
+      hasSecret(editing.api_key_ref)
+        .then((v) => { keyPresent = v; })
+        .catch(() => { keyPresent = false; })
+        .finally(() => { keyKnown = true; });
     }
     return () => { disposed = true; unlisten?.(); };
   });
@@ -78,8 +85,9 @@
 
   function setKind(kind: ProviderKind) {
     if (kind === editing.kind) return;
-    // Keep what the user already typed; the rest comes from the new kind's blank for this role.
-    const fresh = blankForRole(kind, role);
+    // Back on the kind the engine was saved with, its stored fields return (the key reference included,
+    // so a stored key stays attached); otherwise the new kind's blank for this role. The name is kept.
+    const fresh = initial && kind === initial.kind ? (structuredClone($state.snapshot(initial)) as ProviderConfig) : blankForRole(kind, role);
     fresh.id = editing.id;
     fresh.label = editing.label;
     editing = fresh;
@@ -134,6 +142,9 @@
         else if (!keyPresent) { p.api_key_ref = null; }
       }
       await upsertProvider(p);
+      // A key the engine no longer refers to (kind changed, or stored under a new reference) is removed.
+      const oldRef = initial?.api_key_ref;
+      if (oldRef && oldRef !== p.api_key_ref) await deleteSecret(oldRef).catch(() => {});
       toast.ok(t("common.saved"));
       open = false;
     } catch (e) { toast.error(errorMessage(e)); }
@@ -228,6 +239,7 @@
         </div>
       </div>
     </details>
+    {#if noRole}<p class="note-bad" role="alert">{t("engines.no_role_help")}</p>{/if}
 
     {#if probe}<p class="probe {probe.state}" role="status">{probe.text}</p>{/if}
   </div>
@@ -236,7 +248,7 @@
     {#if !isNew}<button type="button" class="btn quiet danger delete" onclick={remove} disabled={busy}>{t("engines.delete")}</button>{/if}
     <button type="button" class="btn" onclick={runProbe} disabled={busy || probe?.state === "wait"}>{t("engines.test")}</button>
     <button type="button" class="btn" onclick={() => (open = false)}>{t("common.cancel")}</button>
-    <button type="button" class="btn primary" onclick={save} disabled={busy || missingModel}>{t("common.save")}</button>
+    <button type="button" class="btn primary" onclick={save} disabled={busy || missingModel || noRole || !keyKnown}>{t("common.save")}</button>
   {/snippet}
 </Modal>
 
@@ -257,5 +269,6 @@
   .probe { margin: 0; font-size: 12px; color: var(--ink-2); overflow-wrap: anywhere; }
   .probe.ok { color: var(--ok); }
   .probe.bad { color: var(--live); }
+  .note-bad { margin: -4px 0 0; font-size: 12px; color: var(--live); }
   .delete { margin-right: auto; margin-left: -6px; }
 </style>
