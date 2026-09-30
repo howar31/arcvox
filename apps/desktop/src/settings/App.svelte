@@ -99,10 +99,7 @@
         {:else if route.page === "prompt"}<Prompt />
         {:else if route.page === "dictionary"}<Dictionary />
         {:else if route.page === "history"}<History />
-        {:else}
-          <div class="legacy">
-            {#if route.page === "speed"}<Speed />{/if}
-          </div>
+        {:else if route.page === "speed"}<Speed />
         {/if}
       </div>
     </main>

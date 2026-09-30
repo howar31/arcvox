@@ -15,7 +15,7 @@
   /* Widget pill: the same in both themes. */
   --pill-bg: rgba(22,23,27,.92); --pill-ink: #F1F2F5; --pill-ink-2: #A3A9B7;
   --pill-live: #FF6B4F; --pill-live-halo: rgba(255,107,79,.22); --pill-accent: #8FA2FF;
-  --panel: var(--pill-bg); --panel-fg: var(--pill-ink);
+  --pill-line: rgba(255,255,255,.08); --pill-button: rgba(255,255,255,.12); --pill-button-hover: rgba(255,255,255,.2);
 
   --font: -apple-system, BlinkMacSystemFont, "PingFang TC", "Segoe UI", "Microsoft JhengHei", sans-serif;
   --font-round: ui-rounded, "SF Pro Rounded", -apple-system, "PingFang TC", "Segoe UI", sans-serif;
@@ -77,21 +77,3 @@ input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
-
-/* Pages not yet moved to the component set keep their earlier look. */
-.legacy { --muted: var(--ink-2); --border: var(--line-strong); }
-.legacy section { margin: 0 0 20px; }
-.legacy h2 { margin: 0 0 12px; font: 600 21px/1.2 var(--font-round); }
-.legacy h3 { margin: 16px 0 6px; font-size: 12px; font-weight: 600; color: var(--ink-2); }
-.legacy label { display: block; margin: 4px 0; }
-.legacy input:not([type]) { height: 26px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--surface); }
-.legacy textarea { font-family: var(--font-mono); }
-.legacy button { height: 26px; padding: 0 11px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--surface); white-space: nowrap; }
-.legacy button:hover { background: var(--sunken); }
-.legacy button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; }
-.legacy .row { display: flex; align-items: center; gap: 8px; margin: 4px 0; flex-wrap: wrap; }
-.legacy .muted { color: var(--ink-2); }
-.legacy .status { color: var(--ink-2); min-height: 1.2em; }
-.legacy table { border-collapse: collapse; width: 100%; }
-.legacy th, .legacy td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); }
-.legacy .form { padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
