@@ -1,0 +1,35 @@
+import type { Utterance } from "./api";
+
+export type DayKey = "today" | "yesterday" | string;
+
+function dayKey(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** Groups rows by local calendar day, newest day and newest row first.
+ * Keys are "today", "yesterday", or the date as YYYY-MM-DD. */
+export function groupByDay(rows: Utterance[], now: Date): { key: DayKey; rows: Utterance[] }[] {
+  const today = dayKey(now);
+  const yesterday = dayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
+  const groups: { key: DayKey; rows: Utterance[] }[] = [];
+  for (const row of [...rows].sort((a, b) => b.ts - a.ts)) {
+    const date = dayKey(new Date(row.ts * 1000));
+    const key = date === today ? "today" : date === yesterday ? "yesterday" : date;
+    const last = groups[groups.length - 1];
+    if (last && last.key === key) last.rows.push(row);
+    else groups.push({ key, rows: [row] });
+  }
+  return groups;
+}
+
+/** Milliseconds as seconds with one decimal; null when the step did not run. */
+export function seconds(ms: number | null): string | null {
+  return ms === null ? null : (ms / 1000).toFixed(1);
+}
+
+/** Whether the raw transcript says something the final text does not. */
+export function showsRaw(u: Utterance): boolean {
+  const raw = u.raw_text.trim();
+  return raw !== "" && raw !== u.final_text.trim();
+}
