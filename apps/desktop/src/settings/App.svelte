@@ -10,6 +10,7 @@
   import Prompt from "./pages/Prompt.svelte";
   import Dictionary from "./pages/Dictionary.svelte";
   import History from "./pages/History.svelte";
+  import Speed from "./pages/Speed.svelte";
   import About from "./pages/About.svelte";
 
   let page = $state<Page>(pageFromHash(location.hash));
@@ -49,6 +50,7 @@
     {:else if page === "prompt"}<Prompt />
     {:else if page === "dictionary"}<Dictionary />
     {:else if page === "history"}<History />
+    {:else if page === "speed"}<Speed />
     {:else if page === "about"}<About />
     {/if}
   </main>
