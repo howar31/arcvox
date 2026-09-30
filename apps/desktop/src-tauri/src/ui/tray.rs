@@ -132,6 +132,9 @@ impl<R: Runtime> Tray<R> {
     pub fn set_state(&self, state: UiState, language: Language) {
         *self.last_state.lock().unwrap() = state;
         let _ = self.icon.set_icon(Some(status_icon(state)));
+        // Replacing the image resets the template flag on macOS; restore it so
+        // the icon follows the menu bar's light or dark appearance.
+        let _ = self.icon.set_icon_as_template(true);
         let _ = self.status.set_text(text(language, status_msg(state)));
     }
 
