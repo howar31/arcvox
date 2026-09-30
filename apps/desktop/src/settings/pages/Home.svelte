@@ -5,13 +5,15 @@
     type Profile, type ProviderConfig, type Utterance,
   } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
-  import { currentLanguage, t } from "../../lib/i18n";
+  import { formatDateTime, formatShortDate, formatTime } from "../../lib/format";
+  import { t } from "../../lib/i18n";
   import { defaultProfile, profileName } from "../../lib/labels";
   import { appsSummary, engineMeta, NEW_PROFILE, withLlm } from "../../lib/profileEdit";
   import { go } from "../../lib/route";
   import { client, config } from "../../lib/store.svelte";
   import Empty from "../../lib/ui/Empty.svelte";
   import Group from "../../lib/ui/Group.svelte";
+  import Icon from "../../lib/ui/Icon.svelte";
   import PageHead from "../../lib/ui/PageHead.svelte";
   import Ring from "../../lib/ui/Ring.svelte";
   import Row from "../../lib/ui/Row.svelte";
@@ -115,14 +117,9 @@
     try { await widgetCopy(text); toast.ok(t("home.copied")); } catch (e) { toast.error(errorMessage(e)); }
   }
 
-  const locale = $derived(currentLanguage() === "zh-TW" ? "zh-TW" : "en");
   function when(ts: number): { short: string; full: string } {
-    const d = new Date(ts * 1000);
-    const today = new Date().toDateString() === d.toDateString();
-    const short = today
-      ? d.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
-      : d.toLocaleDateString(locale, { month: "numeric", day: "numeric" });
-    return { short, full: d.toLocaleString(locale) };
+    const today = new Date().toDateString() === new Date(ts * 1000).toDateString();
+    return { short: today ? formatTime(ts) : formatShortDate(ts), full: formatDateTime(ts) };
   }
 </script>
 
@@ -230,7 +227,7 @@
             <span class="final">{u.final_text}</span>
             <span class="sub line">{[u.app_name, profileName(config.value, u.profile_id)].filter(Boolean).join(t("home.meta_sep"))}</span>
           </span>
-          <button type="button" class="btn quiet" onclick={() => copy(u.final_text)}>{t("widget.copy")}</button>
+          <button type="button" class="btn quiet icon-btn" aria-label={t("widget.copy")} title={t("widget.copy")} onclick={() => copy(u.final_text)}><Icon name="copy" /></button>
         </Row>
       {:else}
         <Empty text={t("home.recent_empty")} />
@@ -283,6 +280,8 @@
   .eng { display: flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0; max-width: 50%; }
   .arrow { flex: none; color: var(--ink-3); }
   .final { line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+  .icon-btn { width: 26px; padding: 0; margin-right: -6px; align-self: flex-start; color: var(--ink-2); }
+  .icon-btn:hover { color: var(--ink); }
   .time { width: 44px; flex: none; align-self: flex-start; padding-top: 1px; color: var(--ink-2); font-size: 12px; font-variant-numeric: tabular-nums; }
   .titled :global(.section.untitled) { margin-top: 0; }
 </style>

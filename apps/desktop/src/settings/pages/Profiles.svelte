@@ -6,6 +6,7 @@
   import { appsSummary, NEW_PROFILE } from "../../lib/profileEdit";
   import { go } from "../../lib/route";
   import { config } from "../../lib/store.svelte";
+  import Empty from "../../lib/ui/Empty.svelte";
   import Group from "../../lib/ui/Group.svelte";
   import Icon from "../../lib/ui/Icon.svelte";
   import Modal from "../../lib/ui/Modal.svelte";
@@ -67,7 +68,7 @@
 
 {#snippet engineName(id: string | null)}
   {@const name = label(id)}
-  <span class="eng">
+  <span class="eng" class:missing={name === null}>
     {#if name === null}<span class="line unknown">{id}</span><Tag tone="warn">{t("home.not_found")}</Tag>
     {:else}<span class="line">{name}</span>{/if}
   </span>
@@ -80,7 +81,7 @@
 </PageHead>
 
 {#if config.value}
-  <Group help={profiles.length < 2 ? t("profiles.only_default") : undefined}>
+  <Group>
     {#each profiles as p (p.id)}
       <Row onclick={() => go("profiles", p.id)}>
         {#snippet leading()}<Ring tone={p.is_default ? "accent" : "off"} />{/snippet}
@@ -95,6 +96,13 @@
       </Row>
     {/each}
   </Group>
+  {#if profiles.length < 2}
+    <Group>
+      <Empty text={t("profiles.only_default")}>
+        {#snippet action()}<button type="button" class="btn" onclick={() => (adding = true)}><Icon name="plus" size={14} />{t("profiles.add")}</button>{/snippet}
+      </Empty>
+    </Group>
+  {/if}
 {/if}
 
 <Modal bind:open={adding} title={t("profiles.add")}>
@@ -111,14 +119,20 @@
 </Modal>
 
 <style>
-  .who { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+  /* The name keeps its room up to a limit; the engine pair gives way first. */
+  .who { display: flex; flex-direction: column; flex: 1 0 auto; min-width: 0; max-width: 50%; }
+  /* The applications line does not widen the name column. */
+  .who > .sub { contain: inline-size; }
   .title { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* The two engine names share the space; each truncates on its own. */
-  .pair { display: flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0; max-width: 52%; color: var(--ink-2); }
+  /* The two engine names share the space; each truncates on its own, before the profile name does. */
+  .pair { display: flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0; max-width: 52%; overflow: hidden; color: var(--ink-2); }
   .eng { display: flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0; max-width: 50%; }
+  /* A missing engine keeps its tag and a short id; the other name gives way. */
+  .eng.missing { flex: none; max-width: none; }
   .arrow { flex: none; color: var(--ink-3); }
-  .unknown { color: var(--warn); }
+  /* An id that is not found keeps a few characters next to its tag. */
+  .unknown { color: var(--warn); max-width: 5em; }
   .choices.busy { opacity: .55; }
   .adding { margin-right: auto; align-self: center; color: var(--ink-2); font-size: 12px; }
   .choices { margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink); }

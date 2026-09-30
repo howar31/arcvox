@@ -140,7 +140,7 @@
 {#if items !== null}
   <PageHead title={t("nav.dictionary")} description={t("dictionary.note")}>
     {#snippet actions()}
-      <button type="button" class="btn" onclick={add}><Icon name="plus" size={14} />{t("dictionary.add")}</button>
+      <button type="button" class="btn primary" onclick={add}><Icon name="plus" size={14} />{t("dictionary.add")}</button>
     {/snippet}
   </PageHead>
 
@@ -204,9 +204,10 @@
   .entry { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; padding: 2px 0; }
   .line { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
   .second { align-items: center; }
-  .term { flex: 1; min-width: 0; min-height: 0; height: 30px; padding: 4px 9px; border-radius: 6px; line-height: 1.5; resize: none; overflow: hidden; }
-  .tag { flex: none; margin-top: 5px; }
-  .icon-btn { width: 26px; padding: 0; margin: 2px -6px 0 0; color: var(--ink-2); flex: none; }
+  /* One line is as tall as the other single-line fields (26 px). */
+  .term { flex: 1; min-width: 0; min-height: 0; height: 26px; padding: 2px 8px; border-radius: 6px; line-height: 20px; resize: none; overflow: hidden; }
+  .tag { flex: none; margin-top: 3px; }
+  .icon-btn { width: 26px; padding: 0; margin: 0 -6px 0 0; color: var(--ink-2); flex: none; }
   .icon-btn:hover { color: var(--ink); }
   .lead { flex: none; }
   .aliases { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }

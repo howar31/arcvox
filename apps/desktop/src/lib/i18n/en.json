@@ -381,6 +381,7 @@
   "history.today": "Today",
   "history.yesterday": "Yesterday",
   "history.raw_line": "Transcript: {text}",
+  "history.deleted_profile": "(deleted)",
   "history.not_rewritten": "Not rewritten",
   "history.asr_secs": "recognition {secs} s",
   "history.llm_secs": "rewriting {secs} s",
