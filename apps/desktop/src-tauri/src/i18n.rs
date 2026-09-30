@@ -188,9 +188,9 @@ pub fn text(lang: Language, msg: Msg) -> &'static str {
         (Language::En, Msg::WidgetEngineUnavailable) => "Engine not ready; open Settings",
         (Language::ZhTw, Msg::WidgetAsrFailed) => "語音辨識失敗，未插入文字",
         (Language::En, Msg::WidgetAsrFailed) => "Speech recognition failed; nothing was inserted",
-        (Language::ZhTw, Msg::WidgetModelMissing) => "找不到本機模型，請到設定 > 模型下載",
+        (Language::ZhTw, Msg::WidgetModelMissing) => "找不到本機模型，請到設定 > 引擎與模型下載",
         (Language::En, Msg::WidgetModelMissing) => {
-            "Local model not found; download it in Settings > Models"
+            "Local model not found; download it in Settings > Engines and models"
         }
         (Language::ZhTw, Msg::WidgetModelCorrupt) => "模型檔案損毀，請重新下載",
         (Language::En, Msg::WidgetModelCorrupt) => "Model file is damaged; download it again",

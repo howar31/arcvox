@@ -1,161 +1,245 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
-  import { errorMessage, listMicrophones, openPrivacyPane, permissions, requestAccessibility, updateGeneral, type ClientSettings, type General } from "../../lib/api";
+  import { errorMessage, listMicrophones, openPrivacyPane, permissions, requestAccessibility, updateGeneral, type ClientSettings, type General, type InsertMethod } from "../../lib/api";
   import { t } from "../../lib/i18n";
   import { client, config } from "../../lib/store.svelte";
   import { invalidFields } from "../../lib/numbers";
+  import { guard } from "../../lib/guard.svelte";
+  import { toast } from "../../lib/ui/toast.svelte";
+  import PageHead from "../../lib/ui/PageHead.svelte";
+  import Group from "../../lib/ui/Group.svelte";
+  import Row from "../../lib/ui/Row.svelte";
+  import Ring from "../../lib/ui/Ring.svelte";
+  import Switch from "../../lib/ui/Switch.svelte";
+  import NumberField from "../../lib/ui/NumberField.svelte";
+  import SaveBar from "../../lib/ui/SaveBar.svelte";
+  import Icon from "../../lib/ui/Icon.svelte";
   import AddPerApp from "./AddPerApp.svelte";
 
   let mics = $state<string[]>([]);
   let accessibility = $state<boolean | null>(null);
   let autostart = $state(false);
-  let status = $state("");
+  // Drafts are edited in place; the base copies are what is saved on disk.
   let draft = $state<ClientSettings | null>(null);
   let general = $state<General | null>(null);
-  let loadedUiLanguage = "";
+  let baseClient = $state("");
+  let baseGeneral = $state("");
+  let saving = $state(false);
+  let problem = $state<string | undefined>(undefined);
 
-  onMount(async () => {
-    mics = await listMicrophones();
-    accessibility = (await permissions()).accessibility;
-    autostart = await isEnabled();
-    draft = structuredClone($state.snapshot(client.value!));
-    loadedUiLanguage = draft.ui_language;
-    // `config.value` is null when the engine failed to open; the
-    // client-settings section above still works since `client.json`
-    // loads independently, but there is no core config to read here.
-    if (config.value) general = structuredClone($state.snapshot(config.value.general));
+  const clientDirty = $derived(draft !== null && JSON.stringify(draft) !== baseClient);
+  const generalDirty = $derived(general !== null && JSON.stringify(general) !== baseGeneral);
+  const dirty = $derived(clientDirty || generalDirty);
+
+  $effect(() => {
+    guard.set(dirty);
+    return () => guard.set(false);
+  });
+  $effect(() => {
+    // A new edit clears the previous validation message.
+    JSON.stringify([draft, general]);
+    problem = undefined;
   });
 
-  async function saveClient() {
-    if (!draft) return;
-    const bad = invalidFields([
+  function reset() {
+    const c = structuredClone($state.snapshot(client.value!));
+    draft = c;
+    baseClient = JSON.stringify(c);
+    // `config.value` is null when the engine failed to open; the client
+    // settings still work since they load independently.
+    if (config.value) {
+      const g = structuredClone($state.snapshot(config.value.general));
+      general = g;
+      baseGeneral = JSON.stringify(g);
+    }
+  }
+
+  async function checkAccess() {
+    accessibility = (await permissions()).accessibility;
+  }
+
+  onMount(() => {
+    reset();
+    listMicrophones().then((m) => (mics = m)).catch(() => {});
+    checkAccess();
+    isEnabled().then((v) => (autostart = v)).catch(() => {});
+    const onFocus = () => { checkAccess(); };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  });
+
+  function invalid(): string[] {
+    const bad: string[] = [];
+    if (draft) bad.push(...invalidFields([
       { key: "general.hold_threshold", value: draft.hotkey.hold_threshold_ms, min: 100, max: 1000, integer: true },
       { key: "general.double_tap_window", value: draft.hotkey.double_tap_window_ms, min: 150, max: 1000, integer: true },
       { key: "general.max_utterance", value: draft.max_utterance_secs, min: 10, max: 1800, integer: true },
-    ]);
-    if (bad.length) { status = t("common.invalid_number", { field: t(bad[0]) }); return; }
-    try {
-      await client.save(draft);
-      status = t("common.saved");
-      // The shell only reads `ui_language` at mount, so a change needs a
-      // reload for every page (including this one) to re-render in it.
-      if (draft.ui_language !== loadedUiLanguage) location.reload();
-    } catch (e) { status = errorMessage(e); }
-  }
-  async function saveGeneral() {
-    if (!general) return;
-    const bad = invalidFields([
+    ]));
+    if (general) bad.push(...invalidFields([
       { key: "general.history_retention", value: general.history_retention_days, min: 1, integer: true },
       { key: "general.recording_retention", value: general.recording_retention_days, min: 1, integer: true },
       { key: "general.asr_timeout", value: general.asr_timeout_secs, min: 1, integer: true },
       { key: "general.llm_timeout", value: general.llm_timeout_secs, min: 1, integer: true },
       { key: "general.llm_idle_unload", value: general.llm_idle_unload_secs, min: 0, integer: true },
-    ]);
-    if (bad.length) { status = t("common.invalid_number", { field: t(bad[0]) }); return; }
-    try { await updateGeneral(general); status = t("common.saved"); } catch (e) { status = errorMessage(e); }
+    ]));
+    return bad;
   }
-  async function toggleAutostart() {
-    if (autostart) await disable(); else await enable();
-    autostart = await isEnabled();
+
+  async function save() {
+    const bad = invalid();
+    if (bad.length) { problem = t("common.invalid_number", { field: t(bad[0]) }); return; }
+    saving = true;
+    try {
+      const languageChanged = clientDirty && draft!.ui_language !== JSON.parse(baseClient).ui_language;
+      if (clientDirty) {
+        await client.save($state.snapshot(draft!));
+        baseClient = JSON.stringify(draft);
+      }
+      if (generalDirty) {
+        config.value = await updateGeneral($state.snapshot(general!));
+        baseGeneral = JSON.stringify(general);
+      }
+      // The shell reads the language once at start, so a change needs a
+      // reload for every page to render in it.
+      if (languageChanged) { location.reload(); return; }
+      toast.ok(t("common.saved"));
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      saving = false;
+    }
   }
+
+  async function setAutostart(on: boolean) {
+    try {
+      if (on) await enable(); else await disable();
+    } catch (e) {
+      toast.error(errorMessage(e));
+    }
+    autostart = await isEnabled().catch(() => !on);
+  }
+
   async function askAccessibility() {
     accessibility = await requestAccessibility();
   }
+
+  function setMethod(bundle: string, method: string) {
+    draft!.insertion.per_app[bundle] = method as InsertMethod;
+  }
 </script>
 
-<h2>{t("nav.general")}</h2>
+<PageHead title={t("nav.general")} />
 
-<section>
-  <h3>{t("general.permissions")}</h3>
-  <div class="row">
-    <span>{t("general.accessibility")}: {accessibility === null ? "..." : accessibility ? t("common.granted") : t("common.missing")}</span>
+<Group title={t("general.permissions")} help={t("general.fn_key_note")}>
+  <Row label={t("general.accessibility")} help={t("general.accessibility_help")}>
+    {#snippet leading()}<Ring tone={accessibility === null ? "off" : accessibility ? "ok" : "live"} />{/snippet}
     {#if accessibility === false}
-      <button onclick={askAccessibility}>{t("general.request")}</button>
-      <button onclick={() => openPrivacyPane("accessibility")}>{t("general.open_system_settings")}</button>
+      <button type="button" class="btn" onclick={askAccessibility}>{t("general.request")}</button>
+      <button type="button" class="btn quiet" onclick={() => openPrivacyPane("accessibility")}>{t("general.open_system_settings")}</button>
+    {:else if accessibility}
+      <span class="value">{t("common.granted")}</span>
     {/if}
-  </div>
-  <div class="row">
-    <span>{t("general.microphone_permission")}</span>
-    <button onclick={() => openPrivacyPane("microphone")}>{t("general.open_system_settings")}</button>
-  </div>
-  <p class="muted">{t("general.fn_key_note")}</p>
-</section>
+  </Row>
+  <Row label={t("general.microphone_permission")}>
+    {#snippet leading()}<span class="ring-space"></span>{/snippet}
+    <button type="button" class="btn quiet" onclick={() => openPrivacyPane("microphone")}>{t("general.open_system_settings")}</button>
+  </Row>
+</Group>
 
 {#if draft}
-<section>
-  <h3>{t("general.hotkey")}</h3>
-  <label>{t("general.hold_threshold")} <input type="number" min="100" max="1000" bind:value={draft.hotkey.hold_threshold_ms} /> ms</label>
-  <label>{t("general.double_tap_window")} <input type="number" min="150" max="1000" bind:value={draft.hotkey.double_tap_window_ms} /> ms</label>
-  <label>{t("general.max_utterance")} <input type="number" min="10" max="1800" bind:value={draft.max_utterance_secs} /> s</label>
-</section>
+  <Group title={t("general.hotkey")}>
+    <Row label={t("general.hold_threshold")}>
+      <NumberField bind:value={draft.hotkey.hold_threshold_ms} min={100} max={1000} unit={t("common.ms")} label={t("general.hold_threshold")} />
+    </Row>
+    <Row label={t("general.double_tap_window")}>
+      <NumberField bind:value={draft.hotkey.double_tap_window_ms} min={150} max={1000} unit={t("common.ms")} label={t("general.double_tap_window")} />
+    </Row>
+    <Row label={t("general.max_utterance")}>
+      <NumberField bind:value={draft.max_utterance_secs} min={10} max={1800} unit={t("common.seconds")} label={t("general.max_utterance")} />
+    </Row>
+  </Group>
 
-<section>
-  <h3>{t("general.microphone")}</h3>
-  <select bind:value={draft.microphone}>
-    <option value="builtin">{t("general.mic_builtin")}</option>
-    <option value="default">{t("general.mic_default")}</option>
-    {#each mics as m}<option value={m}>{m}</option>{/each}
-  </select>
-</section>
-
-<section>
-  <h3>{t("general.context")}</h3>
-  <label><input type="checkbox" bind:checked={draft.context.app_name} /> {t("general.ctx_app_name")}</label>
-  <label><input type="checkbox" bind:checked={draft.context.window_title} /> {t("general.ctx_window_title")}</label>
-  <label><input type="checkbox" bind:checked={draft.context.url} /> {t("general.ctx_url")}</label>
-  <label><input type="checkbox" bind:checked={draft.context.selected_text} /> {t("general.ctx_selected_text")}</label>
-  <label><input type="checkbox" bind:checked={draft.context.clipboard} /> {t("general.ctx_clipboard")}</label>
-</section>
-
-<section>
-  <h3>{t("general.insertion")}</h3>
-  <p class="muted">{t("general.insertion_note")}</p>
-  {#each Object.entries(draft.insertion.per_app) as [bundle, method]}
-    <div class="row">
-      <code>{bundle}</code>
-      <select value={method} onchange={(e) => { draft!.insertion.per_app[bundle] = (e.currentTarget as HTMLSelectElement).value as "paste" | "type" | "ax"; }}>
-        <option value="paste">{t("general.method_paste")}</option>
-        <option value="type">{t("general.method_type")}</option>
-        <option value="ax">{t("general.method_ax")}</option>
+  <Group title={t("general.microphone")}>
+    <Row label={t("general.input_device")}>
+      <select class="wide" bind:value={draft.microphone} aria-label={t("general.input_device")}>
+        <option value="builtin">{t("general.mic_builtin")}</option>
+        <option value="default">{t("general.mic_default")}</option>
+        {#each mics as m (m)}<option value={m}>{m}</option>{/each}
       </select>
-      <button onclick={() => { delete draft!.insertion.per_app[bundle]; }}>{t("common.remove")}</button>
-    </div>
-  {/each}
-  <AddPerApp onadd={(id) => { draft!.insertion.per_app[id] = "paste"; }} />
-</section>
+    </Row>
+  </Group>
 
-<section>
-  <h3>{t("general.language")}</h3>
-  <select bind:value={draft.ui_language}>
-    <option value="system">{t("general.lang_system")}</option>
-    <option value="zh-tw">繁體中文</option>
-    <option value="en">English</option>
-  </select>
-</section>
+  <Group title={t("general.context")} help={t("general.context_help")}>
+    <Row label={t("general.ctx_app_name")}><Switch bind:checked={draft.context.app_name} label={t("general.ctx_app_name")} /></Row>
+    <Row label={t("general.ctx_window_title")}><Switch bind:checked={draft.context.window_title} label={t("general.ctx_window_title")} /></Row>
+    <Row label={t("general.ctx_url")}><Switch bind:checked={draft.context.url} label={t("general.ctx_url")} /></Row>
+    <Row label={t("general.ctx_selected_text")}><Switch bind:checked={draft.context.selected_text} label={t("general.ctx_selected_text")} /></Row>
+    <Row label={t("general.ctx_clipboard")} help={t("general.ctx_clipboard_help")}><Switch bind:checked={draft.context.clipboard} label={t("general.ctx_clipboard")} /></Row>
+  </Group>
 
-<section>
-  <label><input type="checkbox" checked={autostart} onchange={toggleAutostart} /> {t("tray.launch_at_login")}</label>
-</section>
+  <Group title={t("general.insertion")} help={t("general.insertion_note")}>
+    {#each Object.entries(draft.insertion.per_app) as [bundle, method] (bundle)}
+      <Row>
+        <code class="bundle" title={bundle}>{bundle}</code>
+        <select class="method" value={method} onchange={(e) => setMethod(bundle, e.currentTarget.value)} aria-label={t("general.method")}>
+          <option value="paste">{t("general.method_paste")}</option>
+          <option value="type">{t("general.method_type")}</option>
+          <option value="ax">{t("general.method_ax")}</option>
+        </select>
+        <button type="button" class="btn quiet danger icon" onclick={() => { delete draft!.insertion.per_app[bundle]; }} aria-label={t("common.remove")} title={t("common.remove")}><Icon name="trash" size={14} /></button>
+      </Row>
+    {/each}
+    <AddPerApp onadd={(id) => { draft!.insertion.per_app[id] = "paste"; }} />
+  </Group>
 
-<button class="primary" onclick={saveClient}>{t("common.save")}</button>
+  <Group title={t("general.app_group")}>
+    <Row label={t("general.language")}>
+      <select bind:value={draft.ui_language} aria-label={t("general.language")}>
+        <option value="system">{t("general.lang_system")}</option>
+        <option value="zh-tw">繁體中文</option>
+        <option value="en">English</option>
+      </select>
+    </Row>
+    <Row label={t("tray.launch_at_login")} help={t("general.applies_now")}>
+      <Switch checked={autostart} label={t("tray.launch_at_login")} onchange={setAutostart} />
+    </Row>
+  </Group>
 {/if}
 
 {#if general}
-<section>
-  <h3>{t("general.history")}</h3>
-  <label>{t("general.history_retention")} <input type="number" min="1" bind:value={general.history_retention_days} /> {t("common.days")}</label>
-  <label><input type="checkbox" bind:checked={general.keep_recordings} /> {t("general.keep_recordings")}</label>
-  <label>{t("general.recording_retention")} <input type="number" min="1" bind:value={general.recording_retention_days} /> {t("common.days")}</label>
-</section>
+  <Group title={t("general.history")}>
+    <Row label={t("general.history_retention")}>
+      <NumberField bind:value={general.history_retention_days} min={1} unit={t("common.days")} label={t("general.history_retention")} />
+    </Row>
+    <Row label={t("general.keep_recordings")}>
+      <Switch bind:checked={general.keep_recordings} label={t("general.keep_recordings")} />
+    </Row>
+    <Row label={t("general.recording_retention")}>
+      <NumberField bind:value={general.recording_retention_days} min={1} unit={t("common.days")} label={t("general.recording_retention")} />
+    </Row>
+  </Group>
 
-<section>
-  <h3>{t("general.processing")}</h3>
-  <label>{t("general.asr_timeout")} <input type="number" min="1" bind:value={general.asr_timeout_secs} /></label>
-  <label>{t("general.llm_timeout")} <input type="number" min="1" bind:value={general.llm_timeout_secs} /></label>
-  <label>{t("general.llm_idle_unload")} <input type="number" min="0" bind:value={general.llm_idle_unload_secs} /></label>
-  <button class="primary" onclick={saveGeneral}>{t("common.save")}</button>
-</section>
+  <Group title={t("general.processing")}>
+    <Row label={t("general.asr_timeout")}>
+      <NumberField bind:value={general.asr_timeout_secs} min={1} unit={t("common.seconds")} label={t("general.asr_timeout")} />
+    </Row>
+    <Row label={t("general.llm_timeout")}>
+      <NumberField bind:value={general.llm_timeout_secs} min={1} unit={t("common.seconds")} label={t("general.llm_timeout")} />
+    </Row>
+    <Row label={t("general.llm_idle_unload")} help={t("general.llm_idle_unload_help")}>
+      <NumberField bind:value={general.llm_idle_unload_secs} min={0} unit={t("common.seconds")} label={t("general.llm_idle_unload")} />
+    </Row>
+  </Group>
 {/if}
 
-<p class="status">{status}</p>
+<SaveBar {dirty} {saving} message={problem} onsave={save} onrevert={reset} />
+
+<style>
+  .value { color: var(--ink-2); }
+  .ring-space { width: 14px; flex: none; }
+  .wide { width: 240px; }
+  .method { width: 150px; }
+  .bundle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .icon { width: 26px; padding: 0; }
+</style>

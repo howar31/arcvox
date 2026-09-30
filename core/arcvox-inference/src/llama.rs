@@ -111,7 +111,7 @@ fn load_model(path: &Path, label: &str, use_gpu: bool) -> Result<LlamaModel, Pro
             ErrorCode::ModelMissing,
             format!("{label}: model file not found"),
         )
-        .with_hint("download or import the model in Settings > Models"));
+        .with_hint("download or import the model in Settings > Engines and models"));
     }
     let params = LlamaModelParams::default().with_n_gpu_layers(if use_gpu { u32::MAX } else { 0 });
     LlamaModel::load_from_file(backend(), path, &params).map_err(|e| {
@@ -119,7 +119,7 @@ fn load_model(path: &Path, label: &str, use_gpu: bool) -> Result<LlamaModel, Pro
             ErrorCode::ModelCorrupt,
             format!("{label}: cannot load model ({e})"),
         )
-        .with_hint("re-download or re-import the model in Settings > Models")
+        .with_hint("re-download or re-import the model in Settings > Engines and models")
     })
 }
 

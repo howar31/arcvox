@@ -104,7 +104,7 @@ impl<R: Runtime> Tray<R> {
             .on_menu_event(|app, event| match event.id().as_ref() {
                 ID_SETTINGS => open_settings(app, None),
                 ID_HISTORY => open_settings(app, Some("history")),
-                ID_MODELS => open_settings(app, Some("models")),
+                ID_MODELS => open_settings(app, Some("engines")),
                 ID_AUTOSTART => {
                     let al = app.autolaunch();
                     let on = al.is_enabled().unwrap_or(false);
@@ -181,6 +181,8 @@ fn status_msg(state: UiState) -> Msg {
 /// Settings pages that can be selected through `open_settings`'s `page`
 /// argument. Anything else is ignored rather than interpolated into `eval`.
 const SETTINGS_PAGES: &[&str] = &[
+    "home",
+    "engines",
     "general",
     "providers",
     "profiles",
@@ -219,8 +221,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn speed_page_is_reachable_and_unknown_pages_are_not() {
-        assert!(SETTINGS_PAGES.contains(&"speed"));
+    fn settings_pages_are_reachable_and_unknown_pages_are_not() {
+        for page in ["home", "engines", "speed", "general", "models", "providers"] {
+            assert!(SETTINGS_PAGES.contains(&page), "{page}");
+        }
         assert!(!SETTINGS_PAGES.contains(&"javascript:alert(1)"));
     }
 }
