@@ -283,6 +283,6 @@
   .eng { display: flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0; max-width: 50%; }
   .arrow { flex: none; color: var(--ink-3); }
   .final { line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
-  .time { width: 44px; flex: none; align-self: flex-start; padding-top: 1px; color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .time { width: 44px; flex: none; align-self: flex-start; padding-top: 1px; color: var(--ink-2); font-size: 12px; font-variant-numeric: tabular-nums; }
   .titled :global(.section.untitled) { margin-top: 0; }
 </style>

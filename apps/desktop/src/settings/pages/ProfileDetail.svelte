@@ -4,6 +4,7 @@
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { guard } from "../../lib/guard.svelte";
   import { t } from "../../lib/i18n";
+  import { isImeKey } from "../../lib/ime";
   import { defaultProfile } from "../../lib/labels";
   import { blankProfile, moveStep, NEW_PROFILE, slugId, withLlm } from "../../lib/profileEdit";
   import { go } from "../../lib/route";
@@ -239,7 +240,7 @@
         </Row>
       {/if}
       <Row label={t("profiles.urls")} help={t("profiles.urls_help")}>
-        <input type="text" class="url" bind:value={newUrl} placeholder={t("profiles.url_placeholder")} aria-label={t("profiles.urls")} onkeydown={(e) => { if (e.key === "Enter") addUrl(); }} />
+        <input type="text" class="url" bind:value={newUrl} placeholder={t("profiles.url_placeholder")} aria-label={t("profiles.urls")} onkeydown={(e) => { if (e.key === "Enter" && !isImeKey(e)) addUrl(); }} />
         <button type="button" class="btn" disabled={!newUrl.trim()} onclick={addUrl}><Icon name="plus" size={14} />{t("common.add")}</button>
       </Row>
     </Group>
@@ -286,7 +287,7 @@
     <Row>
       <input type="text" class="pair-text" bind:value={newRaw} placeholder={t("profiles.raw")} aria-label={t("profiles.raw")} />
       <span class="arrow" aria-hidden="true">→</span>
-      <input type="text" class="pair-text" bind:value={newRefined} placeholder={t("profiles.refined")} aria-label={t("profiles.refined")} onkeydown={(e) => { if (e.key === "Enter") addExample(); }} />
+      <input type="text" class="pair-text" bind:value={newRefined} placeholder={t("profiles.refined")} aria-label={t("profiles.refined")} onkeydown={(e) => { if (e.key === "Enter" && !isImeKey(e)) addExample(); }} />
       <span class="end"><button type="button" class="btn" disabled={!newRaw.trim() || !newRefined.trim()} onclick={addExample}><Icon name="plus" size={14} />{t("common.add")}</button></span>
     </Row>
   </Group>

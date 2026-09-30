@@ -20,6 +20,9 @@
       saved = current;
       text = current;
     } catch (e) {
+      // Still show the editor, so the default can be restored.
+      saved = "";
+      text = "";
       toast.error(errorMessage(e));
     }
   });

@@ -3,6 +3,7 @@
   import { errorMessage, setDictionary, type DictionaryEntry } from "../../lib/api";
   import { addAliases, dropBlank, isSnippet, trimEntries } from "../../lib/dictionary";
   import { guard } from "../../lib/guard.svelte";
+  import { isImeKey } from "../../lib/ime";
   import { t } from "../../lib/i18n";
   import { config } from "../../lib/store.svelte";
   import Chip from "../../lib/ui/Chip.svelte";
@@ -38,14 +39,26 @@
     if (!stored) return;
     const next = JSON.stringify(stored);
     untrack(() => {
-      if (items === null || JSON.stringify(toEntries(items)) === synced) {
+      if (items === null || (JSON.stringify(toEntries(items)) === synced && !items.some((item) => item.pending.trim()))) {
         items = toItems($state.snapshot(stored) as DictionaryEntry[]);
         synced = next;
       }
     });
   });
 
-  const dirty = $derived(items !== null && stored !== null && JSON.stringify(toEntries(items)) !== JSON.stringify(stored));
+  // Alias text typed but not yet turned into a chip counts as a change, so leaving the page asks first.
+  const dirty = $derived(
+    items !== null && stored !== null &&
+      (JSON.stringify(toEntries(items)) !== JSON.stringify(stored) || items.some((item) => item.pending.trim() !== "")),
+  );
+
+  /** An entry with aliases but no term blocks the save. */
+  const blocks = (item: Item) => !item.term.trim() && (item.aliases.some((a) => a.trim()) || item.pending.trim() !== "");
+
+  function removeLabel(item: Item): string {
+    const first = item.term.split("\n").map((l) => l.trim()).find(Boolean);
+    return first ? t("dictionary.remove_term", { term: first }) : t("dictionary.remove_blank");
+  }
 
   $effect(() => {
     guard.set(dirty);
@@ -72,7 +85,7 @@
   }
 
   function aliasKey(e: KeyboardEvent, item: Item) {
-    if (e.isComposing) return;
+    if (isImeKey(e)) return;
     if (e.key === "Enter" || e.key === "," || e.key === "，") {
       e.preventDefault();
       commitAlias(item);
@@ -103,13 +116,17 @@
     if (!items) return;
     for (const item of items) commitAlias(item);
     await tick();
-    const entries = dropBlank(trimEntries(toEntries($state.snapshot(items) as Item[])));
+    const sent = toEntries($state.snapshot(items) as Item[]);
+    const entries = dropBlank(trimEntries(sent));
     if (entries.some((e) => e.term === "")) { problem = t("dictionary.term_required"); return; }
     saving = true;
     try {
       const next = await setDictionary(entries);
       config.value = next;
-      items = toItems(structuredClone(next.dictionary));
+      // Edits made while the save was running stay in the editor.
+      if (items && JSON.stringify(toEntries(items)) === JSON.stringify(sent) && !items.some((item) => item.pending.trim())) {
+        items = toItems(structuredClone(next.dictionary));
+      }
       synced = JSON.stringify(next.dictionary);
       toast.ok(t("common.saved"));
     } catch (e) {
@@ -141,10 +158,10 @@
                   use:grow={item.term}
                   placeholder={t("dictionary.term")}
                   aria-label={t("dictionary.term")}
-                  aria-invalid={problem && !item.term.trim() ? "true" : undefined}
+                  aria-invalid={problem && blocks(item) ? "true" : undefined}
                 ></textarea>
                 {#if isSnippet(item.term)}<span class="tag"><Tag tone="accent">{t("dictionary.snippet")}</Tag></span>{/if}
-                <button type="button" class="btn quiet icon-btn" aria-label={t("common.remove")} onclick={() => items!.splice(i, 1)}><Icon name="trash" /></button>
+                <button type="button" class="btn quiet icon-btn" aria-label={removeLabel(item)} title={t("common.remove")} onclick={() => items!.splice(i, 1)}><Icon name="trash" /></button>
               </div>
               <div class="line second">
                 <span class="sub lead">{t("dictionary.aliases")}</span>

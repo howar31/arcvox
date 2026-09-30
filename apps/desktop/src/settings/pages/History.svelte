@@ -17,13 +17,16 @@
   let rows = $state<Utterance[] | null>(null);
   let now = $state(new Date());
   let confirmClear = $state(false);
+  // Set when the list could not be read and nothing has been shown yet.
+  let failed = $state(false);
 
   async function reload() {
     try {
       rows = await listHistory(200);
       now = new Date();
+      failed = false;
     } catch (e) {
-      rows ??= [];
+      if (rows === null) failed = true;
       toast.error(errorMessage(e));
     }
   }
@@ -99,7 +102,13 @@
   {/snippet}
 </PageHead>
 
-{#if rows !== null}
+{#if failed}
+  <Group>
+    <Empty text={t("history.load_failed")}>
+      {#snippet action()}<button type="button" class="btn" onclick={reload}>{t("history.retry")}</button>{/snippet}
+    </Empty>
+  </Group>
+{:else if rows !== null}
   {#each groups as g (g.key)}
     <Group title={dayTitle(g.key)}>
       {#each g.rows as u (u.id)}
@@ -142,7 +151,7 @@
 </Modal>
 
 <style>
-  .time { width: 44px; flex: none; align-self: flex-start; padding-top: 1px; color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .time { width: 44px; flex: none; align-self: flex-start; padding-top: 1px; color: var(--ink-2); font-size: 12px; font-variant-numeric: tabular-nums; }
   .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 2px 0; }
   .final { line-height: 1.55; overflow-wrap: anywhere; white-space: pre-line; }
   .raw { color: var(--ink-2); font-size: 12px; overflow-wrap: anywhere; }

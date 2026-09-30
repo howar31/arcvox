@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { runningApps, type RunningApp } from "../../lib/api";
   import { t } from "../../lib/i18n";
+  import { isImeKey } from "../../lib/ime";
   import Row from "../../lib/ui/Row.svelte";
   import Icon from "../../lib/ui/Icon.svelte";
 
@@ -23,7 +24,7 @@
     <option value="">{t("general.pick_app")}</option>
     {#each apps as a (a.bundle_id)}<option value={a.bundle_id}>{a.name}</option>{/each}
   </select>
-  <input class="bundle" type="text" placeholder="com.example.app" aria-label={t("general.bundle_id")} bind:value={chosen} onkeydown={(e) => { if (e.key === "Enter") add(); }} />
+  <input class="bundle" type="text" placeholder="com.example.app" aria-label={t("general.bundle_id")} bind:value={chosen} onkeydown={(e) => { if (e.key === "Enter" && !isImeKey(e)) add(); }} />
   <button type="button" class="btn" disabled={!chosen.trim()} onclick={add}><Icon name="plus" size={14} />{t("common.add")}</button>
 </Row>
 

@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
   import { tick } from "svelte";
+  import { isImeKey } from "../ime";
 
   let { open = $bindable(false), title, children, actions, onclose }: {
     open?: boolean;
@@ -37,7 +38,8 @@
   }
 
   function onkeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") { e.preventDefault(); dismiss(); return; }
+    // Escape during composition cancels the input method, not the dialog.
+    if (e.key === "Escape" && !isImeKey(e)) { e.preventDefault(); dismiss(); return; }
     if (e.key !== "Tab" || !box) return;
     const items = [...box.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.tabIndex >= 0);
     if (!items.length) return;
