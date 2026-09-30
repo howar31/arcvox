@@ -20,9 +20,15 @@ export function blankForRole(kind: ProviderKind, role: Role): ProviderConfig {
   return p;
 }
 
-/** Providers that can serve the role: speech recognition transcribes, text rewriting chats. */
+/** Whether the provider can transcribe or rewrite at all. */
+export const hasRole = (p: ProviderConfig): boolean => p.capabilities.transcribe || p.capabilities.chat;
+
+/**
+ * Providers that can serve the role: speech recognition transcribes, text rewriting chats.
+ * Providers with neither capability are listed under speech recognition so they stay editable.
+ */
 export function enginesOf(config: Config | null, role: Role): ProviderConfig[] {
-  return (config?.providers ?? []).filter((p) => (role === "asr" ? p.capabilities.transcribe : p.capabilities.chat));
+  return (config?.providers ?? []).filter((p) => (role === "asr" ? p.capabilities.transcribe || !hasRole(p) : p.capabilities.chat));
 }
 
 /** Installed files of the role's runtime that no embedded provider loads, by catalogue id or by path. */

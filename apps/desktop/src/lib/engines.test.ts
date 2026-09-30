@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Config, InstalledModel, ManifestView, ModelEntry, ProviderConfig } from "./api";
-import { blankForRole, engineFromModel, freshId, enginesOf, recommendedMissing, unusedModels } from "./engines";
+import { blankForRole, engineFromModel, freshId, hasRole, enginesOf, recommendedMissing, unusedModels } from "./engines";
 import { ASR_CAPS, blankFor, LLM_CAPS, NATIVE_DICTATION, NATIVE_FM } from "./providerForm";
 
 const provider = (id: string, extra: Partial<ProviderConfig>): ProviderConfig => ({ ...blankFor("embedded"), id, label: id, ...extra });
@@ -22,6 +22,14 @@ describe("enginesOf", () => {
     expect(enginesOf(config, "asr").map((p) => p.id)).toEqual(["asr", "both"]);
     expect(enginesOf(config, "llm").map((p) => p.id)).toEqual(["llm", "both"]);
     expect(enginesOf(null, "asr")).toEqual([]);
+  });
+  it("keeps an engine with no role reachable on the speech recognition tab", () => {
+    const none = provider("none", { capabilities: { ...ASR_CAPS, transcribe: false } });
+    const config = { providers: [none] } as Config;
+    expect(enginesOf(config, "asr").map((p) => p.id)).toEqual(["none"]);
+    expect(enginesOf(config, "llm")).toEqual([]);
+    expect(hasRole(none)).toBe(false);
+    expect(hasRole(provider("a", { capabilities: { ...ASR_CAPS } }))).toBe(true);
   });
 });
 

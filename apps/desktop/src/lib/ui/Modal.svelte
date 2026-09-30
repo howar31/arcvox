@@ -20,7 +20,8 @@
     if (!open) return;
     opener = document.activeElement as HTMLElement | null;
     tick().then(() => {
-      const first = box?.querySelector<HTMLElement>(FOCUSABLE);
+      // First tabbable element: skips roving-tabindex items such as unchecked segments.
+      const first = [...(box?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])].find((el) => el.tabIndex >= 0);
       (first ?? box)?.focus();
     });
     return () => {
@@ -38,7 +39,7 @@
   function onkeydown(e: KeyboardEvent) {
     if (e.key === "Escape") { e.preventDefault(); dismiss(); return; }
     if (e.key !== "Tab" || !box) return;
-    const items = [...box.querySelectorAll<HTMLElement>(FOCUSABLE)];
+    const items = [...box.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.tabIndex >= 0);
     if (!items.length) return;
     const first = items[0], last = items[items.length - 1];
     if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
