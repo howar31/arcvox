@@ -19,7 +19,7 @@ Model files are stored in the models directory shown on the Models page. Custom 
 
 Profiles > "Add from preset" creates a profile from one of three presets: mail, chat or code. A preset copies the providers of the default profile and pre-fills the application matchers and a prompt addition for that kind of application. All fields can be edited afterwards.
 
-A dictionary term can span several lines. When one of its aliases is spoken, the whole term is inserted as written. Terms of this kind are not included in the speech recognition hint or in the term list given to the language model.
+A dictionary term can span several lines. When one of its aliases is spoken, the whole term is inserted as written. For terms of this kind, their aliases are sent as the speech hint in place of the text, and the term is left out of the term list given to the language model.
 
 The Speed test page records a sentence, or uses a kept history recording, and runs it through the selected providers with one cold run and one warm run each. It measures speed only. Results are not saved.
 
