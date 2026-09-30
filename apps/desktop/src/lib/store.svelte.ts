@@ -1,7 +1,7 @@
 import { getClient, getConfig, onConfigChanged, updateClient, type ClientSettings, type Config } from "./api";
 
-export type Page = "general" | "providers" | "models" | "profiles" | "prompt" | "dictionary" | "history" | "about";
-export const PAGES: Page[] = ["general", "providers", "models", "profiles", "prompt", "dictionary", "history", "about"];
+export type Page = "general" | "providers" | "models" | "profiles" | "prompt" | "dictionary" | "history" | "speed" | "about";
+export const PAGES: Page[] = ["general", "providers", "models", "profiles", "prompt", "dictionary", "history", "speed", "about"];
 
 export function pageFromHash(hash: string): Page {
   const name = hash.replace(/^#/, "");
