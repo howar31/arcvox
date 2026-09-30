@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { NAV, parseRoute, routeHash } from "./route";
+import { NAV, parseRoute, routeHash, shouldIntercept } from "./route";
 
 test("an empty hash opens the overview", () => {
   expect(parseRoute("")).toEqual({ page: "home", arg: null });
@@ -33,4 +33,13 @@ test("the navigation lists every page once", () => {
   const pages = NAV.flatMap((g) => g.pages);
   expect(new Set(pages).size).toBe(pages.length);
   expect(pages).toEqual(["home", "profiles", "engines", "dictionary", "prompt", "history", "general", "speed", "about"]);
+});
+
+test("a hash change from outside is held only when the page has unsaved changes and the route differs", () => {
+  const detail = { page: "profiles" as const, arg: "mail" };
+  expect(shouldIntercept(false, detail, { page: "general", arg: null })).toBe(false);
+  expect(shouldIntercept(true, detail, { page: "general", arg: null })).toBe(true);
+  expect(shouldIntercept(true, detail, { page: "profiles", arg: "code" })).toBe(true);
+  expect(shouldIntercept(true, detail, { page: "profiles", arg: null })).toBe(true);
+  expect(shouldIntercept(true, detail, { page: "profiles", arg: "mail" })).toBe(false);
 });

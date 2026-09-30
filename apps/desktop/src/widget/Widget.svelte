@@ -12,7 +12,8 @@
   let transcript = $state("");
 
   onMount(() => {
-    uiLanguage().then((l) => setLanguage(l as Lang));
+    // Until the language is known the widget stays in English; each event carries it too.
+    uiLanguage().then((l) => setLanguage(l as Lang)).catch(() => {});
     const unsubs = [
       onWidgetState((p) => {
         setLanguage(p.language);
@@ -64,7 +65,7 @@
       {#if second}<small class:mono={!!message.copyable} title={second}>{second}</small>{/if}
     </div>
     {#if message.copyable}
-      <button type="button" class="copy" onclick={() => widgetCopy(message!.copyable!)}>{t("widget.copy")}</button>
+      <button type="button" class="copy" onclick={() => widgetCopy(message!.copyable!).catch(() => {})}>{t("widget.copy")}</button>
       <button type="button" class="close" onclick={dismiss} aria-label={t("widget.dismiss")} title={t("widget.dismiss")}><Icon name="x" size={14} /></button>
     {/if}
   {:else}
@@ -93,7 +94,8 @@
   .close { width: 26px; margin-left: -4px; background: none; color: var(--pill-ink-2); }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) {
-    .ring.think { animation: none; }
+    /* Without the spin, a full ring: a still gap would read as a fault. */
+    .ring.think { animation: none; border-right-color: var(--pill-accent); }
     .ring.live { box-shadow: 0 0 0 5px var(--pill-live-halo); transition: none; }
   }
 </style>

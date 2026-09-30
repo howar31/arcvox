@@ -64,6 +64,8 @@ select {
   background-size: 4px 4px; background-repeat: no-repeat;
 }
 input[type="number"] { width: 72px; text-align: right; font-variant-numeric: tabular-nums; }
+/* The text box of an add row (next to its Add button): one width on every page. */
+.add-input { width: 200px; flex: 0 1 200px; }
 input::placeholder, textarea::placeholder { color: var(--ink-3); }
 textarea { width: 100%; min-height: 84px; padding: 9px 11px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--surface); line-height: 1.6; resize: vertical; }
 input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="true"] { border-color: var(--live); }
@@ -73,6 +75,8 @@ input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="
 .name { font-weight: 600; }
 .sub { color: var(--ink-2); font-size: 12px; }
 .num { font-variant-numeric: tabular-nums; }
+/* Read by screen readers, not shown. */
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }

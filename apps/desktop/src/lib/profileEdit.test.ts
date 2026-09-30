@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Profile, ProviderConfig, StepSpec } from "./api";
-import { appsSummary, blankProfile, engineMeta, moveStep, NEW_PROFILE, slugId, withLlm } from "./profileEdit";
+import { addStep, appsSummary, blankProfile, engineMeta, moveStep, NEW_PROFILE, removeStep, slugId, withLlm } from "./profileEdit";
 
 const profile = (steps: StepSpec[], llm: string | null = "llm-a"): Profile => ({
   id: "p", name: "P", is_default: true, matcher: { app_ids: [], url_patterns: [] }, asr_provider: "asr-a", llm_provider: llm,
@@ -128,5 +128,52 @@ describe("moveStep", () => {
     const steps = full.map((s) => ({ ...s }));
     moveStep(steps, 2, 1);
     expect(steps).toEqual(full);
+  });
+});
+
+describe("addStep and removeStep keep the rewriting engine in step", () => {
+  const kinds = (p: Profile) => p.steps.map((s) => s.step);
+  it("removing the last llm step turns rewriting off", () => {
+    const next = removeStep(profile([{ step: "asr" }, { step: "llm" }, { step: "rules" }]), 1);
+    expect(kinds(next)).toEqual(["asr", "rules"]);
+    expect(next.llm_provider).toBeNull();
+  });
+  it("removing one of two llm steps keeps the engine", () => {
+    const next = removeStep(profile([{ step: "asr" }, { step: "llm" }, { step: "llm" }]), 2);
+    expect(kinds(next)).toEqual(["asr", "llm"]);
+    expect(next.llm_provider).toBe("llm-a");
+  });
+  it("removing another step keeps the engine, and speech recognition cannot be removed", () => {
+    const p = profile([{ step: "asr" }, { step: "llm" }, { step: "rules" }]);
+    expect(removeStep(p, 2).llm_provider).toBe("llm-a");
+    expect(kinds(removeStep(p, 0))).toEqual(["asr", "llm", "rules"]);
+    expect(kinds(removeStep(p, 9))).toEqual(["asr", "llm", "rules"]);
+  });
+  it("adding an llm step while rewriting is off picks the first chat engine", () => {
+    const next = addStep(profile([{ step: "asr" }], null), "llm", ["llm-b", "llm-c"]);
+    expect(kinds(next)).toEqual(["asr", "llm"]);
+    expect(next.llm_provider).toBe("llm-b");
+  });
+  it("adding an llm step keeps a chosen engine", () => {
+    const next = addStep(profile([{ step: "asr" }]), "llm", ["llm-b"]);
+    expect(next.llm_provider).toBe("llm-a");
+  });
+  it("an llm step is not added when no engine can rewrite", () => {
+    const p = profile([{ step: "asr" }], null);
+    const next = addStep(p, "llm", []);
+    expect(kinds(next)).toEqual(["asr"]);
+    expect(next.llm_provider).toBeNull();
+  });
+  it("adds OpenCC and rules steps at the end", () => {
+    const next = addStep(addStep(profile([{ step: "asr" }], null), "opencc", []), "rules", []);
+    expect(next.steps).toEqual([{ step: "asr" }, { step: "opencc", config: "s2twp" }, { step: "rules" }]);
+    expect(next.llm_provider).toBeNull();
+  });
+  it("does not change its input", () => {
+    const p = profile([{ step: "asr" }, { step: "llm" }], null);
+    const before = JSON.parse(JSON.stringify(p));
+    addStep(p, "llm", ["llm-b"]);
+    removeStep(p, 1);
+    expect(p).toEqual(before);
   });
 });

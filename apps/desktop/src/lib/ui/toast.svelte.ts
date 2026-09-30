@@ -12,7 +12,11 @@ class ToastStore {
     setTimeout(() => this.dismiss(id), OK_MS);
   }
 
-  error(message: string) { this.#push("error", message); }
+  /** An error that is already on screen is not added again. */
+  error(message: string) {
+    if (this.items.some((t) => t.kind === "error" && t.message === message)) return;
+    this.#push("error", message);
+  }
 
   dismiss(id: number) { this.items = this.items.filter((t) => t.id !== id); }
 

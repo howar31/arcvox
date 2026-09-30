@@ -12,6 +12,8 @@
   let saved = $state<string | null>(null);
   let text = $state("");
   let saving = $state(false);
+  // False after a failed load: an editor that did not receive the stored text must not overwrite it.
+  let loaded = $state(false);
   let confirmRestore = $state(false);
 
   onMount(async () => {
@@ -19,6 +21,7 @@
       const current = await getPrompt();
       saved = current;
       text = current;
+      loaded = true;
     } catch (e) {
       // Still show the editor, so the default can be restored.
       saved = "";
@@ -35,6 +38,7 @@
   });
 
   async function save() {
+    if (!loaded) return;
     saving = true;
     try {
       const next = text;
@@ -55,6 +59,7 @@
       const next = await restorePrompt();
       saved = next;
       text = next;
+      loaded = true;
       toast.ok(t("prompt.restored"));
     } catch (e) {
       toast.error(errorMessage(e));
@@ -73,7 +78,7 @@
 
   <textarea class="editor" bind:value={text} aria-label={t("nav.prompt")} spellcheck="false"></textarea>
 
-  <SaveBar {dirty} {saving} onsave={save} onrevert={() => (text = saved ?? "")} />
+  <SaveBar {dirty} {saving} canSave={loaded} message={loaded ? undefined : t("prompt.not_loaded")} onsave={save} onrevert={() => (text = saved ?? "")} />
 
   <Modal bind:open={confirmRestore} title={t("prompt.restore_title")}>
     <p>{t("prompt.restore_body")}</p>

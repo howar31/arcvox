@@ -3,7 +3,7 @@
   import { permissions, uiLanguage } from "../lib/api";
   import { setLanguage, t, type Lang } from "../lib/i18n";
   import { client, config } from "../lib/store.svelte";
-  import { go, NAV, parseRoute } from "../lib/route";
+  import { go, NAV, parseRoute, routeHash, shouldIntercept } from "../lib/route";
   import { guard } from "../lib/guard.svelte";
   import Icon from "../lib/ui/Icon.svelte";
   import Ring from "../lib/ui/Ring.svelte";
@@ -34,6 +34,14 @@
   onMount(() => {
     const onHash = () => {
       const next = parseRoute(location.hash);
+      // A change that did not go through the guard (the tray sets the hash directly) must not drop
+      // unsaved edits: put the current route back and ask first.
+      if (shouldIntercept(guard.dirty, route, next)) {
+        const target = location.hash;
+        history.replaceState(null, "", routeHash(route.page, route.arg));
+        guard.request(() => { location.hash = target; });
+        return;
+      }
       if (next.page !== route.page) main?.scrollTo(0, 0);
       route = next;
     };

@@ -6,7 +6,7 @@
   import { t } from "../../lib/i18n";
   import { isImeKey } from "../../lib/ime";
   import { defaultProfile } from "../../lib/labels";
-  import { blankProfile, moveStep, NEW_PROFILE, slugId, withLlm } from "../../lib/profileEdit";
+  import { addStep as withStep, blankProfile, moveStep, NEW_PROFILE, removeStep, slugId, withLlm, type AddableStep } from "../../lib/profileEdit";
   import { go } from "../../lib/route";
   import { config } from "../../lib/store.svelte";
   import Chip from "../../lib/ui/Chip.svelte";
@@ -15,9 +15,9 @@
   import Icon from "../../lib/ui/Icon.svelte";
   import Modal from "../../lib/ui/Modal.svelte";
   import PageHead from "../../lib/ui/PageHead.svelte";
-  import Ring from "../../lib/ui/Ring.svelte";
   import Row from "../../lib/ui/Row.svelte";
   import SaveBar from "../../lib/ui/SaveBar.svelte";
+  import Tag from "../../lib/ui/Tag.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
   import AddPerApp from "./AddPerApp.svelte";
 
@@ -42,6 +42,8 @@
   let problem = $state<string | undefined>(undefined);
   let confirmDelete = $state(false);
   let gone = $state(false);
+  // Typed but not added yet: counts as a change, and Save adds it first.
+  let newApp = $state("");
   let newUrl = $state("");
   let newRaw = $state("");
   let newRefined = $state("");
@@ -70,8 +72,11 @@
     });
   });
 
+  const pending = $derived(!!(newApp.trim() || newUrl.trim() || newRaw.trim() || newRefined.trim()));
+  const halfExample = $derived(!newRaw.trim() !== !newRefined.trim());
   const dirty = $derived(
-    draft !== null && (isNew ? JSON.stringify(draft) !== initial : source !== null && comparable(draft) !== comparable(source)),
+    draft !== null &&
+      (pending || (isNew ? JSON.stringify(draft) !== initial : source !== null && comparable(draft) !== comparable(source))),
   );
 
   $effect(() => {
@@ -80,7 +85,7 @@
   });
   $effect(() => {
     // A new edit clears the previous validation message.
-    JSON.stringify(draft);
+    JSON.stringify([draft, newRaw, newRefined]);
     problem = undefined;
   });
   $effect(() => { if (draft) ensureAppNames(draft.matcher.app_ids); });
@@ -95,6 +100,7 @@
   const title = $derived(draft?.name.trim() || (isNew ? t("profiles.new_title") : (source?.name ?? "")));
 
   function revert() {
+    newApp = newUrl = newRaw = newRefined = "";
     if (isNew) { draft = JSON.parse(initial); return; }
     if (!source) return;
     draft = structuredClone($state.snapshot(source)) as Profile;
@@ -104,6 +110,10 @@
   async function save() {
     if (!draft || !config.value) return;
     if (!draft.name.trim()) { problem = t("profiles.name_required"); return; }
+    if (halfExample) { problem = t("profiles.example_incomplete"); return; }
+    if (newApp.trim()) { addApp(newApp.trim()); newApp = ""; }
+    addUrl();
+    addExample();
     const next = $state.snapshot(draft) as Profile;
     if (isNew) next.id = slugId(next.name, config.value.profiles.map((p) => p.id));
     next.is_default = source?.is_default ?? false;
@@ -165,12 +175,15 @@
     newRaw = "";
     newRefined = "";
   }
+  // Steps and the rewriting engine change together: see addStep and removeStep.
   function addStep(select: HTMLSelectElement) {
-    const kind = select.value;
+    const kind = select.value as AddableStep | "";
     select.value = "";
     if (!draft || !kind) return;
-    const step: StepSpec = kind === "opencc" ? { step: "opencc", config: "s2twp" } : kind === "llm" ? { step: "llm" } : { step: "rules" };
-    draft.steps.push(step);
+    draft = withStep($state.snapshot(draft) as Profile, kind, llmChoices.map((p) => p.id));
+  }
+  function dropStep(i: number) {
+    if (draft) draft = removeStep($state.snapshot(draft) as Profile, i);
   }
   function move(i: number, delta: number) {
     if (draft) draft.steps = moveStep($state.snapshot(draft.steps) as StepSpec[], i, delta);
@@ -214,7 +227,7 @@
     </Row>
     {#if source}
       <Row label={t("profiles.default_label")} help={t(isDefault ? "profiles.is_default" : "profiles.not_default")}>
-        {#if isDefault}<Ring tone="accent" />
+        {#if isDefault}<Tag tone="accent">{t("profiles.default")}</Tag>
         {:else}<button type="button" class="btn" onclick={makeDefault}>{t("profiles.make_default")}</button>{/if}
       </Row>
     {/if}
@@ -222,6 +235,7 @@
 
   {#if !isDefault}
     <Group title={t("profiles.applies")}>
+      <Row label={t("profiles.apps_label")} />
       <Row>
         <div class="chips">
           {#each draft.matcher.app_ids as id, i (i)}
@@ -231,7 +245,13 @@
           {/each}
         </div>
       </Row>
-      <AddPerApp onadd={addApp} />
+      <AddPerApp onadd={addApp} bind:value={newApp} />
+    </Group>
+    <Group>
+      <Row label={t("profiles.urls")} help={t("profiles.urls_help")}>
+        <input type="text" class="add-input" bind:value={newUrl} placeholder={t("profiles.url_placeholder")} aria-label={t("profiles.urls")} onkeydown={(e) => { if (e.key === "Enter" && !isImeKey(e)) addUrl(); }} />
+        <button type="button" class="btn" disabled={!newUrl.trim()} onclick={addUrl}><Icon name="plus" size={14} />{t("common.add")}</button>
+      </Row>
       {#if draft.matcher.url_patterns.length}
         <Row>
           <div class="chips">
@@ -239,10 +259,6 @@
           </div>
         </Row>
       {/if}
-      <Row label={t("profiles.urls")} help={t("profiles.urls_help")}>
-        <input type="text" class="url" bind:value={newUrl} placeholder={t("profiles.url_placeholder")} aria-label={t("profiles.urls")} onkeydown={(e) => { if (e.key === "Enter" && !isImeKey(e)) addUrl(); }} />
-        <button type="button" class="btn" disabled={!newUrl.trim()} onclick={addUrl}><Icon name="plus" size={14} />{t("common.add")}</button>
-      </Row>
     </Group>
   {/if}
 
@@ -285,9 +301,9 @@
       </Row>
     {/each}
     <Row>
-      <input type="text" class="pair-text" bind:value={newRaw} placeholder={t("profiles.raw")} aria-label={t("profiles.raw")} />
+      <input type="text" class="pair-text" bind:value={newRaw} placeholder={t("profiles.raw")} aria-label={t("profiles.raw")} aria-invalid={problem && halfExample && !newRaw.trim() ? "true" : undefined} />
       <span class="arrow" aria-hidden="true">→</span>
-      <input type="text" class="pair-text" bind:value={newRefined} placeholder={t("profiles.refined")} aria-label={t("profiles.refined")} onkeydown={(e) => { if (e.key === "Enter" && !isImeKey(e)) addExample(); }} />
+      <input type="text" class="pair-text" bind:value={newRefined} placeholder={t("profiles.refined")} aria-label={t("profiles.refined")} aria-invalid={problem && halfExample && !newRefined.trim() ? "true" : undefined} onkeydown={(e) => { if (e.key === "Enter" && !isImeKey(e)) addExample(); }} />
       <span class="end"><button type="button" class="btn" disabled={!newRaw.trim() || !newRefined.trim()} onclick={addExample}><Icon name="plus" size={14} />{t("common.add")}</button></span>
     </Row>
   </Group>
@@ -301,7 +317,7 @@
           <span class="tools">
             <button type="button" class="btn quiet icon-btn" aria-label={t("profiles.move_up")} disabled={i === 0 || draft.steps[i - 1].step === "asr"} onclick={() => move(i, -1)}><Icon name="arrow-up" /></button>
             <button type="button" class="btn quiet icon-btn" aria-label={t("profiles.move_down")} disabled={i === draft.steps.length - 1} onclick={() => move(i, 1)}><Icon name="arrow-down" /></button>
-            <button type="button" class="btn quiet icon-btn" aria-label={t("common.remove")} onclick={() => draft!.steps.splice(i, 1)}><Icon name="trash" /></button>
+            <button type="button" class="btn quiet icon-btn" aria-label={t("common.remove")} onclick={() => dropStep(i)}><Icon name="trash" /></button>
           </span>
         {/if}
       </Row>
@@ -312,7 +328,8 @@
         <select aria-label={t("profiles.add_step")} value="" onchange={(e) => addStep(e.currentTarget)}>
           <option value="" disabled hidden>{t("profiles.add_step")}</option>
           <option value="opencc">{t("profiles.step.opencc")}</option>
-          <option value="llm">{t("profiles.step.llm")}</option>
+          {#if llmChoices.length}<option value="llm">{t("profiles.step.llm")}</option>
+          {:else}<option value="llm" disabled>{t("profiles.step.llm_unavailable")}</option>{/if}
           <option value="rules">{t("profiles.step.rules")}</option>
         </select>
       </span>
@@ -335,7 +352,6 @@
   /* The stored engine no longer exists; the select shows its id. */
   select.unknown { border-color: var(--warn); color: var(--warn); }
   select.unknown option { color: var(--ink); }
-  .url { width: 180px; flex: 0 1 auto; min-width: 0; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; }
   .title { font: 600 12px/1 var(--font); color: var(--ink-2); margin: 22px 2px 8px; }
   textarea { display: block; }
@@ -346,7 +362,7 @@
   .end .icon-btn { margin-right: -6px; }
   .icon-btn { width: 26px; padding: 0; color: var(--ink-2); }
   .icon-btn:hover { color: var(--ink); }
-  .idx { width: 16px; flex: none; color: var(--ink-3); font-size: 12px; text-align: right; }
+  .idx { width: 16px; flex: none; color: var(--ink-2); font-size: 12px; text-align: right; }
   .step { flex: 1; min-width: 0; }
   .tools { display: flex; gap: 2px; margin-right: -6px; }
   /* A native menu: the select is invisible and covers the quiet button. */
