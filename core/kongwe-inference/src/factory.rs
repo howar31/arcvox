@@ -37,7 +37,7 @@ fn model_error(cfg: &ProviderConfig, e: ModelError) -> ProviderError {
     match e {
         ModelError::NotInstalled(_) | ModelError::NotInCatalogue(_) => {
             ProviderError::new(ErrorCode::ModelMissing, format!("{}: {e}", cfg.label))
-                .with_hint("download or import the model in Settings > Models")
+                .with_hint("download or import the model in Settings > Engines and models")
         }
         other => ProviderError::new(ErrorCode::InvalidConfig, format!("{}: {other}", cfg.label)),
     }
@@ -153,7 +153,7 @@ mod tests {
             ProviderConfig::embedded("e", "E", Runtime::Whisper, "w", Capabilities::default());
         let err = f.asr(&cfg, &General::default()).err().unwrap();
         assert_eq!(err.code, ErrorCode::ModelMissing);
-        assert!(err.hint.as_deref().unwrap().contains("Models"));
+        assert!(err.hint.as_deref().unwrap().contains("Engines and models"));
     }
 
     #[tokio::test]

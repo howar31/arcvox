@@ -100,14 +100,14 @@ fn load_context(path: &Path, label: &str, use_gpu: bool) -> Result<WhisperContex
             ErrorCode::ModelMissing,
             format!("{label}: model file not found"),
         )
-        .with_hint("download or import the model in Settings > Models"));
+        .with_hint("download or import the model in Settings > Engines and models"));
     }
     check_header(path).map_err(|why| {
         ProviderError::new(
             ErrorCode::ModelCorrupt,
             format!("{label}: not a valid whisper model ({why})"),
         )
-        .with_hint("re-download or re-import the model in Settings > Models")
+        .with_hint("re-download or re-import the model in Settings > Engines and models")
     })?;
     let mut params = WhisperContextParameters::default();
     params.use_gpu(use_gpu);
@@ -117,7 +117,7 @@ fn load_context(path: &Path, label: &str, use_gpu: bool) -> Result<WhisperContex
             ErrorCode::ModelCorrupt,
             format!("{label}: cannot load model ({e:?})"),
         )
-        .with_hint("re-download or re-import the model in Settings > Models")
+        .with_hint("re-download or re-import the model in Settings > Engines and models")
     })
 }
 
@@ -317,7 +317,7 @@ mod tests {
         };
         let err = p.transcribe(&clip, &AsrHint::default()).await.unwrap_err();
         assert_eq!(err.code, ErrorCode::ModelMissing);
-        assert!(err.hint.as_deref().unwrap().contains("Models"));
+        assert!(err.hint.as_deref().unwrap().contains("Engines and models"));
     }
 
     #[tokio::test]

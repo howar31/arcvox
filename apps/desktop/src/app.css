@@ -1,32 +1,96 @@
+/* Design tokens. Every color in the app is defined here; re-theming means
+   editing these values only. */
 :root {
-  font-family: -apple-system, "PingFang TC", "Helvetica Neue", sans-serif;
-  font-size: 13px;
   color-scheme: light dark;
-  --bg: #f5f5f7;
-  --fg: #1d1d1f;
-  --muted: #6e6e73;
-  --accent: #0a84ff;
-  --panel: rgba(30, 30, 32, 0.92);
-  --panel-fg: #f5f5f7;
-  --border: rgba(0, 0, 0, 0.12);
+  --sidebar: #ECEEF2; --page: #F7F8FA; --surface: #FFFFFF; --sunken: #F1F3F6;
+  --ink: #15171C; --ink-2: #5A6070; --ink-3: #8B91A0;
+  --line: rgba(21,23,28,.10); --line-strong: rgba(21,23,28,.18);
+  --accent: #2747D6; --accent-ink: #FFFFFF; --accent-soft: rgba(39,71,214,.10);
+  --live: #E4472B; --ok: #198754; --warn: #B7700B;
+  --shadow: 0 1px 2px rgba(21,23,28,.06), 0 8px 24px rgba(21,23,28,.08);
+  --scrim: rgba(21,23,28,.28);
+  --knob: #FFFFFF; --knob-shadow: 0 1px 2px rgba(0,0,0,.25);
+  --lift: 0 1px 2px rgba(0,0,0,.12);
+
+  /* Widget pill: the same in both themes. */
+  --pill-bg: rgba(22,23,27,.92); --pill-ink: #F1F2F5; --pill-ink-2: #A3A9B7;
+  --pill-live: #FF6B4F; --pill-live-halo: rgba(255,107,79,.22); --pill-accent: #8FA2FF;
+  --panel: var(--pill-bg); --panel-fg: var(--pill-ink);
+
+  --font: -apple-system, BlinkMacSystemFont, "PingFang TC", "Segoe UI", "Microsoft JhengHei", sans-serif;
+  --font-round: ui-rounded, "SF Pro Rounded", -apple-system, "PingFang TC", "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #1e1e20; --fg: #f5f5f7; --muted: #98989d; --border: rgba(255, 255, 255, 0.14); }
+  :root {
+    --sidebar: #1B1D22; --page: #15161A; --surface: #212329; --sunken: #1A1C21;
+    --ink: #F1F2F5; --ink-2: #A3A9B7; --ink-3: #6F7584;
+    --line: rgba(255,255,255,.09); --line-strong: rgba(255,255,255,.18);
+    --accent: #8FA2FF; --accent-ink: #10142B; --accent-soft: rgba(143,162,255,.16);
+    --live: #FF6B4F; --ok: #4CC38A; --warn: #E2A33B;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 32px rgba(0,0,0,.45);
+    --scrim: rgba(0,0,0,.5);
+  }
 }
-body { margin: 0; background: var(--bg); color: var(--fg); }
-body.widget { background: transparent; }
 
-section { margin: 0 0 20px; }
-h2 { margin: 0 0 12px; font-size: 18px; }
-h3 { margin: 12px 0 6px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
-label { display: block; margin: 4px 0; }
-input[type="text"], input[type="number"], input[type="password"], input:not([type]), select, textarea { font: inherit; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: inherit; }
-textarea { width: 100%; box-sizing: border-box; font-family: ui-monospace, monospace; }
-button { font: inherit; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: inherit; }
-button.primary { background: var(--accent); color: white; border-color: transparent; }
-.row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
-.muted { color: var(--muted); }
-.status { color: var(--muted); min-height: 1.2em; }
-table { border-collapse: collapse; width: 100%; }
-th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border); }
-.form { padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+/* Base */
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; font: 13px/1.5 var(--font); color: var(--ink); background: var(--page); -webkit-font-smoothing: antialiased; }
+body.widget { background: transparent; }
+button, select, input, textarea { font: inherit; color: inherit; }
+input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+code { font-family: var(--font-mono); font-size: 12px; }
+
+/* Buttons */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 26px; padding: 0 11px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); white-space: nowrap; cursor: default; }
+.btn:hover { background: var(--sunken); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; }
+.btn.primary:hover { background: color-mix(in srgb, var(--accent) 88%, var(--ink)); }
+.btn.quiet { border-color: transparent; background: none; color: var(--accent); padding: 0 6px; }
+.btn.quiet:hover { background: var(--accent-soft); }
+.btn.danger { color: var(--live); }
+.btn:disabled { opacity: .5; pointer-events: none; }
+
+/* Fields */
+select, input[type="text"], input[type="number"], input[type="password"], input[type="url"], input[type="search"] {
+  height: 26px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--surface); min-width: 0;
+}
+select {
+  appearance: none; -webkit-appearance: none; padding-right: 24px; max-width: 100%; text-overflow: ellipsis;
+  background-image: linear-gradient(45deg, transparent 50%, var(--ink-2) 50%), linear-gradient(135deg, var(--ink-2) 50%, transparent 50%);
+  background-position: calc(100% - 13px) 50%, calc(100% - 9px) 50%;
+  background-size: 4px 4px; background-repeat: no-repeat;
+}
+input[type="number"] { width: 72px; text-align: right; font-variant-numeric: tabular-nums; }
+input::placeholder, textarea::placeholder { color: var(--ink-3); }
+textarea { width: 100%; min-height: 84px; padding: 9px 11px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--surface); line-height: 1.6; resize: vertical; }
+input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="true"] { border-color: var(--live); }
+
+/* Text */
+.help { display: block; margin: 6px 2px 0; color: var(--ink-2); font-size: 12px; }
+.name { font-weight: 600; }
+.sub { color: var(--ink-2); font-size: 12px; }
+.num { font-variant-numeric: tabular-nums; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
+
+/* Pages not yet moved to the component set keep their earlier look. */
+.legacy section { margin: 0 0 20px; }
+.legacy h2 { margin: 0 0 12px; font: 600 21px/1.2 var(--font-round); }
+.legacy h3 { margin: 16px 0 6px; font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.legacy label { display: block; margin: 4px 0; }
+.legacy input:not([type]) { height: 26px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--surface); }
+.legacy textarea { font-family: var(--font-mono); }
+.legacy button { height: 26px; padding: 0 11px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--surface); white-space: nowrap; }
+.legacy button:hover { background: var(--sunken); }
+.legacy button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; }
+.legacy .row { display: flex; align-items: center; gap: 8px; margin: 4px 0; flex-wrap: wrap; }
+.legacy .muted { color: var(--ink-2); }
+.legacy .status { color: var(--ink-2); min-height: 1.2em; }
+.legacy table { border-collapse: collapse; width: 100%; }
+.legacy th, .legacy td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+.legacy .form { padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }

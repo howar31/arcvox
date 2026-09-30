@@ -66,7 +66,7 @@ mod tests {
             code: ErrorCode::ModelMissing,
             message: "model file not found".into(),
             recoverable: false,
-            hint: Some("download the model in Settings > Models".into()),
+            hint: Some("download the model in Settings > Engines and models".into()),
         };
         let v: serde_json::Value = serde_json::to_value(&e).unwrap();
         assert_eq!(v["code"], "model_missing");
