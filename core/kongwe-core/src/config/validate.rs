@@ -28,6 +28,8 @@ pub enum ConfigError {
     EmbeddedProviderIncomplete(ProviderId),
     #[error("general.{field} must be at least {min}")]
     GeneralRange { field: &'static str, min: u64 },
+    #[error("snippet `{0}` needs at least one alias")]
+    SnippetWithoutAlias(String),
 }
 
 pub fn validate(config: &Config) -> Result<(), ConfigError> {
@@ -70,6 +72,13 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
             field: "llm_timeout_secs",
             min: 1,
         });
+    }
+
+    for e in &config.dictionary {
+        if e.term.contains('\n') && !e.aliases.iter().any(|a| !a.trim().is_empty()) {
+            let first = e.term.lines().next().unwrap_or("").to_string();
+            return Err(ConfigError::SnippetWithoutAlias(first));
+        }
     }
 
     for profile in &config.profiles {
@@ -140,7 +149,7 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
 mod tests {
     use super::*;
     use crate::config::model::{
-        Capabilities, Config, Profile, ProviderConfig, ProviderKind, Runtime,
+        Capabilities, Config, DictionaryEntry, Profile, ProviderConfig, ProviderKind, Runtime,
     };
 
     fn base() -> Config {
@@ -263,6 +272,22 @@ mod tests {
         );
         c.providers.last_mut().unwrap().runtime = Some(Runtime::Whisper);
         c.providers.last_mut().unwrap().model_id = Some("breeze-asr-25-q5_0".into());
+        assert!(validate(&c).is_ok());
+    }
+
+    #[test]
+    fn snippet_without_alias_is_rejected() {
+        let mut c = Config::first_run();
+        c.dictionary.push(DictionaryEntry {
+            term: "a\nb".into(),
+            aliases: vec!["".into()],
+            asr_hint: true,
+        });
+        assert_eq!(
+            validate(&c),
+            Err(ConfigError::SnippetWithoutAlias("a".into()))
+        );
+        c.dictionary[0].aliases = vec!["k".into()];
         assert!(validate(&c).is_ok());
     }
 

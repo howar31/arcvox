@@ -3,14 +3,35 @@
 
 use crate::config::DictionaryEntry;
 
-/// Terms with `asr_hint`, comma-joined, cut at whole terms to fit `budget_bytes`.
+/// A term spanning several lines is a snippet: its aliases are the spoken
+/// keywords and the whole term is what gets inserted.
+pub fn is_snippet(entry: &DictionaryEntry) -> bool {
+    entry.term.contains('\n')
+}
+
+/// Hinted items, comma-joined, cut at whole items to fit `budget_bytes`.
+/// A snippet contributes its non-empty aliases; any other entry its term.
 pub fn asr_hint(entries: &[DictionaryEntry], budget_bytes: usize) -> Option<String> {
+    let items = entries
+        .iter()
+        .filter(|e| e.asr_hint)
+        .flat_map(|e| -> Vec<&str> {
+            if is_snippet(e) {
+                e.aliases
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|a| !a.is_empty())
+                    .collect()
+            } else {
+                vec![e.term.as_str()]
+            }
+        });
     let mut out = String::new();
-    for e in entries.iter().filter(|e| e.asr_hint) {
+    for item in items {
         let candidate = if out.is_empty() {
-            e.term.clone()
+            item.to_string()
         } else {
-            format!("{out}, {}", e.term)
+            format!("{out}, {item}")
         };
         if candidate.len() > budget_bytes {
             break;
@@ -25,7 +46,11 @@ pub fn asr_hint(entries: &[DictionaryEntry], budget_bytes: usize) -> Option<Stri
 }
 
 pub fn llm_terms(entries: &[DictionaryEntry]) -> Vec<String> {
-    entries.iter().map(|e| e.term.clone()).collect()
+    entries
+        .iter()
+        .filter(|e| !is_snippet(e))
+        .map(|e| e.term.clone())
+        .collect()
 }
 
 /// Replaces every alias with its term, matching against the original text
@@ -113,6 +138,23 @@ mod tests {
     fn empty_alias_is_ignored() {
         let d = vec![entry("X", &[""], true)];
         assert_eq!(apply_aliases(&d, "abc"), "abc");
+    }
+
+    #[test]
+    fn snippet_hint_uses_aliases_and_llm_terms_skip_it() {
+        let d = vec![
+            entry("Kongwe", &[], true),
+            entry("Best regards,\nHowar", &["簽名檔", "signature"], true),
+            entry("line one\nline two", &["片段"], false),
+        ];
+        assert!(is_snippet(&d[1]));
+        assert!(!is_snippet(&d[0]));
+        assert_eq!(
+            asr_hint(&d, 1000).as_deref(),
+            Some("Kongwe, 簽名檔, signature")
+        );
+        assert_eq!(llm_terms(&d), vec!["Kongwe"]);
+        assert_eq!(apply_aliases(&d, "附上簽名檔"), "附上Best regards,\nHowar");
     }
 
     #[test]
