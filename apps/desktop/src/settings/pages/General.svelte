@@ -30,9 +30,9 @@
   async function saveClient() {
     if (!draft) return;
     const bad = invalidFields([
-      { key: "general.hold_threshold", value: draft.hotkey.hold_threshold_ms, min: 100, max: 1000 },
-      { key: "general.double_tap_window", value: draft.hotkey.double_tap_window_ms, min: 150, max: 1000 },
-      { key: "general.max_utterance", value: draft.max_utterance_secs, min: 10, max: 1800 },
+      { key: "general.hold_threshold", value: draft.hotkey.hold_threshold_ms, min: 100, max: 1000, integer: true },
+      { key: "general.double_tap_window", value: draft.hotkey.double_tap_window_ms, min: 150, max: 1000, integer: true },
+      { key: "general.max_utterance", value: draft.max_utterance_secs, min: 10, max: 1800, integer: true },
     ]);
     if (bad.length) { status = t("common.invalid_number", { field: t(bad[0]) }); return; }
     try {
@@ -46,11 +46,11 @@
   async function saveGeneral() {
     if (!general) return;
     const bad = invalidFields([
-      { key: "general.history_retention", value: general.history_retention_days, min: 1 },
-      { key: "general.recording_retention", value: general.recording_retention_days, min: 1 },
-      { key: "general.asr_timeout", value: general.asr_timeout_secs, min: 1 },
-      { key: "general.llm_timeout", value: general.llm_timeout_secs, min: 1 },
-      { key: "general.llm_idle_unload", value: general.llm_idle_unload_secs, min: 0 },
+      { key: "general.history_retention", value: general.history_retention_days, min: 1, integer: true },
+      { key: "general.recording_retention", value: general.recording_retention_days, min: 1, integer: true },
+      { key: "general.asr_timeout", value: general.asr_timeout_secs, min: 1, integer: true },
+      { key: "general.llm_timeout", value: general.llm_timeout_secs, min: 1, integer: true },
+      { key: "general.llm_idle_unload", value: general.llm_idle_unload_secs, min: 0, integer: true },
     ]);
     if (bad.length) { status = t("common.invalid_number", { field: t(bad[0]) }); return; }
     try { await updateGeneral(general); status = t("common.saved"); } catch (e) { status = errorMessage(e); }
