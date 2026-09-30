@@ -538,6 +538,11 @@ impl Controller {
                     *f = Some(failure);
                 }
             }
+            Event::Transcript {
+                text,
+                is_final: true,
+                ..
+            } => self.deps.ui.transcript(text),
             Event::Done { .. } => self.on_done(),
             _ => {}
         }
@@ -957,6 +962,24 @@ mod tests {
         wait_state(r, UiState::Recording, "recording").await;
         speak_and_wait(r, secs).await;
         r.modifier.send(fn_up()).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn final_transcript_reaches_the_ui() {
+        let r = rig(fast_settings()).await;
+        mock_ok(&r, "软件 原文", "软件 整理後").await;
+        hold_and_speak(&r, 1.0).await;
+        wait_state(&r, UiState::Idle, "idle").await;
+        // The raw ASR output, sent before the OpenCC step runs.
+        let transcripts = r.ui.transcripts.lock().unwrap().clone();
+        assert_eq!(transcripts, vec!["软件 原文".to_string()]);
+        let log = r.ui.log.lock().unwrap().clone();
+        let t = log
+            .iter()
+            .position(|l| l.starts_with("transcript:"))
+            .unwrap();
+        let inserting = log.iter().position(|l| l == "state:inserting").unwrap();
+        assert!(t < inserting);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
