@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Profile, ProviderConfig, StepSpec } from "./api";
-import { appsSummary, blankProfile, engineMeta, moveStep, slugId, withLlm } from "./profileEdit";
+import { appsSummary, blankProfile, engineMeta, moveStep, NEW_PROFILE, slugId, withLlm } from "./profileEdit";
 
 const profile = (steps: StepSpec[], llm: string | null = "llm-a"): Profile => ({
   id: "p", name: "P", is_default: true, matcher: { app_ids: [], url_patterns: [] }, asr_provider: "asr-a", llm_provider: llm,
@@ -101,6 +101,14 @@ describe("slugId", () => {
     expect(slugId("Mail", ["mail"])).toBe("mail-2");
     expect(slugId("Mail", ["mail", "mail-2"])).toBe("mail-3");
   });
+  it("never returns the reserved id new", () => {
+    expect(slugId("New", [])).toBe("new-2");
+    expect(slugId("  new!", ["new-2"])).toBe("new-3");
+  });
+});
+
+it("keeps the unsaved-profile route argument outside the slug alphabet", () => {
+  expect(NEW_PROFILE).not.toMatch(/^[a-z0-9-]+$/);
 });
 
 describe("moveStep", () => {

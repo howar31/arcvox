@@ -359,5 +359,7 @@
   "profiles.missing_title": "找不到情境",
   "profiles.missing": "這個情境不存在，可能已經刪除。",
   "profiles.back": "回到情境列表",
-  "profiles.only_default": "新增情境，讓特定應用程式使用不同的引擎或寫法。"
+  "profiles.only_default": "新增情境，讓特定應用程式使用不同的引擎或寫法。",
+  "profiles.unusable_option": "{name}（不能用在這裡）",
+  "profiles.adding": "新增中..."
 }

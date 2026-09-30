@@ -359,5 +359,7 @@
   "profiles.missing_title": "Profile not found",
   "profiles.missing": "This profile does not exist; it may have been deleted.",
   "profiles.back": "Back to profiles",
-  "profiles.only_default": "Add a profile to use other engines or wording in specific applications."
+  "profiles.only_default": "Add a profile to use other engines or wording in specific applications.",
+  "profiles.unusable_option": "{name} (cannot be used here)",
+  "profiles.adding": "Adding..."
 }

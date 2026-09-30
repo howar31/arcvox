@@ -47,6 +47,11 @@ function hostOf(url: string | null): string | null {
   try { return new URL(url).host || url; } catch { return url; }
 }
 
+/** Route argument of a profile that is not saved yet; "+" never appears in an id from `slugId`. */
+export const NEW_PROFILE = "+new";
+/** Ids `slugId` never returns: "new" was the route argument of an unsaved profile in earlier builds. */
+const RESERVED_IDS = ["new", NEW_PROFILE];
+
 /** A new profile that starts from the engines, language and steps of `base`. */
 export function blankProfile(base: Profile): Profile {
   return {
@@ -58,10 +63,10 @@ export function blankProfile(base: Profile): Profile {
 
 /**
  * An id for a new profile: the lowercase ASCII words of the name joined by dashes, with a
- * numeric suffix when taken. A name without ASCII letters or digits becomes `profile-<n>`.
+ * numeric suffix when taken or reserved ("new"). A name without ASCII letters or digits becomes `profile-<n>`.
  */
 export function slugId(name: string, taken: string[]): string {
-  const used = new Set(taken);
+  const used = new Set([...taken, ...RESERVED_IDS]);
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   if (slug && !used.has(slug)) return slug;
   const stem = slug || "profile";
