@@ -52,6 +52,17 @@ fn millis(since: Instant) -> u64 {
     since.elapsed().as_millis() as u64
 }
 
+/// Rearms the idle unload when a run ends, including when its future is
+/// dropped mid-run: a cancelled load can still finish in the background and
+/// leave the model resident.
+struct IdleOnDrop<'a>(&'a Engine);
+
+impl Drop for IdleOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.touch_idle();
+    }
+}
+
 impl Engine {
     /// Transcribes `clip` with the default profile's language and dictionary
     /// hint. `cold` unloads the provider first so `load_ms` includes the
@@ -63,9 +74,8 @@ impl Engine {
         cold: bool,
     ) -> BenchRun {
         self.mark_busy();
-        let run = self.run_asr(provider, clip, cold).await;
-        self.touch_idle();
-        run
+        let _idle = IdleOnDrop(self);
+        self.run_asr(provider, clip, cold).await
     }
 
     /// Refines `transcript` with the prompt a session under the default
@@ -73,9 +83,8 @@ impl Engine {
     /// first so `load_ms` includes the model load.
     pub async fn bench_llm(&self, provider: &ProviderId, transcript: &str, cold: bool) -> BenchRun {
         self.mark_busy();
-        let run = self.run_llm(provider, transcript, cold).await;
-        self.touch_idle();
-        run
+        let _idle = IdleOnDrop(self);
+        self.run_llm(provider, transcript, cold).await
     }
 
     async fn run_asr(&self, provider: &ProviderId, clip: Arc<AudioClip>, cold: bool) -> BenchRun {
@@ -196,7 +205,9 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     use super::*;
-    use crate::engine::tests::{drain_session, idle_rig, idle_rig_with, one_second};
+    use crate::engine::tests::{
+        drain_session, idle_rig, idle_rig_with, one_second, settle_and_expect_one_unload,
+    };
     use crate::engine::SessionRequest;
     use crate::steps::llm::fakes::FakeLlm;
     use crate::SAMPLE_RATE;
@@ -275,5 +286,21 @@ mod tests {
         assert_eq!(fake.unloads.load(Ordering::SeqCst), 0);
         assert!(run.error.is_none());
         assert_eq!(run.output, "ok");
+    }
+
+    // Dropping the run mid-completion stands for a cancelled speed test: the
+    // model it loaded must still be let go once the engine is idle.
+    #[tokio::test(start_paused = true)]
+    async fn cancelled_run_rearms_the_idle_unload() {
+        let (fake, _tmp, e) = idle_rig_with(FakeLlm::slow("ok", Duration::from_secs(3))).await;
+        let id = e.config().current().profiles[0]
+            .llm_provider
+            .clone()
+            .unwrap();
+        let cut =
+            tokio::time::timeout(Duration::from_secs(1), e.bench_llm(&id, "原文", false)).await;
+        assert!(cut.is_err());
+        assert_eq!(fake.unloads.load(Ordering::SeqCst), 0);
+        settle_and_expect_one_unload(&fake).await;
     }
 }

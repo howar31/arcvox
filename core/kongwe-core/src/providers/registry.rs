@@ -60,18 +60,7 @@ impl ProviderRegistry {
     /// Removes every cached provider whose config matches `pred` and returns
     /// them, so the caller can unload them outside the cache locks.
     pub fn evict_where(&self, pred: impl Fn(&ProviderConfig) -> bool) -> EvictedProviders {
-        let mut asr = Vec::new();
-        {
-            let mut cache = self.asr.lock().unwrap();
-            cache.retain(|_, (cfg, _, _, p)| {
-                if pred(cfg) {
-                    asr.push(p.clone());
-                    false
-                } else {
-                    true
-                }
-            });
-        }
+        let asr = self.evict_asr_where(&pred);
         let mut llm = Vec::new();
         {
             let mut cache = self.llm.lock().unwrap();
@@ -85,6 +74,23 @@ impl ProviderRegistry {
             });
         }
         (asr, llm)
+    }
+
+    /// `evict_where` for the speech cache only.
+    pub fn evict_asr_where(
+        &self,
+        pred: impl Fn(&ProviderConfig) -> bool,
+    ) -> Vec<Arc<dyn AsrProvider>> {
+        let mut asr = Vec::new();
+        self.asr.lock().unwrap().retain(|_, (cfg, _, _, p)| {
+            if pred(cfg) {
+                asr.push(p.clone());
+                false
+            } else {
+                true
+            }
+        });
+        asr
     }
 
     pub fn resolve_key(&self, cfg: &ProviderConfig) -> Result<Option<String>, ProviderError> {
