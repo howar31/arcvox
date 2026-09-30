@@ -113,6 +113,11 @@ pub fn run() {
                 if window.label() == "settings" {
                     api.prevent_close();
                     let _ = window.hide();
+                    // The speed test page is gone, so nothing will stop its
+                    // recording; release the microphone now.
+                    if let Some(state) = window.app_handle().try_state::<AppState>() {
+                        state.bench.discard_recording();
+                    }
                     #[cfg(target_os = "macos")]
                     let _ = window
                         .app_handle()
