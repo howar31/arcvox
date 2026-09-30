@@ -22,6 +22,9 @@ pub struct ProviderRegistry {
     factories: Vec<Arc<dyn ProviderFactory>>,
 }
 
+/// Providers removed from the cache by [`ProviderRegistry::evict_where`].
+pub type EvictedProviders = (Vec<Arc<dyn AsrProvider>>, Vec<Arc<dyn LlmProvider>>);
+
 impl ProviderRegistry {
     pub fn new(client: reqwest::Client, secrets: Arc<dyn SecretStore>) -> Self {
         Self::with_factories(client, secrets, Vec::new())
@@ -52,6 +55,36 @@ impl ProviderRegistry {
             .values()
             .map(|v| v.3.clone())
             .collect()
+    }
+
+    /// Removes every cached provider whose config matches `pred` and returns
+    /// them, so the caller can unload them outside the cache locks.
+    pub fn evict_where(&self, pred: impl Fn(&ProviderConfig) -> bool) -> EvictedProviders {
+        let mut asr = Vec::new();
+        {
+            let mut cache = self.asr.lock().unwrap();
+            cache.retain(|_, (cfg, _, _, p)| {
+                if pred(cfg) {
+                    asr.push(p.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        let mut llm = Vec::new();
+        {
+            let mut cache = self.llm.lock().unwrap();
+            cache.retain(|_, (cfg, _, _, p)| {
+                if pred(cfg) {
+                    llm.push(p.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        (asr, llm)
     }
 
     pub fn resolve_key(&self, cfg: &ProviderConfig) -> Result<Option<String>, ProviderError> {
@@ -219,6 +252,28 @@ pub(crate) mod tests {
         p.runtime = Some(crate::config::Runtime::Whisper);
         p.model_id = Some("m".into());
         p
+    }
+
+    #[test]
+    fn evict_returns_removed_providers_and_next_build_is_fresh() {
+        let r = ProviderRegistry::with_factories(
+            reqwest::Client::new(),
+            Arc::new(MemorySecretStore::default()),
+            vec![Arc::new(FakeFactory)],
+        );
+        let cfg = embedded_cfg();
+        let a = r.asr(&cfg, &General::default()).unwrap();
+        let l = r.llm(&cfg, &General::default()).unwrap();
+        let (asr, llm) = r.evict_where(|c| c.model_id.as_deref() == Some("m"));
+        assert_eq!(asr.len(), 1);
+        assert_eq!(llm.len(), 1);
+        assert!(Arc::ptr_eq(&asr[0], &a));
+        assert!(Arc::ptr_eq(&llm[0], &l));
+        assert!(r.llm_providers().is_empty());
+        let b = r.asr(&cfg, &General::default()).unwrap();
+        assert!(!Arc::ptr_eq(&a, &b));
+        let (none_a, none_l) = r.evict_where(|c| c.model_id.as_deref() == Some("other"));
+        assert!(none_a.is_empty() && none_l.is_empty());
     }
 
     fn registry() -> ProviderRegistry {
