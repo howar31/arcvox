@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { Config, ManifestView, ProviderConfig } from "./api";
-import { defaultProfile, isKnownProvider, modelLabel, profileName, providerLabel, usedBy } from "./labels";
+import type { Config, InstalledModel, ManifestView, ProviderConfig } from "./api";
+import { setLanguage } from "./i18n";
+import { defaultProfile, modelDescription, modelLabel, profileName, providerLabel, usedBy } from "./labels";
 
 const caps = { transcribe: false, chat: false, streaming: false, language_hint: false, hotwords: false };
 const base: ProviderConfig = {
@@ -9,7 +10,6 @@ const base: ProviderConfig = {
   model_id: null, runtime: null,
 };
 const httpProvider: ProviderConfig = { ...base, id: "b", label: "B label", capabilities: { ...caps, chat: true } };
-const embedded: ProviderConfig = { ...base, id: "e", label: "Embedded", kind: "embedded", runtime: "whisper" };
 const profile = (id: string, name: string, asr: string, llm: string | null, isDefault = false) => ({
   id, name, is_default: isDefault, matcher: { app_ids: [], url_patterns: [] }, asr_provider: asr, llm_provider: llm,
   language_hint: null, prompt_addition: "", few_shot: [], steps: [],
@@ -29,8 +29,6 @@ describe("labels", () => {
     expect(providerLabel(cfg, "a")).toBe("A label");
     expect(providerLabel(cfg, "gone")).toBe("gone");
     expect(providerLabel(cfg, null)).toBe("");
-    expect(isKnownProvider(cfg, "a")).toBe(true);
-    expect(isKnownProvider(cfg, "gone")).toBe(false);
   });
   it("names profiles and finds the default", () => {
     expect(profileName(cfg, "mail")).toBe("Mail");
@@ -43,10 +41,19 @@ describe("labels", () => {
     expect(usedBy(cfg, "b")).toEqual([{ name: "Default", isDefault: true }]);
     expect(usedBy(cfg, "gone")).toEqual([]);
   });
-  it("names the model an embedded provider loads", () => {
-    expect(modelLabel(manifest, { ...embedded, model_id: "breeze-asr-25-q5_0" })).toBe("Breeze-ASR-25 (q5_0)");
-    expect(modelLabel(manifest, { ...embedded, model_id: null, model_path: "/x/y/custom.gguf" })).toBe("custom.gguf");
-    expect(modelLabel(null, { ...embedded, model_id: "unknown-id" })).toBe("unknown-id");
-    expect(modelLabel(manifest, httpProvider)).toBe(httpProvider.label);
+  it("names an installed model: its catalogue label, else its id, or the file name when imported", () => {
+    const m = (id: string, custom = false, path = `/m/${id}.bin`): InstalledModel => ({ id, runtime: "whisper", path, size_bytes: 1, custom });
+    expect(modelLabel(manifest, m("breeze-asr-25-q5_0"))).toBe("Breeze-ASR-25 (q5_0)");
+    expect(modelLabel(null, m("unknown-id"))).toBe("unknown-id");
+    expect(modelLabel(manifest, m("custom/x.gguf", true, "/x/y/custom.gguf"))).toBe("custom.gguf");
+  });
+  it("describes catalogue models in the interface language and falls back to the catalogue text", () => {
+    const entry = { id: "gemma-3-4b-it-q4_k_m", description: "General purpose rewriting model." };
+    setLanguage("zh-TW");
+    expect(modelDescription(entry)).toBe("通用的文字改寫模型，適用 Gemma 使用條款");
+    expect(modelDescription({ id: "future-model", description: "Some future model." })).toBe("Some future model.");
+    setLanguage("en");
+    expect(modelDescription(entry)).toBe("General purpose rewriting model. Subject to the Gemma Terms of Use.");
+    expect(modelDescription({ id: "future-model", description: "" })).toBe("");
   });
 });

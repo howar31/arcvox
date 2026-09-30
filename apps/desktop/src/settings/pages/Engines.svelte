@@ -8,7 +8,7 @@
   } from "../../lib/api";
   import { engineFromModel, enginesOf, hasRole, recommendedMissing, runtimeFor, unusedModels, type Role } from "../../lib/engines";
   import { t } from "../../lib/i18n";
-  import { usedBy } from "../../lib/labels";
+  import { modelDescription, modelLabel, usedBy } from "../../lib/labels";
   import { rowStatus } from "../../lib/models.svelte";
   import { engineMeta } from "../../lib/profileEdit";
   import { baseName, describeProbe, NATIVE_FM } from "../../lib/providerForm";
@@ -18,6 +18,7 @@
   import Empty from "../../lib/ui/Empty.svelte";
   import Group from "../../lib/ui/Group.svelte";
   import Icon from "../../lib/ui/Icon.svelte";
+  import Modal from "../../lib/ui/Modal.svelte";
   import PageHead from "../../lib/ui/PageHead.svelte";
   import Ring from "../../lib/ui/Ring.svelte";
   import Row from "../../lib/ui/Row.svelte";
@@ -38,6 +39,8 @@
   let rowProbes = $state<Record<string, { state: "wait" | "ok" | "bad"; text: string }>>({});
   let formOpen = $state(false);
   let formInitial = $state<ProviderConfig | null>(null);
+  // The installed model waiting for the delete confirmation.
+  let deleting = $state<InstalledModel | null>(null);
 
   const roles = $derived([
     { value: "asr" as Role, label: t("engines.role.asr") },
@@ -85,7 +88,10 @@
       const host = engineMeta(p, installedIds).detail ?? "";
       return p.model ? t("engines.desc.http", { host, model: p.model }) : host;
     }
-    if (p.model_id) return manifest?.models.find((m) => m.id === p.model_id)?.description || p.model_id;
+    if (p.model_id) {
+      const entry = manifest?.models.find((m) => m.id === p.model_id);
+      return (entry && modelDescription(entry)) || p.model_id;
+    }
     if (p.model_path) return t("engines.desc.custom", { file: baseName(p.model_path) });
     return t("engines.desc.no_model");
   }
@@ -115,14 +121,13 @@
   }
 
   // Models
-  const labelOf = (m: InstalledModel): string => (m.custom ? baseName(m.path) : (manifest?.models.find((e) => e.id === m.id)?.label ?? m.id));
   const isUnused = (id: string): boolean => unused.some((m) => m.id === id);
 
   async function createEngine(id: string) {
     const m = installed.find((x) => x.id === id);
     if (!m) return;
     try {
-      await upsertProvider(engineFromModel(m, labelOf(m), providers.map((p) => p.id)));
+      await upsertProvider(engineFromModel(m, modelLabel(manifest, m), providers.map((p) => p.id)));
       toast.ok(t("engines.created"));
     } catch (e) { toast.error(errorMessage(e)); }
   }
@@ -137,8 +142,11 @@
   async function cancel(id: string) {
     try { await modelsCancel(id); } catch (e) { toast.error(errorMessage(e)); }
   }
-  async function removeModel(id: string) {
-    try { await modelsDelete(id); toast.ok(t("engines.model_deleted")); } catch (e) { toast.error(errorMessage(e)); }
+  async function removeModel() {
+    const m = deleting;
+    deleting = null;
+    if (!m) return;
+    try { await modelsDelete(m.id); toast.ok(t("engines.model_deleted")); } catch (e) { toast.error(errorMessage(e)); }
     await refreshInstalled();
   }
   async function importFile() {
@@ -157,7 +165,7 @@
 
 <PageHead title={t("nav.engines")} description={t("engines.description")}>
   {#snippet actions()}
-    <button type="button" class="btn primary" onclick={() => openForm(null)}>{t("engines.add")}</button>
+    <button type="button" class="btn primary" onclick={() => openForm(null)}><Icon name="plus" size={14} />{t("engines.add")}</button>
   {/snippet}
 </PageHead>
 
@@ -200,7 +208,7 @@
 {#snippet modelState(id: string)}
   <Tag tone="ok">{t("engines.installed")}</Tag>
   {#if isUnused(id)}<button type="button" class="btn quiet" onclick={() => createEngine(id)}>{t("engines.create")}</button>{/if}
-  <button type="button" class="btn quiet danger" onclick={() => removeModel(id)}>{t("engines.delete_model")}</button>
+  <button type="button" class="btn quiet danger" onclick={() => { deleting = installed.find((m) => m.id === id) ?? null; }}>{t("engines.delete_model")}</button>
 {/snippet}
 
 <Group title={t("engines.catalogue")}>
@@ -216,7 +224,7 @@
           {#if m.recommended}<Tag tone="accent">{t("engines.recommended")}</Tag>{/if}
         </div>
         <small class="line" title={entryMeta(m)}>{entryMeta(m)}</small>
-        {#if m.description}<small>{m.description}</small>{/if}
+        {#if modelDescription(m)}<small>{modelDescription(m)}</small>{/if}
         {#if s.kind === "error"}<small class="probe bad">{s.message}</small>{/if}
       </div>
       {#if s.kind === "missing"}
@@ -260,6 +268,14 @@
     <button type="button" class="link" onclick={refreshManifest} disabled={refreshing}>{t("engines.refresh")}</button>
   </p>
 </div>
+
+<Modal bind:open={() => deleting !== null, (v) => { if (!v) deleting = null; }} title={t("engines.delete_model_title")}>
+  {#if deleting}<p>{t("engines.delete_model_body", { name: modelLabel(manifest, deleting), size: formatBytes(deleting.size_bytes) })}</p>{/if}
+  {#snippet actions()}
+    <button type="button" class="btn" onclick={() => (deleting = null)}>{t("common.cancel")}</button>
+    <button type="button" class="btn danger" onclick={removeModel}>{t("engines.delete_model")}</button>
+  {/snippet}
+</Modal>
 
 {#if formOpen}
   <EngineForm bind:open={formOpen} initial={formInitial} {role} {installed} {manifest} />
