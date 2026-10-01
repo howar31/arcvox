@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Utterance } from "./api";
-import { clipLength, groupByDay, seconds, showsRaw, totalSeconds } from "./historyView";
+import { clipLength, groupByDay, rawState, seconds, totalSeconds } from "./historyView";
 
 const at = (d: Date) => Math.floor(d.getTime() / 1000);
 const u = (id: number, when: Date, raw = "raw", fin = "final", degraded = false): Utterance => ({
@@ -45,16 +45,17 @@ describe("seconds", () => {
   });
 });
 
-describe("showsRaw", () => {
-  it("shows the raw transcript only when it differs from the final text", () => {
-    expect(showsRaw(u(1, new Date(), "好 我等一下看", "好，我等一下看。"))).toBe(true);
-    expect(showsRaw(u(1, new Date(), "same text ", " same text"))).toBe(false);
+describe("rawState", () => {
+  it("tells a changed transcript from one the rewrite left as it was", () => {
+    expect(rawState(u(1, new Date(), "好 我等一下看", "好，我等一下看。"))).toBe("changed");
+    expect(rawState(u(1, new Date(), "same text ", " same text"))).toBe("same");
   });
-  it("hides it for a degraded row that inserted the raw text", () => {
-    expect(showsRaw(u(1, new Date(), "好 我等一下看", "好 我等一下看", true))).toBe(false);
+  it("tells a failed rewrite from a profile that does not rewrite", () => {
+    expect(rawState(u(1, new Date(), "好 我等一下看", "好 我等一下看", true))).toBe("failed");
+    expect(rawState({ ...u(1, new Date(), "好", "好"), llm_ms: null })).toBe("off");
   });
-  it("hides an empty raw transcript", () => {
-    expect(showsRaw(u(1, new Date(), "  ", "typed"))).toBe(false);
+  it("reports an empty raw transcript as absent", () => {
+    expect(rawState(u(1, new Date(), "  ", "typed"))).toBe("none");
   });
 });
 
