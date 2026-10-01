@@ -147,7 +147,7 @@
     <h2>{t("home.flow")}</h2>
     <Tag tone="accent"><Ring tone="accent" size="sm" />{t("home.profile_tag", { name: profile.name })}</Tag>
   </div>
-  <div class="flow"><div class="path">
+  <div class="path">
     <div class="stage">
       <div class="role">{t("home.stage.capture")}</div>
       <div class="what" title={micName}>{micName}</div>
@@ -191,7 +191,6 @@
       <div class="meta">{t(hasOpencc ? "home.output_opencc" : "home.output_plain")}</div>
       <button type="button" class="btn quiet act" onclick={() => go("profiles", profile.id)}>{t("home.adjust")}</button>
     </div>
-  </div>
   </div>
   <p class="help">{t("home.flow_help", { name: profile.name })}</p>
 
@@ -244,8 +243,7 @@
   .bar h2 { flex: 1; min-width: 0; margin: 0; font: 600 12px/1 var(--font); color: var(--ink-2); }
   .bar .link { height: 20px; font-size: 12px; margin-right: -6px; }
 
-  /* The processing flow: one strip, one stage per step; a column when narrow. */
-  .flow { container: flow / inline-size; }
+  /* The processing flow: one strip, one stage per step. The window's minimum width keeps the four stages side by side. */
   .path { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
   .stage { padding: 14px 14px 13px; position: relative; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; }
   .stage + .stage { border-left: 1px solid var(--line); }
@@ -256,16 +254,6 @@
   .meta { font-size: 12px; color: var(--ink-2); max-width: 100%; flex: 1; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .meta.warn, .unknown { color: var(--warn); }
   .act { margin: 8px 0 0 -6px; }
-  @container flow (width < 520px) {
-    .path { grid-template-columns: minmax(0, 1fr); }
-    .stage { display: grid; grid-template-columns: 104px minmax(0, 1fr) auto; grid-template-areas: "role what act" "role meta act"; column-gap: 12px; align-items: center; padding: 9px 14px; }
-    .stage + .stage { border-left: 0; border-top: 1px solid var(--line); }
-    .stage + .stage::before { left: 22px; top: -5px; transform: rotate(135deg); }
-    .role { grid-area: role; }
-    .what { grid-area: what; margin: 0; }
-    .meta { grid-area: meta; -webkit-line-clamp: 1; line-clamp: 1; }
-    .act { grid-area: act; margin: 0 -6px 0 0; }
-  }
 
   /* A native menu: the select is invisible and covers the quiet button. */
   .menu { position: relative; display: inline-flex; }
