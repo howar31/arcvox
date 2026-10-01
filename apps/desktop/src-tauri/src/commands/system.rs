@@ -61,6 +61,7 @@ pub struct SystemInfo {
     pub config_dir: String,
     pub data_dir: String,
     pub cache_dir: String,
+    pub recordings_dir: String,
 }
 
 #[tauri::command]
@@ -164,6 +165,7 @@ pub fn system_info(app: AppHandle<Wry>, state: State<'_, AppState>) -> SystemInf
         config_dir: state.dirs.config_dir.display().to_string(),
         data_dir: state.dirs.data_dir.display().to_string(),
         cache_dir: state.dirs.cache_dir.display().to_string(),
+        recordings_dir: state.dirs.recordings_dir().display().to_string(),
     }
 }
 

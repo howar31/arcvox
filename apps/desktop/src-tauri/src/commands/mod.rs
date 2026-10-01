@@ -12,6 +12,7 @@ pub mod profiles;
 pub mod prompt;
 pub mod providers;
 pub mod secrets;
+pub mod stats;
 pub mod system;
 
 use serde::Serialize;

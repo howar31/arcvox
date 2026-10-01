@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 
-use crate::dictionary::apply_aliases;
+use crate::dictionary::apply_aliases_counted;
 use crate::steps::{PipelineContext, Step, StepError, StepInput, StepOutput};
 use crate::types::StepName;
 
@@ -15,9 +15,11 @@ impl Step for RulesStep {
     }
 
     async fn run(&self, input: StepInput, ctx: &PipelineContext) -> Result<StepOutput, StepError> {
+        let (text, aliases) = apply_aliases_counted(&ctx.dictionary, &input.text);
         Ok(StepOutput {
-            text: apply_aliases(&ctx.dictionary, &input.text),
+            text,
             language: None,
+            aliases,
         })
     }
 }

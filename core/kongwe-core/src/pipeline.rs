@@ -29,6 +29,11 @@ pub struct Outcome {
     pub language: Option<String>,
     pub asr_ms: u64,
     pub llm_ms: Option<u64>,
+    /// Dictionary term corrections and snippet insertions made by the run.
+    pub dict_fixes: u32,
+    pub snippets: u32,
+    /// The rewrite step ran, did not fail, and returned different text.
+    pub llm_changed: bool,
 }
 
 impl Pipeline {
@@ -96,6 +101,9 @@ impl Pipeline {
         let mut degraded = false;
         let mut asr_ms = 0;
         let mut llm_ms = None;
+        let mut dict_fixes = 0u32;
+        let mut snippets = 0u32;
+        let mut llm_changed = false;
 
         for step in &self.steps {
             let name = step.name();
@@ -121,9 +129,14 @@ impl Pipeline {
                                 })
                                 .await;
                         }
-                        StepName::Llm => llm_ms = Some(elapsed),
+                        StepName::Llm => {
+                            llm_ms = Some(elapsed);
+                            llm_changed = out.text != text;
+                        }
                         _ => {}
                     }
+                    dict_fixes += out.aliases.fixes;
+                    snippets += out.aliases.snippets;
                     text = out.text;
                     let _ = events
                         .send(Event::StepFinished {
@@ -179,6 +192,9 @@ impl Pipeline {
             language,
             asr_ms,
             llm_ms,
+            dict_fixes,
+            snippets,
+            llm_changed,
         })
     }
 }
@@ -262,6 +278,32 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[tokio::test]
+    async fn outcome_counts_dictionary_replacements_and_a_changed_rewrite() {
+        let (tx, _rx) = mpsc::channel(64);
+        let mut ctx = test_context();
+        ctx.dictionary = Arc::new(vec![crate::config::DictionaryEntry {
+            term: "Kongwe".into(),
+            aliases: vec!["空威".into()],
+            asr_hint: false,
+        }]);
+        let p = pipeline(FakeAsr::ok("原文"), FakeLlm::ok("空威 整理後"));
+        let out = p.run(audio(), &ctx, &tx).await.unwrap();
+        assert_eq!(out.final_text, "Kongwe 整理後");
+        assert_eq!((out.dict_fixes, out.snippets), (1, 0));
+        assert!(out.llm_changed);
+    }
+
+    #[tokio::test]
+    async fn an_unchanged_rewrite_is_not_counted_as_changed() {
+        let (tx, _rx) = mpsc::channel(64);
+        let p = pipeline(FakeAsr::ok("原文"), FakeLlm::ok("原文"));
+        let out = p.run(audio(), &test_context(), &tx).await.unwrap();
+        assert!(out.llm_ms.is_some());
+        assert!(!out.llm_changed);
+        assert_eq!((out.dict_fixes, out.snippets), (0, 0));
     }
 
     #[tokio::test]

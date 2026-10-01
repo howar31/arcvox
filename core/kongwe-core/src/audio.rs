@@ -23,6 +23,16 @@ pub fn encode_wav_pcm16(clip: &AudioClip) -> Vec<u8> {
     cursor.into_inner()
 }
 
+/// Length of a PCM WAV file, from its header and size. None when it is not one.
+pub fn wav_duration_ms(path: &std::path::Path) -> Option<u64> {
+    let reader = hound::WavReader::open(path).ok()?;
+    let rate = u64::from(reader.spec().sample_rate);
+    if rate == 0 {
+        return None;
+    }
+    Some(u64::from(reader.duration()) * 1000 / rate)
+}
+
 /// Reads a mono 16-bit PCM WAV file, the format `encode_wav_pcm16` writes.
 pub fn decode_wav_pcm16(bytes: &[u8]) -> Result<AudioClip, String> {
     let reader = hound::WavReader::new(Cursor::new(bytes)).map_err(|e| e.to_string())?;
@@ -47,6 +57,22 @@ pub fn decode_wav_pcm16(bytes: &[u8]) -> Result<AudioClip, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wav_duration_reads_the_header_and_rejects_other_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let clip = AudioClip {
+            samples: vec![0.0; 16_000],
+            sample_rate: 16_000,
+        };
+        let wav = dir.path().join("a.wav");
+        std::fs::write(&wav, encode_wav_pcm16(&clip)).unwrap();
+        assert_eq!(wav_duration_ms(&wav), Some(1000));
+        let text = dir.path().join("a.txt");
+        std::fs::write(&text, b"not audio").unwrap();
+        assert_eq!(wav_duration_ms(&text), None);
+        assert_eq!(wav_duration_ms(&dir.path().join("missing.wav")), None);
+    }
 
     #[test]
     fn wav_header_and_samples_round_trip() {

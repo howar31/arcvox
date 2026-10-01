@@ -5,6 +5,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::config::{DictionaryEntry, General, Profile};
+use crate::dictionary::AliasCounts;
 use crate::types::{AudioClip, Context, ErrorCode, StepName};
 
 pub mod asr;
@@ -19,11 +20,13 @@ pub struct StepInput {
     pub audio: Option<Arc<AudioClip>>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct StepOutput {
     pub text: String,
     /// Language detected by ASR, when the provider reports one.
     pub language: Option<String>,
+    /// Dictionary replacements this step made.
+    pub aliases: AliasCounts,
 }
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]

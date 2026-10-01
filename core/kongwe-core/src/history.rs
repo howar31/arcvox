@@ -6,6 +6,7 @@ use std::sync::Mutex;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::stats::{self, Stats};
 use crate::types::{HistoryId, ProfileId};
 
 #[derive(Debug, thiserror::Error)]
@@ -28,6 +29,12 @@ pub struct NewUtterance {
     pub audio_path: Option<PathBuf>,
     pub asr_ms: u64,
     pub llm_ms: Option<u64>,
+    /// Length of the recorded audio, when known.
+    pub audio_ms: Option<u64>,
+    pub dict_fixes: u32,
+    pub snippets: u32,
+    /// The rewrite step ran, did not fail, and returned different text.
+    pub llm_changed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -43,16 +50,15 @@ pub struct Utterance {
     pub audio_path: Option<PathBuf>,
     pub asr_ms: u64,
     pub llm_ms: Option<u64>,
+    pub audio_ms: Option<u64>,
 }
 
-/// Totals over a span of the history.
+/// Row and recording counts of the history.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct HistoryStats {
-    pub count: u64,
-    /// Characters of the final texts.
-    pub chars: u64,
-    /// Recognition plus rewriting time of every row.
-    pub total_ms: u64,
+pub struct Storage {
+    pub rows: u64,
+    pub recordings: u64,
+    pub recording_bytes: u64,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -70,7 +76,7 @@ pub struct HistoryStore {
     conn: Mutex<Connection>,
 }
 
-const SCHEMA: &str = "
+pub(crate) const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS utterances (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts INTEGER NOT NULL,
@@ -87,6 +93,100 @@ CREATE TABLE IF NOT EXISTS utterances (
 CREATE INDEX IF NOT EXISTS utterances_ts ON utterances(ts);
 ";
 
+const STATS_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS stats_hourly (
+    hour INTEGER NOT NULL, app_name TEXT NOT NULL, profile_id TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0, chars INTEGER NOT NULL DEFAULT 0, audio_ms INTEGER NOT NULL DEFAULT 0,
+    timed_count INTEGER NOT NULL DEFAULT 0, timed_chars INTEGER NOT NULL DEFAULT 0,
+    speed_chars INTEGER NOT NULL DEFAULT 0, speed_audio_ms INTEGER NOT NULL DEFAULT 0,
+    asr_ms INTEGER NOT NULL DEFAULT 0, llm_ms INTEGER NOT NULL DEFAULT 0, llm_count INTEGER NOT NULL DEFAULT 0,
+    changed INTEGER NOT NULL DEFAULT 0, degraded INTEGER NOT NULL DEFAULT 0, unrewritten INTEGER NOT NULL DEFAULT 0,
+    dict_fixes INTEGER NOT NULL DEFAULT 0, snippets INTEGER NOT NULL DEFAULT 0,
+    han INTEGER NOT NULL DEFAULT 0, latin INTEGER NOT NULL DEFAULT 0, kana INTEGER NOT NULL DEFAULT 0,
+    max_chars INTEGER NOT NULL DEFAULT 0, max_audio_ms INTEGER NOT NULL DEFAULT 0,
+    max_total_ms INTEGER NOT NULL DEFAULT 0, max_cpm INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (hour, app_name, profile_id)
+);
+CREATE TABLE IF NOT EXISTS stats_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+";
+
+fn has_column(conn: &Connection, column: &str) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare("SELECT 1 FROM pragma_table_info('utterances') WHERE name = ?1")?;
+    stmt.exists(params![column])
+}
+
+/// Brings a database from an earlier build up to date; safe to run at every open.
+pub(crate) fn upgrade(conn: &Connection, recordings_dir: &Path) -> Result<(), HistoryError> {
+    for (name, ddl) in [
+        (
+            "audio_ms",
+            "ALTER TABLE utterances ADD COLUMN audio_ms INTEGER",
+        ),
+        (
+            "dict_fixes",
+            "ALTER TABLE utterances ADD COLUMN dict_fixes INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "snippets",
+            "ALTER TABLE utterances ADD COLUMN snippets INTEGER NOT NULL DEFAULT 0",
+        ),
+    ] {
+        if !has_column(conn, name)? {
+            conn.execute_batch(ddl)?;
+        }
+    }
+    conn.execute_batch(STATS_SCHEMA)?;
+    // A failed backfill leaves the history usable; it runs again at the next open.
+    if let Err(e) = stats::backfill(conn, recordings_dir) {
+        eprintln!("warning: statistics backfill failed: {e}");
+    }
+    Ok(())
+}
+
+/// Whether `path` lies under a non-empty `dir`. Paths are compared as given;
+/// one that steps up with `..` is never inside.
+pub(crate) fn inside(path: &Path, dir: &Path) -> bool {
+    !dir.as_os_str().is_empty()
+        && path.starts_with(dir)
+        && !path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+}
+
+fn escape_like(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+fn insert_row(conn: &Connection, u: &NewUtterance) -> rusqlite::Result<i64> {
+    conn.execute(
+        "INSERT INTO utterances (ts, profile_id, app_name, raw_text, refined_text, final_text, degraded, audio_path, asr_ms, llm_ms, audio_ms, dict_fixes, snippets)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        params![
+            u.ts,
+            u.profile_id.0,
+            u.app_name,
+            u.raw_text,
+            u.refined_text,
+            u.final_text,
+            u.degraded as i64,
+            u.audio_path.as_ref().map(|p| p.to_string_lossy().to_string()),
+            u.asr_ms as i64,
+            u.llm_ms.map(|v| v as i64),
+            u.audio_ms.map(|v| v as i64),
+            u.dict_fixes as i64,
+            u.snippets as i64,
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
 pub fn now_unix() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -95,42 +195,65 @@ pub fn now_unix() -> i64 {
 }
 
 impl HistoryStore {
-    pub fn open(path: &Path) -> Result<Self, HistoryError> {
+    /// `recordings_dir` is where the engine keeps recordings; the first open
+    /// after an upgrade reads the audio length of the files there.
+    pub fn open(path: &Path, recordings_dir: &Path) -> Result<Self, HistoryError> {
         let conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
         conn.execute_batch(SCHEMA)?;
-        Ok(Self {
-            conn: Mutex::new(conn),
-        })
+        Self::upgraded(conn, recordings_dir)
     }
 
     pub fn open_in_memory() -> Result<Self, HistoryError> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(SCHEMA)?;
-        Ok(Self {
-            conn: Mutex::new(conn),
-        })
+        Self::upgraded(conn, Path::new(""))
     }
 
+    fn upgraded(conn: Connection, recordings_dir: &Path) -> Result<Self, HistoryError> {
+        upgrade(&conn, recordings_dir)?;
+        Ok(Self::from_connection(conn))
+    }
+
+    pub(crate) fn from_connection(conn: Connection) -> Self {
+        Self {
+            conn: Mutex::new(conn),
+        }
+    }
+
+    /// Writes the row and adds it to its statistics bucket in one transaction.
+    /// When only the bucket write fails, the row is still stored.
     pub fn insert(&self, u: NewUtterance) -> Result<HistoryId, HistoryError> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "INSERT INTO utterances (ts, profile_id, app_name, raw_text, refined_text, final_text, degraded, audio_path, asr_ms, llm_ms)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            params![
-                u.ts,
-                u.profile_id.0,
-                u.app_name,
-                u.raw_text,
-                u.refined_text,
-                u.final_text,
-                u.degraded as i64,
-                u.audio_path.as_ref().map(|p| p.to_string_lossy().to_string()),
-                u.asr_ms as i64,
-                u.llm_ms.map(|v| v as i64),
-            ],
-        )?;
-        Ok(HistoryId(conn.last_insert_rowid()))
+        let tx = conn.unchecked_transaction()?;
+        let id = insert_row(&tx, &u)?;
+        let added = stats::add(
+            &tx,
+            &stats::Sample {
+                ts: u.ts,
+                app_name: u.app_name.as_deref().unwrap_or(""),
+                profile_id: &u.profile_id.0,
+                text: &u.final_text,
+                audio_ms: u.audio_ms,
+                asr_ms: u.asr_ms,
+                llm_ms: u.llm_ms,
+                changed: u.llm_changed,
+                degraded: u.degraded,
+                dict_fixes: u.dict_fixes,
+                snippets: u.snippets,
+            },
+        );
+        match added {
+            Ok(()) => {
+                tx.commit()?;
+                Ok(HistoryId(id))
+            }
+            Err(e) => {
+                drop(tx);
+                eprintln!("warning: statistics write failed, keeping the history row: {e}");
+                Ok(HistoryId(insert_row(&conn, &u)?))
+            }
+        }
     }
 
     pub fn set_final(&self, id: HistoryId, text: &str) -> Result<(), HistoryError> {
@@ -151,6 +274,20 @@ impl HistoryStore {
         Ok(())
     }
 
+    /// Removes one row together with its recording, when that file is inside
+    /// `recordings_dir`.
+    pub fn delete_row(&self, id: HistoryId, recordings_dir: &Path) -> Result<(), HistoryError> {
+        let conn = self.conn.lock().unwrap();
+        remove_recording(&conn, id.0, recordings_dir)?;
+        conn.execute("DELETE FROM utterances WHERE id = ?1", params![id.0])?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn connection(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.conn.lock().unwrap()
+    }
+
     pub fn get(&self, id: HistoryId) -> Result<Option<Utterance>, HistoryError> {
         let conn = self.conn.lock().unwrap();
         let row = conn
@@ -160,26 +297,116 @@ impl HistoryStore {
     }
 
     pub fn list_recent(&self, limit: usize) -> Result<Vec<Utterance>, HistoryError> {
+        self.list(limit, None, false)
+    }
+
+    /// Newest first. `query` matches the final and the raw text literally
+    /// (case-insensitive for ASCII); `with_audio` keeps rows with a recording.
+    pub fn list(
+        &self,
+        limit: usize,
+        query: Option<&str>,
+        with_audio: bool,
+    ) -> Result<Vec<Utterance>, HistoryError> {
+        let mut clauses: Vec<&str> = Vec::new();
+        let mut values: Vec<rusqlite::types::Value> = Vec::new();
+        if let Some(q) = query.map(str::trim).filter(|q| !q.is_empty()) {
+            clauses.push("(final_text LIKE ?1 ESCAPE '\\' OR raw_text LIKE ?1 ESCAPE '\\')");
+            values.push(format!("%{}%", escape_like(q)).into());
+        }
+        if with_audio {
+            clauses.push("audio_path IS NOT NULL");
+        }
+        let filter = if clauses.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", clauses.join(" AND "))
+        };
+        let limit_slot = values.len() + 1;
+        values.push((limit as i64).into());
+        let sql = format!("{SELECT}{filter} ORDER BY ts DESC, id DESC LIMIT ?{limit_slot}");
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(&format!("{SELECT} ORDER BY ts DESC, id DESC LIMIT ?1"))?;
-        let rows = stmt.query_map(params![limit as i64], map_row)?;
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(values), map_row)?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
-    /// Totals of the rows with a timestamp of `since` or later.
-    pub fn stats_since(&self, since: i64) -> Result<HistoryStats, HistoryError> {
+    /// Statistics of the buckets from the hour containing `since`, with days
+    /// and hours of day taken at the given UTC offset.
+    pub fn stats(&self, since: i64, tz_offset_secs: i32) -> Result<Stats, HistoryError> {
         let conn = self.conn.lock().unwrap();
-        let (count, chars, total_ms): (i64, i64, i64) = conn.query_row(
-            "SELECT COUNT(*), COALESCE(SUM(LENGTH(final_text)), 0), \
-             COALESCE(SUM(asr_ms + COALESCE(llm_ms, 0)), 0) FROM utterances WHERE ts >= ?1",
-            params![since],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
-        Ok(HistoryStats {
-            count: count as u64,
-            chars: chars as u64,
-            total_ms: total_ms as u64,
-        })
+        Ok(stats::query(&conn, since, tz_offset_secs)?)
+    }
+
+    /// Empties the statistics buckets; history rows are not touched.
+    pub fn reset_stats(&self) -> Result<(), HistoryError> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM stats_hourly", [])?;
+        Ok(())
+    }
+
+    /// Row count and the recordings of `recordings_dir` that exist.
+    pub fn storage(&self, recordings_dir: &Path) -> Result<Storage, HistoryError> {
+        let conn = self.conn.lock().unwrap();
+        let rows: i64 = conn.query_row("SELECT COUNT(*) FROM utterances", [], |r| r.get(0))?;
+        let mut out = Storage {
+            rows: rows as u64,
+            ..Storage::default()
+        };
+        let mut stmt =
+            conn.prepare("SELECT audio_path FROM utterances WHERE audio_path IS NOT NULL")?;
+        let paths: Vec<String> = stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        for p in paths {
+            let p = PathBuf::from(p);
+            if inside(&p, recordings_dir) {
+                if let Ok(meta) = std::fs::metadata(&p) {
+                    out.recordings += 1;
+                    out.recording_bytes += meta.len();
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// The recording of a row, when it has one inside `recordings_dir`.
+    pub fn recording_path(
+        &self,
+        id: HistoryId,
+        recordings_dir: &Path,
+    ) -> Result<Option<PathBuf>, HistoryError> {
+        let conn = self.conn.lock().unwrap();
+        recording_of(&conn, id.0, recordings_dir)
+    }
+
+    /// Removes the row's recording file and clears the reference. False when the row has none.
+    pub fn delete_recording(
+        &self,
+        id: HistoryId,
+        recordings_dir: &Path,
+    ) -> Result<bool, HistoryError> {
+        let conn = self.conn.lock().unwrap();
+        remove_recording(&conn, id.0, recordings_dir)
+    }
+
+    /// The same for every row; returns how many files were removed.
+    pub fn clear_recordings(&self, recordings_dir: &Path) -> Result<usize, HistoryError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id FROM utterances WHERE audio_path IS NOT NULL")?;
+        let ids: Vec<i64> = stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        drop(stmt);
+        let mut removed = 0;
+        for id in ids {
+            if remove_recording(&conn, id, recordings_dir)? {
+                removed += 1;
+            }
+        }
+        Ok(removed)
     }
 
     /// Deletes rows older than `history_days` and recording files older than
@@ -274,7 +501,57 @@ impl HistoryStore {
     }
 }
 
-const SELECT: &str = "SELECT id, ts, profile_id, app_name, raw_text, refined_text, final_text, degraded, audio_path, asr_ms, llm_ms FROM utterances";
+fn recording_of(
+    conn: &Connection,
+    id: i64,
+    recordings_dir: &Path,
+) -> Result<Option<PathBuf>, HistoryError> {
+    let path: Option<String> = conn
+        .query_row(
+            "SELECT audio_path FROM utterances WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
+    Ok(path
+        .map(PathBuf::from)
+        .filter(|p| inside(p, recordings_dir) && p.is_file()))
+}
+
+/// Removes a row's recording file and clears the reference. True when a
+/// file was removed. A reference to a file that is already gone is cleared
+/// too; a file that cannot be removed keeps its reference.
+fn remove_recording(
+    conn: &Connection,
+    id: i64,
+    recordings_dir: &Path,
+) -> Result<bool, HistoryError> {
+    let path: Option<String> = conn
+        .query_row(
+            "SELECT audio_path FROM utterances WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
+    let Some(path) = path.map(PathBuf::from) else {
+        return Ok(false);
+    };
+    if !inside(&path, recordings_dir) {
+        return Ok(false);
+    }
+    let removed = path.is_file() && std::fs::remove_file(&path).is_ok();
+    if !path.exists() {
+        conn.execute(
+            "UPDATE utterances SET audio_path = NULL WHERE id = ?1",
+            params![id],
+        )?;
+    }
+    Ok(removed)
+}
+
+const SELECT: &str = "SELECT id, ts, profile_id, app_name, raw_text, refined_text, final_text, degraded, audio_path, asr_ms, llm_ms, audio_ms FROM utterances";
 
 fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Utterance> {
     Ok(Utterance {
@@ -289,6 +566,7 @@ fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Utterance> {
         audio_path: r.get::<_, Option<String>>(8)?.map(PathBuf::from),
         asr_ms: r.get::<_, i64>(9)? as u64,
         llm_ms: r.get::<_, Option<i64>>(10)?.map(|v| v as u64),
+        audio_ms: r.get::<_, Option<i64>>(11)?.map(|v| v as u64),
     })
 }
 
@@ -308,6 +586,10 @@ mod tests {
             audio_path: audio,
             asr_ms: 120,
             llm_ms: Some(300),
+            audio_ms: None,
+            dict_fixes: 0,
+            snippets: 0,
+            llm_changed: false,
         }
     }
 
@@ -324,29 +606,6 @@ mod tests {
         let recent = s.list_recent(10).unwrap();
         assert_eq!(recent.iter().map(|u| u.id).collect::<Vec<_>>(), vec![b, a]);
         assert_eq!(s.get(HistoryId(999)).unwrap(), None);
-    }
-
-    #[test]
-    fn stats_count_rows_characters_and_time_since_a_moment() {
-        let s = HistoryStore::open_in_memory().unwrap();
-        assert_eq!(s.stats_since(0).unwrap(), HistoryStats::default());
-        s.insert(new(100, None)).unwrap();
-        let mut long = new(200, None);
-        long.final_text = "今天下午四點開會。".into();
-        long.llm_ms = None;
-        s.insert(long).unwrap();
-        s.insert(new(300, None)).unwrap();
-        // Characters, not bytes; a row without a rewrite counts its recognition time only.
-        assert_eq!(
-            s.stats_since(200).unwrap(),
-            HistoryStats {
-                count: 2,
-                chars: 9 + 7,
-                total_ms: 120 + 120 + 300,
-            }
-        );
-        assert_eq!(s.stats_since(0).unwrap().count, 3);
-        assert_eq!(s.stats_since(301).unwrap(), HistoryStats::default());
     }
 
     #[test]
@@ -474,8 +733,149 @@ mod tests {
     fn open_on_disk_creates_file() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("history.sqlite");
-        let s = HistoryStore::open(&path).unwrap();
+        let s = HistoryStore::open(&path, tmp.path()).unwrap();
         s.insert(new(1, None)).unwrap();
         assert!(path.exists());
+    }
+
+    #[test]
+    fn an_older_database_gains_the_new_columns_and_tables() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        conn.execute(
+            "INSERT INTO utterances (ts, profile_id, raw_text, refined_text, final_text) VALUES (7200, 'default', 'a b', 'ab。', 'ab。')",
+            [],
+        )
+        .unwrap();
+        upgrade(&conn, Path::new("/nonexistent")).unwrap();
+        upgrade(&conn, Path::new("/nonexistent")).unwrap();
+        let s = HistoryStore::from_connection(conn);
+        let got = s.list(10, None, false).unwrap();
+        assert_eq!(got[0].audio_ms, None);
+        assert_eq!(s.stats(0, 0).unwrap().totals.count, 1);
+    }
+
+    #[test]
+    fn a_failed_bucket_write_keeps_the_row() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        s.conn
+            .lock()
+            .unwrap()
+            .execute_batch("DROP TABLE stats_hourly")
+            .unwrap();
+        let id = s.insert(new(5, None)).unwrap();
+        assert!(s.get(id).unwrap().is_some());
+    }
+
+    #[test]
+    fn search_matches_wildcards_literally() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        for text in ["100% done", "a_b", "plain", "it's"] {
+            let mut u = new(100, None);
+            u.final_text = text.into();
+            s.insert(u).unwrap();
+        }
+        let hit = |q: &str| {
+            s.list(10, Some(q), false)
+                .unwrap()
+                .iter()
+                .map(|u| u.final_text.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(hit("%"), vec!["100% done"]);
+        assert_eq!(hit("_"), vec!["a_b"]);
+        assert_eq!(hit("'"), vec!["it's"]);
+        assert_eq!(
+            hit("  "),
+            s.list(10, None, false)
+                .unwrap()
+                .iter()
+                .map(|u| u.final_text.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn recordings_are_listed_measured_and_removed_only_inside_their_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let s = HistoryStore::open_in_memory().unwrap();
+        let inside = dir.path().join("a.wav");
+        let stray = outside.path().join("b.wav");
+        std::fs::write(&inside, [0u8; 100]).unwrap();
+        std::fs::write(&stray, [0u8; 50]).unwrap();
+        let a = s.insert(new(100, Some(inside.clone()))).unwrap();
+        let b = s.insert(new(200, Some(stray.clone()))).unwrap();
+        s.insert(new(300, None)).unwrap();
+        assert_eq!(s.list(10, None, true).unwrap().len(), 2);
+        assert_eq!(
+            s.storage(dir.path()).unwrap(),
+            Storage {
+                rows: 3,
+                recordings: 1,
+                recording_bytes: 100
+            }
+        );
+        assert_eq!(s.recording_path(b, dir.path()).unwrap(), None);
+        assert!(!s.delete_recording(b, dir.path()).unwrap());
+        assert!(stray.exists());
+        assert!(s.delete_recording(a, dir.path()).unwrap());
+        assert!(!inside.exists());
+        assert_eq!(s.get(a).unwrap().unwrap().audio_path, None);
+        assert_eq!(s.clear_recordings(dir.path()).unwrap(), 0);
+    }
+
+    #[test]
+    fn clear_recordings_removes_every_file_inside_the_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = HistoryStore::open_in_memory().unwrap();
+        for (i, name) in ["a.wav", "b.wav"].iter().enumerate() {
+            let p = dir.path().join(name);
+            std::fs::write(&p, b"x").unwrap();
+            s.insert(new(i as i64, Some(p))).unwrap();
+        }
+        assert_eq!(s.clear_recordings(dir.path()).unwrap(), 2);
+        assert!(s.list(10, None, true).unwrap().is_empty());
+        assert_eq!(s.list(10, None, false).unwrap().len(), 2);
+    }
+    #[test]
+    fn deleting_a_row_removes_its_recording_inside_the_directory_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let s = HistoryStore::open_in_memory().unwrap();
+        let inside_file = dir.path().join("a.wav");
+        let stray = outside.path().join("b.wav");
+        std::fs::write(&inside_file, [0u8; 8]).unwrap();
+        std::fs::write(&stray, [0u8; 8]).unwrap();
+        let a = s.insert(new(100, Some(inside_file.clone()))).unwrap();
+        let b = s.insert(new(200, Some(stray.clone()))).unwrap();
+        s.delete_row(a, dir.path()).unwrap();
+        s.delete_row(b, dir.path()).unwrap();
+        assert!(!inside_file.exists());
+        assert!(stray.exists());
+        assert_eq!(s.list(10, None, false).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn a_path_that_climbs_out_of_the_directory_is_not_inside_it() {
+        let dir = Path::new("/data/recordings");
+        assert!(inside(Path::new("/data/recordings/a.wav"), dir));
+        assert!(!inside(Path::new("/data/recordings/../config.json"), dir));
+        assert!(!inside(Path::new("/data/other/a.wav"), dir));
+        assert!(!inside(Path::new("/data/recordings/a.wav"), Path::new("")));
+    }
+
+    #[test]
+    fn a_reference_to_a_missing_recording_is_cleared_and_the_rest_are_still_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = HistoryStore::open_in_memory().unwrap();
+        let present = dir.path().join("b.wav");
+        std::fs::write(&present, [0u8; 8]).unwrap();
+        let gone = s.insert(new(100, Some(dir.path().join("a.wav")))).unwrap();
+        s.insert(new(200, Some(present.clone()))).unwrap();
+        assert_eq!(s.clear_recordings(dir.path()).unwrap(), 1);
+        assert!(!present.exists());
+        assert_eq!(s.get(gone).unwrap().unwrap().audio_path, None);
+        assert_eq!(s.list(10, None, true).unwrap().len(), 0);
     }
 }

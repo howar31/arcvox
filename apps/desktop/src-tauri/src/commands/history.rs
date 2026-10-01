@@ -1,10 +1,11 @@
-use kongwe_core::history::Utterance;
+use std::path::Path;
+
+use kongwe_core::history::{HistoryStore, Utterance};
 use kongwe_core::types::HistoryId;
-use kongwe_core::Engine;
 use serde::Serialize;
 use tauri::State;
 
-use super::{engine, CmdResult};
+use super::{engine, CmdError, CmdResult};
 use crate::app::AppState;
 
 #[derive(Debug, Clone, Serialize)]
@@ -17,13 +18,23 @@ pub struct UtteranceDto {
     pub refined_text: String,
     pub final_text: String,
     pub degraded: bool,
+    /// True when the recording file is present.
     pub has_audio: bool,
     pub asr_ms: u64,
     pub llm_ms: Option<u64>,
+    pub audio_ms: Option<u64>,
+    pub audio_bytes: Option<u64>,
 }
 
-impl From<Utterance> for UtteranceDto {
-    fn from(u: Utterance) -> Self {
+impl UtteranceDto {
+    /// A recording counts only when its file is inside `recordings_dir` and can be read.
+    fn new(u: Utterance, recordings_dir: &Path) -> Self {
+        let audio_bytes = u
+            .audio_path
+            .as_deref()
+            .filter(|p| p.starts_with(recordings_dir))
+            .and_then(|p| std::fs::metadata(p).ok())
+            .map(|m| m.len());
         Self {
             id: u.id.0,
             ts: u.ts,
@@ -33,51 +44,125 @@ impl From<Utterance> for UtteranceDto {
             refined_text: u.refined_text,
             final_text: u.final_text,
             degraded: u.degraded,
-            has_audio: u.audio_path.is_some(),
+            has_audio: audio_bytes.is_some(),
             asr_ms: u.asr_ms,
             llm_ms: u.llm_ms,
+            audio_ms: u.audio_ms.filter(|_| audio_bytes.is_some()),
+            audio_bytes,
         }
     }
 }
 
-pub fn list(engine: &Engine, limit: usize) -> CmdResult<Vec<UtteranceDto>> {
-    Ok(engine
-        .history()
-        .list_recent(limit)?
+pub fn list(
+    history: &HistoryStore,
+    recordings_dir: &Path,
+    limit: usize,
+    query: Option<&str>,
+    with_audio: bool,
+) -> CmdResult<Vec<UtteranceDto>> {
+    Ok(history
+        .list(limit, query, with_audio)?
         .into_iter()
-        .map(Into::into)
+        .map(|u| UtteranceDto::new(u, recordings_dir))
+        // A row whose file is gone has no recording to show.
+        .filter(|u| !with_audio || u.has_audio)
         .collect())
+}
+
+/// The bytes of a row's recording.
+pub fn audio(history: &HistoryStore, recordings_dir: &Path, id: i64) -> CmdResult<Vec<u8>> {
+    let path = recording(history, recordings_dir, id)?;
+    Ok(std::fs::read(path)?)
+}
+
+fn recording(
+    history: &HistoryStore,
+    recordings_dir: &Path,
+    id: i64,
+) -> CmdResult<std::path::PathBuf> {
+    history
+        .recording_path(HistoryId(id), recordings_dir)?
+        .ok_or_else(|| CmdError {
+            message: "recording not found".into(),
+        })
 }
 
 #[tauri::command]
 pub fn history_list(
     state: State<'_, AppState>,
     limit: Option<usize>,
+    query: Option<String>,
+    with_audio: Option<bool>,
 ) -> CmdResult<Vec<UtteranceDto>> {
-    list(&engine(&state)?, limit.unwrap_or(200))
+    let e = engine(&state)?;
+    list(
+        &e.history(),
+        &e.dirs().recordings_dir(),
+        limit.unwrap_or(200),
+        query.as_deref(),
+        with_audio.unwrap_or(false),
+    )
+}
+
+#[tauri::command]
+pub fn history_audio(state: State<'_, AppState>, id: i64) -> CmdResult<tauri::ipc::Response> {
+    let e = engine(&state)?;
+    Ok(tauri::ipc::Response::new(audio(
+        &e.history(),
+        &e.dirs().recordings_dir(),
+        id,
+    )?))
+}
+
+#[tauri::command]
+pub fn history_delete_recording(state: State<'_, AppState>, id: i64) -> CmdResult<()> {
+    let e = engine(&state)?;
+    e.history()
+        .delete_recording(HistoryId(id), &e.dirs().recordings_dir())?;
+    Ok(())
+}
+
+/// Deletes every recording; returns how many files were removed.
+#[tauri::command]
+pub fn history_clear_recordings(state: State<'_, AppState>) -> CmdResult<usize> {
+    let e = engine(&state)?;
+    Ok(e.history().clear_recordings(&e.dirs().recordings_dir())?)
+}
+
+#[tauri::command]
+pub fn history_reveal_recording(state: State<'_, AppState>, id: i64) -> CmdResult<()> {
+    let e = engine(&state)?;
+    let path = recording(&e.history(), &e.dirs().recordings_dir(), id)?;
+    std::process::Command::new("open")
+        .arg("-R")
+        .arg(path)
+        .spawn()?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct HistoryStatsDto {
-    pub count: u64,
-    pub chars: u64,
-    pub total_ms: u64,
+pub struct StorageDto {
+    pub rows: u64,
+    pub recordings: u64,
+    pub recording_bytes: u64,
 }
 
-/// Totals of the history from `since` (seconds since the epoch) on.
 #[tauri::command]
-pub fn history_stats(state: State<'_, AppState>, since: i64) -> CmdResult<HistoryStatsDto> {
-    let stats = engine(&state)?.history().stats_since(since)?;
-    Ok(HistoryStatsDto {
-        count: stats.count,
-        chars: stats.chars,
-        total_ms: stats.total_ms,
+pub fn history_storage(state: State<'_, AppState>) -> CmdResult<StorageDto> {
+    let e = engine(&state)?;
+    let s = e.history().storage(&e.dirs().recordings_dir())?;
+    Ok(StorageDto {
+        rows: s.rows,
+        recordings: s.recordings,
+        recording_bytes: s.recording_bytes,
     })
 }
 
 #[tauri::command]
 pub fn history_delete(state: State<'_, AppState>, id: i64) -> CmdResult<()> {
-    engine(&state)?.history().delete(HistoryId(id))?;
+    let e = engine(&state)?;
+    e.history()
+        .delete_row(HistoryId(id), &e.dirs().recordings_dir())?;
     Ok(())
 }
 
@@ -86,4 +171,87 @@ pub fn history_clear(state: State<'_, AppState>) -> CmdResult<()> {
     let e = engine(&state)?;
     e.history().clear_all(&e.dirs().recordings_dir())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use kongwe_core::history::NewUtterance;
+    use kongwe_core::types::ProfileId;
+
+    use super::*;
+
+    fn row(ts: i64, text: &str, audio: Option<PathBuf>) -> NewUtterance {
+        NewUtterance {
+            ts,
+            profile_id: ProfileId("default".into()),
+            app_name: None,
+            raw_text: text.into(),
+            refined_text: text.into(),
+            final_text: text.into(),
+            degraded: false,
+            audio_path: audio,
+            asr_ms: 10,
+            llm_ms: None,
+            audio_ms: Some(1500),
+            dict_fixes: 0,
+            snippets: 0,
+            llm_changed: false,
+        }
+    }
+
+    #[test]
+    fn a_row_reports_its_recording_only_when_the_file_is_in_the_recordings_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let history = HistoryStore::open_in_memory().unwrap();
+        let kept = dir.path().join("a.wav");
+        let stray = elsewhere.path().join("b.wav");
+        std::fs::write(&kept, b"0123456789").unwrap();
+        std::fs::write(&stray, b"01234").unwrap();
+        history.insert(row(1, "kept", Some(kept))).unwrap();
+        let stray_id = history.insert(row(2, "stray", Some(stray))).unwrap();
+        history
+            .insert(row(3, "gone", Some(dir.path().join("missing.wav"))))
+            .unwrap();
+
+        let rows = list(&history, dir.path(), 10, None, false).unwrap();
+        let by_text = |t: &str| rows.iter().find(|r| r.final_text == t).unwrap();
+        assert!(by_text("kept").has_audio);
+        assert_eq!(by_text("kept").audio_bytes, Some(10));
+        assert_eq!(by_text("kept").audio_ms, Some(1500));
+        for text in ["stray", "gone"] {
+            assert!(!by_text(text).has_audio, "{text}");
+            assert_eq!(by_text(text).audio_bytes, None, "{text}");
+            assert_eq!(by_text(text).audio_ms, None, "{text}");
+        }
+        assert!(audio(&history, dir.path(), stray_id.0).is_err());
+    }
+
+    #[test]
+    fn audio_returns_the_file_and_the_list_filters() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = HistoryStore::open_in_memory().unwrap();
+        let path = dir.path().join("a.wav");
+        std::fs::write(&path, b"RIFFdata").unwrap();
+        let id = history.insert(row(1, "with sound", Some(path))).unwrap();
+        history.insert(row(2, "text only", None)).unwrap();
+
+        assert_eq!(audio(&history, dir.path(), id.0).unwrap(), b"RIFFdata");
+        let only = |q: Option<&str>, with_audio: bool| {
+            list(&history, dir.path(), 10, q, with_audio)
+                .unwrap()
+                .into_iter()
+                .map(|r| r.final_text)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(only(None, true), vec!["with sound"]);
+        history
+            .insert(row(3, "file gone", Some(dir.path().join("missing.wav"))))
+            .unwrap();
+        assert_eq!(only(None, true), vec!["with sound"]);
+        assert_eq!(only(Some("only"), false), vec!["text only"]);
+        assert!(audio(&history, dir.path(), 999).is_err());
+    }
 }

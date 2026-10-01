@@ -99,8 +99,9 @@ impl Engine {
         dirs.ensure()?;
         let config = ConfigStore::open_with_defaults(&dirs, &opts.first_run)?;
         let path = dirs.history_path();
+        let history_recordings = dirs.recordings_dir();
         let history = Arc::new(
-            tokio::task::spawn_blocking(move || HistoryStore::open(&path))
+            tokio::task::spawn_blocking(move || HistoryStore::open(&path, &history_recordings))
                 .await
                 .expect("join")?,
         );
@@ -497,6 +498,11 @@ async fn run_session(
         audio_path: audio_path.clone(),
         asr_ms: outcome.asr_ms,
         llm_ms: outcome.llm_ms,
+        audio_ms: (clip.sample_rate > 0)
+            .then(|| clip.samples.len() as u64 * 1000 / u64::from(clip.sample_rate)),
+        dict_fixes: outcome.dict_fixes,
+        snippets: outcome.snippets,
+        llm_changed: outcome.llm_changed,
     };
     let history = inner.history.clone();
     #[cfg(test)]
@@ -877,6 +883,7 @@ pub(crate) mod tests {
         assert_eq!(row.final_text, "軟體 整理後");
         assert_eq!(row.app_name.as_deref(), Some("TextEdit"));
         assert!(row.audio_path.is_none());
+        assert!(row.audio_ms.is_some());
 
         r.engine.record_final(s.id(), "使用者改過").await.unwrap();
         assert_eq!(

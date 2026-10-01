@@ -748,6 +748,10 @@ mod tests {
             audio_path: audio,
             asr_ms: 1,
             llm_ms: None,
+            audio_ms: None,
+            dict_fixes: 0,
+            snippets: 0,
+            llm_changed: false,
         };
         let kept = history.insert(row(Some(wav), "kept")).unwrap();
         let dropped = history.insert(row(None, "dropped")).unwrap();
