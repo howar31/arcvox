@@ -1,5 +1,6 @@
-//! The floating panel: a Tauri window turned into a non-activating NSPanel
-//! that joins every Space and sits above full-screen apps.
+//! The floating widget and the panel next to it: two Tauri windows turned
+//! into non-activating NSPanels that join every Space and sit above
+//! full-screen apps.
 
 use std::path::PathBuf;
 
@@ -10,9 +11,14 @@ use objc2_app_kit::{NSWindowCollectionBehavior, NSWindowStyleMask};
 #[cfg(target_os = "macos")]
 use tauri_nspanel::{tauri_panel, ManagerExt, WebviewWindowExt};
 
-use super::placement::{self, Rect, WidgetPositions};
+use super::placement::{self, Long, Rect, Size, WidgetPositions};
 
 pub const WINDOW: &str = "widget";
+/// The window that holds what does not fit the widget: messages, the
+/// recognised text, buttons.
+pub const PANEL: &str = "panel";
+/// Bounds for the size the panel reports for its content.
+const PANEL_MAX: Size = Size { w: 520.0, h: 800.0 };
 /// kCGPopUpMenuWindowLevel from CGWindowLevel.h.
 #[cfg(target_os = "macos")]
 const LEVEL_POPUP_MENU: i64 = 101;
@@ -37,19 +43,21 @@ tauri_panel! {
 
 #[cfg(target_os = "macos")]
 pub fn convert_to_panel<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
-    let window = app
-        .get_webview_window(WINDOW)
-        .ok_or(tauri::Error::WindowNotFound)?;
-    let panel = window.to_panel::<WidgetPanel<R>>()?;
-    panel.set_level(LEVEL_POPUP_MENU);
-    if let Err(e) = panel.add_style_mask(NSWindowStyleMask::NonactivatingPanel) {
-        tracing::warn!(error = %e, "widget panel style mask not applied");
+    for label in [WINDOW, PANEL] {
+        let window = app
+            .get_webview_window(label)
+            .ok_or(tauri::Error::WindowNotFound)?;
+        let panel = window.to_panel::<WidgetPanel<R>>()?;
+        panel.set_level(LEVEL_POPUP_MENU);
+        if let Err(e) = panel.add_style_mask(NSWindowStyleMask::NonactivatingPanel) {
+            tracing::warn!(error = %e, window = label, "panel style mask not applied");
+        }
+        panel.set_collection_behavior(
+            NSWindowCollectionBehavior::CanJoinAllSpaces
+                | NSWindowCollectionBehavior::FullScreenAuxiliary
+                | NSWindowCollectionBehavior::Stationary,
+        );
     }
-    panel.set_collection_behavior(
-        NSWindowCollectionBehavior::CanJoinAllSpaces
-            | NSWindowCollectionBehavior::FullScreenAuxiliary
-            | NSWindowCollectionBehavior::Stationary,
-    );
     Ok(())
 }
 
@@ -177,31 +185,37 @@ fn primary_button_down() -> bool {
     false
 }
 
-/// Orders the widget front without activating the app.
-fn order_front<R: Runtime>(app: &AppHandle<R>) {
+/// Orders the window front without activating the app.
+fn order_front<R: Runtime>(app: &AppHandle<R>, label: &str) {
     #[cfg(target_os = "macos")]
     {
-        if let Ok(panel) = app.get_webview_panel(WINDOW) {
+        if let Ok(panel) = app.get_webview_panel(label) {
             panel.order_front_regardless();
             return;
         }
     }
-    if let Some(window) = app.get_webview_window(WINDOW) {
+    if let Some(window) = app.get_webview_window(label) {
         let _ = window.show();
     }
 }
 
-pub fn hide<R: Runtime>(app: &AppHandle<R>) {
+fn hide_window<R: Runtime>(app: &AppHandle<R>, label: &str) {
     #[cfg(target_os = "macos")]
     {
-        if let Ok(panel) = app.get_webview_panel(WINDOW) {
+        if let Ok(panel) = app.get_webview_panel(label) {
             panel.hide();
             return;
         }
     }
-    if let Some(window) = app.get_webview_window(WINDOW) {
+    if let Some(window) = app.get_webview_window(label) {
         let _ = window.hide();
     }
+}
+
+/// Hides the widget and its panel.
+pub fn hide<R: Runtime>(app: &AppHandle<R>) {
+    hide_window(app, PANEL);
+    hide_window(app, WINDOW);
 }
 
 struct Drag {
@@ -210,8 +224,8 @@ struct Drag {
     frame: Rect,
 }
 
-/// Where the widget is and which shape it has. Every method that takes the
-/// app handle must be called on the main thread.
+/// Where the widget and its panel are. Every method that takes the app
+/// handle must be called on the main thread.
 pub struct Layout {
     config_dir: PathBuf,
     positions: WidgetPositions,
@@ -219,35 +233,101 @@ pub struct Layout {
     /// the widget appears, so the widget stays put if the pointer moves to
     /// another display meanwhile.
     display: Option<String>,
-    /// Whether the widget shows only the ring and a short label.
-    compact: bool,
+    /// The factor of the size the user chose.
+    scale: f64,
+    /// The long side the widget's labels need.
+    long: Long,
+    /// The size of the panel's content while the panel has any.
+    panel: Option<Size>,
     drag: Option<Drag>,
 }
 
 impl Layout {
-    pub fn load(config_dir: PathBuf) -> Self {
+    pub fn load(config_dir: PathBuf, scale: f64) -> Self {
         Self {
+            scale,
             positions: WidgetPositions::load(&config_dir),
             config_dir,
             display: None,
-            compact: true,
+            long: Long::scaled(scale),
+            panel: None,
             drag: None,
         }
     }
 
     /// Puts the widget at its place on the display under the pointer (or
     /// the display it is already on) and orders it front.
-    pub fn show<R: Runtime>(&mut self, app: &AppHandle<R>, compact: bool) {
-        self.compact = compact;
+    pub fn show<R: Runtime>(&mut self, app: &AppHandle<R>) {
         // A drag owns the frame until the drop.
         if self.drag.is_none() {
             self.place(app);
         }
-        order_front(app);
+        order_front(app, WINDOW);
     }
 
     pub fn hidden(&mut self) {
         self.display = None;
+        // The panel reports its content again before it is shown again.
+        self.panel = None;
+    }
+
+    fn short(&self) -> f64 {
+        (placement::SHORT * self.scale).round()
+    }
+
+    /// The user chose another size. The widget measures its labels again;
+    /// until then the long side is an estimate.
+    pub fn set_scale<R: Runtime>(&mut self, app: &AppHandle<R>, scale: f64) {
+        if self.scale == scale {
+            return;
+        }
+        self.scale = scale;
+        self.long = Long::scaled(scale);
+        if self.display.is_some() && self.drag.is_none() {
+            self.place(app);
+        }
+    }
+
+    /// The widget measured its labels: it takes the new length.
+    pub fn set_long<R: Runtime>(&mut self, app: &AppHandle<R>, long: Long) {
+        if self.long == long {
+            return;
+        }
+        self.long = long;
+        if self.display.is_some() && self.drag.is_none() {
+            self.place(app);
+        }
+    }
+
+    /// The panel has content of this size, or none. It is on screen only
+    /// together with the widget.
+    pub fn set_panel<R: Runtime>(&mut self, app: &AppHandle<R>, size: Option<Size>) {
+        self.panel = size.filter(|s| s.w >= 1.0 && s.h >= 1.0).map(|s| Size {
+            w: s.w.ceil().min(PANEL_MAX.w),
+            h: s.h.ceil().min(PANEL_MAX.h),
+        });
+        if self.panel.is_none() {
+            hide_window(app, PANEL);
+        } else if self.display.is_some() && self.drag.is_none() {
+            self.place(app);
+        }
+    }
+
+    /// Puts the panel next to the widget at `widget` and orders it front.
+    fn place_panel<R: Runtime>(&self, app: &AppHandle<R>, displays: &[Display], widget: Rect) {
+        let (Some(size), Some(window)) = (self.panel, app.get_webview_window(PANEL)) else {
+            return;
+        };
+        let rects: Vec<Rect> = displays.iter().map(|d| d.rect).collect();
+        let Some(display) = placement::display_at(&rects, widget.center()).map(|i| rects[i]) else {
+            return;
+        };
+        apply_frame(
+            &window,
+            placement::panel_frame(display, widget, size),
+            displays,
+        );
+        order_front(app, PANEL);
     }
 
     /// Forgets every saved position.
@@ -285,13 +365,11 @@ impl Layout {
             .positions
             .get(&display.key)
             .copied()
-            .unwrap_or_else(|| placement::default_anchor(display.rect));
-        let size = placement::size_for(anchor.dock, self.compact);
-        apply_frame(
-            &window,
-            placement::frame(display.rect, anchor, size),
-            &displays,
-        );
+            .unwrap_or_else(|| placement::default_anchor(display.rect, self.short()));
+        let size = placement::size_for(anchor.dock, self.long, self.short());
+        let frame = placement::frame(display.rect, anchor, size);
+        apply_frame(&window, frame, &displays);
+        self.place_panel(app, &displays, frame);
     }
 
     /// Starts following the pointer. Returns false when the drag cannot start.
@@ -326,6 +404,7 @@ impl Layout {
         let displays = displays(app);
         if primary_button_down() {
             apply_frame(&window, moved, &displays);
+            self.place_panel(app, &displays, moved);
             return true;
         }
         self.drag = None;
@@ -336,7 +415,7 @@ impl Layout {
             {
                 self.positions.positions.insert(
                     display.key.clone(),
-                    placement::anchor_after_drag(display.rect, moved),
+                    placement::anchor_after_drag(display.rect, moved, self.long.wide),
                 );
                 self.save();
                 self.display = Some(display.key.clone());

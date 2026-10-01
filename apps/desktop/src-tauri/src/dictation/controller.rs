@@ -574,7 +574,11 @@ impl Controller {
                 text,
                 is_final: true,
                 ..
-            } => self.deps.ui.transcript(text),
+            } => {
+                if self.settings.show_transcript {
+                    self.deps.ui.transcript(text);
+                }
+            }
             Event::Done { .. } => self.on_done(),
             _ => {}
         }
@@ -1004,6 +1008,17 @@ mod tests {
         wait_state(r, UiState::Recording, "recording").await;
         speak_and_wait(r, secs).await;
         r.modifier.send(fn_up()).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_transcript_is_not_shown_when_switched_off() {
+        let mut s = fast_settings();
+        s.show_transcript = false;
+        let r = rig(s).await;
+        mock_ok(&r, "原文", "整理後").await;
+        hold_and_speak(&r, 1.0).await;
+        wait_state(&r, UiState::Idle, "idle").await;
+        assert!(r.ui.transcripts.lock().unwrap().is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

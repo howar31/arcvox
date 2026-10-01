@@ -53,6 +53,8 @@ export interface ClientSettings {
   insertion: { per_app: Record<string, InsertMethod> };
   max_utterance_secs: number;
   auto_stop: { enabled: boolean; silence_secs: number };
+  show_transcript: boolean;
+  widget_size: "small" | "medium" | "large";
   ui_language: "system" | "zh-tw" | "en";
   manifest_url: string | null;
 }
@@ -118,6 +120,12 @@ export const uiLanguage = () => invoke<string>("ui_language");
 export const widgetCopy = (text: string) => invoke<void>("widget_copy", { text });
 export const widgetDismiss = () => invoke<void>("widget_dismiss");
 export const widgetDragStart = () => invoke<void>("widget_drag_start");
+/** The length the widget's labels need in each shape. */
+/** The factor of the widget size the user chose. */
+export const widgetScale = () => invoke<number>("widget_scale");
+export const widgetMeasure = (wide: number, tall: number) => invoke<void>("widget_measure", { wide, tall });
+/** The size of the panel's content; null when it has none. */
+export const panelFit = (width: number | null, height: number | null) => invoke<void>("panel_fit", { width, height });
 /** Why `keys` cannot be added to `existing`; null when they can. */
 export const shortcutCheck = (keys: string[], existing: string[][]) => invoke<string | null>("shortcut_check", { keys, existing });
 /** Starts or ends recording a new shortcut; false when keys cannot be recorded. */
@@ -134,7 +142,7 @@ export function onConfigChanged(cb: (c: Config) => void): Promise<UnlistenFn> {
 }
 
 export type WidgetState = "idle" | "recording" | "locked" | "processing" | "inserting" | "placing" | "no_accessibility" | "engine_error";
-export interface StatePayload { state: WidgetState; language: "zh-TW" | "en" }
+export interface StatePayload { state: WidgetState; language: "zh-TW" | "en"; scale?: number }
 export interface LevelPayload { rms: number }
 /** `code` is the kind of failure of a failed dictation; `retry` says it was kept for a retry from the history. */
 export interface MessagePayload { kind: "info" | "error"; key: string; detail: string | null; copyable: string | null; code: string | null; retry: boolean; language: "zh-TW" | "en" }

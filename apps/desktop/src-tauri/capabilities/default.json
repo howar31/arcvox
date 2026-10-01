@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Settings and widget windows",
-  "windows": ["settings", "widget"],
+  "description": "Settings, widget and panel windows",
+  "windows": ["settings", "widget", "panel"],
   "permissions": [
     "core:default",
     "core:window:allow-show",

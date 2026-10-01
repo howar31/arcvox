@@ -67,6 +67,9 @@ pub fn run() {
             crate::commands::system::widget_drag_start,
             crate::commands::system::widget_placing,
             crate::commands::system::widget_reset_position,
+            crate::commands::system::widget_measure,
+            crate::commands::system::widget_scale,
+            crate::commands::system::panel_fit,
             crate::commands::system::system_open_settings_window,
             crate::commands::system::system_list_microphones,
             crate::commands::system::system_permissions,
@@ -242,7 +245,12 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
     crate::ui::widget::convert_to_panel(&app)?;
     let window_state = WindowState::new(dirs.config_dir.clone());
     window_state.restore(&app);
-    let ui = Arc::new(TauriUi::new(app.clone(), language, &dirs.config_dir)?);
+    let ui = Arc::new(TauriUi::new(
+        app.clone(),
+        language,
+        settings.widget_size.scale(),
+        &dirs.config_dir,
+    )?);
 
     let secrets = Arc::new(KeychainStore::new());
     // A stalled connection fails the read instead of hanging a download or its Cancel.

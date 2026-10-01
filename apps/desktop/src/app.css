@@ -46,7 +46,8 @@ html, body { height: 100%; overflow: hidden; }
 body { margin: 0; font: var(--text)/1.5 var(--font); color: var(--ink); background: var(--page); -webkit-font-smoothing: antialiased; -webkit-user-select: none; user-select: none; cursor: default; }
 input, textarea { -webkit-user-select: text; user-select: text; }
 input:not([type="checkbox"]):not([type="radio"]), textarea { cursor: text; }
-body.widget { background: transparent; }
+/* --u: the unit of the floating widget and its panel; the size setting changes it. */
+body.widget { background: transparent; --u: 1px; }
 button, select, input, textarea { font: inherit; color: inherit; }
 input[type="radio"] { accent-color: var(--accent); }
 /* A checkbox as tall as the text next to it. */

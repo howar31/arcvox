@@ -32,6 +32,10 @@ pub struct ClientSettings {
     pub insertion: InsertionSettings,
     pub max_utterance_secs: u32,
     pub auto_stop: AutoStop,
+    /// Shows the recognised text next to the widget while it is rewritten.
+    pub show_transcript: bool,
+    /// How large the floating widget and its panel are.
+    pub widget_size: WidgetSize,
     pub ui_language: UiLanguage,
     /// Overrides the model catalogue location; `None` uses the built-in one.
     #[serde(default)]
@@ -54,6 +58,26 @@ pub struct HotkeySettings {
 pub struct AutoStop {
     pub enabled: bool,
     pub silence_secs: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WidgetSize {
+    Small,
+    #[default]
+    Medium,
+    Large,
+}
+
+impl WidgetSize {
+    /// The factor on the small size's measures.
+    pub fn scale(self) -> f64 {
+        match self {
+            WidgetSize::Small => 1.0,
+            WidgetSize::Medium => 7.0 / 6.0,
+            WidgetSize::Large => 4.0 / 3.0,
+        }
+    }
 }
 
 impl Default for AutoStop {
@@ -115,6 +139,8 @@ impl Default for ClientSettings {
             insertion: InsertionSettings::default(),
             max_utterance_secs: 300,
             auto_stop: AutoStop::default(),
+            show_transcript: true,
+            widget_size: WidgetSize::default(),
             ui_language: UiLanguage::System,
             manifest_url: None,
         }

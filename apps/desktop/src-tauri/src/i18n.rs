@@ -160,8 +160,8 @@ pub fn text(lang: Language, msg: Msg) -> &'static str {
         (Language::En, Msg::TrayQuit) => "Quit Kongwe",
         (Language::ZhTw, Msg::WidgetListening) => "聆聽中",
         (Language::En, Msg::WidgetListening) => "Listening",
-        (Language::ZhTw, Msg::WidgetLocked) => "連續聽寫中，再按一次快捷鍵結束",
-        (Language::En, Msg::WidgetLocked) => "Hands-free, press the shortcut again to finish",
+        (Language::ZhTw, Msg::WidgetLocked) => "再按一次快捷鍵結束",
+        (Language::En, Msg::WidgetLocked) => "Press the shortcut again to finish",
         (Language::ZhTw, Msg::WidgetProcessing) => "處理中",
         (Language::En, Msg::WidgetProcessing) => "Processing",
         (Language::ZhTw, Msg::WidgetInserting) => "輸入中",
@@ -184,16 +184,14 @@ pub fn text(lang: Language, msg: Msg) -> &'static str {
         }
         (Language::ZhTw, Msg::WidgetMicrophoneUnavailable) => "無法使用麥克風",
         (Language::En, Msg::WidgetMicrophoneUnavailable) => "Microphone unavailable",
-        (Language::ZhTw, Msg::WidgetEngineUnavailable) => "引擎尚未就緒，請開啟設定",
-        (Language::En, Msg::WidgetEngineUnavailable) => "Engine not ready; open Settings",
+        (Language::ZhTw, Msg::WidgetEngineUnavailable) => "引擎尚未就緒",
+        (Language::En, Msg::WidgetEngineUnavailable) => "Engine not ready",
         (Language::ZhTw, Msg::WidgetAsrFailed) => "語音辨識失敗，未插入文字",
         (Language::En, Msg::WidgetAsrFailed) => "Speech recognition failed; nothing was inserted",
-        (Language::ZhTw, Msg::WidgetModelMissing) => "找不到本機模型，請到設定 > 引擎與模型下載",
-        (Language::En, Msg::WidgetModelMissing) => {
-            "Local model not found; download it in Settings > Engines and models"
-        }
-        (Language::ZhTw, Msg::WidgetModelCorrupt) => "模型檔案損毀，請重新下載",
-        (Language::En, Msg::WidgetModelCorrupt) => "Model file is damaged; download it again",
+        (Language::ZhTw, Msg::WidgetModelMissing) => "找不到本機模型",
+        (Language::En, Msg::WidgetModelMissing) => "Local model not found",
+        (Language::ZhTw, Msg::WidgetModelCorrupt) => "模型檔案損毀",
+        (Language::En, Msg::WidgetModelCorrupt) => "Model file is damaged",
         (Language::ZhTw, Msg::WidgetNativeUnavailable) => "Apple 的服務目前無法使用",
         (Language::En, Msg::WidgetNativeUnavailable) => "The Apple service is not available",
         (Language::ZhTw, Msg::WidgetDegraded) => "改寫失敗，已插入原始辨識結果",

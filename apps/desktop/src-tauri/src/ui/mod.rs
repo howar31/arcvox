@@ -21,7 +21,9 @@ use app_menu::AppMenu;
 use tray::Tray;
 
 const HIDE_AFTER_IDLE: Duration = Duration::from_millis(1200);
-const HIDE_AFTER_ERROR: Duration = Duration::from_millis(4000);
+const HIDE_AFTER_NOTICE: Duration = Duration::from_millis(4000);
+/// A message in the panel has more to read than a notice on the widget.
+const HIDE_AFTER_ERROR: Duration = Duration::from_millis(6000);
 const HIDE_AFTER_COPYABLE: Duration = Duration::from_millis(15_000);
 /// How often a dragged widget catches up with the pointer.
 const DRAG_TICK: Duration = Duration::from_millis(8);
@@ -32,6 +34,8 @@ const PLACING: &str = "placing";
 struct StatePayload {
     state: &'static str,
     language: &'static str,
+    /// The factor of the size the user chose for the widget.
+    scale: f64,
 }
 
 #[derive(Serialize, Clone)]
@@ -62,6 +66,8 @@ pub struct TauriUi {
     tray: Tray<Wry>,
     menu: AppMenu<Wry>,
     language: Mutex<Language>,
+    /// The factor of the widget size the user chose.
+    scale: Mutex<f64>,
     state: Mutex<UiState>,
     /// Bumped on every show; a scheduled hide fires only if unchanged.
     generation: Arc<AtomicU64>,
@@ -83,7 +89,12 @@ pub struct TauriUi {
 }
 
 impl TauriUi {
-    pub fn new(app: AppHandle<Wry>, language: Language, config_dir: &Path) -> tauri::Result<Self> {
+    pub fn new(
+        app: AppHandle<Wry>,
+        language: Language,
+        scale: f64,
+        config_dir: &Path,
+    ) -> tauri::Result<Self> {
         let tray = Tray::build(&app, language)?;
         let menu = AppMenu::install(&app, language)?;
         Ok(Self {
@@ -91,10 +102,14 @@ impl TauriUi {
             tray,
             menu,
             language: Mutex::new(language),
+            scale: Mutex::new(scale),
             state: Mutex::new(UiState::Idle),
             generation: Arc::new(AtomicU64::new(0)),
             hide_deadline: Arc::new(Mutex::new(None)),
-            layout: Arc::new(Mutex::new(widget::Layout::load(config_dir.to_path_buf()))),
+            layout: Arc::new(Mutex::new(widget::Layout::load(
+                config_dir.to_path_buf(),
+                scale,
+            ))),
             dragging: Arc::new(AtomicBool::new(false)),
             hide_waiting: Arc::new(AtomicBool::new(false)),
             placing: AtomicBool::new(false),
@@ -114,17 +129,41 @@ impl TauriUi {
         *self.language.lock().unwrap() = language;
         self.tray.set_language(language);
         self.menu.set_language(language);
+        // The widget measures its labels again in the new language.
+        self.emit_current_state();
+    }
+
+    /// The factor of the widget size the user chose.
+    pub fn scale(&self) -> f64 {
+        *self.scale.lock().unwrap()
+    }
+
+    pub fn set_scale(&self, scale: f64) {
+        *self.scale.lock().unwrap() = scale;
+        let app = self.app.clone();
+        let layout = self.layout.clone();
+        let _ = self
+            .app
+            .run_on_main_thread(move || layout.lock().unwrap().set_scale(&app, scale));
+        // The widget and the panel take the size and report what they need.
+        self.emit_current_state();
+    }
+
+    fn emit_current_state(&self) {
+        let state = *self.state.lock().unwrap();
+        let placing = self.placing.load(Ordering::SeqCst);
+        self.emit_state(if placing && !is_session(state) {
+            PLACING
+        } else {
+            Self::state_name(state)
+        });
     }
 
     fn language(&self) -> Language {
         *self.language.lock().unwrap()
     }
 
-    /// Shows the widget. `compact` says it has only the ring and a short
-    /// label to show, which lets a widget docked to a side edge be vertical.
-    /// Only a message needs the horizontal pill there; the transcript is
-    /// shown in the horizontal pill only.
-    fn show(&self, compact: bool) {
+    fn show(&self) {
         self.sticky.store(false, Ordering::SeqCst);
         *self.hide_deadline.lock().unwrap() = None;
         self.generation.fetch_add(1, Ordering::SeqCst);
@@ -132,11 +171,38 @@ impl TauriUi {
         let layout = self.layout.clone();
         let _ = self
             .app
-            .run_on_main_thread(move || layout.lock().unwrap().show(&app, compact));
+            .run_on_main_thread(move || layout.lock().unwrap().show(&app));
+    }
+
+    /// The widget measured the length its labels need in each shape.
+    pub fn measured(&self, wide: f64, tall: f64) {
+        let long = placement::Long::measured(wide, tall);
+        let app = self.app.clone();
+        let layout = self.layout.clone();
+        let _ = self
+            .app
+            .run_on_main_thread(move || layout.lock().unwrap().set_long(&app, long));
+    }
+
+    /// The panel has content of this size, or none.
+    pub fn panel_fit(&self, size: Option<(f64, f64)>) {
+        let size = size.map(|(w, h)| placement::Size { w, h });
+        let app = self.app.clone();
+        let layout = self.layout.clone();
+        let _ = self
+            .app
+            .run_on_main_thread(move || layout.lock().unwrap().set_panel(&app, size));
+    }
+
+    /// Sends an event to the widget and to its panel.
+    fn emit<S: Serialize + Clone>(&self, event: &str, payload: S) {
+        for window in [widget::WINDOW, widget::PANEL] {
+            let _ = self.app.emit_to(window, event, payload.clone());
+        }
     }
 
     /// Schedules a hide, but never shortens an already-pending later
-    /// deadline (e.g. a 4 s error hide must not cut a 15 s copyable-message
+    /// deadline (e.g. a 6 s error hide must not cut a 15 s copyable-message
     /// hide short just because `Idle` follows right after).
     fn hide_after(&self, delay: Duration) {
         if self.placing.load(Ordering::SeqCst) || self.sticky.load(Ordering::SeqCst) {
@@ -233,7 +299,7 @@ impl TauriUi {
         }
         if on {
             self.emit_state(PLACING);
-            self.show(true);
+            self.show();
         } else {
             self.emit_state(Self::state_name(state));
             self.dismiss();
@@ -250,12 +316,12 @@ impl TauriUi {
     }
 
     fn emit_state(&self, state: &'static str) {
-        let _ = self.app.emit_to(
-            widget::WINDOW,
+        self.emit(
             "widget-state",
             StatePayload {
                 state,
                 language: self.language().tag(),
+                scale: self.scale(),
             },
         );
     }
@@ -302,9 +368,9 @@ impl Ui for TauriUi {
         });
         match state {
             UiState::Recording | UiState::Locked | UiState::Processing | UiState::Inserting => {
-                self.show(true)
+                self.show()
             }
-            // Stays as it is: visible, and wide if a message is on it.
+            // Stays as it is: visible, with its message if it has one.
             UiState::Idle if placing => {}
             UiState::Idle => self.hide_after(HIDE_AFTER_IDLE),
             UiState::NoAccessibility | UiState::EngineError => {}
@@ -319,8 +385,7 @@ impl Ui for TauriUi {
 
     fn transcript(&self, text: String) {
         let language = self.language();
-        let _ = self.app.emit_to(
-            widget::WINDOW,
+        self.emit(
             "widget-transcript",
             TranscriptPayload {
                 text,
@@ -333,8 +398,8 @@ impl Ui for TauriUi {
         let language = self.language();
         let copyable = message.copyable.is_some();
         let sticky = message.sticky;
-        let _ = self.app.emit_to(
-            widget::WINDOW,
+        let notice = message.is_notice();
+        self.emit(
             "widget-message",
             MessagePayload {
                 kind: match message.kind {
@@ -349,10 +414,12 @@ impl Ui for TauriUi {
                 language: language.tag(),
             },
         );
-        self.show(false);
+        self.show();
         self.sticky.store(sticky, Ordering::SeqCst);
         self.hide_after(if copyable {
             HIDE_AFTER_COPYABLE
+        } else if notice {
+            HIDE_AFTER_NOTICE
         } else {
             HIDE_AFTER_ERROR
         });
