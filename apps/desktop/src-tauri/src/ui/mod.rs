@@ -1,9 +1,11 @@
 //! Implements the controller's `Ui` on top of the tray and the widget.
 //! Every AppKit call is hopped onto the main thread.
 
+pub mod placement;
 pub mod tray;
 pub mod widget;
 
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -18,6 +20,10 @@ use tray::Tray;
 const HIDE_AFTER_IDLE: Duration = Duration::from_millis(1200);
 const HIDE_AFTER_ERROR: Duration = Duration::from_millis(4000);
 const HIDE_AFTER_COPYABLE: Duration = Duration::from_millis(15_000);
+/// How often a dragged widget catches up with the pointer.
+const DRAG_TICK: Duration = Duration::from_millis(8);
+/// The widget state shown while the user is asked to position the widget.
+const PLACING: &str = "placing";
 
 #[derive(Serialize, Clone)]
 struct StatePayload {
@@ -49,32 +55,38 @@ pub struct TauriUi {
     app: AppHandle<Wry>,
     tray: Tray<Wry>,
     language: Mutex<Language>,
+    state: Mutex<UiState>,
     /// Bumped on every show; a scheduled hide fires only if unchanged.
     generation: Arc<AtomicU64>,
     /// The latest deadline a scheduled hide is waiting for. A later
     /// `hide_after` call yields to an already-pending later deadline
     /// instead of cutting it short; `show` clears it outright.
     hide_deadline: Arc<Mutex<Option<Instant>>>,
-    /// Whether the widget is currently showing a copyable message (one
-    /// with a Copy button). While true, `set_state(Idle)` must leave the
-    /// panel's click-through state alone: `Idle` fires the instant
-    /// `insert()` finishes, milliseconds after the copyable message was
-    /// shown, and resetting click-through then would make the Copy button
-    /// unclickable for the rest of the message's `HIDE_AFTER_COPYABLE`
-    /// window.
-    copyable_showing: Arc<AtomicBool>,
+    /// Position and shape of the widget; locked on the main thread only.
+    layout: Arc<Mutex<widget::Layout>>,
+    /// True while the user drags the widget.
+    dragging: Arc<AtomicBool>,
+    /// A hide came due during a drag and waits for the drop.
+    hide_waiting: Arc<AtomicBool>,
+    /// True while the settings window keeps the widget visible so the user
+    /// can position it.
+    placing: AtomicBool,
 }
 
 impl TauriUi {
-    pub fn new(app: AppHandle<Wry>, language: Language) -> tauri::Result<Self> {
+    pub fn new(app: AppHandle<Wry>, language: Language, config_dir: &Path) -> tauri::Result<Self> {
         let tray = Tray::build(&app, language)?;
         Ok(Self {
             app,
             tray,
             language: Mutex::new(language),
+            state: Mutex::new(UiState::Idle),
             generation: Arc::new(AtomicU64::new(0)),
             hide_deadline: Arc::new(Mutex::new(None)),
-            copyable_showing: Arc::new(AtomicBool::new(false)),
+            layout: Arc::new(Mutex::new(widget::Layout::load(config_dir.to_path_buf()))),
+            dragging: Arc::new(AtomicBool::new(false)),
+            hide_waiting: Arc::new(AtomicBool::new(false)),
+            placing: AtomicBool::new(false),
         })
     }
 
@@ -91,19 +103,25 @@ impl TauriUi {
         *self.language.lock().unwrap()
     }
 
-    fn show(&self) {
+    /// Shows the widget. `compact` says it has only the ring and a short
+    /// label to show, which lets a widget docked to a side edge be vertical.
+    fn show(&self, compact: bool) {
         *self.hide_deadline.lock().unwrap() = None;
         self.generation.fetch_add(1, Ordering::SeqCst);
         let app = self.app.clone();
+        let layout = self.layout.clone();
         let _ = self
             .app
-            .run_on_main_thread(move || widget::show_at_bottom(&app));
+            .run_on_main_thread(move || layout.lock().unwrap().show(&app, compact));
     }
 
     /// Schedules a hide, but never shortens an already-pending later
     /// deadline (e.g. a 4 s error hide must not cut a 15 s copyable-message
     /// hide short just because `Idle` follows right after).
     fn hide_after(&self, delay: Duration) {
+        if self.placing.load(Ordering::SeqCst) {
+            return;
+        }
         let deadline = Instant::now() + delay;
         {
             let mut pending = self.hide_deadline.lock().unwrap();
@@ -117,33 +135,108 @@ impl TauriUi {
         let gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let generation = self.generation.clone();
         let hide_deadline = self.hide_deadline.clone();
-        let copyable_showing = self.copyable_showing.clone();
+        let dragging = self.dragging.clone();
+        let hide_waiting = self.hide_waiting.clone();
+        let layout = self.layout.clone();
         let app = self.app.clone();
         std::thread::spawn(move || {
             std::thread::sleep(delay);
             if generation.load(Ordering::SeqCst) == gen {
                 *hide_deadline.lock().unwrap() = None;
-                // The panel is actually going away now, so whatever
-                // message (copyable or not) was showing is gone with it;
-                // click-through goes back to true so a stray click after
-                // the panel reappears never lands on the old content.
-                copyable_showing.store(false, Ordering::SeqCst);
-                hide_panel_now(&app);
+                if dragging.load(Ordering::SeqCst) {
+                    hide_waiting.store(true, Ordering::SeqCst);
+                } else {
+                    hide_panel_now(&app, &layout);
+                }
             }
         });
     }
 
-    /// Dismisses the widget right away: clears the copyable-message flag
-    /// and hides the panel now instead of after a delay. The generation is
-    /// bumped first so a pending `hide_after` sleeper (for example the
-    /// copyable message's own timeout) finds a stale generation when it
-    /// wakes and no-ops instead of acting on a panel state that dismiss
-    /// already replaced.
+    /// Dismisses the widget right away instead of after a delay. The
+    /// generation is bumped first so a pending `hide_after` sleeper finds a
+    /// stale generation when it wakes and does nothing.
     pub fn dismiss(&self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
         *self.hide_deadline.lock().unwrap() = None;
-        self.copyable_showing.store(false, Ordering::SeqCst);
-        hide_panel_now(&self.app);
+        hide_panel_now(&self.app, &self.layout);
+    }
+
+    /// Follows the pointer until the mouse button is released, then keeps
+    /// the position for the display the widget was dropped on.
+    pub fn drag_start(self: Arc<Self>) {
+        if self.dragging.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        std::thread::spawn(move || {
+            // Runs one step on the main thread; true while the drag goes on.
+            let step = |begin: bool| {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let app = self.app.clone();
+                let layout = self.layout.clone();
+                let sent = self.app.run_on_main_thread(move || {
+                    let mut layout = layout.lock().unwrap();
+                    let going = if begin {
+                        layout.drag_begin(&app)
+                    } else {
+                        layout.drag_step(&app)
+                    };
+                    let _ = tx.send(going);
+                });
+                sent.is_ok() && rx.recv().unwrap_or(false)
+            };
+            if step(true) {
+                loop {
+                    std::thread::sleep(DRAG_TICK);
+                    if !step(false) {
+                        break;
+                    }
+                }
+            }
+            self.dragging.store(false, Ordering::SeqCst);
+            if self.hide_waiting.swap(false, Ordering::SeqCst) {
+                self.hide_after(HIDE_AFTER_IDLE);
+            }
+        });
+    }
+
+    /// Keeps the widget visible so the user can drag it into place, or
+    /// ends that and hides it again.
+    pub fn set_placing(&self, on: bool) {
+        if self.placing.swap(on, Ordering::SeqCst) == on {
+            return;
+        }
+        let state = *self.state.lock().unwrap();
+        if is_session(state) {
+            // A dictation is on screen; it goes on as usual.
+            return;
+        }
+        if on {
+            self.emit_state(PLACING);
+            self.show(true);
+        } else {
+            self.emit_state(Self::state_name(state));
+            self.dismiss();
+        }
+    }
+
+    /// Forgets the positions chosen by dragging.
+    pub fn reset_positions(&self) {
+        let app = self.app.clone();
+        let layout = self.layout.clone();
+        let _ = self
+            .app
+            .run_on_main_thread(move || layout.lock().unwrap().reset(&app));
+    }
+
+    fn emit_state(&self, state: &'static str) {
+        let _ = self.app.emit_to(
+            widget::WINDOW,
+            "widget-state",
+            StatePayload {
+                state,
+                language: self.language().tag(),
+            },
+        );
     }
 
     fn state_name(state: UiState) -> &'static str {
@@ -159,69 +252,39 @@ impl TauriUi {
     }
 }
 
-/// Resets click-through to true and hides the panel. Shared by the delayed
-/// `hide_after` sleeper and by `dismiss`, which needs the same reset but
-/// right away instead of after a delay.
-fn hide_panel_now(app: &AppHandle<Wry>) {
+/// Whether the state belongs to a dictation in progress.
+fn is_session(state: UiState) -> bool {
+    matches!(
+        state,
+        UiState::Recording | UiState::Locked | UiState::Processing | UiState::Inserting
+    )
+}
+
+fn hide_panel_now(app: &AppHandle<Wry>, layout: &Arc<Mutex<widget::Layout>>) {
     let target = app.clone();
+    let layout = layout.clone();
     let _ = app.run_on_main_thread(move || {
-        widget::set_click_through(&target, true);
+        layout.lock().unwrap().hidden();
         widget::hide(&target);
     });
 }
 
-/// A `set_state` or `message` call, the two events that can change the
-/// widget's click-through state.
-enum ClickThroughEvent {
-    State(UiState),
-    Message { copyable: bool },
-}
-
-/// What click-through value to apply for `event`, or `None` to leave the
-/// panel's current click-through state alone. The only event that must be
-/// left alone is `Idle` while a copyable message is still showing (see
-/// `TauriUi::copyable_showing`); every other state resets to click-through,
-/// and a message always sets an explicit value.
-fn click_through_for(event: ClickThroughEvent, copyable_showing: bool) -> Option<bool> {
-    match event {
-        ClickThroughEvent::State(UiState::Idle) if copyable_showing => None,
-        ClickThroughEvent::State(_) => Some(true),
-        ClickThroughEvent::Message { copyable } => Some(!copyable),
-    }
-}
-
 impl Ui for TauriUi {
     fn set_state(&self, state: UiState) {
-        let language = self.language();
-        self.tray.set_state(state, language);
-        let _ = self.app.emit_to(
-            widget::WINDOW,
-            "widget-state",
-            StatePayload {
-                state: Self::state_name(state),
-                language: language.tag(),
-            },
-        );
-        // Any state other than `Idle` starts a new session (or a
-        // permission/engine banner) and ends whatever copyable message
-        // was showing; `Idle` itself must not clear it here; `insert()`
-        // calls `go_idle()` right after showing a copyable message, and
-        // the message's own `HIDE_AFTER_COPYABLE` timer (or a later
-        // session) is what ends it instead.
-        if !matches!(state, UiState::Idle) {
-            self.copyable_showing.store(false, Ordering::SeqCst);
-        }
-        let showing = self.copyable_showing.load(Ordering::SeqCst);
-        if let Some(ignore) = click_through_for(ClickThroughEvent::State(state), showing) {
-            let app = self.app.clone();
-            let _ = self
-                .app
-                .run_on_main_thread(move || widget::set_click_through(&app, ignore));
-        }
+        self.tray.set_state(state, self.language());
+        *self.state.lock().unwrap() = state;
+        let placing = self.placing.load(Ordering::SeqCst);
+        self.emit_state(if placing && !is_session(state) {
+            PLACING
+        } else {
+            Self::state_name(state)
+        });
         match state {
             UiState::Recording | UiState::Locked | UiState::Processing | UiState::Inserting => {
-                self.show()
+                self.show(true)
             }
+            // Stays as it is: visible, and wide if a message is on it.
+            UiState::Idle if placing => {}
             UiState::Idle => self.hide_after(HIDE_AFTER_IDLE),
             UiState::NoAccessibility | UiState::EngineError => {}
         }
@@ -235,6 +298,7 @@ impl Ui for TauriUi {
 
     fn transcript(&self, text: String) {
         let language = self.language();
+        let has_text = !text.is_empty();
         let _ = self.app.emit_to(
             widget::WINDOW,
             "widget-transcript",
@@ -243,6 +307,10 @@ impl Ui for TauriUi {
                 language: language.tag(),
             },
         );
+        // The transcript needs the room of the horizontal pill.
+        if has_text {
+            self.show(false);
+        }
     }
 
     fn message(&self, message: UiMessage) {
@@ -262,18 +330,7 @@ impl Ui for TauriUi {
                 language: language.tag(),
             },
         );
-        // Only a copyable message has a Copy button to click, so only it
-        // makes the panel take mouse events. Recorded before the
-        // `Idle` that typically follows right after (from `go_idle()`)
-        // so that state change knows not to undo this.
-        self.copyable_showing.store(copyable, Ordering::SeqCst);
-        let ignore = click_through_for(ClickThroughEvent::Message { copyable }, copyable)
-            .expect("a message always has an explicit click-through value");
-        let app = self.app.clone();
-        let _ = self
-            .app
-            .run_on_main_thread(move || widget::set_click_through(&app, ignore));
-        self.show();
+        self.show(false);
         self.hide_after(if copyable {
             HIDE_AFTER_COPYABLE
         } else {
@@ -287,42 +344,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn idle_with_a_copyable_message_showing_is_left_alone() {
-        assert_eq!(
-            click_through_for(ClickThroughEvent::State(UiState::Idle), true),
-            None
-        );
-    }
-
-    #[test]
-    fn idle_with_nothing_copyable_resets_to_click_through() {
-        assert_eq!(
-            click_through_for(ClickThroughEvent::State(UiState::Idle), false),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn an_active_state_resets_to_click_through() {
-        assert_eq!(
-            click_through_for(ClickThroughEvent::State(UiState::Recording), true),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn a_copyable_message_makes_the_panel_interactive() {
-        assert_eq!(
-            click_through_for(ClickThroughEvent::Message { copyable: true }, false),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn a_plain_message_stays_click_through() {
-        assert_eq!(
-            click_through_for(ClickThroughEvent::Message { copyable: false }, false),
-            Some(true)
-        );
+    fn only_dictation_states_count_as_a_session() {
+        for state in [
+            UiState::Recording,
+            UiState::Locked,
+            UiState::Processing,
+            UiState::Inserting,
+        ] {
+            assert!(is_session(state), "{state:?}");
+        }
+        for state in [
+            UiState::Idle,
+            UiState::NoAccessibility,
+            UiState::EngineError,
+        ] {
+            assert!(!is_session(state), "{state:?}");
+        }
     }
 }

@@ -77,13 +77,16 @@ export const reveal = (path: string) => invoke<void>("system_reveal", { path });
 export const uiLanguage = () => invoke<string>("ui_language");
 export const widgetCopy = (text: string) => invoke<void>("widget_copy", { text });
 export const widgetDismiss = () => invoke<void>("widget_dismiss");
+export const widgetDragStart = () => invoke<void>("widget_drag_start");
+export const widgetPlacing = (on: boolean) => invoke<void>("widget_placing", { on });
+export const widgetResetPosition = () => invoke<void>("widget_reset_position");
 export const openSettingsWindow = (page?: string) => invoke<void>("system_open_settings_window", { page: page ?? null });
 
 export function onConfigChanged(cb: (c: Config) => void): Promise<UnlistenFn> {
   return listen<Config>("config-changed", (e) => cb(e.payload));
 }
 
-export type WidgetState = "idle" | "recording" | "locked" | "processing" | "inserting" | "no_accessibility" | "engine_error";
+export type WidgetState = "idle" | "recording" | "locked" | "processing" | "inserting" | "placing" | "no_accessibility" | "engine_error";
 export interface StatePayload { state: WidgetState; language: "zh-TW" | "en" }
 export interface LevelPayload { rms: number }
 export interface MessagePayload { kind: "info" | "error"; key: string; detail: string | null; copyable: string | null; language: "zh-TW" | "en" }

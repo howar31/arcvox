@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
-  import { errorMessage, listMicrophones, openPrivacyPane, permissions, requestAccessibility, updateGeneral, type ClientSettings, type General, type InsertMethod } from "../../lib/api";
+  import { errorMessage, listMicrophones, openPrivacyPane, permissions, requestAccessibility, updateGeneral, widgetPlacing, widgetResetPosition, type ClientSettings, type General, type InsertMethod } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { t } from "../../lib/i18n";
   import { client, config } from "../../lib/store.svelte";
@@ -30,6 +30,8 @@
   let problem = $state<string | undefined>(undefined);
   // A bundle id chosen or typed but not added yet: counts as a change, and Save adds it first.
   let newApp = $state("");
+  // True while the widget is kept on screen so it can be dragged into place.
+  let placing = $state(false);
 
   const clientDirty = $derived(draft !== null && JSON.stringify(draft) !== baseClient);
   const generalDirty = $derived(general !== null && JSON.stringify(general) !== baseGeneral);
@@ -74,7 +76,10 @@
     isEnabled().then((v) => (autostart = v)).catch(() => {});
     const onFocus = () => { checkAccess(); };
     window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      if (placing) widgetPlacing(false).catch(() => {});
+    };
   });
 
   function invalid(): string[] {
@@ -139,6 +144,14 @@
 
   async function openPane(pane: "accessibility" | "microphone") {
     try { await openPrivacyPane(pane); } catch (e) { toast.error(errorMessage(e)); }
+  }
+
+  async function setPlacing(on: boolean) {
+    try { await widgetPlacing(on); placing = on; } catch (e) { toast.error(errorMessage(e)); }
+  }
+
+  async function resetWidget() {
+    try { await widgetResetPosition(); toast.ok(t("general.widget_reset_done")); } catch (e) { toast.error(errorMessage(e)); }
   }
 
   function addApp(id: string) {
@@ -228,6 +241,13 @@
     </Row>
   </Group>
 {/if}
+
+<Group title={t("general.widget")}>
+  <Row label={t("general.widget_position")} help={t("general.widget_position_help")}>
+    <button type="button" class="btn" aria-pressed={placing} onclick={() => setPlacing(!placing)}>{t(placing ? "general.widget_done" : "general.widget_show")}</button>
+    <button type="button" class="btn quiet" onclick={resetWidget}>{t("general.widget_reset")}</button>
+  </Row>
+</Group>
 
 {#if general}
   <Group title={t("general.history")}>

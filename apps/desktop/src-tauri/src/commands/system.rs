@@ -22,6 +22,23 @@ pub fn widget_dismiss(state: State<'_, AppState>) {
     state.ui.dismiss();
 }
 
+/// The pointer went down on the widget: it follows the pointer until release.
+#[tauri::command]
+pub fn widget_drag_start(state: State<'_, AppState>) {
+    state.ui.clone().drag_start();
+}
+
+/// Shows the widget so it can be dragged into place, or ends that.
+#[tauri::command]
+pub fn widget_placing(state: State<'_, AppState>, on: bool) {
+    state.ui.set_placing(on);
+}
+
+#[tauri::command]
+pub fn widget_reset_position(state: State<'_, AppState>) {
+    state.ui.reset_positions();
+}
+
 #[tauri::command]
 pub fn system_open_settings_window(app: AppHandle<Wry>, page: Option<String>) {
     crate::ui::tray::open_settings(&app, page.as_deref());
