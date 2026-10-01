@@ -28,9 +28,14 @@ pub enum ConfigError {
     EmbeddedProviderIncomplete(ProviderId),
     #[error("general.{field} must be at least {min}")]
     GeneralRange { field: &'static str, min: u64 },
+    #[error("general.{field} must be at most {max}")]
+    GeneralMax { field: &'static str, max: u64 },
     #[error("snippet `{0}` needs at least one alias")]
     SnippetWithoutAlias(String),
 }
+
+/// Highest accepted `general.retry_count`.
+pub const MAX_RETRY_COUNT: u32 = 5;
 
 pub fn validate(config: &Config) -> Result<(), ConfigError> {
     let mut seen = std::collections::HashSet::new();
@@ -65,6 +70,12 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
         return Err(ConfigError::GeneralRange {
             field: "asr_timeout_secs",
             min: 1,
+        });
+    }
+    if config.general.retry_count > MAX_RETRY_COUNT {
+        return Err(ConfigError::GeneralMax {
+            field: "retry_count",
+            max: u64::from(MAX_RETRY_COUNT),
         });
     }
     if config.general.typing_chars_per_min < 1 {

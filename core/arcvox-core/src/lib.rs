@@ -20,7 +20,10 @@ pub mod steps;
 pub mod types;
 
 pub use config::FirstRunDefaults;
-pub use engine::{Engine, EngineError, EngineOptions, SessionRequest, MIN_UTTERANCE_SECS};
+pub use engine::{
+    Engine, EngineError, EngineOptions, ReprocessError, Reprocessed, SessionRequest,
+    MIN_UTTERANCE_SECS,
+};
 pub use paths::DataDir;
 pub use protocol::{Event, PROTOCOL_VERSION};
 pub use providers::factory::ProviderFactory;

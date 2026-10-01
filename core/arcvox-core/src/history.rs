@@ -51,6 +51,34 @@ pub struct Utterance {
     pub asr_ms: u64,
     pub llm_ms: Option<u64>,
     pub audio_ms: Option<u64>,
+    /// Set when the dictation failed: why. Such a row has a recording and
+    /// no text until it is processed again.
+    pub error: Option<String>,
+}
+
+/// A dictation that failed after it was recorded.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FailedUtterance {
+    pub ts: i64,
+    pub profile_id: ProfileId,
+    pub app_name: Option<String>,
+    pub audio_path: PathBuf,
+    pub audio_ms: Option<u64>,
+    pub error: String,
+}
+
+/// What processing a row's recording again produced.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Redo {
+    pub profile_id: ProfileId,
+    pub raw_text: String,
+    pub final_text: String,
+    pub degraded: bool,
+    pub asr_ms: u64,
+    pub llm_ms: Option<u64>,
+    pub dict_fixes: u32,
+    pub snippets: u32,
+    pub llm_changed: bool,
 }
 
 /// Row and recording counts of the history.
@@ -130,6 +158,7 @@ pub(crate) fn upgrade(conn: &Connection, recordings_dir: &Path) -> Result<(), Hi
             "snippets",
             "ALTER TABLE utterances ADD COLUMN snippets INTEGER NOT NULL DEFAULT 0",
         ),
+        ("error", "ALTER TABLE utterances ADD COLUMN error TEXT"),
     ] {
         if !has_column(conn, name)? {
             conn.execute_batch(ddl)?;
@@ -273,6 +302,92 @@ impl HistoryStore {
                 Ok(Some(HistoryId(insert_row(&conn, &u)?)))
             }
         }
+    }
+
+    /// Stores a failed dictation so its recording can be processed again.
+    /// It has no text and is not counted in the statistics.
+    pub fn insert_failed(&self, u: FailedUtterance) -> Result<HistoryId, HistoryError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO utterances (ts, profile_id, app_name, raw_text, refined_text, final_text, audio_path, audio_ms, error)
+             VALUES (?1, ?2, ?3, '', '', '', ?4, ?5, ?6)",
+            params![
+                u.ts,
+                u.profile_id.0,
+                u.app_name,
+                u.audio_path.to_string_lossy().to_string(),
+                u.audio_ms.map(|v| v as i64),
+                u.error,
+            ],
+        )?;
+        Ok(HistoryId(conn.last_insert_rowid()))
+    }
+
+    /// Replaces why a failed row failed, after another attempt failed too.
+    /// A row that has text is left alone.
+    pub fn set_error(&self, id: HistoryId, error: &str) -> Result<(), HistoryError> {
+        self.conn.lock().unwrap().execute(
+            "UPDATE utterances SET error = ?1 WHERE id = ?2 AND error IS NOT NULL",
+            params![error, id.0],
+        )?;
+        Ok(())
+    }
+
+    /// Writes the result of processing a row's recording again. A row that
+    /// had failed becomes an ordinary one and is counted in the statistics
+    /// now, at the time it was spoken; a row that already had text is not
+    /// counted a second time. False when the row no longer exists.
+    pub fn apply_redo(&self, id: HistoryId, r: &Redo) -> Result<bool, HistoryError> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let row: Option<(i64, Option<String>, Option<i64>, bool)> = tx
+            .query_row(
+                "SELECT ts, app_name, audio_ms, error IS NOT NULL FROM utterances WHERE id = ?1",
+                params![id.0],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()?;
+        let Some((ts, app_name, audio_ms, was_failed)) = row else {
+            return Ok(false);
+        };
+        tx.execute(
+            "UPDATE utterances SET profile_id = ?1, raw_text = ?2, refined_text = ?3, final_text = ?3, degraded = ?4,
+                asr_ms = ?5, llm_ms = ?6, dict_fixes = ?7, snippets = ?8, error = NULL WHERE id = ?9",
+            params![
+                r.profile_id.0,
+                r.raw_text,
+                r.final_text,
+                r.degraded as i64,
+                r.asr_ms as i64,
+                r.llm_ms.map(|v| v as i64),
+                r.dict_fixes as i64,
+                r.snippets as i64,
+                id.0,
+            ],
+        )?;
+        if was_failed {
+            let counted = stats::add(
+                &tx,
+                &stats::Sample {
+                    ts,
+                    app_name: app_name.as_deref().unwrap_or(""),
+                    profile_id: &r.profile_id.0,
+                    text: &r.final_text,
+                    audio_ms: audio_ms.map(|v| v as u64),
+                    asr_ms: r.asr_ms,
+                    llm_ms: r.llm_ms,
+                    changed: r.llm_changed,
+                    degraded: r.degraded,
+                    dict_fixes: r.dict_fixes,
+                    snippets: r.snippets,
+                },
+            );
+            if let Err(e) = counted {
+                tracing::warn!(error = %e, "statistics write failed for a retried dictation");
+            }
+        }
+        tx.commit()?;
+        Ok(true)
     }
 
     pub fn set_final(&self, id: HistoryId, text: &str) -> Result<(), HistoryError> {
@@ -639,7 +754,7 @@ fn remove_recording(
     Ok(removed)
 }
 
-const SELECT: &str = "SELECT id, ts, profile_id, app_name, raw_text, refined_text, final_text, degraded, audio_path, asr_ms, llm_ms, audio_ms FROM utterances";
+const SELECT: &str = "SELECT id, ts, profile_id, app_name, raw_text, refined_text, final_text, degraded, audio_path, asr_ms, llm_ms, audio_ms, error FROM utterances";
 
 fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Utterance> {
     Ok(Utterance {
@@ -655,6 +770,7 @@ fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Utterance> {
         asr_ms: r.get::<_, i64>(9)? as u64,
         llm_ms: r.get::<_, Option<i64>>(10)?.map(|v| v as u64),
         audio_ms: r.get::<_, Option<i64>>(11)?.map(|v| v as u64),
+        error: r.get(12)?,
     })
 }
 
@@ -824,6 +940,73 @@ mod tests {
         // Ten characters: 15 s of typing at 40 a minute, 6 s at 100.
         assert_eq!(s.stats_for(0, 0, 40).unwrap().saved_ms, Some(10_000));
         assert_eq!(s.stats_for(0, 0, 100).unwrap().saved_ms, Some(1_000));
+    }
+
+    #[test]
+    fn a_failed_row_is_not_counted_until_a_retry_gives_it_text() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let id = s
+            .insert_failed(FailedUtterance {
+                ts: 7200,
+                profile_id: ProfileId("default".into()),
+                app_name: Some("Notes".into()),
+                audio_path: PathBuf::from("/rec/a.wav"),
+                audio_ms: Some(4000),
+                error: "timed out".into(),
+            })
+            .unwrap();
+        let row = s.get(id).unwrap().unwrap();
+        assert_eq!(
+            (row.final_text.as_str(), row.error.as_deref()),
+            ("", Some("timed out"))
+        );
+        assert_eq!(s.stats(0, 0).unwrap().totals.count, 0);
+
+        s.set_error(id, "still down").unwrap();
+        assert_eq!(
+            s.get(id).unwrap().unwrap().error.as_deref(),
+            Some("still down")
+        );
+
+        let redo = Redo {
+            profile_id: ProfileId("mail".into()),
+            raw_text: "raw".into(),
+            final_text: "done".into(),
+            degraded: false,
+            asr_ms: 10,
+            llm_ms: Some(20),
+            dict_fixes: 0,
+            snippets: 0,
+            llm_changed: true,
+        };
+        assert!(s.apply_redo(id, &redo).unwrap());
+        let row = s.get(id).unwrap().unwrap();
+        assert_eq!(
+            (
+                row.final_text.as_str(),
+                row.raw_text.as_str(),
+                row.error,
+                row.profile_id.0.as_str()
+            ),
+            ("done", "raw", None, "mail")
+        );
+        assert_eq!(s.stats(0, 0).unwrap().totals.count, 1);
+
+        // A row that has text is replaced without being counted again.
+        assert!(s
+            .apply_redo(
+                id,
+                &Redo {
+                    final_text: "again".into(),
+                    ..redo.clone()
+                }
+            )
+            .unwrap());
+        assert_eq!(s.get(id).unwrap().unwrap().final_text, "again");
+        assert_eq!(s.stats(0, 0).unwrap().totals.count, 1);
+        s.set_error(id, "ignored").unwrap();
+        assert_eq!(s.get(id).unwrap().unwrap().error, None);
+        assert!(!s.apply_redo(HistoryId(999), &redo).unwrap());
     }
 
     #[test]

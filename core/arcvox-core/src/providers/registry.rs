@@ -17,8 +17,28 @@ use crate::types::{ErrorCode, ProviderId};
 pub struct ProviderRegistry {
     client: reqwest::Client,
     secrets: Arc<dyn SecretStore>,
-    asr: Mutex<HashMap<ProviderId, (ProviderConfig, u64, Option<String>, Arc<dyn AsrProvider>)>>,
-    llm: Mutex<HashMap<ProviderId, (ProviderConfig, u64, Option<String>, Arc<dyn LlmProvider>)>>,
+    asr: Mutex<
+        HashMap<
+            ProviderId,
+            (
+                ProviderConfig,
+                (u64, u32),
+                Option<String>,
+                Arc<dyn AsrProvider>,
+            ),
+        >,
+    >,
+    llm: Mutex<
+        HashMap<
+            ProviderId,
+            (
+                ProviderConfig,
+                (u64, u32),
+                Option<String>,
+                Arc<dyn LlmProvider>,
+            ),
+        >,
+    >,
     factories: Vec<Arc<dyn ProviderFactory>>,
 }
 
@@ -120,7 +140,7 @@ impl ProviderRegistry {
         let mut cache = self.asr.lock().unwrap();
         if let Some((cached_cfg, cached_timeout, cached_key, p)) = cache.get(&cfg.id) {
             if cached_cfg == cfg
-                && *cached_timeout == general.asr_timeout_secs
+                && *cached_timeout == (general.asr_timeout_secs, general.retry_count)
                 && *cached_key == key
             {
                 return Ok(p.clone());
@@ -137,6 +157,7 @@ impl ProviderRegistry {
                     cfg.extra_headers.clone(),
                     cfg.label.clone(),
                     Duration::from_secs(general.asr_timeout_secs),
+                    general.retry_count,
                     cfg.capabilities.language_hint,
                     cfg.capabilities.hotwords,
                 ))
@@ -150,7 +171,12 @@ impl ProviderRegistry {
         };
         cache.insert(
             cfg.id.clone(),
-            (cfg.clone(), general.asr_timeout_secs, key, provider.clone()),
+            (
+                cfg.clone(),
+                (general.asr_timeout_secs, general.retry_count),
+                key,
+                provider.clone(),
+            ),
         );
         Ok(provider)
     }
@@ -164,7 +190,7 @@ impl ProviderRegistry {
         let mut cache = self.llm.lock().unwrap();
         if let Some((cached_cfg, cached_timeout, cached_key, p)) = cache.get(&cfg.id) {
             if cached_cfg == cfg
-                && *cached_timeout == general.llm_timeout_secs
+                && *cached_timeout == (general.llm_timeout_secs, general.retry_count)
                 && *cached_key == key
             {
                 return Ok(p.clone());
@@ -180,6 +206,7 @@ impl ProviderRegistry {
                     key.clone(),
                     cfg.extra_headers.clone(),
                     cfg.label.clone(),
+                    general.retry_count,
                 ))
             }
             kind @ (ProviderKind::Embedded | ProviderKind::Native) => {
@@ -191,7 +218,12 @@ impl ProviderRegistry {
         };
         cache.insert(
             cfg.id.clone(),
-            (cfg.clone(), general.llm_timeout_secs, key, provider.clone()),
+            (
+                cfg.clone(),
+                (general.llm_timeout_secs, general.retry_count),
+                key,
+                provider.clone(),
+            ),
         );
         Ok(provider)
     }

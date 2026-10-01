@@ -22,6 +22,7 @@ pub struct HttpAsrProvider {
     extra_headers: BTreeMap<String, String>,
     label: String,
     timeout: Duration,
+    retries: u32,
     send_language: bool,
     send_prompt: bool,
 }
@@ -36,6 +37,7 @@ impl HttpAsrProvider {
         extra_headers: BTreeMap<String, String>,
         label: impl Into<String>,
         timeout: Duration,
+        retries: u32,
         send_language: bool,
         send_prompt: bool,
     ) -> Self {
@@ -47,6 +49,7 @@ impl HttpAsrProvider {
             extra_headers,
             label: label.into(),
             timeout,
+            retries,
             send_language,
             send_prompt,
         }
@@ -106,7 +109,7 @@ impl AsrProvider for HttpAsrProvider {
     ) -> Result<Transcript, ProviderError> {
         let wav = encode_wav_pcm16(audio);
         let timeout = request_timeout(self.timeout, audio.duration_secs());
-        let resp = send_with_retry(&self.label, || {
+        let resp = send_with_retry(&self.label, self.retries, || {
             let mut req = self
                 .client
                 .post(self.url.clone())
@@ -171,6 +174,7 @@ mod tests {
             BTreeMap::new(),
             "Speaches",
             Duration::from_secs(5),
+            1,
             lang,
             prompt,
         )

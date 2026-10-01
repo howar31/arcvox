@@ -214,7 +214,8 @@ pub fn history_candidates(history: &HistoryStore) -> CmdResult<Vec<ClipCandidate
     Ok(history
         .list_recent(200)?
         .into_iter()
-        .filter(|u| u.audio_path.is_some())
+        // A failed dictation has a recording but no text to name it by.
+        .filter(|u| u.audio_path.is_some() && u.error.is_none())
         .take(20)
         .map(|u| ClipCandidate {
             id: u.id.0,

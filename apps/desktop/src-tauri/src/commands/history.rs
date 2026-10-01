@@ -1,7 +1,8 @@
 use std::path::Path;
 
-use arcvox_core::history::{HistoryStore, Utterance};
-use arcvox_core::types::HistoryId;
+use arcvox_core::history::{HistoryStore, Redo, Utterance};
+use arcvox_core::types::{HistoryId, ProfileId};
+use arcvox_core::{Engine, ReprocessError};
 use serde::Serialize;
 use tauri::State;
 
@@ -24,6 +25,99 @@ pub struct UtteranceDto {
     pub llm_ms: Option<u64>,
     pub audio_ms: Option<u64>,
     pub audio_bytes: Option<u64>,
+    /// Why the dictation failed; such a row has no text yet.
+    pub error: Option<String>,
+}
+
+/// The result of processing a row's recording again.
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct RedoDto {
+    /// True when the result was stored right away (the row had failed).
+    pub applied: bool,
+    pub profile_id: String,
+    pub raw_text: String,
+    pub final_text: String,
+    pub degraded: bool,
+    pub asr_ms: u64,
+    pub llm_ms: Option<u64>,
+    pub dict_fixes: u32,
+    pub snippets: u32,
+    pub llm_changed: bool,
+    pub asr_label: String,
+    pub llm_label: Option<String>,
+}
+
+impl RedoDto {
+    fn redo(&self) -> Redo {
+        Redo {
+            profile_id: ProfileId(self.profile_id.clone()),
+            raw_text: self.raw_text.clone(),
+            final_text: self.final_text.clone(),
+            degraded: self.degraded,
+            asr_ms: self.asr_ms,
+            llm_ms: self.llm_ms,
+            dict_fixes: self.dict_fixes,
+            snippets: self.snippets,
+            llm_changed: self.llm_changed,
+        }
+    }
+}
+
+/// Processes a row's recording again with the named profile, or the row's
+/// own. A row that had failed takes the result at once, or the new reason
+/// when this attempt fails too; a row that has text is left as it is and
+/// the result is returned for the user to accept.
+pub async fn reprocess(engine: &Engine, id: i64, profile_id: Option<String>) -> CmdResult<RedoDto> {
+    let id = HistoryId(id);
+    let history = engine.history();
+    let was_failed = history.get(id)?.is_some_and(|u| u.error.is_some());
+    let done = match engine.reprocess(id, profile_id.map(ProfileId)).await {
+        Ok(done) => done,
+        Err(e) => {
+            if let ReprocessError::Failed(why) = &e {
+                history.set_error(id, why)?;
+            }
+            return Err(e.into());
+        }
+    };
+    let applied = was_failed && history.apply_redo(id, &done.redo)?;
+    let r = done.redo;
+    Ok(RedoDto {
+        applied,
+        profile_id: r.profile_id.0,
+        raw_text: r.raw_text,
+        final_text: r.final_text,
+        degraded: r.degraded,
+        asr_ms: r.asr_ms,
+        llm_ms: r.llm_ms,
+        dict_fixes: r.dict_fixes,
+        snippets: r.snippets,
+        llm_changed: r.llm_changed,
+        asr_label: done.asr_label,
+        llm_label: done.llm_label,
+    })
+}
+
+#[tauri::command]
+pub async fn history_reprocess(
+    state: State<'_, AppState>,
+    id: i64,
+    profile_id: Option<String>,
+) -> CmdResult<RedoDto> {
+    let e = engine(&state)?;
+    reprocess(&e, id, profile_id).await
+}
+
+/// Replaces a row's text with a result `history_reprocess` returned.
+#[tauri::command]
+pub fn history_apply_redo(state: State<'_, AppState>, id: i64, redo: RedoDto) -> CmdResult<()> {
+    let e = engine(&state)?;
+    if !e.history().apply_redo(HistoryId(id), &redo.redo())? {
+        return Err(CmdError {
+            message: "the history row no longer exists".into(),
+        });
+    }
+    Ok(())
 }
 
 impl UtteranceDto {
@@ -49,6 +143,7 @@ impl UtteranceDto {
             llm_ms: u.llm_ms,
             audio_ms: u.audio_ms.filter(|_| audio_bytes.is_some()),
             audio_bytes,
+            error: u.error,
         }
     }
 }

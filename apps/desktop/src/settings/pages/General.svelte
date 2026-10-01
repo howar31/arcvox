@@ -120,6 +120,7 @@
       { key: "general.typing_speed", value: general.typing_chars_per_min, min: 1, max: 1000, integer: true },
       { key: "general.asr_timeout", value: general.asr_timeout_secs, min: 1, integer: true },
       { key: "general.llm_timeout", value: general.llm_timeout_secs, min: 1, integer: true },
+      { key: "general.retry_count", value: general.retry_count, min: 0, max: 5, integer: true },
       { key: "general.llm_idle_unload", value: general.llm_idle_unload_secs, min: 0, integer: true },
     ]));
     return bad;
@@ -312,6 +313,9 @@
     </Row>
     <Row label={t("general.llm_timeout")}>
       <NumberField bind:value={general.llm_timeout_secs} min={1} unit={t("common.seconds")} label={t("general.llm_timeout")} />
+    </Row>
+    <Row label={t("general.retry_count")} help={t("general.retry_count_help")}>
+      <NumberField bind:value={general.retry_count} min={0} max={5} unit={t("common.times")} label={t("general.retry_count")} />
     </Row>
     <Row label={t("general.llm_idle_unload")} help={t("general.llm_idle_unload_help")}>
       <NumberField bind:value={general.llm_idle_unload_secs} min={0} unit={t("common.seconds")} label={t("general.llm_idle_unload")} />
