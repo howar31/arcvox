@@ -6,7 +6,7 @@
   } from "../../lib/api";
   import { blankForRole, freshId, hasRole, type Role } from "../../lib/engines";
   import { t } from "../../lib/i18n";
-  import { defaultProfile, modelLabel } from "../../lib/labels";
+  import { defaultProfile, modelLabel, usedBy } from "../../lib/labels";
   import { baseName, capsForNative, capsForRuntime, describeProbe, NATIVE_DICTATION, NATIVE_FM } from "../../lib/providerForm";
   import { config } from "../../lib/store.svelte";
   import Icon from "../../lib/ui/Icon.svelte";
@@ -173,6 +173,12 @@
   async function remove() {
     if (!initial) return;
     confirmDelete = false;
+    // An engine a profile still uses cannot be deleted; say which profiles, in the interface language.
+    const users = usedBy(config.value, initial.id);
+    if (users.length > 0) {
+      toast.error(t("engines.delete_in_use", { names: users.map((u) => u.name).join(t("home.list_sep")) }));
+      return;
+    }
     busy = true;
     try {
       // The core refuses to delete an engine a profile still uses; its message explains which.

@@ -48,8 +48,8 @@ pub enum ReprocessError {
     #[error(transparent)]
     History(#[from] HistoryError),
     /// The engines could not produce a result; the text says why.
-    #[error("{0}")]
-    Failed(String),
+    #[error("{text}")]
+    Failed { code: ErrorCode, text: String },
 }
 
 /// The result of `Engine::reprocess` and the engines that produced it.
@@ -331,7 +331,10 @@ impl Engine {
             Ok::<_, ReprocessError>((row, clip))
         })
         .await
-        .map_err(|e| ReprocessError::Failed(e.to_string()))??;
+        .map_err(|e| ReprocessError::Failed {
+            code: ErrorCode::Internal,
+            text: e.to_string(),
+        })??;
 
         let config = self.inner.config.current();
         let wanted = profile.unwrap_or_else(|| row.profile_id.clone());
@@ -353,7 +356,10 @@ impl Engine {
 
         self.mark_busy();
         let _idle = RearmIdle(self);
-        let fail = |e: &crate::steps::StepError| ReprocessError::Failed(failure_text(e));
+        let fail = |e: &crate::steps::StepError| ReprocessError::Failed {
+            code: e.code,
+            text: failure_text(e),
+        };
         let pipeline =
             Pipeline::build(&config, &profile, &self.inner.registry).map_err(|e| fail(&e))?;
         let ctx =
@@ -574,6 +580,7 @@ async fn keep_failed(
         audio_path: path.clone(),
         audio_ms: (clip.sample_rate > 0)
             .then(|| clip.samples.len() as u64 * 1000 / u64::from(clip.sample_rate)),
+        code: err.code,
         error: failure_text(err),
     };
     let history = inner.history.clone();
@@ -1292,7 +1299,17 @@ pub(crate) mod tests {
         assert_eq!(r.engine.history().stats(0, 0).unwrap().totals.count, 0);
 
         let again = r.engine.reprocess(row.id, None).await;
-        assert!(matches!(again, Err(ReprocessError::Failed(_))), "{again:?}");
+        assert!(
+            matches!(
+                again,
+                Err(ReprocessError::Failed {
+                    code: ErrorCode::ProviderError,
+                    ..
+                })
+            ),
+            "{again:?}"
+        );
+        assert_eq!(row.error_code.as_deref(), Some("provider_error"));
 
         drop(down);
         mock_ok(&r, "原文", "整理後").await;

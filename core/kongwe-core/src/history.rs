@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::stats::{self, Stats};
-use crate::types::{HistoryId, ProfileId};
+use crate::types::{ErrorCode, HistoryId, ProfileId};
 
 #[derive(Debug, thiserror::Error)]
 pub enum HistoryError {
@@ -54,6 +54,9 @@ pub struct Utterance {
     /// Set when the dictation failed: why. Such a row has a recording and
     /// no text until it is processed again.
     pub error: Option<String>,
+    /// The kind of failure, as `ErrorCode::name`; None for rows stored
+    /// before the kind was kept.
+    pub error_code: Option<String>,
 }
 
 /// A dictation that failed after it was recorded.
@@ -64,6 +67,7 @@ pub struct FailedUtterance {
     pub app_name: Option<String>,
     pub audio_path: PathBuf,
     pub audio_ms: Option<u64>,
+    pub code: ErrorCode,
     pub error: String,
 }
 
@@ -159,6 +163,10 @@ pub(crate) fn upgrade(conn: &Connection, recordings_dir: &Path) -> Result<(), Hi
             "ALTER TABLE utterances ADD COLUMN snippets INTEGER NOT NULL DEFAULT 0",
         ),
         ("error", "ALTER TABLE utterances ADD COLUMN error TEXT"),
+        (
+            "error_code",
+            "ALTER TABLE utterances ADD COLUMN error_code TEXT",
+        ),
     ] {
         if !has_column(conn, name)? {
             conn.execute_batch(ddl)?;
@@ -309,8 +317,8 @@ impl HistoryStore {
     pub fn insert_failed(&self, u: FailedUtterance) -> Result<HistoryId, HistoryError> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO utterances (ts, profile_id, app_name, raw_text, refined_text, final_text, audio_path, audio_ms, error)
-             VALUES (?1, ?2, ?3, '', '', '', ?4, ?5, ?6)",
+            "INSERT INTO utterances (ts, profile_id, app_name, raw_text, refined_text, final_text, audio_path, audio_ms, error, error_code)
+             VALUES (?1, ?2, ?3, '', '', '', ?4, ?5, ?6, ?7)",
             params![
                 u.ts,
                 u.profile_id.0,
@@ -318,6 +326,7 @@ impl HistoryStore {
                 u.audio_path.to_string_lossy().to_string(),
                 u.audio_ms.map(|v| v as i64),
                 u.error,
+                u.code.name(),
             ],
         )?;
         Ok(HistoryId(conn.last_insert_rowid()))
@@ -325,10 +334,15 @@ impl HistoryStore {
 
     /// Replaces why a failed row failed, after another attempt failed too.
     /// A row that has text is left alone.
-    pub fn set_error(&self, id: HistoryId, error: &str) -> Result<(), HistoryError> {
+    pub fn set_error(
+        &self,
+        id: HistoryId,
+        code: ErrorCode,
+        error: &str,
+    ) -> Result<(), HistoryError> {
         self.conn.lock().unwrap().execute(
-            "UPDATE utterances SET error = ?1 WHERE id = ?2 AND error IS NOT NULL",
-            params![error, id.0],
+            "UPDATE utterances SET error = ?1, error_code = ?2 WHERE id = ?3 AND error IS NOT NULL",
+            params![error, code.name(), id.0],
         )?;
         Ok(())
     }
@@ -352,7 +366,7 @@ impl HistoryStore {
         };
         tx.execute(
             "UPDATE utterances SET profile_id = ?1, raw_text = ?2, refined_text = ?3, final_text = ?3, degraded = ?4,
-                asr_ms = ?5, llm_ms = ?6, dict_fixes = ?7, snippets = ?8, error = NULL WHERE id = ?9",
+                asr_ms = ?5, llm_ms = ?6, dict_fixes = ?7, snippets = ?8, error = NULL, error_code = NULL WHERE id = ?9",
             params![
                 r.profile_id.0,
                 r.raw_text,
@@ -754,7 +768,7 @@ fn remove_recording(
     Ok(removed)
 }
 
-const SELECT: &str = "SELECT id, ts, profile_id, app_name, raw_text, refined_text, final_text, degraded, audio_path, asr_ms, llm_ms, audio_ms, error FROM utterances";
+const SELECT: &str = "SELECT id, ts, profile_id, app_name, raw_text, refined_text, final_text, degraded, audio_path, asr_ms, llm_ms, audio_ms, error, error_code FROM utterances";
 
 fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Utterance> {
     Ok(Utterance {
@@ -771,6 +785,7 @@ fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Utterance> {
         llm_ms: r.get::<_, Option<i64>>(10)?.map(|v| v as u64),
         audio_ms: r.get::<_, Option<i64>>(11)?.map(|v| v as u64),
         error: r.get(12)?,
+        error_code: r.get(13)?,
     })
 }
 
@@ -952,6 +967,7 @@ mod tests {
                 app_name: Some("Notes".into()),
                 audio_path: PathBuf::from("/rec/a.wav"),
                 audio_ms: Some(4000),
+                code: ErrorCode::ProviderTimeout,
                 error: "timed out".into(),
             })
             .unwrap();
@@ -962,7 +978,13 @@ mod tests {
         );
         assert_eq!(s.stats(0, 0).unwrap().totals.count, 0);
 
-        s.set_error(id, "still down").unwrap();
+        assert_eq!(row.error_code.as_deref(), Some("provider_timeout"));
+        s.set_error(id, ErrorCode::ProviderUnreachable, "still down")
+            .unwrap();
+        assert_eq!(
+            s.get(id).unwrap().unwrap().error_code.as_deref(),
+            Some("provider_unreachable")
+        );
         assert_eq!(
             s.get(id).unwrap().unwrap().error.as_deref(),
             Some("still down")
@@ -1004,7 +1026,7 @@ mod tests {
             .unwrap());
         assert_eq!(s.get(id).unwrap().unwrap().final_text, "again");
         assert_eq!(s.stats(0, 0).unwrap().totals.count, 1);
-        s.set_error(id, "ignored").unwrap();
+        s.set_error(id, ErrorCode::Internal, "ignored").unwrap();
         assert_eq!(s.get(id).unwrap().unwrap().error, None);
         assert!(!s.apply_redo(HistoryId(999), &redo).unwrap());
     }

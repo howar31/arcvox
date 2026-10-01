@@ -2,6 +2,7 @@
 //! layer (tray + widget) and by a recorder in tests.
 
 use crate::i18n::Msg;
+use kongwe_core::types::ErrorCode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiState {
@@ -32,6 +33,10 @@ pub struct UiMessage {
     pub copyable: Option<String>,
     /// Stays until it is dismissed or the next dictation starts.
     pub sticky: bool,
+    /// The kind of failure, for a failed dictation.
+    pub code: Option<ErrorCode>,
+    /// The failed dictation was kept and can be retried from the history.
+    pub retry: bool,
 }
 
 impl UiMessage {
@@ -42,6 +47,8 @@ impl UiMessage {
             detail: None,
             copyable: None,
             sticky: false,
+            code: None,
+            retry: false,
         }
     }
     pub fn error(msg: Msg, detail: Option<String>) -> Self {
@@ -51,6 +58,8 @@ impl UiMessage {
             detail,
             copyable: None,
             sticky: false,
+            code: None,
+            retry: false,
         }
     }
     pub fn copyable(msg: Msg, text: String) -> Self {
@@ -60,16 +69,21 @@ impl UiMessage {
             detail: None,
             copyable: Some(text),
             sticky: false,
+            code: None,
+            retry: false,
         }
     }
     /// A failed dictation: the detail can be copied and the message stays.
-    pub fn failure(msg: Msg, detail: String) -> Self {
+    /// `retry` says the recording was kept for a retry from the history.
+    pub fn failure(msg: Msg, detail: String, code: ErrorCode, retry: bool) -> Self {
         Self {
             kind: MessageKind::Error,
             msg,
             detail: None,
             copyable: Some(detail),
             sticky: true,
+            code: Some(code),
+            retry,
         }
     }
 }

@@ -5,7 +5,7 @@ import { clipLength, groupByDay, rawState, seconds, totalSeconds } from "./histo
 const at = (d: Date) => Math.floor(d.getTime() / 1000);
 const u = (id: number, when: Date, raw = "raw", fin = "final", degraded = false): Utterance => ({
   id, ts: at(when), profile_id: "default", app_name: "Notes", raw_text: raw, refined_text: fin, final_text: fin,
-  degraded, has_audio: false, asr_ms: 1180, llm_ms: degraded ? null : 940, audio_ms: null, audio_bytes: null, error: null,
+  degraded, has_audio: false, asr_ms: 1180, llm_ms: degraded ? null : 940, audio_ms: null, audio_bytes: null, error: null, error_code: null,
 });
 
 describe("groupByDay", () => {

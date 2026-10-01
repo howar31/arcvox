@@ -52,6 +52,27 @@ pub enum ErrorCode {
     InferenceFailed,
 }
 
+impl ErrorCode {
+    /// The name the code has on the wire and in stored rows.
+    pub fn name(self) -> &'static str {
+        match self {
+            ErrorCode::ProviderUnreachable => "provider_unreachable",
+            ErrorCode::ProviderUnauthorized => "provider_unauthorized",
+            ErrorCode::ProviderTimeout => "provider_timeout",
+            ErrorCode::ProviderError => "provider_error",
+            ErrorCode::InvalidConfig => "invalid_config",
+            ErrorCode::NoAudio => "no_audio",
+            ErrorCode::NoSpeech => "no_speech",
+            ErrorCode::Cancelled => "cancelled",
+            ErrorCode::Internal => "internal",
+            ErrorCode::ModelMissing => "model_missing",
+            ErrorCode::ModelCorrupt => "model_corrupt",
+            ErrorCode::NativeUnavailable => "native_unavailable",
+            ErrorCode::InferenceFailed => "inference_failed",
+        }
+    }
+}
+
 /// What the client knows about the frontmost application.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AppInfo {
@@ -146,6 +167,19 @@ mod tests {
         );
         let back: StepName = serde_json::from_str("\"opencc\"").unwrap();
         assert_eq!(back, StepName::OpenCc);
+    }
+
+    #[test]
+    fn a_code_name_is_its_wire_form() {
+        for code in [
+            ErrorCode::ProviderUnreachable,
+            ErrorCode::ProviderTimeout,
+            ErrorCode::NoSpeech,
+            ErrorCode::ModelMissing,
+            ErrorCode::InferenceFailed,
+        ] {
+            assert_eq!(serde_json::to_value(code).unwrap(), code.name());
+        }
     }
 
     #[test]
