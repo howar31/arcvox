@@ -2,6 +2,7 @@
 
 pub mod apple;
 pub mod ax;
+pub mod event_tap;
 pub mod frontmost;
 pub mod modifier_monitor;
 pub mod pasteboard;
@@ -10,15 +11,28 @@ pub mod secure_input;
 pub mod terminate;
 
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 
-use crate::platform::{ClipboardSnapshot, FrontmostApp, ModifierEvent, Platform, PlatformError};
+use crate::platform::{
+    CaptureSink, ClipboardSnapshot, FrontmostApp, ModifierEvent, Platform, PlatformError,
+};
+use crate::shortcut::Shortcut;
 
-#[derive(Default)]
-pub struct MacPlatform;
+pub struct MacPlatform {
+    tap: Arc<event_tap::TapState>,
+}
+
+impl Default for MacPlatform {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl MacPlatform {
     pub fn new() -> Self {
-        Self
+        Self {
+            tap: event_tap::TapState::new(),
+        }
     }
 }
 
@@ -27,6 +41,11 @@ impl Platform for MacPlatform {
         if !ax::is_trusted(false) {
             return Err(PlatformError::NotTrusted);
         }
+        if event_tap::install(&self.tap, tx.clone()) {
+            return Ok(());
+        }
+        // Without the tap only the fn key can be watched.
+        tracing::warn!("event tap not available; watching the fn key only");
         if modifier_monitor::install(tx) {
             Ok(())
         } else {
@@ -34,6 +53,22 @@ impl Platform for MacPlatform {
                 "event monitor could not be installed".into(),
             ))
         }
+    }
+
+    fn set_shortcuts(&self, shortcuts: Vec<Shortcut>) {
+        self.tap.set_shortcuts(shortcuts);
+    }
+
+    fn set_capture_sink(&self, sink: CaptureSink) {
+        self.tap.set_sink(sink);
+    }
+
+    fn set_shortcut_capture(&self, on: bool) -> bool {
+        if !self.tap.running() {
+            return false;
+        }
+        self.tap.set_capture(on);
+        true
     }
 
     fn frontmost_app(&self) -> Option<FrontmostApp> {

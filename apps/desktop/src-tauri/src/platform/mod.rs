@@ -3,25 +3,23 @@
 //! implementation in phase 1.
 
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 use std::time::Instant;
+
+use crate::shortcut::{Key, Shortcut};
 
 #[cfg(target_os = "macos")]
 pub mod macos;
 
 #[derive(Debug, Clone, Copy)]
 pub enum ModifierEvent {
-    FnDown {
-        at: Instant,
-    },
-    FnUp {
-        at: Instant,
-    },
+    /// A recording shortcut went down.
+    TriggerDown { at: Instant },
+    /// The recording shortcut that was down is no longer held.
+    TriggerUp { at: Instant },
     /// Any non-modifier key went down system-wide. Only the virtual key
     /// code is carried; it is never logged.
-    KeyDown {
-        key_code: u16,
-        at: Instant,
-    },
+    KeyDown { key_code: u16, at: Instant },
 }
 
 impl ModifierEvent {
@@ -31,8 +29,8 @@ impl ModifierEvent {
     /// milliseconds).
     pub fn at(&self) -> Instant {
         match self {
-            ModifierEvent::FnDown { at }
-            | ModifierEvent::FnUp { at }
+            ModifierEvent::TriggerDown { at }
+            | ModifierEvent::TriggerUp { at }
             | ModifierEvent::KeyDown { at, .. } => *at,
         }
     }
@@ -65,11 +63,32 @@ pub enum PlatformError {
     Other(String),
 }
 
+/// What recording a new shortcut reports to the settings window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CaptureEvent {
+    /// The keys held now, or with `done` the combination that was pressed
+    /// and let go.
+    Keys { keys: Vec<Key>, done: bool },
+    /// Escape alone, or nothing was pressed for a while.
+    Cancelled,
+}
+
+pub type CaptureSink = Arc<dyn Fn(CaptureEvent) + Send + Sync>;
+
 pub trait Platform: Send + Sync {
-    /// Starts delivering fn key transitions and key presses. Must be called
-    /// on the main thread. Returns an error when the monitor cannot start
-    /// (for example, accessibility not granted).
+    /// Starts delivering the recording shortcut's transitions and key
+    /// presses. Must be called on the main thread. Returns an error when
+    /// the monitor cannot start (for example, accessibility not granted).
     fn start_modifier_monitor(&self, tx: Sender<ModifierEvent>) -> Result<(), PlatformError>;
+    /// The shortcuts that start a recording.
+    fn set_shortcuts(&self, _shortcuts: Vec<Shortcut>) {}
+    /// Where the keys pressed while recording a new shortcut are reported.
+    fn set_capture_sink(&self, _sink: CaptureSink) {}
+    /// Starts or ends recording a new shortcut. False when this platform
+    /// cannot record one right now.
+    fn set_shortcut_capture(&self, _on: bool) -> bool {
+        false
+    }
     fn frontmost_app(&self) -> Option<FrontmostApp>;
     fn selected_text(&self, pid: i32) -> Option<String>;
     fn clipboard_text(&self) -> Option<String>;

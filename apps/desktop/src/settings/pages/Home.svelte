@@ -13,6 +13,7 @@
   import {
     dayDate, durationParts, fillDays, groupSums, heatLevel, localDay, percent, periodStart, speed, streaks, topWithOthers, type Period,
   } from "../../lib/statsView";
+  import { firstShortcut } from "../../lib/shortcut";
   import { client, config } from "../../lib/store.svelte";
   import BarList from "../../lib/ui/BarList.svelte";
   import Columns from "../../lib/ui/Columns.svelte";
@@ -188,7 +189,7 @@
     </Empty>
   </div>
 {:else if totals && stats}
-  {#if empty}<p class="hint">{t("home.empty.intro")}</p>{/if}
+  {#if empty}<p class="hint">{t("home.empty.intro", { key: firstShortcut(client.value?.hotkey.shortcuts) })}</p>{/if}
 
   <div class="tiles">
     <StatTile parts={[{ value: num(totals.chars) }]} label={t("home.tile.chars")} detail={totals.count ? t("home.tile.chars_detail", { n: num(Math.round(totals.chars / totals.count)) }) : undefined} />

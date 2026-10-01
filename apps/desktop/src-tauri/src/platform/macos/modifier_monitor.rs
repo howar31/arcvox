@@ -41,9 +41,9 @@ impl Forwarder {
                     // gets around to handling it.
                     let at = Instant::now();
                     let _ = self.tx.send(if down {
-                        ModifierEvent::FnDown { at }
+                        ModifierEvent::TriggerDown { at }
                     } else {
-                        ModifierEvent::FnUp { at }
+                        ModifierEvent::TriggerUp { at }
                     });
                 }
             }

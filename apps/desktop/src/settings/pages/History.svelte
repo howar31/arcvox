@@ -9,7 +9,8 @@
   import { clipLength, groupByDay, rawState, seconds, totalSeconds } from "../../lib/historyView";
   import { t } from "../../lib/i18n";
   import { isImeKey } from "../../lib/ime";
-  import { config } from "../../lib/store.svelte";
+  import { firstShortcut } from "../../lib/shortcut";
+  import { client, config } from "../../lib/store.svelte";
   import Empty from "../../lib/ui/Empty.svelte";
   import Group from "../../lib/ui/Group.svelte";
   import Icon from "../../lib/ui/Icon.svelte";
@@ -319,7 +320,7 @@
     </Group>
   {:else}
     <Group>
-      <Empty text={t(filtered ? "history.no_match" : "history.empty")} />
+      <Empty text={filtered ? t("history.no_match") : t("history.empty", { key: firstShortcut(client.value?.hotkey.shortcuts) })} />
     </Group>
   {/each}
 {/if}

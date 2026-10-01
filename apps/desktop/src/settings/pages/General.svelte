@@ -14,6 +14,8 @@
   import Ring from "../../lib/ui/Ring.svelte";
   import Switch from "../../lib/ui/Switch.svelte";
   import NumberField from "../../lib/ui/NumberField.svelte";
+  import ShortcutField from "../../lib/ui/ShortcutField.svelte";
+  import { defaultShortcuts, isDefaultShortcuts, MAX_SHORTCUTS } from "../../lib/shortcut";
   import SaveBar from "../../lib/ui/SaveBar.svelte";
   import Icon from "../../lib/ui/Icon.svelte";
   import Modal from "../../lib/ui/Modal.svelte";
@@ -192,7 +194,7 @@
 
 <PageHead title={t("nav.general")} />
 
-<Group title={t("general.permissions")} help={t("general.fn_key_note")}>
+<Group title={t("general.permissions")} help={draft?.hotkey.shortcuts.some((s) => s.includes("Fn")) ? t("general.fn_key_note") : undefined}>
   <Row label={t("general.accessibility")} help={t("general.accessibility_help")}>
     {#snippet leading()}<Ring tone={accessibility === null ? "off" : accessibility ? "ok" : "live"} />{/snippet}
     {#if accessibility === false}
@@ -210,6 +212,14 @@
 
 {#if draft}
   <Group title={t("general.hotkey")}>
+    <div class="shortcuts">
+      <div class="shortcuts-head">
+        <span class="name">{t("general.shortcuts")}</span>
+        <button type="button" class="btn quiet" disabled={isDefaultShortcuts(draft.hotkey.shortcuts)} onclick={() => (draft!.hotkey.shortcuts = defaultShortcuts())}>{t("general.shortcut_reset")}</button>
+      </div>
+      <small class="sub">{t("general.shortcuts_help", { max: String(MAX_SHORTCUTS) })}</small>
+      <ShortcutField bind:value={draft.hotkey.shortcuts} />
+    </div>
     <Row label={t("general.hold_threshold")}>
       <NumberField bind:value={draft.hotkey.hold_threshold_ms} min={100} max={1000} unit={t("common.ms")} label={t("general.hold_threshold")} />
     </Row>
@@ -343,6 +353,11 @@
 
 <style>
   .value { color: var(--ink-2); }
+  /* The shortcut row: its label on top, the shortcuts below over the full width. */
+  .shortcuts { padding: var(--row-y) var(--row-x) 6px; border-bottom: 1px solid var(--line); }
+  .shortcuts-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .shortcuts-head .btn { margin: -8px -8px -8px 0; }
+  .shortcuts .sub { display: block; margin-top: 2px; }
   .ring-space { width: 14px; flex: none; }
   /* The selects of the value column share one width. */
   .wide { width: 220px; }
