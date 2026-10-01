@@ -270,21 +270,21 @@
 
 <style>
   .form { display: flex; flex-direction: column; gap: 14px; margin-top: 8px; color: var(--ink); }
-  .fields { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 10px 12px; align-items: center; }
+  .fields { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 12px 14px; align-items: center; }
   .fields > label, .lbl { color: var(--ink-2); }
   .fields input:not([type="checkbox"]), .fields select { width: 100%; }
-  .note { grid-column: 2; margin: -4px 0 0; font-size: 12px; color: var(--ink-2); }
-  .status { display: flex; align-items: center; gap: 8px; min-height: 26px; min-width: 0; }
+  .note { grid-column: 2; margin: -4px 0 0; font-size: var(--text-sm); color: var(--ink-2); }
+  .status { display: flex; align-items: center; gap: 8px; min-height: var(--control); min-width: 0; }
   .grow { flex: 1; min-width: 0; }
   details { border-top: 1px solid var(--line); padding-top: 10px; }
   summary { color: var(--ink-2); cursor: default; width: max-content; }
   .adv { margin-top: 10px; align-items: start; }
-  .adv > .lbl, .adv > label { line-height: 26px; }
+  .adv > .lbl, .adv > label { line-height: var(--control); }
   .caps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; }
-  .caps label { display: flex; align-items: center; gap: 6px; line-height: 26px; }
-  .probe { margin: 0; font-size: 12px; color: var(--ink-2); overflow-wrap: anywhere; }
+  .caps label { display: flex; align-items: center; gap: 8px; line-height: 30px; }
+  .probe { margin: 0; font-size: var(--text-sm); color: var(--ink-2); overflow-wrap: anywhere; }
   .probe.ok { color: var(--ok); }
   .probe.bad { color: var(--live); }
-  .note-bad { margin: -4px 0 0; font-size: 12px; color: var(--live); }
-  .delete { margin-right: auto; margin-left: -6px; }
+  .note-bad { margin: -4px 0 0; font-size: var(--text-sm); color: var(--live); }
+  .delete { margin-right: auto; margin-left: -8px; }
 </style>

@@ -21,6 +21,6 @@
 {/if}
 
 <style>
-  .savebar { position: sticky; bottom: 0; z-index: 5; margin: 24px -32px -80px; padding: 12px 32px; display: flex; align-items: center; gap: 10px; background: color-mix(in srgb, var(--page) 88%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-top: 1px solid var(--line); }
+  .savebar { position: sticky; bottom: 0; z-index: 5; margin: 24px calc(-1 * var(--page-x)) -80px; padding: 12px var(--page-x); display: flex; align-items: center; gap: 10px; background: color-mix(in srgb, var(--page) 88%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-top: 1px solid var(--line); }
   .message { flex: 1; min-width: 0; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>

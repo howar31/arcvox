@@ -359,29 +359,29 @@
 </Modal>
 
 <style>
-  .lead { margin: 14px 2px 0; color: var(--ink-2); }
-  .field { width: 220px; flex: none; }
+  .lead { margin: 16px 4px 0; color: var(--ink-2); }
+  .field { width: 240px; flex: none; }
   /* The stored engine no longer exists; the select shows its id. */
   select.unknown { border-color: var(--warn); color: var(--warn); }
   select.unknown option { color: var(--ink); }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; }
-  .title { font: 600 12px/1 var(--font); color: var(--ink-2); margin: 22px 2px 8px; }
+  .title { font: 600 var(--text-sm)/1 var(--font); color: var(--ink-2); margin: 26px 4px 10px; }
   textarea { display: block; }
   .pair-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
   .arrow { flex: none; color: var(--ink-3); }
   /* Keeps the arrows of the example rows and the add row in one column. */
-  .end { width: 76px; flex: none; display: flex; justify-content: flex-end; }
-  .end .icon-btn { margin-right: -6px; }
-  .icon-btn { width: 26px; padding: 0; color: var(--ink-2); }
+  .end { width: 88px; flex: none; display: flex; justify-content: flex-end; }
+  .end .icon-btn { margin-right: -8px; }
+  .icon-btn { width: var(--control); padding: 0; color: var(--ink-2); }
   .icon-btn:hover { color: var(--ink); }
-  .idx { width: 16px; flex: none; color: var(--ink-2); font-size: 12px; text-align: right; }
+  .idx { width: 16px; flex: none; color: var(--ink-2); font-size: var(--text-sm); text-align: right; }
   .step { flex: 1; min-width: 0; }
-  .tools { display: flex; gap: 2px; margin-right: -6px; }
+  .tools { display: flex; gap: 2px; margin-right: -8px; }
   /* A native menu: the select is invisible and covers the quiet button. */
-  .menu { position: relative; display: inline-flex; margin-left: -6px; }
+  .menu { position: relative; display: inline-flex; margin-left: -8px; }
   .menu select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; padding: 0; border: 0; cursor: default; }
   .menu:hover .btn { background: var(--accent-soft); }
   .menu:has(select:focus-visible) .btn { outline: 2px solid var(--accent); outline-offset: 1px; }
-  .delete { margin-right: auto; margin-left: -6px; }
-  .problem { flex: 1; min-width: 0; align-self: center; color: var(--live); font-size: 12px; }
+  .delete { margin-right: auto; margin-left: -8px; }
+  .problem { flex: 1; min-width: 0; align-self: center; color: var(--live); font-size: var(--text-sm); }
 </style>

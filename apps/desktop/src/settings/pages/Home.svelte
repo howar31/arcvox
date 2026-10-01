@@ -263,24 +263,24 @@
 {/if}
 
 <style>
-  .attention { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; padding: 10px 14px; border-radius: 10px; background: color-mix(in srgb, var(--live) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--live) 35%, transparent); }
+  .attention { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; padding: 12px var(--row-x); border-radius: var(--radius-group); background: color-mix(in srgb, var(--live) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--live) 35%, transparent); }
   .grow { flex: 1; min-width: 0; }
 
-  .bar { display: flex; align-items: center; gap: 10px; min-height: 20px; margin: 22px 2px 8px; }
-  .bar h2 { flex: 1; min-width: 0; margin: 0; font: 600 12px/1 var(--font); color: var(--ink-2); }
-  .bar .link { height: 20px; font-size: 12px; margin-right: -6px; }
+  .bar { display: flex; align-items: center; gap: 10px; min-height: 22px; margin: 26px 4px 10px; }
+  .bar h2 { flex: 1; min-width: 0; margin: 0; font: 600 var(--text-sm)/1 var(--font); color: var(--ink-2); }
+  .bar .link { height: 22px; font-size: var(--text-sm); margin-right: -8px; }
 
   /* The processing flow: one strip, one stage per step. The window's minimum width keeps the four stages side by side. */
-  .path { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
-  .stage { padding: 14px 14px 13px; position: relative; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; }
+  .path { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-group); overflow: hidden; }
+  .stage { padding: 16px var(--row-x) 14px; position: relative; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; }
   .stage + .stage { border-left: 1px solid var(--line); }
-  .stage + .stage::before { content: ""; position: absolute; left: -5px; top: 21px; width: 8px; height: 8px; border-top: 1.5px solid var(--ink-3); border-right: 1.5px solid var(--ink-3); transform: rotate(45deg); background: var(--surface); }
+  .stage + .stage::before { content: ""; position: absolute; left: -5px; top: 24px; width: 8px; height: 8px; border-top: 1.5px solid var(--ink-3); border-right: 1.5px solid var(--ink-3); transform: rotate(45deg); background: var(--surface); }
   .stage.engine { background: linear-gradient(var(--accent-soft), var(--accent-soft)); }
-  .role { font-size: 11px; color: var(--ink-2); }
-  .what { font: 600 14px/1.3 var(--font-round); margin: 8px 0 3px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .meta { font-size: 12px; color: var(--ink-2); max-width: 100%; flex: 1; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .role { font-size: var(--text-xs); color: var(--ink-2); }
+  .what { font: 600 var(--text-lg)/1.3 var(--font-round); margin: 10px 0 4px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .meta { font-size: var(--text-sm); color: var(--ink-2); max-width: 100%; flex: 1; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .meta.warn, .unknown { color: var(--warn); }
-  .act { margin: 8px 0 0 -6px; }
+  .act { margin: 10px 0 0 -8px; }
 
   /* A native menu: the select is invisible and covers the quiet button. */
   .menu { position: relative; display: inline-flex; }
@@ -296,12 +296,12 @@
   .who { display: flex; flex-direction: column; flex: 1; min-width: 0; }
   .line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* The two engine names share the space; each truncates on its own. */
-  .pair { display: flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0; max-width: 52%; color: var(--ink-2); }
+  .pair { display: flex; align-items: center; justify-content: flex-end; gap: 5px; flex: 0 1 auto; min-width: 0; max-width: 52%; color: var(--ink-2); }
   .eng { display: flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0; max-width: 50%; }
   .arrow { flex: none; color: var(--ink-3); }
   .final { line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
-  .icon-btn { width: 26px; padding: 0; margin-right: -6px; align-self: flex-start; color: var(--ink-2); }
+  .icon-btn { width: var(--control); padding: 0; margin-right: -8px; align-self: flex-start; color: var(--ink-2); }
   .icon-btn:hover { color: var(--ink); }
-  .time { width: 44px; flex: none; align-self: flex-start; padding-top: 1px; color: var(--ink-2); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .time { width: 50px; flex: none; align-self: flex-start; padding-top: 2px; color: var(--ink-2); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
   .titled :global(.section.untitled) { margin-top: 0; }
 </style>

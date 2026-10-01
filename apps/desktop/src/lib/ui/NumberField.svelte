@@ -22,5 +22,5 @@
 
 <style>
   .field { display: inline-flex; align-items: center; gap: 8px; flex: none; }
-  .unit { color: var(--ink-2); font-size: 12px; width: 32px; white-space: nowrap; }
+  .unit { color: var(--ink-2); font-size: var(--text-sm); width: 36px; white-space: nowrap; }
 </style>

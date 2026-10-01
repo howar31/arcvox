@@ -91,5 +91,5 @@
 
 <style>
   /* Fills the window below the heading, and keeps a usable height in a short window. */
-  .editor { display: block; height: max(220px, calc(100vh - 232px)); margin-top: 16px; }
+  .editor { display: block; height: max(220px, calc(100vh - 262px)); margin-top: 16px; }
 </style>

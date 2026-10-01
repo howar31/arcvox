@@ -33,7 +33,7 @@
 </div>
 
 <style>
-  .seg { display: inline-flex; padding: 2px; border-radius: 8px; background: var(--sunken); border: 1px solid var(--line); }
-  button { height: 24px; padding: 0 14px; border: 0; border-radius: 6px; background: none; color: var(--ink-2); white-space: nowrap; cursor: default; }
+  .seg { display: inline-flex; padding: 3px; border-radius: 10px; background: var(--sunken); border: 1px solid var(--line); }
+  button { height: 28px; padding: 0 16px; border: 0; border-radius: 7px; font-size: var(--text-control); background: none; color: var(--ink-2); white-space: nowrap; cursor: default; }
   button.on { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: var(--lift); }
 </style>

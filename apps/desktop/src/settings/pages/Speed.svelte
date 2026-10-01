@@ -247,22 +247,22 @@
 {/if}
 
 <style>
-  .read { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
-  blockquote { margin: 0; padding: 10px 14px; border-left: 3px solid var(--accent); border-radius: 6px; background: var(--accent-soft); font-size: 14px; line-height: 1.6; }
-  .elapsed { min-width: 64px; text-align: right; }
-  .pick { width: 180px; flex: none; }
+  .read { display: flex; flex-direction: column; gap: 8px; padding: 14px var(--row-x); border-bottom: 1px solid var(--line); }
+  blockquote { margin: 0; padding: 12px 16px; border-left: 3px solid var(--accent); border-radius: var(--radius); background: var(--accent-soft); font-size: var(--text-lg); line-height: 1.6; }
+  .elapsed { min-width: 72px; text-align: right; }
+  .pick { width: 200px; flex: none; }
   .sublist + .sublist { border-top: 1px solid var(--line); }
-  .subhead { padding: 10px 14px 0; font-size: 12px; font-weight: 600; color: var(--ink-2); }
+  .subhead { padding: 12px var(--row-x) 0; font-size: var(--text-sm); font-weight: 600; color: var(--ink-2); }
   .check { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; }
   .check span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .run { display: flex; align-items: center; gap: 10px; margin-top: 16px; }
+  .run { display: flex; align-items: center; gap: 10px; margin-top: 18px; }
   .caution { flex: 1; min-width: 0; }
-  .cols { display: flex; gap: 12px; padding: 10px 14px 2px; font-weight: 600; }
+  .cols { display: flex; gap: 14px; padding: 12px var(--row-x) 2px; font-weight: 600; }
   .grow { flex: 1; }
-  .val { width: 84px; flex: none; text-align: right; }
+  .val { width: 92px; flex: none; text-align: right; }
   .result { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .title { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; min-width: 0; }
   .title .name { min-width: 0; overflow-wrap: anywhere; }
-  .out { color: var(--ink-2); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .out { color: var(--ink-2); font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .out.error { color: var(--live); }
 </style>
