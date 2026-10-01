@@ -27,43 +27,52 @@ describe("widget label", () => {
 
 describe("panel", () => {
   it("is absent for a state alone and for a notice", () => {
-    expect(panelView("recording", null, "", false)).toBeNull();
-    expect(panelView("processing", null, "", false)).toBeNull();
-    expect(panelView("idle", message({ kind: "info", key: "widget.cancelled" }), "", false)).toBeNull();
-    expect(panelView("idle", message({ key: "widget.no_speech", detail: "no speech" }), "", false)).toBeNull();
+    expect(panelView("recording", null, "", null, false)).toBeNull();
+    expect(panelView("processing", null, "", null, false)).toBeNull();
+    expect(panelView("idle", message({ kind: "info", key: "widget.cancelled" }), "", null, false)).toBeNull();
+    expect(panelView("idle", message({ key: "widget.no_speech", detail: "no speech" }), "", null, false)).toBeNull();
   });
   it("shows the recognised text while processing and the hint when a hands-free dictation begins", () => {
-    expect(panelView("processing", null, "原文", false)).toEqual({ caption: "辨識原文", text: "原文", actions: [], close: false });
-    expect(panelView("inserting", null, "原文", false)).toBeNull();
-    expect(panelView("locked", null, "", true)?.text).toBe(t("widget.locked"));
-    expect(panelView("locked", null, "", false)).toBeNull();
+    expect(panelView("processing", null, "原文", null, false)).toEqual({ caption: "辨識原文", text: "原文", actions: [], close: false });
+    expect(panelView("inserting", null, "原文", null, false)).toBeNull();
+    expect(panelView("locked", null, "", null, true)?.text).toBe(t("widget.locked"));
+    expect(panelView("locked", null, "", null, false)).toBeNull();
+  });
+  it("shows the final text taking the place of the recognised text, until the widget goes", () => {
+    const view = { caption: "最終文字", rewrite: { from: "原文", to: "整理後" }, actions: [], close: false };
+    expect(panelView("processing", null, "原文", "整理後", false)).toEqual(view);
+    expect(panelView("inserting", null, "原文", "整理後", false)).toEqual(view);
+    expect(panelView("idle", null, "原文", "整理後", false)).toEqual(view);
+    expect(panelView("idle", null, "", "整理後", false)).toBeNull();
+    // A message takes the panel.
+    expect(panelView("idle", message({ key: "widget.degraded", detail: "x" }), "原文", "原文", false)?.rewrite).toBeUndefined();
   });
   it("explains a failure and offers the retry when the recording was kept", () => {
-    const failed = panelView("idle", message({ copyable: "Speaches: timed out", code: "provider_timeout" }), "", false);
+    const failed = panelView("idle", message({ copyable: "Speaches: timed out", code: "provider_timeout" }), "", null, false);
     expect(failed).toEqual({ title: "語音辨識失敗，未插入文字", body: "引擎沒有在時限內回應。", detail: "Speaches: timed out", actions: ["copy_detail"], close: true });
-    const kept = panelView("idle", message({ copyable: "x", code: "provider_timeout", retry: true }), "", false);
+    const kept = panelView("idle", message({ copyable: "x", code: "provider_timeout", retry: true }), "", null, false);
     expect(kept?.body).toBe("引擎沒有在時限內回應。\n錄音已保留，可到歷史紀錄重試。");
     expect(kept?.actions).toEqual(["copy_detail", "open_history"]);
   });
   it("sends model and engine problems to the engines page without repeating the title", () => {
-    const missing = panelView("idle", message({ key: "widget.model_missing", copyable: "x", code: "model_missing" }), "", false);
+    const missing = panelView("idle", message({ key: "widget.model_missing", copyable: "x", code: "model_missing" }), "", null, false);
     expect(missing?.body).toBe("請到設定的「引擎與模型」下載。");
     expect(missing?.actions).toEqual(["copy_detail", "open_engines"]);
-    const engine = panelView("idle", message({ key: "widget.engine_unavailable" }), "", false);
+    const engine = panelView("idle", message({ key: "widget.engine_unavailable" }), "", null, false);
     expect(engine).toEqual({ title: "引擎尚未就緒", body: undefined, detail: undefined, actions: ["open_engines"], close: false });
-    const apple = panelView("idle", message({ key: "widget.native_unavailable", copyable: "x", code: "native_unavailable" }), "", false);
+    const apple = panelView("idle", message({ key: "widget.native_unavailable", copyable: "x", code: "native_unavailable" }), "", null, false);
     expect(apple?.body).toBeUndefined();
   });
   it("shows the system's words for a microphone error", () => {
-    const mic = panelView("idle", message({ key: "widget.microphone_unavailable", detail: "device gone" }), "", false);
+    const mic = panelView("idle", message({ key: "widget.microphone_unavailable", detail: "device gone" }), "", null, false);
     expect(mic).toEqual({ title: "無法使用麥克風", body: t("panel.microphone"), detail: "device gone", actions: [], close: false });
   });
   it("offers the text that was not inserted", () => {
-    const shown = panelView("idle", message({ kind: "info", key: "widget.app_changed", copyable: "聽寫結果" }), "", false);
+    const shown = panelView("idle", message({ kind: "info", key: "widget.app_changed", copyable: "聽寫結果" }), "", null, false);
     expect(shown).toEqual({ title: t("widget.app_changed"), result: "聽寫結果", actions: ["copy"], close: true });
   });
   it("shows the reason of a failed rewrite", () => {
-    const degraded = panelView("idle", message({ key: "widget.degraded", detail: "Ollama: timed out" }), "", false);
+    const degraded = panelView("idle", message({ key: "widget.degraded", detail: "Ollama: timed out" }), "", null, false);
     expect(degraded).toEqual({ title: t("widget.degraded"), detail: "Ollama: timed out", actions: [], close: false });
   });
 });

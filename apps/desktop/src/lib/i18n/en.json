@@ -577,10 +577,11 @@
   "panel.copy_detail": "Copy details",
   "panel.open_settings": "Open Settings",
   "panel.open_history": "Open History",
-  "general.show_transcript": "Show the recognised text while processing",
-  "general.show_transcript_help": "While the text is being rewritten, what was recognised appears in a panel next to the floating widget.",
+  "general.show_transcript": "Show the dictated text while processing",
+  "general.show_transcript_help": "The recognised text appears in a panel next to the floating widget; when the processing is over, the panel shows what it changed.",
   "general.widget_size": "Size",
   "general.widget_size_small": "Small",
   "general.widget_size_medium": "Medium",
-  "general.widget_size_large": "Large"
+  "general.widget_size_large": "Large",
+  "panel.final": "Final text"
 }

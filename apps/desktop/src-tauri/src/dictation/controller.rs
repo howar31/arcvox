@@ -508,6 +508,9 @@ impl Controller {
         }
         match event {
             Event::Refined { text, .. } => {
+                if self.settings.show_transcript {
+                    self.deps.ui.refined(text.clone());
+                }
                 if let State::Processing { refined, .. } = &mut self.state {
                     *refined = Some(text);
                 }
@@ -1019,6 +1022,8 @@ mod tests {
         hold_and_speak(&r, 1.0).await;
         wait_state(&r, UiState::Idle, "idle").await;
         assert!(r.ui.transcripts.lock().unwrap().is_empty());
+        let log = r.ui.log.lock().unwrap().clone();
+        assert!(!log.iter().any(|l| l.starts_with("refined:")));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1037,6 +1042,9 @@ mod tests {
             .unwrap();
         let inserting = log.iter().position(|l| l == "state:inserting").unwrap();
         assert!(t < inserting);
+        // The final text follows, still before the insertion.
+        let refined = log.iter().position(|l| l.starts_with("refined:")).unwrap();
+        assert!(t < refined && refined < inserting);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

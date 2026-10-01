@@ -5,16 +5,34 @@
   import { panelView, type PanelAction } from "../lib/widgetView";
   import { WidgetFeed } from "../lib/widgetEvents.svelte";
   import Icon from "../lib/ui/Icon.svelte";
+  import Rewrite from "./Rewrite.svelte";
 
   const feed = new WidgetFeed();
   let box = $state<HTMLElement>();
+  /** The final text laid out on its own, to know the room it needs. */
+  let ghost = $state<HTMLElement>();
+  /** The size the panel keeps while one text turns into the other. */
+  let held = $state<{ w: number; h: number } | null>(null);
+  const still = window.matchMedia("(prefers-reduced-motion: reduce)");
 
   onMount(() => feed.listen());
 
   const view = $derived.by(() => {
     void feed.language;
     void feed.scale;
-    return panelView(feed.state, feed.message, feed.transcript, feed.hint);
+    return panelView(feed.state, feed.message, feed.transcript, feed.refined, feed.hint);
+  });
+  // One value for one pair of texts, whatever else changes meanwhile.
+  const pair = $derived(view?.rewrite ? view.rewrite.from + "\u0000" + view.rewrite.to : null);
+
+  // While the text changes the panel keeps room for both the old and the new text, so the window is resized once before and once after.
+  $effect(() => {
+    if (!pair || !box || !ghost || still.matches) {
+      held = null;
+      return;
+    }
+    const before = box.getBoundingClientRect(), after = ghost.getBoundingClientRect();
+    held = { w: Math.max(before.width, after.width), h: Math.max(before.height, after.height) };
   });
 
   // The window takes the size of the content; without content it is hidden.
@@ -23,7 +41,7 @@
       panelFit(null, null).catch(() => {});
       return;
     }
-    const r = box.getBoundingClientRect();
+    const r = held ? { width: held.w, height: held.h } : box.getBoundingClientRect();
     panelFit(r.width, r.height).catch(() => {});
   });
 
@@ -45,7 +63,7 @@
 </script>
 
 {#if view}
-  <div class="panel" bind:this={box}>
+  <div class="panel" bind:this={box} style:width={held ? held.w + "px" : null} style:height={held ? held.h + "px" : null}>
     {#if view.caption}<div class="caption">{view.caption}</div>{/if}
     {#if view.title}
       <div class="head">
@@ -54,6 +72,9 @@
       </div>
     {/if}
     {#if view.text}<div class="text">{view.text}</div>{/if}
+    {#if view.rewrite}
+      <div class="text">{#key pair}<Rewrite from={view.rewrite.from} to={view.rewrite.to} animate={!still.matches} ondone={() => { held = null; }} />{/key}</div>
+    {/if}
     {#if view.body}<div class="body">{view.body}</div>{/if}
     {#if view.result}<div class="quote result">{view.result}</div>{/if}
     {#if view.detail}<div class="quote">{view.detail}</div>{/if}
@@ -63,11 +84,15 @@
       </div>
     {/if}
   </div>
+  {#if view.rewrite}
+    <div class="panel ghost" bind:this={ghost} aria-hidden="true"><div class="caption">{view.caption}</div><div class="text">{view.rewrite.to}</div></div>
+  {/if}
 {/if}
 
 <style>
   /* Sized by its content, whatever the size of the window at that moment. */
   .panel { position: fixed; left: 0; top: 0; width: max-content; min-width: calc(200 * var(--u)); max-width: calc(372 * var(--u)); border-radius: calc(20 * var(--u)); padding: calc(18 * var(--u)) calc(20 * var(--u)); background: var(--pill-bg); color: var(--pill-ink); box-shadow: inset 0 0 0 1px var(--pill-line); font-size: calc(13 * var(--u)); line-height: 1.6; user-select: none; -webkit-user-select: none; cursor: default; }
+  .ghost { visibility: hidden; pointer-events: none; }
   .caption { font-size: calc(11 * var(--u)); color: var(--pill-ink-2); margin-bottom: calc(6 * var(--u)); }
   .head { display: flex; align-items: flex-start; gap: calc(12 * var(--u)); }
   .title { flex: 1; font-weight: 600; }
