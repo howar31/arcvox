@@ -384,7 +384,7 @@
   "history.deleted_profile": "（已刪除）",
   "history.not_rewritten": "未改寫",
   "history.asr_secs": "辨識 {secs} 秒",
-  "history.llm_secs": "改寫 {secs} 秒",
+  "history.total_secs": "共 {total} 秒（辨識 {asr}、改寫 {llm}）",
   "history.delete": "刪除",
   "history.clear_body": "所有紀錄與錄音都會從這台電腦刪除，無法復原。",
   "history.cleared": "已清除歷史紀錄",

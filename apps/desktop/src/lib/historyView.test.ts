@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Utterance } from "./api";
-import { groupByDay, seconds, showsRaw } from "./historyView";
+import { groupByDay, seconds, showsRaw, totalSeconds } from "./historyView";
 
 const at = (d: Date) => Math.floor(d.getTime() / 1000);
 const u = (id: number, when: Date, raw = "raw", fin = "final", degraded = false): Utterance => ({
@@ -55,5 +55,17 @@ describe("showsRaw", () => {
   });
   it("hides an empty raw transcript", () => {
     expect(showsRaw(u(1, new Date(), "  ", "typed"))).toBe(false);
+  });
+});
+
+describe("totalSeconds", () => {
+  it("adds recognition and rewriting before rounding", () => {
+    expect(totalSeconds(1180, 940)).toBe("2.1");
+    expect(totalSeconds(1140, 940)).toBe("2.1");
+    expect(totalSeconds(60, 60)).toBe("0.1");
+  });
+
+  it("is null when the rewrite did not run: the recognition time is the total", () => {
+    expect(totalSeconds(1180, null)).toBeNull();
   });
 });
