@@ -15,6 +15,7 @@ pub mod protocol;
 pub mod providers;
 pub mod secrets;
 pub mod session;
+pub mod stats;
 pub mod steps;
 pub mod types;
 

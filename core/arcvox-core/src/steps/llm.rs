@@ -99,6 +99,7 @@ impl Step for LlmStep {
         Ok(StepOutput {
             text,
             language: None,
+            ..Default::default()
         })
     }
 }

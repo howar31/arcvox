@@ -55,6 +55,7 @@ impl Step for OpenCcStep {
         Ok(StepOutput {
             text: self.convert(&input.text),
             language: None,
+            ..Default::default()
         })
     }
 }

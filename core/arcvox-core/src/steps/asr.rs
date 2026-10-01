@@ -58,6 +58,7 @@ impl Step for AsrStep {
         Ok(StepOutput {
             text: t.text,
             language: t.language,
+            ..Default::default()
         })
     }
 }

@@ -53,24 +53,49 @@ pub fn llm_terms(entries: &[DictionaryEntry]) -> Vec<String> {
         .collect()
 }
 
+/// How many replacements a pass made: term corrections and snippet insertions.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AliasCounts {
+    pub fixes: u32,
+    pub snippets: u32,
+}
+
 /// Replaces every alias with its term, matching against the original text
 /// in a single pass so replacement output is never re-scanned. At each
 /// position the longest matching alias wins, so `台北市` wins over `台北`
 /// when both are aliases.
 pub fn apply_aliases(entries: &[DictionaryEntry], text: &str) -> String {
-    let mut pairs: Vec<(&str, &str)> = entries
+    apply_aliases_counted(entries, text).0
+}
+
+/// `apply_aliases` plus the number of replacements, split by entry kind.
+pub fn apply_aliases_counted(entries: &[DictionaryEntry], text: &str) -> (String, AliasCounts) {
+    let mut pairs: Vec<(&str, &str, bool)> = entries
         .iter()
-        .flat_map(|e| e.aliases.iter().map(move |a| (a.as_str(), e.term.as_str())))
-        .filter(|(alias, _)| !alias.is_empty())
+        .flat_map(|e| {
+            let snippet = is_snippet(e);
+            e.aliases
+                .iter()
+                .map(move |a| (a.as_str(), e.term.as_str(), snippet))
+        })
+        .filter(|(alias, _, _)| !alias.is_empty())
         .collect();
-    pairs.sort_by_key(|(alias, _)| std::cmp::Reverse(alias.len()));
+    pairs.sort_by_key(|(alias, _, _)| std::cmp::Reverse(alias.len()));
 
     let mut out = String::new();
+    let mut counts = AliasCounts::default();
     let mut i = 0;
     while i < text.len() {
         let rest = &text[i..];
-        if let Some(&(alias, term)) = pairs.iter().find(|(alias, _)| rest.starts_with(alias)) {
+        if let Some(&(alias, term, snippet)) =
+            pairs.iter().find(|(alias, _, _)| rest.starts_with(alias))
+        {
             out.push_str(term);
+            if snippet {
+                counts.snippets += 1;
+            } else {
+                counts.fixes += 1;
+            }
             i += alias.len();
         } else {
             let ch = rest
@@ -81,7 +106,7 @@ pub fn apply_aliases(entries: &[DictionaryEntry], text: &str) -> String {
             i += ch.len_utf8();
         }
     }
-    out
+    (out, counts)
 }
 
 #[cfg(test)]
@@ -172,5 +197,31 @@ mod tests {
         let d = vec![entry("XY", &["ABC"], true), entry("Z", &["XY"], true)];
         assert_eq!(apply_aliases(&d, "ABC"), "XY");
         assert_eq!(apply_aliases(&d, "XY ABC"), "Z XY");
+    }
+
+    #[test]
+    fn counted_replacement_separates_terms_from_snippets() {
+        let d = vec![
+            entry("Arcvox", &["雅客", "語音"], false),
+            entry("Best regards,\nThe team", &["結尾敬語"], false),
+        ];
+        let (text, counts) = apply_aliases_counted(&d, "雅客 和 語音 結尾敬語");
+        assert_eq!(text, "Arcvox 和 Arcvox Best regards,\nThe team");
+        assert_eq!(
+            counts,
+            AliasCounts {
+                fixes: 2,
+                snippets: 1
+            }
+        );
+    }
+
+    #[test]
+    fn counted_replacement_without_a_match_counts_nothing() {
+        let d = vec![entry("Arcvox", &["雅客"], false)];
+        assert_eq!(
+            apply_aliases_counted(&d, "hello"),
+            ("hello".to_string(), AliasCounts::default())
+        );
     }
 }
