@@ -49,9 +49,13 @@
     return () => window.removeEventListener("focus", onFocus);
   });
 
-  const profile = $derived(defaultProfile(config.value));
+  // The profile whose flow is shown: the default one until another is picked.
+  let shownId = $state<string | null>(null);
+  // The default profile first, the others in their stored order.
+  const profiles = $derived([...(config.value?.profiles ?? [])].sort((a, b) => Number(b.is_default) - Number(a.is_default)));
+  const profile = $derived(profiles.find((p) => p.id === shownId) ?? defaultProfile(config.value));
   const providers = $derived(config.value?.providers ?? []);
-  const others = $derived((config.value?.profiles ?? []).filter((p) => !p.is_default));
+  const others = $derived(profiles.filter((p) => !p.is_default));
   const choices = $derived({
     asr: providers.filter((p) => p.capabilities.transcribe),
     llm: providers.filter((p) => p.capabilities.chat),
@@ -92,7 +96,7 @@
       await upsertProfile($state.snapshot(next) as Profile);
       toast.ok(t("common.saved"));
     } catch (e) {
-      const current = defaultProfile(config.value);
+      const current = config.value?.profiles.find((p) => p.id === profile.id);
       select.value = (role === "asr" ? current?.asr_provider : current?.llm_provider) ?? "";
       toast.error(errorMessage(e));
     }
@@ -108,12 +112,19 @@
     }
   }
 
-  function appsLine(p: Profile): string {
+  /** The first applications of a profile as one phrase; null when it has none. */
+  function appsList(p: Profile): string | null {
     const names = [...p.matcher.app_ids.map(appName), ...p.matcher.url_patterns];
-    if (names.length === 0) return t("home.no_apps");
+    if (names.length === 0) return null;
     const { shown, more } = appsSummary(names);
     const list = shown.join(t("home.list_sep"));
     return more > 0 ? t("home.apps_more", { names: list, count: String(more) }) : list;
+  }
+  const appsLine = (p: Profile): string => appsList(p) ?? t("home.no_apps");
+  function flowHelp(p: Profile): string {
+    if (p.is_default) return t("home.flow_help", { name: p.name });
+    const apps = appsList(p);
+    return apps === null ? t("home.flow_help_unused") : t("home.flow_help_other", { apps });
   }
 
   async function copy(text: string) {
@@ -147,8 +158,17 @@
   {@const asr = engineLine(profile.asr_provider)}
   {@const llm = engineLine(profile.llm_provider)}
   <div class="bar">
-    <h2>{t("home.flow")}</h2>
-    <Tag tone="accent"><Ring tone="accent" size="sm" />{t("home.profile_tag", { name: profile.name })}</Tag>
+    <h2>{profile.is_default ? t("home.flow_default") : t("home.flow_of", { name: profile.name })}</h2>
+    {#if profiles.length > 1}
+      <span class="menu pick">
+        <Tag tone="accent"><Ring tone="accent" size="sm" /><span class="picked">{profile.name}</span><Icon name="chevron-down" size={12} /></Tag>
+        <select value={profile.id} aria-label={t("home.pick_profile")} onchange={(e) => (shownId = e.currentTarget.value)}>
+          {#each profiles as p (p.id)}<option value={p.id}>{p.is_default ? t("home.default_option", { name: p.name }) : p.name}</option>{/each}
+        </select>
+      </span>
+    {:else}
+      <Tag tone="accent"><Ring tone="accent" size="sm" />{t("home.profile_tag", { name: profile.name })}</Tag>
+    {/if}
   </div>
   <div class="path">
     <div class="stage">
@@ -195,7 +215,7 @@
       <button type="button" class="btn quiet act" onclick={() => (editing = profile.id)}>{t("home.adjust")}</button>
     </div>
   </div>
-  <p class="help">{t("home.flow_help", { name: profile.name })}</p>
+  <p class="help">{flowHelp(profile)}</p>
 
   <Group title={t("home.by_app")}>
     {#each others as p (p.id)}
@@ -266,6 +286,11 @@
   .menu { position: relative; display: inline-flex; }
   .menu select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; padding: 0; border: 0; cursor: default; }
   .menu:hover .btn { background: var(--accent-soft); }
+  /* The profile picker: the tag is the button. */
+  .pick { min-width: 0; max-width: 50%; }
+  .pick :global(.tag) { min-width: 0; max-width: 100%; }
+  .picked { overflow: hidden; text-overflow: ellipsis; }
+  .pick:has(select:focus-visible) :global(.tag) { outline: 2px solid var(--accent); outline-offset: 1px; }
   .menu:has(select:focus-visible) .btn { outline: 2px solid var(--accent); outline-offset: 1px; }
 
   .who { display: flex; flex-direction: column; flex: 1; min-width: 0; }

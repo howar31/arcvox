@@ -15,6 +15,7 @@
     x: '<path d="M4 4l8 8M12 4l-8 8"/>',
     "chevron-right": '<path d="M6 3.5 10.5 8 6 12.5"/>',
     "chevron-left": '<path d="M10 3.5 5.5 8l4.5 4.5"/>',
+    "chevron-down": '<path d="M3.5 6 8 10.5 12.5 6"/>',
     copy: '<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h.5"/>',
     trash: '<path d="M2.5 4.5h11M6.5 4.5V3a.5.5 0 0 1 .5-.5h2a.5.5 0 0 1 .5.5v1.5M4 4.5l.7 8.2a1 1 0 0 0 1 .8h4.6a1 1 0 0 0 1-.8l.7-8.2"/>',
     "arrow-up": '<path d="M8 13V3M4 7l4-4 4 4"/>',
