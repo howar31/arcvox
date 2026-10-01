@@ -32,73 +32,135 @@ impl QuitConfirm {
 }
 
 pub struct AppMenu<R: Runtime> {
-    quit: MenuItem<R>,
+    app: AppHandle<R>,
     confirm: QuitConfirm,
+}
+
+/// Labels of the menu, Traditional Chinese then English.
+struct Labels {
+    about: &'static str,
+    services: &'static str,
+    hide: &'static str,
+    hide_others: &'static str,
+    edit: &'static str,
+    undo: &'static str,
+    redo: &'static str,
+    cut: &'static str,
+    copy: &'static str,
+    paste: &'static str,
+    select_all: &'static str,
+    window: &'static str,
+    minimize: &'static str,
+    close_window: &'static str,
+}
+
+fn labels(language: Language) -> Labels {
+    match language {
+        Language::ZhTw => Labels {
+            about: "關於 Arcvox",
+            services: "服務",
+            hide: "隱藏 Arcvox",
+            hide_others: "隱藏其他",
+            edit: "編輯",
+            undo: "還原",
+            redo: "重做",
+            cut: "剪下",
+            copy: "複製",
+            paste: "貼上",
+            select_all: "全選",
+            window: "視窗",
+            minimize: "縮到最小",
+            close_window: "關閉視窗",
+        },
+        Language::En => Labels {
+            about: "About Arcvox",
+            services: "Services",
+            hide: "Hide Arcvox",
+            hide_others: "Hide Others",
+            edit: "Edit",
+            undo: "Undo",
+            redo: "Redo",
+            cut: "Cut",
+            copy: "Copy",
+            paste: "Paste",
+            select_all: "Select All",
+            window: "Window",
+            minimize: "Minimize",
+            close_window: "Close Window",
+        },
+    }
+}
+
+fn build<R: Runtime>(app: &AppHandle<R>, language: Language) -> tauri::Result<Menu<R>> {
+    let l = labels(language);
+    let quit = MenuItem::with_id(
+        app,
+        ID_QUIT,
+        text(language, Msg::TrayQuit),
+        true,
+        Some("CmdOrCtrl+Q"),
+    )?;
+    Menu::with_items(
+        app,
+        &[
+            &Submenu::with_items(
+                app,
+                app.package_info().name.clone(),
+                true,
+                &[
+                    &PredefinedMenuItem::about(app, Some(l.about), None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::services(app, Some(l.services))?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::hide(app, Some(l.hide))?,
+                    &PredefinedMenuItem::hide_others(app, Some(l.hide_others))?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &quit,
+                ],
+            )?,
+            &Submenu::with_items(
+                app,
+                l.edit,
+                true,
+                &[
+                    &PredefinedMenuItem::undo(app, Some(l.undo))?,
+                    &PredefinedMenuItem::redo(app, Some(l.redo))?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::cut(app, Some(l.cut))?,
+                    &PredefinedMenuItem::copy(app, Some(l.copy))?,
+                    &PredefinedMenuItem::paste(app, Some(l.paste))?,
+                    &PredefinedMenuItem::select_all(app, Some(l.select_all))?,
+                ],
+            )?,
+            &Submenu::with_items(
+                app,
+                l.window,
+                true,
+                &[
+                    &PredefinedMenuItem::minimize(app, Some(l.minimize))?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::close_window(app, Some(l.close_window))?,
+                ],
+            )?,
+        ],
+    )
 }
 
 impl<R: Runtime> AppMenu<R> {
     /// Builds the menu and installs it as the application's menu.
     pub fn install(app: &AppHandle<R>, language: Language) -> tauri::Result<Self> {
-        let quit = MenuItem::with_id(
-            app,
-            ID_QUIT,
-            text(language, Msg::TrayQuit),
-            true,
-            Some("CmdOrCtrl+Q"),
-        )?;
-        let menu = Menu::with_items(
-            app,
-            &[
-                &Submenu::with_items(
-                    app,
-                    app.package_info().name.clone(),
-                    true,
-                    &[
-                        &PredefinedMenuItem::about(app, None, None)?,
-                        &PredefinedMenuItem::separator(app)?,
-                        &PredefinedMenuItem::services(app, None)?,
-                        &PredefinedMenuItem::separator(app)?,
-                        &PredefinedMenuItem::hide(app, None)?,
-                        &PredefinedMenuItem::hide_others(app, None)?,
-                        &PredefinedMenuItem::separator(app)?,
-                        &quit,
-                    ],
-                )?,
-                &Submenu::with_items(
-                    app,
-                    "Edit",
-                    true,
-                    &[
-                        &PredefinedMenuItem::undo(app, None)?,
-                        &PredefinedMenuItem::redo(app, None)?,
-                        &PredefinedMenuItem::separator(app)?,
-                        &PredefinedMenuItem::cut(app, None)?,
-                        &PredefinedMenuItem::copy(app, None)?,
-                        &PredefinedMenuItem::paste(app, None)?,
-                        &PredefinedMenuItem::select_all(app, None)?,
-                    ],
-                )?,
-                &Submenu::with_items(
-                    app,
-                    "Window",
-                    true,
-                    &[
-                        &PredefinedMenuItem::minimize(app, None)?,
-                        &PredefinedMenuItem::separator(app)?,
-                        &PredefinedMenuItem::close_window(app, None)?,
-                    ],
-                )?,
-            ],
-        )?;
-        app.set_menu(menu)?;
+        app.set_menu(build(app, language)?)?;
         Ok(Self {
-            quit,
+            app: app.clone(),
             confirm: QuitConfirm::default(),
         })
     }
 
+    /// The menu is built again in the new language.
     pub fn set_language(&self, language: Language) {
-        let _ = self.quit.set_text(text(language, Msg::TrayQuit));
+        if let Ok(menu) = build(&self.app, language) {
+            let _ = self.app.set_menu(menu);
+        }
     }
 
     /// Handles a request to quit. The first request shows a hint in the

@@ -23,6 +23,14 @@ A dictionary term can span several lines. When one of its aliases is spoken, the
 
 The Speed test page records a sentence, or uses a kept history recording, and runs it through the selected engines with a cold run and a warm run each. It measures speed only. Results are not saved.
 
+## Permissions and password fields
+
+The macOS client needs the Accessibility permission to insert text and the Microphone permission to record.
+
+While macOS reports Secure Input (a password field has the keyboard), Arcvox does not insert text; the widget shows the result with a Copy button. This depends on the application turning Secure Input on. Terminal does so for password prompts; in iTerm2 it is the "Secure Keyboard Entry" option; a terminal that never turns it on cannot be told apart from ordinary typing, so text dictated at its password prompt is inserted.
+
+A dictation that fails stays on the widget with its detail and a Copy button until it is dismissed or the next dictation starts.
+
 ## License
 
 Layered open core. The Rust core and the desktop and iOS clients are Apache-2.0 (see `LICENSE` and `core/LICENSE`). The self-hosted engine server under `server/` is AGPL-3.0 and carries its own license file. The hosted service's operations layer is not part of this repository.

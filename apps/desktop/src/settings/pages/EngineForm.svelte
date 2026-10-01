@@ -42,6 +42,18 @@
   // Deleting asks first, in place of the form's buttons.
   let confirmDelete = $state(false);
   let keepButton: HTMLButtonElement | undefined = $state();
+  // Esc or the backdrop with unsaved edits asks too, in the same place.
+  let confirmDiscard = $state(false);
+  // svelte-ignore state_referenced_locally
+  const pristine = JSON.stringify($state.snapshot(editing));
+  const dirty = $derived(apiKey !== "" || JSON.stringify($state.snapshot(editing)) !== pristine);
+
+  function beforeclose(): boolean {
+    if (confirmDiscard || confirmDelete || busy || !dirty) return !busy;
+    confirmDiscard = true;
+    tick().then(() => keepButton?.focus());
+    return false;
+  }
 
   async function askDelete() {
     confirmDelete = true;
@@ -183,8 +195,10 @@
   }
 </script>
 
-<Modal bind:open title={confirmDelete ? t("engines.delete_title") : isNew ? t("engines.add") : t("engines.edit_title")}>
-  {#if confirmDelete}
+<Modal bind:open title={confirmDiscard ? t("common.discard_title") : confirmDelete ? t("engines.delete_title") : isNew ? t("engines.add") : t("engines.edit_title")} {beforeclose}>
+  {#if confirmDiscard}
+    <p>{t("engines.discard_body")}</p>
+  {:else if confirmDelete}
     <p>{t("engines.delete_body", { name: initial?.label ?? "" })}</p>
   {:else}
     <div class="form">
@@ -257,7 +271,10 @@
   {/if}
 
   {#snippet actions()}
-    {#if confirmDelete}
+    {#if confirmDiscard}
+      <button type="button" class="btn" bind:this={keepButton} onclick={() => (confirmDiscard = false)}>{t("common.cancel")}</button>
+      <button type="button" class="btn danger" onclick={() => (open = false)}>{t("common.discard")}</button>
+    {:else if confirmDelete}
       <button type="button" class="btn" bind:this={keepButton} onclick={() => (confirmDelete = false)}>{t("common.cancel")}</button>
       <button type="button" class="btn danger" onclick={remove} disabled={busy}>{t("engines.delete")}</button>
     {:else}

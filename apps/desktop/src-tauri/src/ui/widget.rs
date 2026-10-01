@@ -70,7 +70,8 @@ pub(super) struct Display {
 // scale, so each value is divided by the scale it was reported in.
 
 pub(super) fn displays<R: Runtime>(app: &AppHandle<R>) -> Vec<Display> {
-    app.available_monitors()
+    let displays = app
+        .available_monitors()
         .unwrap_or_default()
         .into_iter()
         .map(|m| {
@@ -87,7 +88,28 @@ pub(super) fn displays<R: Runtime>(app: &AppHandle<R>) -> Vec<Display> {
                 },
             }
         })
-        .collect()
+        .collect();
+    distinct_keys(displays)
+}
+
+/// Monitors of the same model report the same name. The first one, from the
+/// left and then from the top, keeps the name; the others get a number, so
+/// each has a position of its own.
+fn distinct_keys(mut displays: Vec<Display>) -> Vec<Display> {
+    let mut order: Vec<usize> = (0..displays.len()).collect();
+    order.sort_by(|&a, &b| {
+        let (a, b) = (&displays[a].rect, &displays[b].rect);
+        a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y))
+    });
+    let mut seen: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    for i in order {
+        let n = seen.entry(displays[i].key.clone()).or_insert(0);
+        *n += 1;
+        if *n > 1 {
+            displays[i].key = format!("{} #{n}", displays[i].key);
+        }
+    }
+    displays
 }
 
 fn pointer<R: Runtime>(app: &AppHandle<R>) -> Option<(f64, f64)> {
@@ -322,5 +344,35 @@ impl Layout {
         }
         self.place(app);
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn display(key: &str, x: f64) -> Display {
+        Display {
+            key: key.into(),
+            rect: Rect {
+                x,
+                y: 0.0,
+                w: 100.0,
+                h: 100.0,
+            },
+        }
+    }
+
+    #[test]
+    fn displays_with_the_same_name_get_keys_of_their_own() {
+        let keys: Vec<String> = distinct_keys(vec![
+            display("Studio", 200.0),
+            display("Built-in", 0.0),
+            display("Studio", 100.0),
+        ])
+        .into_iter()
+        .map(|d| d.key)
+        .collect();
+        assert_eq!(keys, ["Studio #2", "Built-in", "Studio"]);
     }
 }

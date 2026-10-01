@@ -30,6 +30,8 @@ pub struct UiMessage {
     pub detail: Option<String>,
     /// When set, the widget shows this text with a Copy button and stays.
     pub copyable: Option<String>,
+    /// Stays until it is dismissed or the next dictation starts.
+    pub sticky: bool,
 }
 
 impl UiMessage {
@@ -39,6 +41,7 @@ impl UiMessage {
             msg,
             detail: None,
             copyable: None,
+            sticky: false,
         }
     }
     pub fn error(msg: Msg, detail: Option<String>) -> Self {
@@ -47,6 +50,7 @@ impl UiMessage {
             msg,
             detail,
             copyable: None,
+            sticky: false,
         }
     }
     pub fn copyable(msg: Msg, text: String) -> Self {
@@ -55,6 +59,17 @@ impl UiMessage {
             msg,
             detail: None,
             copyable: Some(text),
+            sticky: false,
+        }
+    }
+    /// A failed dictation: the detail can be copied and the message stays.
+    pub fn failure(msg: Msg, detail: String) -> Self {
+        Self {
+            kind: MessageKind::Error,
+            msg,
+            detail: None,
+            copyable: Some(detail),
+            sticky: true,
         }
     }
 }

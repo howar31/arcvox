@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Config, Profile } from "./api";
-import { appliesDictionary, convertsScript, selectedProfile, withDictionary, withScript } from "./flowEdit";
+import { appliesDictionary, convertsScript, scriptChoice, selectedProfile, withDictionary, withScript } from "./flowEdit";
 
 const base: Profile = {
   id: "default", name: "Default", is_default: true, matcher: { app_ids: [], url_patterns: [] },
@@ -18,6 +18,15 @@ describe("flowEdit", () => {
     expect(kinds(on)).toEqual(["asr", "opencc", "llm", "rules"]);
     expect(on.steps[1]).toEqual({ step: "opencc", config: "s2twp" });
     expect(kinds(withScript(base, true))).toEqual(kinds(base));
+  });
+
+  it("names the conversion a profile applies and replaces another configuration on request", () => {
+    expect(scriptChoice(base)).toBe("tw");
+    expect(scriptChoice(withScript(base, false))).toBe("none");
+    const hk: Profile = { ...base, steps: [{ step: "asr" }, { step: "opencc", config: "s2hk" }] };
+    expect(scriptChoice(hk)).toEqual({ other: "s2hk" });
+    expect(scriptChoice(withScript(hk, true))).toEqual({ other: "s2hk" });
+    expect(scriptChoice(withScript(hk, true, true))).toBe("tw");
   });
 
   it("turns the dictionary off and on at the end", () => {

@@ -498,5 +498,9 @@
   "general.stats_reset": "Reset statistics",
   "general.stats_reset_title": "Reset the statistics?",
   "general.stats_reset_body": "Every figure on the home page starts from zero again. History rows are not deleted.",
-  "general.stats_reset_done": "Statistics reset"
+  "general.stats_reset_done": "Statistics reset",
+  "engines.discard_body": "The changes to this engine have not been saved. Closing the dialog discards them.",
+  "home.output_opencc_other": "Converted with {config}",
+  "flow.model_missing": "The model of the selected engine has not been downloaded.",
+  "flow.to_download": "Go to download"
 }

@@ -79,10 +79,15 @@
     {@const second = message.copyable ?? message.detail}
     <div class="text">
       <span class="line wrap" title={t(message.key)}>{t(message.key)}</span>
-      {#if second}<small class:mono={!!message.copyable} title={second}>{second}</small>{/if}
+      {#if second}<small class:mono={!!message.copyable && message.kind !== "error"} title={second}>{second}</small>{/if}
     </div>
     {#if message.copyable}
-      <button type="button" class="copy" onclick={() => widgetCopy(message!.copyable!).catch(() => {})}>{t("widget.copy")}</button>
+      <!-- On a failure the copy is of the detail, a secondary action: an icon leaves the message its room. -->
+      {#if message.kind === "error"}
+        <button type="button" class="close" onclick={() => widgetCopy(message!.copyable!).catch(() => {})} aria-label={t("widget.copy")} title={t("widget.copy")}><Icon name="copy" size={14} /></button>
+      {:else}
+        <button type="button" class="copy" onclick={() => widgetCopy(message!.copyable!).catch(() => {})}>{t("widget.copy")}</button>
+      {/if}
       <button type="button" class="close" onclick={dismiss} aria-label={t("widget.dismiss")} title={t("widget.dismiss")}><Icon name="x" size={14} /></button>
     {/if}
   {:else}

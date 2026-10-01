@@ -526,14 +526,13 @@ impl Controller {
                     _ => Msg::WidgetEngineUnavailable,
                 };
                 let detail = hint.unwrap_or(message);
-                // These two stay until dismissed, with the detail available
-                // to copy, since the fix is a setting or a download.
-                let failure =
-                    if matches!(code, ErrorCode::ModelMissing | ErrorCode::NativeUnavailable) {
-                        UiMessage::copyable(msg, detail)
-                    } else {
-                        UiMessage::error(msg, Some(detail))
-                    };
+                // A failure stays until dismissed, with the detail available
+                // to copy; an utterance without speech needs no action.
+                let failure = if matches!(code, ErrorCode::NoSpeech | ErrorCode::NoAudio) {
+                    UiMessage::error(msg, Some(detail))
+                } else {
+                    UiMessage::failure(msg, detail)
+                };
                 if let State::Processing { failure: f, .. } = &mut self.state {
                     *f = Some(failure);
                 }
@@ -1418,10 +1417,12 @@ mod tests {
             .find(|m| m.kind == MessageKind::Error)
             .expect("an error message was recorded");
         assert_eq!(m.msg, Msg::WidgetAsrFailed, "{messages:?}");
+        // The detail can be copied and the message stays until dismissed.
         assert!(
-            m.detail.as_deref().is_some_and(|d| d.contains("500")),
+            m.copyable.as_deref().is_some_and(|d| d.contains("500")),
             "{messages:?}"
         );
+        assert!(m.sticky, "{messages:?}");
         assert!(r.platform.calls().is_empty(), "{:?}", r.platform.calls());
     }
 
