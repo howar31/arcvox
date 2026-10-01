@@ -58,6 +58,15 @@ where
         .collect()
 }
 
+/// A dropout or a route change is reported by a stream that goes on
+/// delivering audio; every other error ends it.
+fn stream_event(e: &cpal::Error) -> AudioMsg {
+    match e.kind() {
+        cpal::ErrorKind::Xrun | cpal::ErrorKind::DeviceChanged => AudioMsg::Glitch(e.to_string()),
+        _ => AudioMsg::Error(e.to_string()),
+    }
+}
+
 /// Builds the input stream for one concrete sample type. Shared by every
 /// `SampleFormat` arm in `CpalSource::start` so the mono-mixdown and error
 /// forwarding logic exists once.
@@ -82,7 +91,7 @@ where
             });
         },
         move |e: cpal::Error| {
-            let _ = err_tx.send(AudioMsg::Error(e.to_string()));
+            let _ = err_tx.send(stream_event(&e));
         },
         None,
     )
@@ -131,6 +140,17 @@ impl AudioSource for CpalSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_dropout_or_a_route_change_leaves_the_stream_running() {
+        for kind in [cpal::ErrorKind::Xrun, cpal::ErrorKind::DeviceChanged] {
+            assert!(matches!(stream_event(&kind.into()), AudioMsg::Glitch(_)));
+        }
+        assert!(matches!(
+            stream_event(&cpal::ErrorKind::DeviceNotAvailable.into()),
+            AudioMsg::Error(_)
+        ));
+    }
 
     #[test]
     fn mono_mixdown_averages_channels() {

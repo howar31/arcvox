@@ -413,6 +413,8 @@ impl Controller {
                     _ => {}
                 }
             }
+            // The stream keeps delivering audio; the recording goes on.
+            AudioMsg::Glitch(e) => tracing::debug!(error = %e, "audio stream glitch"),
             AudioMsg::Error(e) => {
                 tracing::warn!(error = %e, "audio stream error");
                 match std::mem::replace(&mut self.state, State::Idle) {
@@ -745,6 +747,15 @@ mod tests {
                 })
                 .unwrap();
         }
+        fn glitch(&self) {
+            self.tx
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .send(AudioMsg::Glitch("dropout".into()))
+                .unwrap();
+        }
         fn error(&self) {
             self.tx
                 .lock()
@@ -1075,6 +1086,28 @@ mod tests {
         wait_for(
             || r.platform.calls().contains(&"paste".to_string()),
             "paste without a closing tap",
+        )
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dropout_does_not_end_the_recording() {
+        let r = rig(fast_settings()).await;
+        mock_ok(&r, "一", "一").await;
+        r.modifier.send(fn_down()).unwrap();
+        wait_state(&r, UiState::Recording, "recording").await;
+        r.audio.speech(0.5);
+        r.audio.glitch();
+        r.audio.speech(0.5);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            !r.ui.states.lock().unwrap().contains(&UiState::Processing),
+            "the recording goes on after a dropout"
+        );
+        r.modifier.send(fn_up()).unwrap();
+        wait_for(
+            || r.platform.calls().contains(&"paste".to_string()),
+            "paste",
         )
         .await;
     }

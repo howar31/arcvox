@@ -152,6 +152,7 @@ fn capture(
                 }
                 Ok(())
             }
+            AudioMsg::Glitch(_) => Ok(()),
             AudioMsg::Error(e) => Err(e),
         }
     };
