@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Utterance } from "./api";
-import { groupByDay, seconds, showsRaw, totalSeconds } from "./historyView";
+import { averageSeconds, groupByDay, seconds, showsRaw, totalSeconds } from "./historyView";
 
 const at = (d: Date) => Math.floor(d.getTime() / 1000);
 const u = (id: number, when: Date, raw = "raw", fin = "final", degraded = false): Utterance => ({
@@ -67,5 +67,15 @@ describe("totalSeconds", () => {
 
   it("is null when the rewrite did not run: the recognition time is the total", () => {
     expect(totalSeconds(1180, null)).toBeNull();
+  });
+});
+
+describe("averageSeconds", () => {
+  it("divides the time by the number of dictations", () => {
+    expect(averageSeconds({ count: 4, total_ms: 8600 })).toBe("2.1");
+  });
+
+  it("is null without dictations", () => {
+    expect(averageSeconds({ count: 0, total_ms: 0 })).toBeNull();
   });
 });

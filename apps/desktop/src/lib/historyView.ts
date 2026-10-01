@@ -33,6 +33,11 @@ export function totalSeconds(asrMs: number, llmMs: number | null): string | null
   return llmMs === null ? null : seconds(asrMs + llmMs);
 }
 
+/** Average time per dictation as seconds with one decimal; null when there was none. */
+export function averageSeconds(stats: { count: number; total_ms: number }): string | null {
+  return stats.count > 0 ? seconds(stats.total_ms / stats.count) : null;
+}
+
 /** Whether the raw transcript says something the final text does not. */
 export function showsRaw(u: Utterance): boolean {
   const raw = u.raw_text.trim();

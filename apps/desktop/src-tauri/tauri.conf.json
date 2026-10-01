@@ -17,8 +17,9 @@
         "title": "Arcvox",
         "url": "settings.html",
         "width": 900,
-        "height": 930,
+        "height": 870,
         "minWidth": 900,
+        "maxWidth": 900,
         "minHeight": 560,
         "visible": false,
         "resizable": true

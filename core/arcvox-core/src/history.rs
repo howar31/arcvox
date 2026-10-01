@@ -45,6 +45,16 @@ pub struct Utterance {
     pub llm_ms: Option<u64>,
 }
 
+/// Totals over a span of the history.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HistoryStats {
+    pub count: u64,
+    /// Characters of the final texts.
+    pub chars: u64,
+    /// Recognition plus rewriting time of every row.
+    pub total_ms: u64,
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct PruneReport {
     pub rows_deleted: usize,
@@ -154,6 +164,22 @@ impl HistoryStore {
         let mut stmt = conn.prepare(&format!("{SELECT} ORDER BY ts DESC, id DESC LIMIT ?1"))?;
         let rows = stmt.query_map(params![limit as i64], map_row)?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Totals of the rows with a timestamp of `since` or later.
+    pub fn stats_since(&self, since: i64) -> Result<HistoryStats, HistoryError> {
+        let conn = self.conn.lock().unwrap();
+        let (count, chars, total_ms): (i64, i64, i64) = conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(LENGTH(final_text)), 0), \
+             COALESCE(SUM(asr_ms + COALESCE(llm_ms, 0)), 0) FROM utterances WHERE ts >= ?1",
+            params![since],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        Ok(HistoryStats {
+            count: count as u64,
+            chars: chars as u64,
+            total_ms: total_ms as u64,
+        })
     }
 
     /// Deletes rows older than `history_days` and recording files older than
@@ -298,6 +324,29 @@ mod tests {
         let recent = s.list_recent(10).unwrap();
         assert_eq!(recent.iter().map(|u| u.id).collect::<Vec<_>>(), vec![b, a]);
         assert_eq!(s.get(HistoryId(999)).unwrap(), None);
+    }
+
+    #[test]
+    fn stats_count_rows_characters_and_time_since_a_moment() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        assert_eq!(s.stats_since(0).unwrap(), HistoryStats::default());
+        s.insert(new(100, None)).unwrap();
+        let mut long = new(200, None);
+        long.final_text = "今天下午四點開會。".into();
+        long.llm_ms = None;
+        s.insert(long).unwrap();
+        s.insert(new(300, None)).unwrap();
+        // Characters, not bytes; a row without a rewrite counts its recognition time only.
+        assert_eq!(
+            s.stats_since(200).unwrap(),
+            HistoryStats {
+                count: 2,
+                chars: 9 + 7,
+                total_ms: 120 + 120 + 300,
+            }
+        );
+        assert_eq!(s.stats_since(0).unwrap().count, 3);
+        assert_eq!(s.stats_since(301).unwrap(), HistoryStats::default());
     }
 
     #[test]

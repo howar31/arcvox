@@ -106,6 +106,8 @@ impl TauriUi {
 
     /// Shows the widget. `compact` says it has only the ring and a short
     /// label to show, which lets a widget docked to a side edge be vertical.
+    /// Only a message needs the horizontal pill there; the transcript is
+    /// shown in the horizontal pill only.
     fn show(&self, compact: bool) {
         *self.hide_deadline.lock().unwrap() = None;
         self.generation.fetch_add(1, Ordering::SeqCst);
@@ -299,7 +301,6 @@ impl Ui for TauriUi {
 
     fn transcript(&self, text: String) {
         let language = self.language();
-        let has_text = !text.is_empty();
         let _ = self.app.emit_to(
             widget::WINDOW,
             "widget-transcript",
@@ -308,10 +309,6 @@ impl Ui for TauriUi {
                 language: language.tag(),
             },
         );
-        // The transcript needs the room of the horizontal pill.
-        if has_text {
-            self.show(false);
-        }
     }
 
     fn message(&self, message: UiMessage) {

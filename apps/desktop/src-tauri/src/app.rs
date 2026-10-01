@@ -81,6 +81,7 @@ pub fn run() {
             crate::commands::prompt::prompt_set,
             crate::commands::prompt::prompt_restore,
             crate::commands::history::history_list,
+            crate::commands::history::history_stats,
             crate::commands::history::history_delete,
             crate::commands::history::history_clear,
             crate::commands::secrets::secrets_set,
@@ -143,8 +144,32 @@ pub fn run() {
                 }
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                end_process(app);
+            }
+        });
+}
+
+/// Ends the process at once when the app exits. A normal exit runs the
+/// inference runtime's static destructors, and those abort while a model
+/// still holds GPU resources; a model that is loading or in use cannot be
+/// freed first, so the destructors are skipped instead.
+fn end_process(app: &tauri::AppHandle<Wry>) {
+    if let Some(state) = app.try_state::<AppState>() {
+        state.bench.abort_run();
+        state.bench.discard_recording();
+    }
+    #[cfg(unix)]
+    {
+        extern "C" {
+            fn _exit(status: i32) -> !;
+        }
+        // SAFETY: `_exit` takes no pointers and does not return.
+        unsafe { _exit(0) }
+    }
 }
 
 fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {

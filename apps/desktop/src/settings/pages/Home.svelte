@@ -1,14 +1,15 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
-    errorMessage, listHistory, listMicrophones, modelsInstalled, openPrivacyPane, permissions, upsertProfile, widgetCopy,
-    type Profile, type ProviderConfig, type Utterance,
+    errorMessage, historyStats, listHistory, listMicrophones, modelsInstalled, openPrivacyPane, permissions, upsertProfile, widgetCopy,
+    type HistoryStats, type Profile, type ProviderConfig, type Utterance,
   } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
-  import { formatDateTime, formatShortDate, formatTime } from "../../lib/format";
+  import { formatDateTime, formatShortDate, formatTime, uiLocale } from "../../lib/format";
+  import { averageSeconds } from "../../lib/historyView";
   import { t } from "../../lib/i18n";
   import { defaultProfile, profileName } from "../../lib/labels";
-  import { appsSummary, engineMeta, NEW_PROFILE, withLlm } from "../../lib/profileEdit";
+  import { appsSummary, engineMeta, withLlm } from "../../lib/profileEdit";
   import { go } from "../../lib/route";
   import { client, config } from "../../lib/store.svelte";
   import Empty from "../../lib/ui/Empty.svelte";
@@ -28,6 +29,8 @@
   let installedIds = $state<Set<string> | null>(null);
   let installedPaths = $state<Set<string>>(new Set());
   let recent = $state<Utterance[] | null>(null);
+  // Totals of today and of the last seven days, today included.
+  let stats = $state<{ today: HistoryStats; week: HistoryStats } | null>(null);
   // The profile open in the editor: its id, or NEW_PROFILE.
   let editing = $state<string | null>(null);
 
@@ -39,12 +42,28 @@
     try { recent = await listHistory(3); } catch (e) { recent ??= []; toast.error(errorMessage(e)); }
   }
 
+  async function loadStats() {
+    const midnight = new Date();
+    midnight.setHours(0, 0, 0, 0);
+    const today = Math.floor(midnight.getTime() / 1000);
+    midnight.setDate(midnight.getDate() - 6);
+    const week = Math.floor(midnight.getTime() / 1000);
+    try {
+      const [a, b] = await Promise.all([historyStats(today), historyStats(week)]);
+      stats = { today: a, week: b };
+    } catch {
+      // The totals are left out; the list below reports a history that cannot be read.
+      stats = null;
+    }
+  }
+
   onMount(() => {
     checkAccess();
     listMicrophones().then((m) => { mics = m; }).catch(() => { mics = []; });
     modelsInstalled().then((m) => { installedIds = new Set(m.map((x) => x.id)); installedPaths = new Set(m.map((x) => x.path)); }).catch(() => { installedIds = null; });
     loadRecent();
-    const onFocus = () => { checkAccess(); loadRecent(); };
+    loadStats();
+    const onFocus = () => { checkAccess(); loadRecent(); loadStats(); };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   });
@@ -55,13 +74,12 @@
   const profiles = $derived([...(config.value?.profiles ?? [])].sort((a, b) => Number(b.is_default) - Number(a.is_default)));
   const profile = $derived(profiles.find((p) => p.id === shownId) ?? defaultProfile(config.value));
   const providers = $derived(config.value?.providers ?? []);
-  const others = $derived(profiles.filter((p) => !p.is_default));
   const choices = $derived({
     asr: providers.filter((p) => p.capabilities.transcribe),
     llm: providers.filter((p) => p.capabilities.chat),
   });
 
-  $effect(() => { ensureAppNames(others.flatMap((p) => p.matcher.app_ids)); });
+  $effect(() => { if (profile) ensureAppNames(profile.matcher.app_ids); });
 
   const find = (id: string | null): ProviderConfig | null => providers.find((p) => p.id === id) ?? null;
 
@@ -120,7 +138,6 @@
     const list = shown.join(t("home.list_sep"));
     return more > 0 ? t("home.apps_more", { names: list, count: String(more) }) : list;
   }
-  const appsLine = (p: Profile): string => appsList(p) ?? t("home.no_apps");
   function flowHelp(p: Profile): string {
     if (p.is_default) return t("home.flow_help", { name: p.name });
     const apps = appsList(p);
@@ -136,13 +153,6 @@
     return { short: today ? formatTime(ts) : formatShortDate(ts), full: formatDateTime(ts) };
   }
 </script>
-
-{#snippet engineName(id: string | null)}
-  <span class="eng">
-    {#if id !== null && !find(id)}<span class="line unknown">{id}</span><Tag tone="warn">{t("home.not_found")}</Tag>
-    {:else}<span class="line">{id === null ? t("home.no_rewrite") : find(id)?.label}</span>{/if}
-  </span>
-{/snippet}
 
 <PageHead title={t("nav.home")} description={t("home.description")} />
 
@@ -216,22 +226,25 @@
     </div>
   </div>
   <p class="help">{flowHelp(profile)}</p>
+{/if}
 
-  <Group title={t("home.by_app")}>
-    {#each others as p (p.id)}
-      <Row onclick={() => (editing = p.id)}>
-        <span class="who">
-          <span class="name line">{p.name}</span>
-          <span class="sub line">{appsLine(p)}</span>
-        </span>
-        <span class="pair">{@render engineName(p.asr_provider)}<span class="arrow" aria-hidden="true">→</span>{@render engineName(p.llm_provider)}</span>
-      </Row>
-    {:else}
-      <Empty text={t("home.by_app_empty")}>
-        {#snippet action()}<button type="button" class="btn" onclick={() => (editing = NEW_PROFILE)}>{t("home.add_profile")}</button>{/snippet}
-      </Empty>
+{#if stats}
+  {@const number = (n: number) => n.toLocaleString(uiLocale())}
+  {@const average = (s: HistoryStats) => { const v = averageSeconds(s); return v === null ? t("home.stat.none") : t("home.stat.secs", { secs: v }); }}
+  <div class="bar"><h2>{t("home.today")}</h2></div>
+  <div class="stats">
+    {#each [
+      [t("home.stat.count"), number(stats.today.count), number(stats.week.count)],
+      [t("home.stat.chars"), number(stats.today.chars), number(stats.week.chars)],
+      [t("home.stat.average"), average(stats.today), average(stats.week)],
+    ] as [label, value, week] (label)}
+      <div class="stat">
+        <div class="role">{label}</div>
+        <div class="value num">{value}</div>
+        <div class="meta">{t("home.stat.week", { value: week })}</div>
+      </div>
     {/each}
-  </Group>
+  </div>
 {/if}
 
 {#if recent !== null && config.value}
@@ -295,10 +308,11 @@
 
   .who { display: flex; flex-direction: column; flex: 1; min-width: 0; }
   .line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* The two engine names share the space; each truncates on its own. */
-  .pair { display: flex; align-items: center; justify-content: flex-end; gap: 5px; flex: 0 1 auto; min-width: 0; max-width: 52%; color: var(--ink-2); }
-  .eng { display: flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0; max-width: 50%; }
-  .arrow { flex: none; color: var(--ink-3); }
+  /* Today's totals: one strip, like the flow above it. */
+  .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-group); overflow: hidden; }
+  .stat { padding: 14px var(--row-x) 13px; min-width: 0; }
+  .stat + .stat { border-left: 1px solid var(--line); }
+  .value { font: 600 22px/1.25 var(--font-round); margin: 6px 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .final { line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
   .icon-btn { width: var(--control); padding: 0; margin-right: -8px; align-self: flex-start; color: var(--ink-2); }
   .icon-btn:hover { color: var(--ink); }

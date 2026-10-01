@@ -57,6 +57,24 @@ pub fn history_list(
     list(&engine(&state)?, limit.unwrap_or(200))
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct HistoryStatsDto {
+    pub count: u64,
+    pub chars: u64,
+    pub total_ms: u64,
+}
+
+/// Totals of the history from `since` (seconds since the epoch) on.
+#[tauri::command]
+pub fn history_stats(state: State<'_, AppState>, since: i64) -> CmdResult<HistoryStatsDto> {
+    let stats = engine(&state)?.history().stats_since(since)?;
+    Ok(HistoryStatsDto {
+        count: stats.count,
+        chars: stats.chars,
+        total_ms: stats.total_ms,
+    })
+}
+
 #[tauri::command]
 pub fn history_delete(state: State<'_, AppState>, id: i64) -> CmdResult<()> {
     engine(&state)?.history().delete(HistoryId(id))?;
