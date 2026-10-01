@@ -114,6 +114,15 @@ pub fn run() {
             setup(app.handle().clone())?;
             Ok(())
         })
+        .on_menu_event(|app, event| {
+            if event.id().as_ref() == crate::ui::app_menu::ID_QUIT {
+                if let Some(state) = app.try_state::<AppState>() {
+                    if state.ui.menu().quit_requested(app) {
+                        app.exit(0);
+                    }
+                }
+            }
+        })
         .on_window_event(|window, event| {
             if window.label() == SETTINGS_WINDOW
                 && matches!(
@@ -266,6 +275,18 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         bench: BenchState::default(),
         window_state,
     });
+
+    // A quit request from outside the app's own menus (the Dock menu, a
+    // quit Apple event) takes the same two steps as the menu item.
+    #[cfg(target_os = "macos")]
+    {
+        let handle = app.clone();
+        crate::platform::macos::terminate::install(move || {
+            handle
+                .try_state::<AppState>()
+                .is_none_or(|state| state.ui.menu().quit_requested(&handle))
+        });
+    }
 
     {
         let mut rx = state_models.subscribe();

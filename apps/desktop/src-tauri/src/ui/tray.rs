@@ -80,7 +80,7 @@ impl<R: Runtime> Tray<R> {
             ID_QUIT,
             text(language, Msg::TrayQuit),
             true,
-            Some("CmdOrCtrl+Q"),
+            None::<&str>,
         )?;
         let menu = Menu::with_items(
             app,

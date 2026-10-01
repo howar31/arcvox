@@ -1,6 +1,7 @@
 //! Implements the controller's `Ui` on top of the tray and the widget.
 //! Every AppKit call is hopped onto the main thread.
 
+pub mod app_menu;
 pub mod placement;
 pub mod tray;
 pub mod widget;
@@ -16,6 +17,7 @@ use tauri::{AppHandle, Emitter, Wry};
 
 use crate::dictation::ui::{MessageKind, Ui, UiMessage, UiState};
 use crate::i18n::Language;
+use app_menu::AppMenu;
 use tray::Tray;
 
 const HIDE_AFTER_IDLE: Duration = Duration::from_millis(1200);
@@ -55,6 +57,7 @@ struct MessagePayload {
 pub struct TauriUi {
     app: AppHandle<Wry>,
     tray: Tray<Wry>,
+    menu: AppMenu<Wry>,
     language: Mutex<Language>,
     state: Mutex<UiState>,
     /// Bumped on every show; a scheduled hide fires only if unchanged.
@@ -77,9 +80,11 @@ pub struct TauriUi {
 impl TauriUi {
     pub fn new(app: AppHandle<Wry>, language: Language, config_dir: &Path) -> tauri::Result<Self> {
         let tray = Tray::build(&app, language)?;
+        let menu = AppMenu::install(&app, language)?;
         Ok(Self {
             app,
             tray,
+            menu,
             language: Mutex::new(language),
             state: Mutex::new(UiState::Idle),
             generation: Arc::new(AtomicU64::new(0)),
@@ -95,9 +100,14 @@ impl TauriUi {
         &self.tray
     }
 
+    pub fn menu(&self) -> &AppMenu<Wry> {
+        &self.menu
+    }
+
     pub fn set_language(&self, language: Language) {
         *self.language.lock().unwrap() = language;
         self.tray.set_language(language);
+        self.menu.set_language(language);
     }
 
     fn language(&self) -> Language {
