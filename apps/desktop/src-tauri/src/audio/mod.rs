@@ -15,6 +15,8 @@ pub enum AudioMsg {
     Frames { rate: u32, mono: Vec<f32> },
     /// The stream failed (device removed, format error). No more frames follow.
     Error(String),
+    /// The stream reported a dropout or a route change and keeps running.
+    Glitch(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
