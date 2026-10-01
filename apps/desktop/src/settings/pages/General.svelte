@@ -281,9 +281,9 @@
   .value { color: var(--ink-2); }
   .ring-space { width: 14px; flex: none; }
   /* The selects of the value column share one width. */
-  .wide { width: 200px; }
-  .method { width: 150px; }
+  .wide { width: 220px; }
+  .method { width: 170px; }
   .bundle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .icon-btn { width: 26px; padding: 0; margin-right: -6px; color: var(--ink-2); }
+  .icon-btn { width: var(--control); padding: 0; margin-right: -8px; color: var(--ink-2); }
   .icon-btn:hover { color: var(--ink); }
 </style>

@@ -9,6 +9,6 @@
 </div>
 
 <style>
-  .empty { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 24px 16px; text-align: center; color: var(--ink-2); }
+  .empty { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 28px 18px; text-align: center; color: var(--ink-2); }
   p { margin: 0; }
 </style>

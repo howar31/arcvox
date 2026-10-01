@@ -36,6 +36,6 @@
 
 <style>
   /* The picker gives way first, so the text box keeps the width of the other add rows. */
-  .apps { width: 150px; flex: 0 4 auto; min-width: 0; }
+  .apps { width: 170px; flex: 0 4 auto; min-width: 0; }
   .add-input { margin-left: auto; }
 </style>

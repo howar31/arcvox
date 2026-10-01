@@ -204,13 +204,13 @@
   .entry { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; padding: 2px 0; }
   .line { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
   .second { align-items: center; }
-  /* One line is as tall as the other single-line fields (26 px). */
-  .term { flex: 1; min-width: 0; min-height: 0; height: 26px; padding: 2px 8px; border-radius: 6px; line-height: 20px; resize: none; overflow: hidden; }
-  .tag { flex: none; margin-top: 3px; }
-  .icon-btn { width: 26px; padding: 0; margin: 0 -6px 0 0; color: var(--ink-2); flex: none; }
+  /* One line is as tall as the other single-line fields. */
+  .term { flex: 1; min-width: 0; min-height: 0; height: var(--control); padding: 5px 10px; border-radius: var(--radius); line-height: 20px; font-size: var(--text-control); resize: none; overflow: hidden; }
+  .tag { flex: none; margin-top: 5px; }
+  .icon-btn { width: var(--control); padding: 0; margin: 0 -8px 0 0; color: var(--ink-2); flex: none; }
   .icon-btn:hover { color: var(--ink); }
   .lead { flex: none; }
   .aliases { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-  .alias-input { flex: 1; min-width: 90px; height: 24px; padding: 0 4px; border: 0; background: none; font-size: 12px; }
+  .alias-input { flex: 1; min-width: 90px; height: 28px; padding: 0 4px; border: 0; background: none; font-size: var(--text-sm); }
   .hint { flex: none; display: flex; align-items: center; gap: 8px; }
 </style>

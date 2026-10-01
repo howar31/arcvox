@@ -76,7 +76,7 @@
               class:on={route.page === p}
               aria-current={route.page === p ? "page" : undefined}
               onclick={() => guard.request(() => go(p))}
-            ><Icon name={p} /><span>{t(`nav.${p}`)}</span></button>
+            ><Icon name={p} size={17} /><span>{t(`nav.${p}`)}</span></button>
           {/each}
         {/each}
       </nav>
@@ -123,22 +123,22 @@
 
 <style>
   .loading { height: 100vh; display: grid; place-items: center; color: var(--ink-2); }
-  .shell { display: grid; grid-template-columns: 196px minmax(0, 1fr); height: 100vh; }
-  .sidebar { background: var(--sidebar); border-right: 1px solid var(--line); padding: 14px 10px; display: flex; flex-direction: column; gap: 2px; min-height: 0; overflow-y: auto; }
-  nav { display: flex; flex-direction: column; gap: 2px; }
-  .nav-group { font-size: 11px; font-weight: 600; color: var(--ink-2); padding: 14px 10px 4px; }
-  .nav { display: flex; align-items: center; gap: 9px; height: 30px; padding: 0 10px; border-radius: 7px; border: 0; background: none; color: var(--ink); text-align: left; cursor: default; white-space: nowrap; }
+  .shell { display: grid; grid-template-columns: 224px minmax(0, 1fr); height: 100vh; }
+  .sidebar { background: var(--sidebar); border-right: 1px solid var(--line); padding: 16px 12px; display: flex; flex-direction: column; gap: 3px; min-height: 0; overflow-y: auto; }
+  nav { display: flex; flex-direction: column; gap: 3px; }
+  .nav-group { font-size: var(--text-xs); font-weight: 600; color: var(--ink-2); padding: 18px 12px 6px; }
+  .nav { display: flex; align-items: center; gap: 11px; height: 38px; padding: 0 12px; border-radius: 9px; font-size: 14px; border: 0; background: none; color: var(--ink); text-align: left; cursor: default; white-space: nowrap; }
   .nav span { overflow: hidden; text-overflow: ellipsis; }
   .nav :global(.icon) { opacity: .75; }
   .nav:hover { background: var(--line); }
   .nav.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   .nav.on :global(.icon) { opacity: 1; }
-  .state { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 10px; font-size: 12px; color: var(--ink-2); line-height: 1.35; }
+  .state { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 12px; font-size: var(--text-sm); color: var(--ink-2); line-height: 1.35; }
   .state-link { border: 0; background: none; padding: 0; color: var(--ink-2); text-align: left; cursor: default; }
   .state-link:hover { text-decoration: underline; }
   /* Positioned: absolutely placed descendants (visually hidden labels) stay inside the scroll area. */
   .main { position: relative; overflow-x: hidden; overflow-y: auto; min-width: 0; }
-  .page { padding: 26px 32px 80px; max-width: 664px; min-height: 100%; }
-  .banner { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 20px; padding: 10px 14px; border-radius: 10px; background: color-mix(in srgb, var(--live) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--live) 35%, transparent); }
+  .page { padding: 30px var(--page-x) 80px; max-width: 736px; min-height: 100%; }
+  .banner { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 22px; padding: 12px var(--row-x); border-radius: var(--radius-group); background: color-mix(in srgb, var(--live) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--live) 35%, transparent); }
   .banner :global(.ring) { margin-top: 3px; }
 </style>

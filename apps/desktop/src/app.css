@@ -17,6 +17,11 @@
   --pill-live: #FF6B4F; --pill-live-halo: rgba(255,107,79,.22); --pill-accent: #8FA2FF;
   --pill-line: rgba(255,255,255,.08); --pill-button: rgba(255,255,255,.12); --pill-button-hover: rgba(255,255,255,.2);
 
+  /* Type scale and density of the settings window. */
+  --text: 14.5px; --text-control: 13.5px; --text-sm: 12.5px; --text-xs: 11.5px; --text-lg: 15.5px; --text-title: 25px;
+  --control: 32px; --radius: 8px; --radius-group: 14px;
+  --row-min: 54px; --row-y: 10px; --row-x: 18px; --page-x: 28px;
+
   --font: -apple-system, BlinkMacSystemFont, "PingFang TC", "Segoe UI", "Microsoft JhengHei", sans-serif;
   --font-round: ui-rounded, "SF Pro Rounded", -apple-system, "PingFang TC", "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
@@ -37,45 +42,45 @@
 * { box-sizing: border-box; }
 /* The window never scrolls as a whole; each view owns its scroll area. */
 html, body { height: 100%; overflow: hidden; }
-body { margin: 0; font: 13px/1.5 var(--font); color: var(--ink); background: var(--page); -webkit-font-smoothing: antialiased; }
+body { margin: 0; font: var(--text)/1.5 var(--font); color: var(--ink); background: var(--page); -webkit-font-smoothing: antialiased; }
 body.widget { background: transparent; }
 button, select, input, textarea { font: inherit; color: inherit; }
 input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-code { font-family: var(--font-mono); font-size: 12px; }
+code { font-family: var(--font-mono); font-size: var(--text-sm); }
 
 /* Buttons */
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 26px; padding: 0 11px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); white-space: nowrap; cursor: default; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: var(--control); padding: 0 14px; border-radius: var(--radius); border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font-size: var(--text-control); white-space: nowrap; cursor: default; }
 .btn:hover { background: var(--sunken); }
 .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; }
 .btn.primary:hover { background: color-mix(in srgb, var(--accent) 88%, var(--ink)); }
-.btn.quiet { border-color: transparent; background: none; color: var(--accent); padding: 0 6px; }
+.btn.quiet { border-color: transparent; background: none; color: var(--accent); padding: 0 8px; }
 .btn.quiet:hover { background: var(--accent-soft); }
 .btn.danger { color: var(--live); }
 .btn:disabled { opacity: .5; pointer-events: none; }
 
 /* Fields */
 select, input[type="text"], input[type="number"], input[type="password"], input[type="url"], input[type="search"] {
-  height: 26px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--surface); min-width: 0;
+  height: var(--control); padding: 0 10px; border-radius: var(--radius); border: 1px solid var(--line-strong); background: var(--surface); min-width: 0; font-size: var(--text-control);
 }
 select {
   /* Clipped: a long option must not widen the scroll area around the select. */
-  appearance: none; -webkit-appearance: none; padding-right: 24px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  appearance: none; -webkit-appearance: none; padding-right: 28px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   background-image: linear-gradient(45deg, transparent 50%, var(--ink-2) 50%), linear-gradient(135deg, var(--ink-2) 50%, transparent 50%);
-  background-position: calc(100% - 13px) 50%, calc(100% - 9px) 50%;
+  background-position: calc(100% - 15px) 50%, calc(100% - 11px) 50%;
   background-size: 4px 4px; background-repeat: no-repeat;
 }
-input[type="number"] { width: 72px; text-align: right; font-variant-numeric: tabular-nums; }
+input[type="number"] { width: 84px; text-align: right; font-variant-numeric: tabular-nums; }
 /* The text box of an add row (next to its Add button): one width on every page. */
-.add-input { width: 200px; flex: 0 1 200px; }
+.add-input { width: 220px; flex: 0 1 220px; }
 input::placeholder, textarea::placeholder { color: var(--ink-3); }
-textarea { width: 100%; min-height: 84px; padding: 9px 11px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--surface); line-height: 1.6; resize: vertical; }
+textarea { width: 100%; min-height: 96px; padding: 11px 13px; border-radius: 10px; border: 1px solid var(--line-strong); background: var(--surface); line-height: 1.6; resize: vertical; }
 input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="true"] { border-color: var(--live); }
 
 /* Text */
-.help { display: block; margin: 6px 2px 0; color: var(--ink-2); font-size: 12px; }
+.help { display: block; margin: 8px 4px 0; color: var(--ink-2); font-size: var(--text-sm); }
 .name { font-weight: 600; }
-.sub { color: var(--ink-2); font-size: 12px; }
+.sub { color: var(--ink-2); font-size: var(--text-sm); }
 .num { font-variant-numeric: tabular-nums; }
 /* Read by screen readers, not shown. */
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }

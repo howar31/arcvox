@@ -33,17 +33,17 @@
 {/if}
 
 <style>
-  .item { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 8px 14px; width: 100%; }
+  .item { display: flex; align-items: center; gap: 14px; min-height: var(--row-min); padding: var(--row-y) var(--row-x); width: 100%; }
   .item + :global(.item) { border-top: 1px solid var(--line); }
   .label { display: block; flex: 1; min-width: 0; }
   .text { display: block; }
-  .label small { display: block; color: var(--ink-2); font-size: 12px; overflow-wrap: anywhere; }
+  .label small { display: block; color: var(--ink-2); font-size: var(--text-sm); overflow-wrap: anywhere; }
   .link { border: 0; border-radius: 0; background: none; text-align: left; cursor: default; }
   .link:hover { background: var(--sunken); }
-  .link:first-child { border-top-left-radius: 9px; border-top-right-radius: 9px; }
-  .link:last-child { border-bottom-left-radius: 9px; border-bottom-right-radius: 9px; }
+  .link:first-child { border-top-left-radius: calc(var(--radius-group) - 1px); border-top-right-radius: calc(var(--radius-group) - 1px); }
+  .link:last-child { border-bottom-left-radius: calc(var(--radius-group) - 1px); border-bottom-right-radius: calc(var(--radius-group) - 1px); }
   .link:focus-visible { outline-offset: -2px; }
   .chev { display: flex; color: var(--ink-3); }
   /* Line a trailing quiet button's text up with plain values in the column. */
-  .item > :global(.btn.quiet:last-child) { margin-right: -6px; }
+  .item > :global(.btn.quiet:last-child) { margin-right: -8px; }
 </style>

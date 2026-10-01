@@ -76,15 +76,15 @@ ${mitTerms}`;
 <style>
   .app { display: flex; align-items: center; gap: 14px; }
   .mark { width: 40px; height: 40px; border-radius: 50%; border: 6px solid var(--accent); flex: none; }
-  .app-name { font: 600 14px/1.3 var(--font-round); }
+  .app-name { font: 600 var(--text-lg)/1.3 var(--font-round); }
   .license { margin: 12px 0 0; color: var(--ink-2); }
-  details summary { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 14px; list-style: none; cursor: default; border-radius: 9px; }
+  details summary { display: flex; align-items: center; gap: 10px; min-height: var(--row-min); padding: var(--row-y) var(--row-x); list-style: none; cursor: default; border-radius: calc(var(--radius-group) - 1px); }
   details summary::-webkit-details-marker { display: none; }
   details summary:hover { background: var(--sunken); }
   details summary:focus-visible { outline-offset: -2px; }
   summary .name { flex: 1; min-width: 0; }
   .chev { display: flex; color: var(--ink-3); transition: transform .15s; }
   details[open] .chev { transform: rotate(90deg); }
-  details[open] summary { border-radius: 9px 9px 0 0; }
-  .notice { margin: 0; padding: 12px 14px 14px; border-top: 1px solid var(--line); white-space: pre-wrap; font: 11px/1.55 var(--font-mono); color: var(--ink-2); max-height: 260px; overflow: auto; }
+  details[open] summary { border-radius: calc(var(--radius-group) - 1px) calc(var(--radius-group) - 1px) 0 0; }
+  .notice { margin: 0; padding: 14px var(--row-x) 16px; border-top: 1px solid var(--line); white-space: pre-wrap; font: 12px/1.55 var(--font-mono); color: var(--ink-2); max-height: 260px; overflow: auto; }
 </style>

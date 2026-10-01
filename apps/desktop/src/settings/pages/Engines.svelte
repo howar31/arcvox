@@ -284,20 +284,20 @@
 <style>
   .info { flex: 1; min-width: 0; }
   .toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
-  .toolbar .btn.quiet { margin-right: -6px; }
+  .toolbar .btn.quiet { margin-right: -8px; }
   /* Tags move to a second line before the name is shortened. */
   .title { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 6px; min-width: 0; }
   .title .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-  .info small { display: block; color: var(--ink-2); font-size: 12px; overflow-wrap: anywhere; }
+  .info small { display: block; color: var(--ink-2); font-size: var(--text-sm); overflow-wrap: anywhere; }
   .info small.line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .probe.ok { color: var(--ok); }
   .probe.bad { color: var(--live); }
   .bar { width: 96px; height: 4px; border-radius: 2px; background: var(--sunken); overflow: hidden; flex: none; }
   .bar i { display: block; height: 100%; background: var(--accent); transition: width .2s; }
-  .pct { width: 34px; text-align: right; flex: none; }
+  .pct { width: 38px; text-align: right; flex: none; }
   .foot { margin-top: 8px; }
   .foot .help { margin-top: 4px; }
-  .link { border: 0; background: none; padding: 0; margin-left: 6px; color: var(--accent); font-size: 12px; cursor: default; }
+  .link { border: 0; background: none; padding: 0; margin-left: 6px; color: var(--accent); font-size: var(--text-sm); cursor: default; }
   .link:hover { text-decoration: underline; }
   .link:disabled { opacity: .5; }
 </style>

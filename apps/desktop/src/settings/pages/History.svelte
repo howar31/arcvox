@@ -146,16 +146,16 @@
 </Modal>
 
 <style>
-  .time { width: 44px; flex: none; align-self: flex-start; padding-top: 1px; color: var(--ink-2); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .time { width: 50px; flex: none; align-self: flex-start; padding-top: 2px; color: var(--ink-2); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
   .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 2px 0; }
   .final { line-height: 1.55; overflow-wrap: anywhere; white-space: pre-line; }
-  .raw { color: var(--ink-2); font-size: 12px; overflow-wrap: anywhere; }
-  .meta { display: flex; align-items: center; gap: 2px 6px; flex-wrap: wrap; color: var(--ink-2); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .raw { color: var(--ink-2); font-size: var(--text-sm); overflow-wrap: anywhere; }
+  .meta { display: flex; align-items: center; gap: 2px 6px; flex-wrap: wrap; color: var(--ink-2); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
   .meta-text { min-width: 0; overflow-wrap: anywhere; }
   .part { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
   .dot { color: var(--ink-3); }
   .deleted { margin-left: 3px; color: var(--ink-3); }
-  .tools { flex: none; align-self: flex-start; display: flex; gap: 2px; margin-right: -6px; }
-  .icon-btn { width: 26px; padding: 0; color: var(--ink-2); }
+  .tools { flex: none; align-self: flex-start; display: flex; gap: 2px; margin-right: -8px; }
+  .icon-btn { width: var(--control); padding: 0; color: var(--ink-2); }
   .icon-btn:hover { color: var(--ink); }
 </style>

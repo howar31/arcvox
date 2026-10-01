@@ -132,7 +132,7 @@
   .title { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* The two engine names share the space; each truncates on its own, before the profile name does. */
-  .pair { display: flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0; max-width: 52%; overflow: hidden; color: var(--ink-2); }
+  .pair { display: flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0; max-width: 52%; margin-left: auto; justify-content: flex-end; overflow: hidden; color: var(--ink-2); }
   .eng { display: flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0; max-width: 50%; }
   /* A missing engine keeps its tag and a short id; the other name gives way. */
   .eng.missing { flex: none; max-width: none; }
@@ -140,6 +140,6 @@
   /* An id that is not found keeps a few characters next to its tag. */
   .unknown { color: var(--warn); max-width: 5em; }
   .choices.busy { opacity: .55; }
-  .adding { margin-right: auto; align-self: center; color: var(--ink-2); font-size: 12px; }
-  .choices { margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink); }
+  .adding { margin-right: auto; align-self: center; color: var(--ink-2); font-size: var(--text-sm); }
+  .choices { margin-top: 8px; border: 1px solid var(--line); border-radius: var(--radius-group); background: var(--surface); color: var(--ink); }
 </style>

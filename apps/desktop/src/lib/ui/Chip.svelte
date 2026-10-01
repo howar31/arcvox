@@ -13,9 +13,9 @@
 </span>
 
 <style>
-  .chip { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 10px; border-radius: 12px; background: var(--sunken); border: 1px solid var(--line); font-size: 12px; max-width: 100%; }
-  .chip.removable { padding-right: 4px; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 12px; border-radius: 14px; background: var(--sunken); border: 1px solid var(--line); font-size: var(--text-sm); max-width: 100%; }
+  .chip.removable { padding-right: 5px; }
   .text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  button { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--ink-3); cursor: default; flex: none; }
+  button { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--ink-3); cursor: default; flex: none; }
   button:hover { background: var(--line); color: var(--ink); }
 </style>
