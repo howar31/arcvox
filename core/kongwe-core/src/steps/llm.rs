@@ -10,7 +10,7 @@ use crate::dictionary::llm_terms;
 use crate::prompt::{assemble, PromptParts};
 use crate::providers::{LlmOptions, LlmProvider};
 use crate::steps::{PipelineContext, Step, StepError, StepInput, StepOutput};
-use crate::types::{ErrorCode, StepName};
+use crate::types::{Context, ErrorCode, StepName};
 
 /// Below this ratio of output chars to input chars, the output is treated as
 /// a conversational reply rather than a rewrite and rejected. A self
@@ -22,6 +22,23 @@ const MIN_OUTPUT_RATIO: f64 = 1.0 / 3.0;
 /// Inputs of at most this many chars skip the ratio guard: short utterances
 /// legitimately shrink a lot (e.g. a single self-correction).
 const MIN_INPUT_CHARS_FOR_RATIO_GUARD: usize = 12;
+
+/// A window title of at least this many chars that appears in the output
+/// but not in the input was copied from the context, not spoken. Shorter
+/// titles are skipped: they can be an ordinary word of the rewrite, such as
+/// a dictionary term.
+const MIN_TITLE_CHARS_FOR_COPY_GUARD: usize = 8;
+
+/// Whether the output contains the window title although the user did not
+/// say it. The title is given to the model as background only.
+fn copies_window_title(input: &str, output: &str, context: &Context) -> bool {
+    let Some(title) = context.window_title.as_deref().map(str::trim) else {
+        return false;
+    };
+    title.chars().count() >= MIN_TITLE_CHARS_FOR_COPY_GUARD
+        && output.contains(title)
+        && !input.contains(title)
+}
 
 pub struct LlmStep {
     provider: Arc<dyn LlmProvider>,
@@ -71,6 +88,12 @@ impl Step for LlmStep {
             return Err(StepError::recoverable(
                 ErrorCode::ProviderError,
                 "llm output rejected as a reply rather than a rewrite",
+            ));
+        }
+        if copies_window_title(&input.text, &text, &ctx.context) {
+            return Err(StepError::recoverable(
+                ErrorCode::ProviderError,
+                "llm output rejected: it contains the window title",
             ));
         }
         Ok(StepOutput {
@@ -280,6 +303,56 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out.text, "今天下午四點要開會，記得帶筆電。");
+    }
+
+    fn titled(title: &str) -> PipelineContext {
+        let mut ctx = test_context();
+        ctx.context.window_title = Some(title.into());
+        ctx
+    }
+
+    #[tokio::test]
+    async fn output_that_copies_the_window_title_is_rejected() {
+        let fake = FakeLlm::ok("週報 社群圖片下載工具\n\n忘了說 我們要支援中文和英文");
+        let err = LlmStep::new(fake)
+            .run(
+                StepInput {
+                    text: "忘了說 我們要支援中文和英文".into(),
+                    audio: None,
+                },
+                &titled("週報 社群圖片下載工具"),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProviderError);
+        assert!(err.recoverable);
+    }
+
+    #[test]
+    fn a_title_the_user_spoke_or_a_short_title_is_not_a_copy() {
+        let ctx = titled("週報 社群圖片下載工具");
+        // Not in the output at all.
+        assert!(!copies_window_title("忘了說", "忘了說。", &ctx.context));
+        // Spoken by the user, so it belongs in the output.
+        assert!(!copies_window_title(
+            "打開週報 社群圖片下載工具",
+            "打開週報 社群圖片下載工具。",
+            &ctx.context
+        ));
+        // Copied.
+        assert!(copies_window_title(
+            "忘了說",
+            "週報 社群圖片下載工具\n忘了說",
+            &ctx.context
+        ));
+        // A short title can be an ordinary word of the rewrite.
+        let short = titled("Kongwe");
+        assert!(!copies_window_title(
+            "公威很好用",
+            "Kongwe 很好用。",
+            &short.context
+        ));
+        assert!(!copies_window_title("x", "y", &test_context().context));
     }
 
     #[tokio::test]

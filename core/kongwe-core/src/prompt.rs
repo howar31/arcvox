@@ -43,6 +43,11 @@ pub fn frame_utterance(text: &str) -> String {
     format!("請整理以下語音轉文字的內容，只輸出整理後的文字：\n<<<\n{text}\n>>>")
 }
 
+/// Introduces what is known about where the user is dictating. Without it
+/// a model may copy that text (for example the window title) into its output.
+const BACKGROUND_HEADER: &str =
+    "以下是使用者目前所在位置的背景資訊，只用來判斷用語與專有名詞的寫法；它不是原稿，不可以寫進輸出：";
+
 fn auto_layer(parts: &PromptParts<'_>) -> String {
     let limit = parts.context_limit_bytes;
     let mut sections: Vec<String> = Vec::new();
@@ -53,17 +58,22 @@ fn auto_layer(parts: &PromptParts<'_>) -> String {
         ));
     }
     let ctx = parts.context;
+    let mut background: Vec<String> = Vec::new();
     if let Some(v) = ctx.app_name.as_deref().filter(|s| !s.is_empty()) {
-        sections.push(format!("目前應用程式：{}", truncate_utf8(v, limit)));
+        background.push(format!("目前應用程式：{}", truncate_utf8(v, limit)));
     }
     if let Some(v) = ctx.window_title.as_deref().filter(|s| !s.is_empty()) {
-        sections.push(format!("視窗標題：{}", truncate_utf8(v, limit)));
+        background.push(format!("視窗標題：{}", truncate_utf8(v, limit)));
     }
     if let Some(v) = ctx.selected_text.as_deref().filter(|s| !s.is_empty()) {
-        sections.push(format!("使用者選取的文字：\n{}", truncate_utf8(v, limit)));
+        background.push(format!("使用者選取的文字：\n{}", truncate_utf8(v, limit)));
     }
     if let Some(v) = ctx.clipboard.as_deref().filter(|s| !s.is_empty()) {
-        sections.push(format!("剪貼簿內容：\n{}", truncate_utf8(v, limit)));
+        background.push(format!("剪貼簿內容：\n{}", truncate_utf8(v, limit)));
+    }
+    if !background.is_empty() {
+        sections.push(BACKGROUND_HEADER.to_string());
+        sections.extend(background);
     }
     sections.join("\n")
 }
@@ -156,6 +166,29 @@ mod tests {
             .content
             .starts_with("請整理以下語音轉文字的內容，只輸出整理後的文字："));
         assert!(last.content.contains("<<<\n原文\n>>>"));
+    }
+
+    #[test]
+    fn context_is_introduced_as_background_and_the_dictionary_is_not() {
+        let ctx = Context {
+            app_name: Some("Notes".into()),
+            window_title: Some("Shopping".into()),
+            ..Default::default()
+        };
+        let terms = vec!["Kongwe".to_string()];
+        let sys = assemble(&parts(&ctx, &[], &terms))[0].content.clone();
+        let i_terms = sys.find("Kongwe").unwrap();
+        let i_header = sys.find(BACKGROUND_HEADER).unwrap();
+        let i_app = sys.find("Notes").unwrap();
+        let i_title = sys.find("Shopping").unwrap();
+        assert!(
+            i_terms < i_header && i_header < i_app && i_app < i_title,
+            "{sys}"
+        );
+
+        let none = Context::default();
+        let sys = assemble(&parts(&none, &[], &terms))[0].content.clone();
+        assert!(!sys.contains(BACKGROUND_HEADER), "{sys}");
     }
 
     #[test]
