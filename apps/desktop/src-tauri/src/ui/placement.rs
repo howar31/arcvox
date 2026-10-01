@@ -27,7 +27,7 @@ pub struct Size {
 }
 
 /// A rectangle in global points; `y` grows downwards.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Rect {
     pub x: f64,
     pub y: f64,
