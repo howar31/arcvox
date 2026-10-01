@@ -22,51 +22,66 @@ pub fn endpoint(base: &Url, rel: &str) -> Url {
         .expect("relative endpoint path is valid")
 }
 
-/// Sends the request built by `build`. One retry on connection error or 5xx.
-/// No retry on 4xx or timeout.
-pub async fn send_with_retry<F>(label: &str, build: F) -> Result<Response, ProviderError>
+/// Sends the request built by `build`. A connection error, a 5xx answer or
+/// a timeout is tried again, up to `retries` more times; a 4xx answer is
+/// not, since asking again gives the same result. The error of the last
+/// attempt says how many retries were made.
+pub async fn send_with_retry<F>(
+    label: &str,
+    retries: u32,
+    build: F,
+) -> Result<Response, ProviderError>
 where
     F: Fn() -> RequestBuilder,
 {
-    let mut attempt = 0u8;
+    let mut retried = 0u32;
     loop {
-        attempt += 1;
-        match build().send().await {
+        let (err, again) = match build().send().await {
             Ok(resp) if resp.status().is_success() => return Ok(resp),
             Ok(resp) => {
                 let status = resp.status();
-                if status.is_server_error() && attempt < 2 {
+                if status.is_server_error() && retried < retries {
+                    retried += 1;
                     continue;
                 }
                 let body = resp.text().await.unwrap_or_default();
-                return Err(classify_status(label, status, &body));
+                (
+                    classify_status(label, status, &body),
+                    status.is_server_error(),
+                )
             }
-            Err(err) => {
-                if err.is_timeout() {
-                    return Err(ProviderError::new(
-                        ErrorCode::ProviderTimeout,
-                        format!("{label}: request timed out"),
-                    ));
-                }
-                if err.is_connect() {
-                    if attempt < 2 {
-                        continue;
-                    }
-                    return Err(ProviderError::new(
-                        ErrorCode::ProviderUnreachable,
-                        format!("{label}: {err}"),
-                    )
+            Err(err) if err.is_timeout() => (
+                ProviderError::new(
+                    ErrorCode::ProviderTimeout,
+                    format!("{label}: request timed out"),
+                ),
+                true,
+            ),
+            Err(err) if err.is_connect() => (
+                ProviderError::new(ErrorCode::ProviderUnreachable, format!("{label}: {err}"))
                     .with_hint(format!(
                         "check that {label} is running and the base URL is correct"
-                    )));
-                }
-                return Err(ProviderError::new(
-                    ErrorCode::ProviderError,
-                    format!("{label}: {err}"),
-                ));
-            }
+                    )),
+                true,
+            ),
+            Err(err) => (
+                ProviderError::new(ErrorCode::ProviderError, format!("{label}: {err}")),
+                false,
+            ),
+        };
+        if again && retried < retries {
+            retried += 1;
+            continue;
         }
+        return Err(after_retries(err, retried));
     }
+}
+
+fn after_retries(mut err: ProviderError, retried: u32) -> ProviderError {
+    if retried > 0 {
+        err.message = format!("{} (after {retried} retries)", err.message);
+    }
+    err
 }
 
 pub fn classify_status(label: &str, status: StatusCode, body: &str) -> ProviderError {
@@ -159,9 +174,56 @@ mod tests {
             .await;
         let client = reqwest::Client::new();
         let url = format!("{}/x", server.uri());
-        let resp = send_with_retry("test", || client.get(&url)).await.unwrap();
+        let resp = send_with_retry("test", 1, || client.get(&url))
+            .await
+            .unwrap();
         assert_eq!(resp.status(), 200);
         assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_timeout_is_tried_again_and_the_error_says_how_often() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/x"))
+            .respond_with(
+                ResponseTemplate::new(200).set_delay(std::time::Duration::from_millis(300)),
+            )
+            .mount(&server)
+            .await;
+        let client = reqwest::Client::new();
+        let url = format!("{}/x", server.uri());
+        let err = send_with_retry("test", 2, || {
+            client
+                .get(&url)
+                .timeout(std::time::Duration::from_millis(50))
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProviderTimeout);
+        assert!(
+            err.message.ends_with("(after 2 retries)"),
+            "{}",
+            err.message
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn no_retries_means_one_attempt() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/x"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        let client = reqwest::Client::new();
+        let url = format!("{}/x", server.uri());
+        let err = send_with_retry("test", 0, || client.get(&url))
+            .await
+            .unwrap_err();
+        assert!(!err.message.contains("retries"), "{}", err.message);
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -174,7 +236,7 @@ mod tests {
             .await;
         let client = reqwest::Client::new();
         let url = format!("{}/x", server.uri());
-        let err = send_with_retry("test", || client.get(&url))
+        let err = send_with_retry("test", 1, || client.get(&url))
             .await
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::ProviderUnauthorized);
@@ -193,7 +255,7 @@ mod tests {
             .await;
         let client = reqwest::Client::new();
         let url = format!("{}/x", server.uri());
-        let err = send_with_retry("test", || {
+        let err = send_with_retry("test", 0, || {
             client
                 .get(&url)
                 .timeout(std::time::Duration::from_millis(50))
@@ -208,7 +270,7 @@ mod tests {
     async fn unreachable_maps_with_hint_after_one_retry() {
         // Port 9 (discard) is closed on macOS by default; connection is refused.
         let client = reqwest::Client::new();
-        let err = send_with_retry("Ollama", || client.get("http://127.0.0.1:9/x"))
+        let err = send_with_retry("Ollama", 1, || client.get("http://127.0.0.1:9/x"))
             .await
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::ProviderUnreachable);

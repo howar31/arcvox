@@ -31,6 +31,8 @@ While macOS reports Secure Input (a password field has the keyboard), Kongwe doe
 
 A dictation that fails stays on the widget with its detail and a Copy button until it is dismissed or the next dictation starts. Hands-free dictation can end by itself after a pause: Settings > General.
 
+Requests to an engine over the network are tried again after a connection failure, a server error or a timeout; the number of retries is set in Settings > General. When recordings are kept, a dictation that failed is listed in the history with its recording and can be processed again there. Any history row with a recording can be run again with the same or another profile, and the new result replaces the text only when accepted.
+
 ## License
 
 Layered open core. The Rust core and the desktop and iOS clients are Apache-2.0 (see `LICENSE` and `core/LICENSE`). The self-hosted engine server under `server/` is AGPL-3.0 and carries its own license file. The hosted service's operations layer is not part of this repository.

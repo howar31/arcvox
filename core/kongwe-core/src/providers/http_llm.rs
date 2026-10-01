@@ -18,6 +18,7 @@ pub struct HttpLlmProvider {
     api_key: Option<String>,
     extra_headers: BTreeMap<String, String>,
     label: String,
+    retries: u32,
 }
 
 impl HttpLlmProvider {
@@ -28,6 +29,7 @@ impl HttpLlmProvider {
         api_key: Option<String>,
         extra_headers: BTreeMap<String, String>,
         label: impl Into<String>,
+        retries: u32,
     ) -> Self {
         Self {
             client,
@@ -36,6 +38,7 @@ impl HttpLlmProvider {
             api_key,
             extra_headers,
             label: label.into(),
+            retries,
         }
     }
 }
@@ -68,7 +71,7 @@ impl LlmProvider for HttpLlmProvider {
             "max_tokens": opts.max_tokens,
             "stream": false,
         });
-        let resp = send_with_retry(&self.label, || {
+        let resp = send_with_retry(&self.label, self.retries, || {
             let mut req = self
                 .client
                 .post(self.url.clone())
@@ -156,6 +159,7 @@ mod tests {
             Some("k1".into()),
             headers,
             "Ollama",
+            1,
         );
         let out = p
             .complete(
@@ -189,6 +193,7 @@ mod tests {
             None,
             BTreeMap::new(),
             "Ollama",
+            1,
         );
         assert_eq!(
             p.complete(vec![ChatMessage::user("U")], &opts())
@@ -214,6 +219,7 @@ mod tests {
             None,
             BTreeMap::new(),
             "Ollama",
+            1,
         );
         let err = p
             .complete(vec![ChatMessage::user("U")], &opts())
@@ -240,6 +246,7 @@ mod tests {
             None,
             BTreeMap::new(),
             "Ollama",
+            1,
         );
         let err = p
             .complete(vec![ChatMessage::user("U")], &opts())

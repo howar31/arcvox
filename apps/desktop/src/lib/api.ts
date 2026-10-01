@@ -22,7 +22,7 @@ export interface DictionaryEntry { term: string; aliases: string[]; asr_hint: bo
 export interface General {
   history_retention_days: number; keep_recordings: boolean; recording_retention_days: number; context_limit_bytes: number;
   asr_timeout_secs: number; llm_timeout_secs: number; llm_temperature: number; llm_max_tokens: number | null;
-  llm_idle_unload_secs: number; typing_chars_per_min: number;
+  llm_idle_unload_secs: number; retry_count: number; typing_chars_per_min: number;
 }
 export interface Config { schema_version: number; general: General; providers: ProviderConfig[]; profiles: Profile[]; dictionary: DictionaryEntry[] }
 export interface ProbeResult { ok: boolean; failure: { kind: string; message?: string; reason?: string } | null }
@@ -31,6 +31,13 @@ export interface Utterance {
   degraded: boolean; has_audio: boolean; asr_ms: number; llm_ms: number | null;
   /** Length and size of the recording, when one is kept. */
   audio_ms: number | null; audio_bytes: number | null;
+  /** Why the dictation failed; such a row has no text yet. */
+  error: string | null;
+}
+/** The result of processing a row's recording again; `applied` when it was stored at once (the row had failed). */
+export interface Redo {
+  applied: boolean; profile_id: string; raw_text: string; final_text: string; degraded: boolean; asr_ms: number; llm_ms: number | null;
+  dict_fixes: number; snippets: number; llm_changed: boolean; asr_label: string; llm_label: string | null;
 }
 export type InsertMethod = "paste" | "type" | "ax";
 export interface ClientSettings {
@@ -64,6 +71,8 @@ export const restorePrompt = () => invoke<string>("prompt_restore");
 /** Recent rows; `query` keeps rows whose text contains it, `withAudio` rows with a recording. */
 export const listHistory = (limit = 200, query = "", withAudio = false) => invoke<Utterance[]>("history_list", { limit, query, withAudio });
 export const historyAudio = (id: number) => invoke<ArrayBuffer>("history_audio", { id });
+export const reprocessHistory = (id: number, profileId: string | null) => invoke<Redo>("history_reprocess", { id, profileId });
+export const applyRedo = (id: number, redo: Redo) => invoke<void>("history_apply_redo", { id, redo });
 export const deleteRecording = (id: number) => invoke<void>("history_delete_recording", { id });
 /** Deletes every recording and returns how many files were removed. */
 export const clearRecordings = () => invoke<number>("history_clear_recordings");

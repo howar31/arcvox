@@ -39,6 +39,37 @@ pub enum EngineError {
     UnknownSession(SessionId),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ReprocessError {
+    #[error("the history row no longer exists")]
+    NoRow,
+    #[error("the row has no recording")]
+    NoRecording,
+    #[error(transparent)]
+    History(#[from] HistoryError),
+    /// The engines could not produce a result; the text says why.
+    #[error("{0}")]
+    Failed(String),
+}
+
+/// The result of `Engine::reprocess` and the engines that produced it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Reprocessed {
+    pub redo: crate::history::Redo,
+    pub asr_label: String,
+    /// None when the profile does not rewrite.
+    pub llm_label: Option<String>,
+}
+
+/// Rearms the idle unload of the language model when a rerun ends.
+struct RearmIdle<'a>(&'a Engine);
+
+impl Drop for RearmIdle<'_> {
+    fn drop(&mut self) {
+        self.0.touch_idle();
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SessionRequest {
     pub app: AppInfo,
@@ -276,6 +307,95 @@ impl Engine {
         }
     }
 
+    /// Runs the recording of a history row through a profile again and
+    /// returns the result without storing it. `profile` names the profile to
+    /// use; without it, or when it no longer exists, the row's own profile
+    /// is used, and the default one when that is gone too. The profile's
+    /// current engines and settings apply, with the application name as the
+    /// only context, since nothing else of the original moment was kept.
+    pub async fn reprocess(
+        &self,
+        id: HistoryId,
+        profile: Option<ProfileId>,
+    ) -> Result<Reprocessed, ReprocessError> {
+        let history = self.inner.history.clone();
+        let recordings = self.inner.dirs.recordings_dir();
+        let (row, clip) = tokio::task::spawn_blocking(move || {
+            let row = history.get(id)?.ok_or(ReprocessError::NoRow)?;
+            let path = history
+                .recording_path(id, &recordings)?
+                .ok_or(ReprocessError::NoRecording)?;
+            let bytes = std::fs::read(&path).map_err(|_| ReprocessError::NoRecording)?;
+            let clip =
+                crate::audio::decode_wav_pcm16(&bytes).map_err(|_| ReprocessError::NoRecording)?;
+            Ok::<_, ReprocessError>((row, clip))
+        })
+        .await
+        .map_err(|e| ReprocessError::Failed(e.to_string()))??;
+
+        let config = self.inner.config.current();
+        let wanted = profile.unwrap_or_else(|| row.profile_id.clone());
+        let profile =
+            Arc::new(resolve(&config.profiles, &AppInfo::default(), Some(&wanted)).clone());
+        let label = |id: &crate::types::ProviderId| {
+            config
+                .provider(id)
+                .map(|p| p.label.clone())
+                .unwrap_or_else(|| id.0.clone())
+        };
+        let asr_label = label(&profile.asr_provider);
+        let llm_label = profile
+            .steps
+            .iter()
+            .any(|s| matches!(s, crate::config::StepSpec::Llm))
+            .then(|| profile.llm_provider.as_ref().map(label))
+            .flatten();
+
+        self.mark_busy();
+        let _idle = RearmIdle(self);
+        let fail = |e: &crate::steps::StepError| ReprocessError::Failed(failure_text(e));
+        let pipeline =
+            Pipeline::build(&config, &profile, &self.inner.registry).map_err(|e| fail(&e))?;
+        let ctx =
+            PipelineContext {
+                profile: profile.clone(),
+                context: Context {
+                    app_name: row.app_name.clone(),
+                    ..Context::default()
+                },
+                dictionary: Arc::new(config.dictionary.clone()),
+                base_prompt: self.inner.config.base_prompt().unwrap_or_else(|_| {
+                    crate::config::base_prompt::DEFAULT_BASE_PROMPT.to_string()
+                }),
+                general: config.general.clone(),
+            };
+        // Nobody listens to the step events of a rerun.
+        let (tx, mut rx) = mpsc::channel(EVENT_BUFFER);
+        let drain = self
+            .inner
+            .runtime
+            .spawn(async move { while rx.recv().await.is_some() {} });
+        let outcome = pipeline.run(Arc::new(clip), &ctx, &tx).await;
+        drop(tx);
+        let _ = drain.await;
+        let outcome = outcome.map_err(|e| fail(&e))?;
+        Ok(Reprocessed {
+            asr_label,
+            llm_label,
+            redo: crate::history::Redo {
+                profile_id: profile.id.clone(),
+                raw_text: outcome.raw_text,
+                final_text: outcome.final_text,
+                degraded: outcome.degraded,
+                asr_ms: outcome.asr_ms,
+                llm_ms: outcome.llm_ms,
+                dict_fixes: outcome.dict_fixes,
+                snippets: outcome.snippets,
+                llm_changed: outcome.llm_changed,
+            },
+        })
+    }
+
     /// Records what the user actually inserted for a finished session.
     pub async fn record_final(
         &self,
@@ -414,6 +534,61 @@ async fn send_done_once(
 // one over clippy's default threshold of 7; every remaining parameter is a
 // distinct, necessary piece of state, so the lint stays silenced rather than
 // inventing a further grouping not called for elsewhere.
+/// Why a dictation failed, as stored with its recording.
+fn failure_text(err: &crate::steps::StepError) -> String {
+    match &err.hint {
+        Some(hint) => format!("{}; {hint}", err.message),
+        None => err.message.clone(),
+    }
+}
+
+/// Keeps the recording of a dictation that failed, with a history row that
+/// says why, so it can be processed again. Only when recordings are kept;
+/// silence and a cancelled dictation leave nothing.
+#[allow(clippy::too_many_arguments)]
+async fn keep_failed(
+    inner: &Arc<Inner>,
+    config: &crate::config::Config,
+    session_id: &SessionId,
+    profile: &crate::config::Profile,
+    req: &SessionRequest,
+    clip: &AudioClip,
+    err: &crate::steps::StepError,
+    flags: &SessionFlags,
+) {
+    if !config.general.keep_recordings
+        || matches!(err.code, ErrorCode::NoSpeech | ErrorCode::NoAudio)
+        || flags.cancelled.load(Ordering::SeqCst)
+    {
+        return;
+    }
+    let path = inner
+        .dirs
+        .recordings_dir()
+        .join(format!("{session_id}.wav"));
+    let bytes = encode_wav_pcm16(clip);
+    let failed = crate::history::FailedUtterance {
+        ts: crate::history::now_unix(),
+        profile_id: profile.id.clone(),
+        app_name: req.app.app_name.clone(),
+        audio_path: path.clone(),
+        audio_ms: (clip.sample_rate > 0)
+            .then(|| clip.samples.len() as u64 * 1000 / u64::from(clip.sample_rate)),
+        error: failure_text(err),
+    };
+    let history = inner.history.clone();
+    let stored = tokio::task::spawn_blocking(move || {
+        std::fs::write(&path, bytes)?;
+        history.insert_failed(failed).inspect_err(|_| {
+            let _ = std::fs::remove_file(&path);
+        })
+    })
+    .await;
+    if !matches!(stored, Ok(Ok(_))) {
+        tracing::warn!(session = %session_id, "the failed dictation could not be kept");
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_session(
     inner: Arc<Inner>,
@@ -474,6 +649,17 @@ async fn run_session(
         Ok(p) => p,
         Err(err) => {
             tracing::warn!(session = %session_id, code = ?err.code, error = %err.message, "session could not start its steps");
+            keep_failed(
+                &inner,
+                &config,
+                &session_id,
+                &profile,
+                &req,
+                &clip,
+                &err,
+                &flags,
+            )
+            .await;
             let _ = tx
                 .send(Event::Error {
                     step: None,
@@ -494,6 +680,17 @@ async fn run_session(
         Ok(o) => o,
         Err(err) => {
             tracing::warn!(session = %session_id, code = ?err.code, error = %err.message, "session failed");
+            keep_failed(
+                &inner,
+                &config,
+                &session_id,
+                &profile,
+                &req,
+                &clip,
+                &err,
+                &flags,
+            )
+            .await;
             send_done_once(&tx, &flags.done_sent, &session_id, None).await;
             inner.schedule_idle_unload();
             return;
@@ -1055,6 +1252,86 @@ pub(crate) mod tests {
         assert!(path.starts_with(r.engine.dirs().recordings_dir()));
         assert!(path.exists());
         assert_eq!(&std::fs::read(&path).unwrap()[0..4], b"RIFF");
+    }
+
+    #[tokio::test]
+    async fn a_failed_dictation_keeps_its_recording_and_can_be_processed_again() {
+        let r = rig(true).await;
+        // The speech server answers 400 until the mocks below replace it.
+        let down = Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("bad audio"))
+            .mount_as_scoped(&r.asr)
+            .await;
+        let s = r.engine.start_session(SessionRequest {
+            app: AppInfo {
+                app_name: Some("Notes".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        s.push_audio(&one_second());
+        s.finish();
+        let events = drain(&s).await;
+        assert!(matches!(
+            events.last(),
+            Some(Event::Done {
+                history_id: None,
+                ..
+            })
+        ));
+        let rows = r.engine.history().list_recent(10).unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        let row = &rows[0];
+        assert!(
+            row.error.as_deref().is_some_and(|e| e.contains("400")),
+            "{row:?}"
+        );
+        assert_eq!(row.final_text, "");
+        assert!(row.audio_path.as_ref().is_some_and(|p| p.exists()));
+        assert_eq!(r.engine.history().stats(0, 0).unwrap().totals.count, 0);
+
+        let again = r.engine.reprocess(row.id, None).await;
+        assert!(matches!(again, Err(ReprocessError::Failed(_))), "{again:?}");
+
+        drop(down);
+        mock_ok(&r, "原文", "整理後").await;
+        let done = r.engine.reprocess(row.id, None).await.unwrap();
+        assert_eq!(done.redo.final_text, "整理後");
+        assert_eq!(done.redo.raw_text, "原文");
+        assert_eq!(done.redo.profile_id, row.profile_id);
+        assert!(done.llm_label.is_some());
+        // Nothing is stored until the result is applied.
+        assert!(r
+            .engine
+            .history()
+            .get(row.id)
+            .unwrap()
+            .unwrap()
+            .error
+            .is_some());
+        assert!(r.engine.history().apply_redo(row.id, &done.redo).unwrap());
+        assert_eq!(r.engine.history().stats(0, 0).unwrap().totals.count, 1);
+    }
+
+    #[tokio::test]
+    async fn a_failed_dictation_leaves_nothing_when_recordings_are_not_kept() {
+        let r = rig(false).await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(400))
+            .mount(&r.asr)
+            .await;
+        let s = r.engine.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        s.finish();
+        drain(&s).await;
+        assert!(r.engine.history().list_recent(10).unwrap().is_empty());
+        let id = HistoryId(1);
+        assert!(matches!(
+            r.engine.reprocess(id, None).await,
+            Err(ReprocessError::NoRow)
+        ));
     }
 
     #[tokio::test]

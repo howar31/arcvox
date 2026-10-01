@@ -86,6 +86,8 @@ pub fn run() {
             crate::commands::history::history_clear_recordings,
             crate::commands::history::history_reveal_recording,
             crate::commands::history::history_storage,
+            crate::commands::history::history_reprocess,
+            crate::commands::history::history_apply_redo,
             crate::commands::stats::stats_get,
             crate::commands::stats::stats_reset,
             crate::commands::history::history_delete,
