@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::shortcut::Shortcut;
+
 pub const CLIENT_SCHEMA_VERSION: u32 = 1;
 pub const FILE_NAME: &str = "client.json";
 
@@ -41,6 +43,9 @@ pub struct ClientSettings {
 pub struct HotkeySettings {
     pub hold_threshold_ms: u64,
     pub double_tap_window_ms: u64,
+    /// The key combinations and mouse buttons that start a recording.
+    #[serde(deserialize_with = "crate::shortcut::lenient")]
+    pub shortcuts: Vec<Shortcut>,
 }
 
 /// Ends a hands-free dictation by itself after a pause in the speech.
@@ -121,6 +126,7 @@ impl Default for HotkeySettings {
         Self {
             hold_threshold_ms: 250,
             double_tap_window_ms: 350,
+            shortcuts: vec![Shortcut::fn_key()],
         }
     }
 }

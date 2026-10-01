@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use arcvox_core::models::{ModelStore, DEFAULT_MANIFEST_URL};
 use arcvox_core::{DataDir, Engine, EngineOptions, FirstRunDefaults};
-use tauri::{Manager, Wry};
+use tauri::{Emitter, Manager, Wry};
 
 use crate::audio::capture::CpalSource;
 use crate::audio::AudioSource;
@@ -13,7 +13,7 @@ use crate::commands::bench::BenchState;
 use crate::dictation::ui::{Ui, UiState};
 use crate::dictation::{self, ControllerHandle, Deps};
 use crate::i18n::{self, Language};
-use crate::platform::Platform;
+use crate::platform::{CaptureEvent, Platform};
 use crate::providers::{build_factories, BUNDLED_MANIFEST};
 use crate::secrets::KeychainStore;
 use crate::settings::ClientSettings;
@@ -33,6 +33,16 @@ pub struct AppState {
     pub engine_error: Mutex<Option<String>>,
     pub bench: BenchState,
     pub window_state: WindowState,
+}
+
+/// The keys held while a new shortcut is recorded, sent to the settings window.
+#[derive(serde::Serialize, Clone)]
+struct CapturePayload {
+    keys: Vec<crate::shortcut::Key>,
+    /// The combination was pressed and let go.
+    done: bool,
+    /// Recording ended without a combination.
+    cancelled: bool,
 }
 
 pub fn run() {
@@ -97,6 +107,8 @@ pub fn run() {
             crate::commands::secrets::secrets_delete,
             crate::commands::client::client_get,
             crate::commands::client::client_update,
+            crate::commands::client::shortcut_check,
+            crate::commands::client::shortcut_capture,
             crate::commands::models::models_manifest,
             crate::commands::models::models_manifest_now,
             crate::commands::models::models_installed,
@@ -151,6 +163,8 @@ pub fn run() {
                     // recording; release the microphone now.
                     if let Some(state) = window.app_handle().try_state::<AppState>() {
                         state.bench.discard_recording();
+                        // Nothing is left to end the recording of a shortcut.
+                        state.platform.set_shortcut_capture(false);
                         crate::commands::bench::cancel_run(window.app_handle(), &state);
                         // Nothing is left to end the positioning of the widget either.
                         state.ui.set_placing(false);
@@ -208,6 +222,22 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(not(target_os = "macos"))]
     let platform: Arc<dyn Platform> = unimplemented!("only macOS is supported in this phase");
     let audio: Arc<dyn AudioSource> = Arc::new(CpalSource);
+    let capture_app = app.clone();
+    platform.set_capture_sink(Arc::new(move |event| {
+        let payload = match event {
+            CaptureEvent::Keys { keys, done } => CapturePayload {
+                keys,
+                done,
+                cancelled: false,
+            },
+            CaptureEvent::Cancelled => CapturePayload {
+                keys: Vec::new(),
+                done: false,
+                cancelled: true,
+            },
+        };
+        let _ = capture_app.emit_to(SETTINGS_WINDOW, "shortcut-capture", payload);
+    }));
 
     crate::ui::widget::convert_to_panel(&app)?;
     let window_state = WindowState::new(dirs.config_dir.clone());

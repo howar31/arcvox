@@ -3,6 +3,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { permissions, uiLanguage } from "../lib/api";
   import { setLanguage, t, type Lang } from "../lib/i18n";
+  import { firstShortcut } from "../lib/shortcut";
   import { client, config } from "../lib/store.svelte";
   import { go, NAV, parseRoute, routeHash, shouldIntercept } from "../lib/route";
   import { guard } from "../lib/guard.svelte";
@@ -99,7 +100,7 @@
           <Ring tone="live" />
           <button type="button" class="state-link" onclick={() => guard.request(() => go("general"))}>{t("shell.needs_access")}</button>
         {:else if accessibility}
-          <Ring tone="ok" /><span>{t("shell.ready")}</span>
+          <Ring tone="ok" /><span>{t("shell.ready", { key: firstShortcut(client.value?.hotkey.shortcuts) })}</span>
         {/if}
       </div>
     </aside>

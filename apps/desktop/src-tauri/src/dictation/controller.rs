@@ -103,6 +103,8 @@ impl Controller {
         tx: Sender<ControllerMsg>,
     ) -> Self {
         let recognizer = Recognizer::new(&settings.hotkey);
+        deps.platform
+            .set_shortcuts(crate::shortcut::sanitized(&settings.hotkey.shortcuts));
         Self {
             deps,
             engine,
@@ -155,6 +157,9 @@ impl Controller {
 
     fn apply_settings(&mut self, s: ClientSettings) {
         self.recognizer = Recognizer::new(&s.hotkey);
+        self.deps
+            .platform
+            .set_shortcuts(crate::shortcut::sanitized(&s.hotkey.shortcuts));
         self.settings = s;
     }
 
@@ -184,13 +189,13 @@ impl Controller {
         // and the hold/tap thresholds must be measured from the latter.
         let now = ev.at();
         let input = match ev {
-            ModifierEvent::FnDown { .. } => {
+            ModifierEvent::TriggerDown { .. } => {
                 if matches!(self.state, State::Idle) {
                     self.arm();
                 }
-                Input::FnDown
+                Input::TriggerDown
             }
-            ModifierEvent::FnUp { .. } => Input::FnUp,
+            ModifierEvent::TriggerUp { .. } => Input::TriggerUp,
             ModifierEvent::KeyDown { key_code, .. } if key_code == KEY_ESCAPE => {
                 self.cancel_active();
                 Input::Escape
@@ -206,7 +211,7 @@ impl Controller {
         // But a key press that lands after fn is already up (during a tap's
         // double-tap window) drops the recognizer straight to `Idle` with
         // no gesture at all, so an `Armed` stream opened by the tap's
-        // `FnDown` is never closed by `on_gesture`. Close it here whenever
+        // `TriggerDown` is never closed by `on_gesture`. Close it here whenever
         // the recognizer is fully at rest but the state machine is still
         // `Armed`.
         if matches!(self.state, State::Armed { .. })
@@ -301,7 +306,7 @@ impl Controller {
 
     fn start_recording(&mut self, locked: bool) {
         // A double tap arrives with the stream already open from the first
-        // tap's FnDown (Armed), or from Idle when the taps were fast.
+        // tap's TriggerDown (Armed), or from Idle when the taps were fast.
         let capture = match std::mem::replace(&mut self.state, State::Idle) {
             State::Armed { capture } => Some(capture),
             State::Idle => None,
@@ -789,6 +794,7 @@ mod tests {
             hotkey: HotkeySettings {
                 hold_threshold_ms: 30,
                 double_tap_window_ms: 60,
+                ..HotkeySettings::default()
             },
             ..ClientSettings::default()
         }
@@ -800,10 +806,10 @@ mod tests {
     // not care about the distinction; tests that do (late-handling races)
     // construct the event directly with an explicit `at`.
     fn fn_down() -> ModifierEvent {
-        ModifierEvent::FnDown { at: Instant::now() }
+        ModifierEvent::TriggerDown { at: Instant::now() }
     }
     fn fn_up() -> ModifierEvent {
-        ModifierEvent::FnUp { at: Instant::now() }
+        ModifierEvent::TriggerUp { at: Instant::now() }
     }
     fn key_down(key_code: u16) -> ModifierEvent {
         ModifierEvent::KeyDown {
@@ -981,7 +987,7 @@ mod tests {
     /// folded it into the recording capture (observed through a new UI
     /// level) before returning. `AudioSource::start` and `modifier_sender`
     /// each hand their sender to a separate forwarding thread, so sending a
-    /// speech block and the following `FnUp` back to back does not
+    /// speech block and the following `TriggerUp` back to back does not
     /// guarantee the controller sees them in that order.
     async fn speak_and_wait(r: &Rig, secs: f32) {
         let before = r.ui.levels.lock().unwrap().len();
@@ -1666,9 +1672,11 @@ mod tests {
         // only handled long after it actually happened.
         *r.audio.delay.lock().unwrap() = Duration::from_millis(80);
         let t0 = Instant::now();
-        r.modifier.send(ModifierEvent::FnDown { at: t0 }).unwrap();
         r.modifier
-            .send(ModifierEvent::FnUp {
+            .send(ModifierEvent::TriggerDown { at: t0 })
+            .unwrap();
+        r.modifier
+            .send(ModifierEvent::TriggerUp {
                 at: t0 + Duration::from_millis(5),
             })
             .unwrap();

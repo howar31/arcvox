@@ -11,8 +11,8 @@ pub const KEY_ESCAPE: u16 = 53;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Input {
-    FnDown,
-    FnUp,
+    TriggerDown,
+    TriggerUp,
     /// Any other key went down. `key_code` is the virtual key code.
     KeyDown {
         key_code: u16,
@@ -84,7 +84,7 @@ impl Recognizer {
     pub fn on_input(&mut self, input: Input, now: Instant) -> Vec<Gesture> {
         let mut out = self.on_tick(now);
         match input {
-            Input::FnDown => {
+            Input::TriggerDown => {
                 if self.fn_down {
                     return out;
                 }
@@ -97,7 +97,7 @@ impl Recognizer {
                     _ => State::Pending { since: now },
                 };
             }
-            Input::FnUp => {
+            Input::TriggerUp => {
                 if !self.fn_down {
                     return out;
                 }
@@ -159,21 +159,24 @@ mod tests {
     #[test]
     fn hold_emits_start_at_threshold_and_end_on_release() {
         let (mut r, t0) = rec();
-        assert!(r.on_input(Input::FnDown, t0).is_empty());
+        assert!(r.on_input(Input::TriggerDown, t0).is_empty());
         assert_eq!(r.next_deadline(), Some(ms(t0, 250)));
         assert!(r.on_tick(ms(t0, 100)).is_empty());
         assert_eq!(r.on_tick(ms(t0, 250)), vec![Gesture::HoldStart]);
         assert_eq!(r.next_deadline(), None);
-        assert_eq!(r.on_input(Input::FnUp, ms(t0, 900)), vec![Gesture::HoldEnd]);
+        assert_eq!(
+            r.on_input(Input::TriggerUp, ms(t0, 900)),
+            vec![Gesture::HoldEnd]
+        );
         assert!(!r.fn_is_down());
     }
 
     #[test]
     fn hold_start_fires_from_the_release_event_when_no_tick_ran() {
         let (mut r, t0) = rec();
-        r.on_input(Input::FnDown, t0);
+        r.on_input(Input::TriggerDown, t0);
         assert_eq!(
-            r.on_input(Input::FnUp, ms(t0, 600)),
+            r.on_input(Input::TriggerUp, ms(t0, 600)),
             vec![Gesture::HoldStart, Gesture::HoldEnd]
         );
     }
@@ -181,8 +184,8 @@ mod tests {
     #[test]
     fn short_press_becomes_tap_after_the_window() {
         let (mut r, t0) = rec();
-        r.on_input(Input::FnDown, t0);
-        assert!(r.on_input(Input::FnUp, ms(t0, 100)).is_empty());
+        r.on_input(Input::TriggerDown, t0);
+        assert!(r.on_input(Input::TriggerUp, ms(t0, 100)).is_empty());
         assert_eq!(r.next_deadline(), Some(ms(t0, 450)));
         assert!(r.on_tick(ms(t0, 400)).is_empty());
         assert_eq!(r.on_tick(ms(t0, 450)), vec![Gesture::Tap]);
@@ -191,52 +194,52 @@ mod tests {
     #[test]
     fn two_short_presses_are_a_double_tap() {
         let (mut r, t0) = rec();
-        r.on_input(Input::FnDown, t0);
-        r.on_input(Input::FnUp, ms(t0, 80));
+        r.on_input(Input::TriggerDown, t0);
+        r.on_input(Input::TriggerUp, ms(t0, 80));
         assert_eq!(
-            r.on_input(Input::FnDown, ms(t0, 300)),
+            r.on_input(Input::TriggerDown, ms(t0, 300)),
             vec![Gesture::DoubleTap]
         );
-        assert!(r.on_input(Input::FnUp, ms(t0, 380)).is_empty());
+        assert!(r.on_input(Input::TriggerUp, ms(t0, 380)).is_empty());
         assert!(r.on_tick(ms(t0, 2000)).is_empty());
     }
 
     #[test]
     fn tap_then_hold_is_a_double_tap_not_a_hold() {
         let (mut r, t0) = rec();
-        r.on_input(Input::FnDown, t0);
-        r.on_input(Input::FnUp, ms(t0, 80));
+        r.on_input(Input::TriggerDown, t0);
+        r.on_input(Input::TriggerUp, ms(t0, 80));
         assert_eq!(
-            r.on_input(Input::FnDown, ms(t0, 200)),
+            r.on_input(Input::TriggerDown, ms(t0, 200)),
             vec![Gesture::DoubleTap]
         );
         assert!(r.on_tick(ms(t0, 1000)).is_empty());
-        assert!(r.on_input(Input::FnUp, ms(t0, 1200)).is_empty());
+        assert!(r.on_input(Input::TriggerUp, ms(t0, 1200)).is_empty());
     }
 
     #[test]
     fn key_press_while_fn_down_aborts_and_cancels() {
         let (mut r, t0) = rec();
-        r.on_input(Input::FnDown, t0);
+        r.on_input(Input::TriggerDown, t0);
         assert_eq!(
             r.on_input(Input::KeyDown { key_code: 123 }, ms(t0, 50)),
             vec![Gesture::Abort]
         );
-        assert!(r.on_input(Input::FnUp, ms(t0, 100)).is_empty());
+        assert!(r.on_input(Input::TriggerUp, ms(t0, 100)).is_empty());
         assert!(r.on_tick(ms(t0, 1000)).is_empty());
 
         let (mut r, t0) = rec();
-        r.on_input(Input::FnDown, t0);
+        r.on_input(Input::TriggerDown, t0);
         assert_eq!(r.on_tick(ms(t0, 250)), vec![Gesture::HoldStart]);
         assert_eq!(r.on_input(Input::Escape, ms(t0, 500)), vec![Gesture::Abort]);
-        assert!(r.on_input(Input::FnUp, ms(t0, 600)).is_empty());
+        assert!(r.on_input(Input::TriggerUp, ms(t0, 600)).is_empty());
     }
 
     #[test]
     fn key_press_without_fn_clears_a_pending_tap() {
         let (mut r, t0) = rec();
-        r.on_input(Input::FnDown, t0);
-        r.on_input(Input::FnUp, ms(t0, 80));
+        r.on_input(Input::TriggerDown, t0);
+        r.on_input(Input::TriggerUp, ms(t0, 80));
         assert!(r
             .on_input(Input::KeyDown { key_code: 0 }, ms(t0, 100))
             .is_empty());
@@ -246,11 +249,11 @@ mod tests {
     #[test]
     fn repeated_down_or_up_events_are_ignored() {
         let (mut r, t0) = rec();
-        r.on_input(Input::FnDown, t0);
-        assert!(r.on_input(Input::FnDown, ms(t0, 10)).is_empty());
+        r.on_input(Input::TriggerDown, t0);
+        assert!(r.on_input(Input::TriggerDown, ms(t0, 10)).is_empty());
         assert!(r
-            .on_input(Input::FnUp, ms(t0, 1000))
+            .on_input(Input::TriggerUp, ms(t0, 1000))
             .contains(&Gesture::HoldEnd));
-        assert!(r.on_input(Input::FnUp, ms(t0, 1010)).is_empty());
+        assert!(r.on_input(Input::TriggerUp, ms(t0, 1010)).is_empty());
     }
 }

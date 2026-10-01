@@ -46,7 +46,8 @@ export interface Redo {
 export type InsertMethod = "paste" | "type" | "ax";
 export interface ClientSettings {
   schema_version: number;
-  hotkey: { hold_threshold_ms: number; double_tap_window_ms: number };
+  /** `shortcuts`: the key combinations and mouse buttons that start a recording, each a list of key names. */
+  hotkey: { hold_threshold_ms: number; double_tap_window_ms: number; shortcuts: string[][] };
   microphone: string;
   context: { app_name: boolean; window_title: boolean; url: boolean; selected_text: boolean; clipboard: boolean };
   insertion: { per_app: Record<string, InsertMethod> };
@@ -117,6 +118,13 @@ export const uiLanguage = () => invoke<string>("ui_language");
 export const widgetCopy = (text: string) => invoke<void>("widget_copy", { text });
 export const widgetDismiss = () => invoke<void>("widget_dismiss");
 export const widgetDragStart = () => invoke<void>("widget_drag_start");
+/** Why `keys` cannot be added to `existing`; null when they can. */
+export const shortcutCheck = (keys: string[], existing: string[][]) => invoke<string | null>("shortcut_check", { keys, existing });
+/** Starts or ends recording a new shortcut; false when keys cannot be recorded. */
+export const shortcutCapture = (on: boolean) => invoke<boolean>("shortcut_capture", { on });
+/** The keys held while a shortcut is recorded; `done` when the combination was let go, `cancelled` when recording ended without one. */
+export interface CapturePayload { keys: string[]; done: boolean; cancelled: boolean }
+export function onShortcutCapture(cb: (p: CapturePayload) => void): Promise<UnlistenFn> { return listen<CapturePayload>("shortcut-capture", (e) => cb(e.payload)); }
 export const widgetPlacing = (on: boolean) => invoke<void>("widget_placing", { on });
 export const widgetResetPosition = () => invoke<void>("widget_reset_position");
 export const openSettingsWindow = (page?: string) => invoke<void>("system_open_settings_window", { page: page ?? null });
