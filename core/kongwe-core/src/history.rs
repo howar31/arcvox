@@ -353,8 +353,23 @@ impl HistoryStore {
     /// Statistics of the buckets from the hour containing `since`, with days
     /// and hours of day taken at the given UTC offset.
     pub fn stats(&self, since: i64, tz_offset_secs: i32) -> Result<Stats, HistoryError> {
+        self.stats_for(since, tz_offset_secs, stats::TYPING_CHARS_PER_MIN)
+    }
+
+    /// `stats` with the typing speed the saved-time estimate compares against.
+    pub fn stats_for(
+        &self,
+        since: i64,
+        tz_offset_secs: i32,
+        typing_chars_per_min: u32,
+    ) -> Result<Stats, HistoryError> {
         let conn = self.conn.lock().unwrap();
-        Ok(stats::query(&conn, since, tz_offset_secs)?)
+        Ok(stats::query(
+            &conn,
+            since,
+            tz_offset_secs,
+            typing_chars_per_min,
+        )?)
     }
 
     /// Empties the statistics buckets; history rows are not touched.
@@ -795,6 +810,20 @@ mod tests {
             }
         );
         assert!(s.get(id).unwrap().is_some());
+    }
+
+    #[test]
+    fn saved_time_follows_the_typing_speed() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let mut u = new(1, None);
+        u.final_text = "一二三四五六七八九十".into();
+        u.audio_ms = Some(5_000);
+        u.asr_ms = 0;
+        u.llm_ms = None;
+        s.insert(u).unwrap();
+        // Ten characters: 15 s of typing at 40 a minute, 6 s at 100.
+        assert_eq!(s.stats_for(0, 0, 40).unwrap().saved_ms, Some(10_000));
+        assert_eq!(s.stats_for(0, 0, 100).unwrap().saved_ms, Some(1_000));
     }
 
     #[test]

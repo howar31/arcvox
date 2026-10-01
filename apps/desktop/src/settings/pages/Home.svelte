@@ -28,8 +28,6 @@
   const PERIOD_KEY = "kongwe.stats.period";
   /** Days the heatmap covers. */
   const HEAT_DAYS = 140;
-  /** Characters a minute the saved-time estimate assumes for typing. */
-  const TYPING_SPEED = 40;
 
   function storedPeriod(): Period {
     try {
@@ -196,7 +194,7 @@
     <StatTile parts={[{ value: num(totals.chars) }]} label={t("home.tile.chars")} detail={totals.count ? t("home.tile.chars_detail", { n: num(Math.round(totals.chars / totals.count)) }) : undefined} />
     <StatTile parts={[{ value: num(totals.count) }]} label={t("home.tile.count")} detail={periodDays.span > 1 && totals.count ? t("home.tile.count_detail", { n: num(Math.round(totals.count / periodDays.span)) }) : undefined} />
     <StatTile parts={span(totals.audio_ms)} label={t("home.tile.audio")} detail={t("home.tile.audio_detail")} />
-    <StatTile parts={stats.saved_ms === null ? [{ value: t("home.none") }] : span(stats.saved_ms)} label={t("home.tile.saved")} detail={t("home.tile.saved_detail", { n: String(TYPING_SPEED) })} />
+    <StatTile parts={stats.saved_ms === null ? [{ value: t("home.none") }] : span(stats.saved_ms)} label={t("home.tile.saved")} detail={t("home.tile.saved_detail", { n: String(config.value?.general.typing_chars_per_min ?? 40) })} />
   </div>
 
   <div class="cards">

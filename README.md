@@ -29,7 +29,7 @@ The macOS client needs the Accessibility permission to insert text and the Micro
 
 While macOS reports Secure Input (a password field has the keyboard), Kongwe does not insert text; the widget shows the result with a Copy button. This depends on the application turning Secure Input on. Terminal does so for password prompts; in iTerm2 it is the "Secure Keyboard Entry" option; a terminal that never turns it on cannot be told apart from ordinary typing, so text dictated at its password prompt is inserted.
 
-A dictation that fails stays on the widget with its detail and a Copy button until it is dismissed or the next dictation starts.
+A dictation that fails stays on the widget with its detail and a Copy button until it is dismissed or the next dictation starts. Hands-free dictation can end by itself after a pause: Settings > General.
 
 ## License
 

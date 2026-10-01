@@ -61,9 +61,61 @@ pub fn trim(samples: &[f32], vad: &mut dyn Vad) -> Option<Range<usize>> {
     Some(start..end)
 }
 
+/// Watches a growing recording for a pause after speech.
+pub struct SilenceWatch {
+    vad: Box<dyn Vad>,
+    /// Samples already looked at.
+    seen: usize,
+    heard_speech: bool,
+    silent_samples: usize,
+    limit_samples: usize,
+}
+
+impl SilenceWatch {
+    pub fn new(vad: Box<dyn Vad>, silence_secs: u32, sample_rate: u32) -> Self {
+        Self {
+            vad,
+            seen: 0,
+            heard_speech: false,
+            silent_samples: 0,
+            limit_samples: silence_secs as usize * sample_rate as usize,
+        }
+    }
+
+    /// Looks at the whole frames added to `samples` since the last call.
+    /// True once speech has been followed by silence for the set time; a
+    /// recording that starts with silence is left running.
+    pub fn paused(&mut self, samples: &[f32]) -> bool {
+        while self.seen + FRAME_SAMPLES <= samples.len() {
+            let frame = &samples[self.seen..self.seen + FRAME_SAMPLES];
+            self.seen += FRAME_SAMPLES;
+            if self.vad.is_speech(frame) {
+                self.heard_speech = true;
+                self.silent_samples = 0;
+            } else {
+                self.silent_samples += FRAME_SAMPLES;
+            }
+        }
+        self.heard_speech && self.silent_samples >= self.limit_samples
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pause_counts_only_after_speech() {
+        let mut watch = SilenceWatch::new(Box::new(PeakVad), 1, 16_000);
+        let mut audio = signal(32_000, 0, 0);
+        assert!(!watch.paused(&audio), "silence before any speech");
+        audio.extend(signal(0, 8_000, 8_000));
+        assert!(!watch.paused(&audio), "half a second of silence");
+        audio.extend(signal(0, 0, 8_704));
+        assert!(watch.paused(&audio));
+        audio.extend(signal(0, 4_096, 0));
+        assert!(!watch.paused(&audio), "speech again resets the pause");
+    }
 
     /// Speech = any frame whose peak exceeds 0.1.
     struct PeakVad;

@@ -22,7 +22,7 @@ export interface DictionaryEntry { term: string; aliases: string[]; asr_hint: bo
 export interface General {
   history_retention_days: number; keep_recordings: boolean; recording_retention_days: number; context_limit_bytes: number;
   asr_timeout_secs: number; llm_timeout_secs: number; llm_temperature: number; llm_max_tokens: number | null;
-  llm_idle_unload_secs: number;
+  llm_idle_unload_secs: number; typing_chars_per_min: number;
 }
 export interface Config { schema_version: number; general: General; providers: ProviderConfig[]; profiles: Profile[]; dictionary: DictionaryEntry[] }
 export interface ProbeResult { ok: boolean; failure: { kind: string; message?: string; reason?: string } | null }
@@ -40,6 +40,7 @@ export interface ClientSettings {
   context: { app_name: boolean; window_title: boolean; url: boolean; selected_text: boolean; clipboard: boolean };
   insertion: { per_app: Record<string, InsertMethod> };
   max_utterance_secs: number;
+  auto_stop: { enabled: boolean; silence_secs: number };
   ui_language: "system" | "zh-tw" | "en";
   manifest_url: string | null;
 }

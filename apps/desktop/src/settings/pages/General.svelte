@@ -112,10 +112,12 @@
       { key: "general.hold_threshold", value: draft.hotkey.hold_threshold_ms, min: 100, max: 1000, integer: true },
       { key: "general.double_tap_window", value: draft.hotkey.double_tap_window_ms, min: 150, max: 1000, integer: true },
       { key: "general.max_utterance", value: draft.max_utterance_secs, min: 10, max: 1800, integer: true },
+      { key: "general.auto_stop_secs", value: draft.auto_stop.silence_secs, min: 1, max: 30, integer: true },
     ]));
     if (general) bad.push(...invalidFields([
-      { key: "general.history_retention", value: general.history_retention_days, min: 1, integer: true },
-      { key: "general.recording_retention", value: general.recording_retention_days, min: 1, integer: true },
+      { key: "general.history_retention", value: general.history_retention_days, min: 0, integer: true },
+      { key: "general.recording_retention", value: general.recording_retention_days, min: 0, integer: true },
+      { key: "general.typing_speed", value: general.typing_chars_per_min, min: 1, max: 1000, integer: true },
       { key: "general.asr_timeout", value: general.asr_timeout_secs, min: 1, integer: true },
       { key: "general.llm_timeout", value: general.llm_timeout_secs, min: 1, integer: true },
       { key: "general.llm_idle_unload", value: general.llm_idle_unload_secs, min: 0, integer: true },
@@ -216,6 +218,14 @@
     <Row label={t("general.max_utterance")}>
       <NumberField bind:value={draft.max_utterance_secs} min={10} max={1800} unit={t("common.seconds")} label={t("general.max_utterance")} />
     </Row>
+    <Row label={t("general.auto_stop")} help={t("general.auto_stop_help")}>
+      <Switch bind:checked={draft.auto_stop.enabled} label={t("general.auto_stop")} />
+    </Row>
+    {#if draft.auto_stop.enabled}
+      <Row label={t("general.auto_stop_secs")}>
+        <NumberField bind:value={draft.auto_stop.silence_secs} min={1} max={30} unit={t("common.seconds")} label={t("general.auto_stop_secs")} />
+      </Row>
+    {/if}
   </Group>
 
   <Group title={t("general.microphone")}>
@@ -275,18 +285,21 @@
 
 {#if general}
   <Group title={t("general.history")}>
-    <Row label={t("general.history_retention")}>
-      <NumberField bind:value={general.history_retention_days} min={1} unit={t("common.days")} label={t("general.history_retention")} />
+    <Row label={t("general.history_retention")} help={t("general.retention_zero_help")}>
+      <NumberField bind:value={general.history_retention_days} min={0} unit={t("common.days")} label={t("general.history_retention")} />
     </Row>
     <Row label={t("general.keep_recordings")}>
       <Switch bind:checked={general.keep_recordings} label={t("general.keep_recordings")} />
     </Row>
-    <Row label={t("general.recording_retention")}>
-      <NumberField bind:value={general.recording_retention_days} min={1} unit={t("common.days")} label={t("general.recording_retention")} />
+    <Row label={t("general.recording_retention")} help={t("general.retention_zero_help")}>
+      <NumberField bind:value={general.recording_retention_days} min={0} unit={t("common.days")} label={t("general.recording_retention")} />
     </Row>
     <Row label={t("general.recordings_usage")} help={storage ? t("general.recordings_usage_value", { n: storage.recordings.toLocaleString(), size: formatBytes(storage.recording_bytes) }) : undefined}>
       <button type="button" class="btn quiet" onclick={revealRecordings}>{t("history.reveal")}</button>
       <button type="button" class="btn danger" disabled={!storage?.recordings} onclick={() => (confirmRecordings = true)}>{t("history.clear_recordings")}</button>
+    </Row>
+    <Row label={t("general.typing_speed")} help={t("general.typing_speed_help")}>
+      <NumberField bind:value={general.typing_chars_per_min} min={1} max={1000} unit={t("common.chars")} label={t("general.typing_speed")} />
     </Row>
     <Row label={t("general.stats")} help={t("general.stats_help")}>
       <button type="button" class="btn danger" onclick={() => (confirmStats = true)}>{t("general.stats_reset")}</button>

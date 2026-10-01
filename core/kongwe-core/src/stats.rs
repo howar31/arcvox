@@ -6,8 +6,9 @@ use std::path::Path;
 
 use rusqlite::{params, Connection};
 
-/// Typing speed assumed when estimating the time dictation saved.
-pub const TYPING_CHARS_PER_MIN: u64 = 40;
+/// Typing speed, in characters a minute, assumed when estimating the time
+/// dictation saved unless the settings name another.
+pub const TYPING_CHARS_PER_MIN: u32 = 40;
 /// Shorter clips are left out of the speaking speed figures.
 pub const SPEED_MIN_AUDIO_MS: u64 = 3000;
 
@@ -289,7 +290,12 @@ fn named_rows(conn: &Connection, column: &str, from: i64) -> rusqlite::Result<Ve
     rows.collect()
 }
 
-pub(crate) fn query(conn: &Connection, since: i64, tz_offset_secs: i32) -> rusqlite::Result<Stats> {
+pub(crate) fn query(
+    conn: &Connection,
+    since: i64,
+    tz_offset_secs: i32,
+    typing_chars_per_min: u32,
+) -> rusqlite::Result<Stats> {
     let from = since - since.rem_euclid(3600);
     let tz = i64::from(tz_offset_secs);
     let sums = [
@@ -368,7 +374,7 @@ pub(crate) fn query(conn: &Connection, since: i64, tz_offset_secs: i32) -> rusql
     }
 
     let saved_ms = (totals.timed_count > 0).then(|| {
-        let typing = totals.timed_chars * 60_000 / TYPING_CHARS_PER_MIN;
+        let typing = totals.timed_chars * 60_000 / u64::from(typing_chars_per_min.max(1));
         let processing = (totals.asr_ms + totals.llm_ms) * totals.timed_count / totals.count;
         typing
             .saturating_sub(totals.audio_ms)

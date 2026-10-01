@@ -24,6 +24,11 @@ impl Recorder {
         rms(mono)
     }
 
+    /// What was recorded so far, at the engine's sample rate.
+    pub fn samples(&self) -> &[f32] {
+        &self.samples
+    }
+
     pub fn len_secs(&self) -> f32 {
         self.samples.len() as f32 / SAMPLE_RATE as f32
     }
