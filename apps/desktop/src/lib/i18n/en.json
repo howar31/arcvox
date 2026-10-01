@@ -502,5 +502,12 @@
   "engines.discard_body": "The changes to this engine have not been saved. Closing the dialog discards them.",
   "home.output_opencc_other": "Converted with {config}",
   "flow.model_missing": "The model of the selected engine has not been downloaded.",
-  "flow.to_download": "Go to download"
+  "flow.to_download": "Go to download",
+  "general.retention_zero_help": "Set to 0 to keep them forever.",
+  "general.typing_speed": "Typing speed per minute",
+  "general.typing_speed_help": "Used for the time saved estimate on the home page.",
+  "general.auto_stop": "End hands-free dictation after a pause",
+  "general.auto_stop_help": "When off, hands-free dictation ends when fn is pressed again.",
+  "general.auto_stop_secs": "Pause length",
+  "common.chars": "chars"
 }

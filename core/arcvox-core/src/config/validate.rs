@@ -67,6 +67,12 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
             min: 1,
         });
     }
+    if config.general.typing_chars_per_min < 1 {
+        return Err(ConfigError::GeneralRange {
+            field: "typing_chars_per_min",
+            min: 1,
+        });
+    }
     if config.general.llm_timeout_secs < 1 {
         return Err(ConfigError::GeneralRange {
             field: "llm_timeout_secs",

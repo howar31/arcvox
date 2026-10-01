@@ -45,6 +45,8 @@ pub struct General {
     pub llm_temperature: f32,
     pub llm_max_tokens: Option<u32>,
     pub llm_idle_unload_secs: u64,
+    /// Characters a minute the saved-time estimate assumes for typing.
+    pub typing_chars_per_min: u32,
 }
 
 impl Default for General {
@@ -59,6 +61,7 @@ impl Default for General {
             llm_temperature: 0.2,
             llm_max_tokens: Some(1024),
             llm_idle_unload_secs: 300,
+            typing_chars_per_min: crate::stats::TYPING_CHARS_PER_MIN,
         }
     }
 }

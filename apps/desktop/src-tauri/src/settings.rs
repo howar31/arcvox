@@ -29,6 +29,7 @@ pub struct ClientSettings {
     pub context: ContextOptIns,
     pub insertion: InsertionSettings,
     pub max_utterance_secs: u32,
+    pub auto_stop: AutoStop,
     pub ui_language: UiLanguage,
     /// Overrides the model catalogue location; `None` uses the built-in one.
     #[serde(default)]
@@ -40,6 +41,23 @@ pub struct ClientSettings {
 pub struct HotkeySettings {
     pub hold_threshold_ms: u64,
     pub double_tap_window_ms: u64,
+}
+
+/// Ends a hands-free dictation by itself after a pause in the speech.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AutoStop {
+    pub enabled: bool,
+    pub silence_secs: u32,
+}
+
+impl Default for AutoStop {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            silence_secs: 3,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -91,6 +109,7 @@ impl Default for ClientSettings {
             context: ContextOptIns::default(),
             insertion: InsertionSettings::default(),
             max_utterance_secs: 300,
+            auto_stop: AutoStop::default(),
             ui_language: UiLanguage::System,
             manifest_url: None,
         }

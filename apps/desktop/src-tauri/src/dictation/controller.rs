@@ -23,6 +23,8 @@ use crate::vad;
 struct Capture {
     handle: Option<Box<dyn AudioHandle>>,
     recorder: Option<Recorder>,
+    /// Set for a hands-free dictation that ends by itself after a pause.
+    pause: Option<vad::SilenceWatch>,
 }
 
 impl Capture {
@@ -30,6 +32,13 @@ impl Capture {
         self.recorder
             .get_or_insert_with(|| Recorder::new(rate))
             .push(mono)
+    }
+    /// True when the speaker has paused for as long as the setting says.
+    fn paused(&mut self) -> bool {
+        match (&mut self.pause, &self.recorder) {
+            (Some(watch), Some(recorder)) => watch.paused(recorder.samples()),
+            _ => false,
+        }
     }
     fn secs(&self) -> f32 {
         self.recorder.as_ref().map(|r| r.len_secs()).unwrap_or(0.0)
@@ -224,6 +233,7 @@ impl Controller {
                     capture: Capture {
                         handle: Some(handle),
                         recorder: None,
+                        pause: None,
                     },
                 };
             }
@@ -321,6 +331,7 @@ impl Controller {
                 Ok(handle) => Capture {
                     handle: Some(handle),
                     recorder: None,
+                    pause: None,
                 },
                 Err(e) => {
                     self.deps.ui.message(UiMessage::error(
@@ -332,6 +343,16 @@ impl Controller {
                 }
             },
         };
+        let mut capture = capture;
+        let auto_stop = &self.settings.auto_stop;
+        if locked && auto_stop.enabled {
+            // Audio captured before this point (the first tap) is looked at too.
+            capture.pause = Some(vad::SilenceWatch::new(
+                (self.deps.vad_factory)(),
+                auto_stop.silence_secs,
+                arcvox_core::SAMPLE_RATE,
+            ));
+        }
         let captured = context::capture(self.deps.platform.as_ref(), &self.settings.context);
         let session = engine.start_session(SessionRequest {
             app: captured.app.clone(),
@@ -385,7 +406,7 @@ impl Controller {
                     State::Recording { capture, .. } => {
                         let level = capture.push(rate, &mono);
                         self.deps.ui.level(level.min(1.0));
-                        if capture.secs() >= max {
+                        if capture.secs() >= max || capture.paused() {
                             self.finish_recording();
                         }
                     }
@@ -1021,6 +1042,39 @@ mod tests {
                     .unwrap_or(false)
             },
             "record_final",
+        )
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn locked_mode_finishes_after_a_pause_when_set() {
+        let mut s = fast_settings();
+        s.auto_stop = crate::settings::AutoStop {
+            enabled: true,
+            silence_secs: 1,
+        };
+        let r = rig(s).await;
+        mock_ok(&r, "一", "一").await;
+        r.modifier.send(fn_down()).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        r.modifier.send(fn_up()).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        r.modifier.send(fn_down()).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        r.modifier.send(fn_up()).unwrap();
+        wait_state(&r, UiState::Locked, "locked").await;
+        r.audio.silence(1.5);
+        r.audio.speech(0.5);
+        r.audio.silence(0.5);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            !r.ui.states.lock().unwrap().contains(&UiState::Processing),
+            "a pause shorter than the setting keeps recording"
+        );
+        r.audio.silence(0.6);
+        wait_for(
+            || r.platform.calls().contains(&"paste".to_string()),
+            "paste without a closing tap",
         )
         .await;
     }
