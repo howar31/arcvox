@@ -59,6 +59,9 @@ export const getPrompt = () => invoke<string>("prompt_get");
 export const setPrompt = (text: string) => invoke<void>("prompt_set", { text });
 export const restorePrompt = () => invoke<string>("prompt_restore");
 export const listHistory = (limit = 200) => invoke<Utterance[]>("history_list", { limit });
+export interface HistoryStats { count: number; chars: number; total_ms: number }
+/** Totals of the history from `since` (seconds since the epoch) on. */
+export const historyStats = (since: number) => invoke<HistoryStats>("history_stats", { since });
 export const deleteHistory = (id: number) => invoke<void>("history_delete", { id });
 export const clearHistory = () => invoke<void>("history_clear");
 export const setSecret = (keyRef: string, value: string) => invoke<void>("secrets_set", { keyRef, value });

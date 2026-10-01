@@ -52,10 +52,10 @@ impl WindowFrames {
 }
 
 /// The frame to restore for a saved one: on the display that shows most of
-/// it, no smaller than `min`, no larger than that display, and with its top
-/// edge on the display. `None` when no connected display shows enough of
+/// it, no smaller than `min`, no wider than `max_width`, no larger than that
+/// display, and with its top edge on the display. `None` when no connected display shows enough of
 /// the saved frame, so the default placement is used instead.
-pub fn restored_frame(saved: Rect, displays: &[Rect], min: Size) -> Option<Rect> {
+pub fn restored_frame(saved: Rect, displays: &[Rect], min: Size, max_width: f64) -> Option<Rect> {
     let values = [saved.x, saved.y, saved.w, saved.h];
     if values.iter().any(|v| !v.is_finite()) || saved.w <= 0.0 || saved.h <= 0.0 {
         return None;
@@ -71,7 +71,7 @@ pub fn restored_frame(saved: Rect, displays: &[Rect], min: Size) -> Option<Rect>
         .filter(|(_, (w, h))| *w >= MIN_VISIBLE.w && *h >= MIN_VISIBLE.h)
         .max_by(|a, b| (a.1 .0 * a.1 .1).total_cmp(&(b.1 .0 * b.1 .1)))
         .map(|(d, _)| *d)?;
-    let w = saved.w.max(min.w).min(display.w);
+    let w = saved.w.min(max_width).max(min.w).min(display.w);
     let h = saved.h.max(min.h).min(display.h);
     Some(Rect {
         x: saved.x,
@@ -108,18 +108,18 @@ impl WindowState {
         };
         let displays = widget::displays(app);
         let rects: Vec<Rect> = displays.iter().map(|d| d.rect).collect();
-        let min = app
+        let config = app
             .config()
             .app
             .windows
             .iter()
-            .find(|w| w.label == SETTINGS_WINDOW)
-            .map(|w| Size {
-                w: w.min_width.unwrap_or(0.0),
-                h: w.min_height.unwrap_or(0.0),
-            })
-            .unwrap_or(Size { w: 0.0, h: 0.0 });
-        if let Some(frame) = restored_frame(saved, &rects, min) {
+            .find(|w| w.label == SETTINGS_WINDOW);
+        let min = Size {
+            w: config.and_then(|w| w.min_width).unwrap_or(0.0),
+            h: config.and_then(|w| w.min_height).unwrap_or(0.0),
+        };
+        let max_width = config.and_then(|w| w.max_width).unwrap_or(f64::INFINITY);
+        if let Some(frame) = restored_frame(saved, &rects, min, max_width) {
             widget::apply_frame(&window, frame, &displays);
         }
     }
@@ -185,48 +185,81 @@ mod tests {
     #[test]
     fn a_frame_on_a_connected_display_is_restored_as_saved() {
         let saved = rect(200.0, 120.0, 1000.0, 700.0);
-        assert_eq!(restored_frame(saved, &[MAIN, SIDE], MIN), Some(saved));
+        assert_eq!(
+            restored_frame(saved, &[MAIN, SIDE], MIN, f64::INFINITY),
+            Some(saved)
+        );
         let on_side = rect(1700.0, 50.0, 960.0, 900.0);
-        assert_eq!(restored_frame(on_side, &[MAIN, SIDE], MIN), Some(on_side));
+        assert_eq!(
+            restored_frame(on_side, &[MAIN, SIDE], MIN, f64::INFINITY),
+            Some(on_side)
+        );
         // Partly off the side of the display is how the user left it.
         let hanging = rect(-300.0, 100.0, 900.0, 600.0);
-        assert_eq!(restored_frame(hanging, &[MAIN], MIN), Some(hanging));
+        assert_eq!(
+            restored_frame(hanging, &[MAIN], MIN, f64::INFINITY),
+            Some(hanging)
+        );
     }
 
     #[test]
     fn a_frame_on_a_display_that_is_gone_is_not_restored() {
         let on_side = rect(1700.0, 50.0, 960.0, 900.0);
-        assert_eq!(restored_frame(on_side, &[MAIN], MIN), None);
-        assert_eq!(restored_frame(on_side, &[], MIN), None);
+        assert_eq!(restored_frame(on_side, &[MAIN], MIN, f64::INFINITY), None);
+        assert_eq!(restored_frame(on_side, &[], MIN, f64::INFINITY), None);
         // Only a sliver is left on the remaining display.
         let sliver = rect(1450.0, 50.0, 960.0, 900.0);
-        assert_eq!(restored_frame(sliver, &[MAIN], MIN), None);
+        assert_eq!(restored_frame(sliver, &[MAIN], MIN, f64::INFINITY), None);
     }
 
     #[test]
     fn the_size_is_kept_between_the_minimum_and_the_display() {
-        let small = restored_frame(rect(100.0, 100.0, 400.0, 300.0), &[MAIN], MIN).unwrap();
+        let small = restored_frame(
+            rect(100.0, 100.0, 400.0, 300.0),
+            &[MAIN],
+            MIN,
+            f64::INFINITY,
+        )
+        .unwrap();
         assert_eq!((small.w, small.h), (900.0, 560.0));
-        let huge = restored_frame(rect(0.0, 0.0, 3000.0, 2000.0), &[MAIN], MIN).unwrap();
+        let huge =
+            restored_frame(rect(0.0, 0.0, 3000.0, 2000.0), &[MAIN], MIN, f64::INFINITY).unwrap();
         assert_eq!((huge.w, huge.h), (1512.0, 982.0));
     }
 
     #[test]
+    fn a_frame_wider_than_the_window_may_be_is_narrowed() {
+        let wide = restored_frame(rect(100.0, 100.0, 1300.0, 700.0), &[MAIN], MIN, 900.0).unwrap();
+        assert_eq!((wide.x, wide.w, wide.h), (100.0, 900.0, 700.0));
+    }
+
+    #[test]
     fn the_top_of_the_window_stays_on_the_display() {
-        let above = restored_frame(rect(100.0, -200.0, 900.0, 600.0), &[MAIN], MIN).unwrap();
+        let above = restored_frame(
+            rect(100.0, -200.0, 900.0, 600.0),
+            &[MAIN],
+            MIN,
+            f64::INFINITY,
+        )
+        .unwrap();
         assert_eq!(above.y, 0.0);
         let low = rect(100.0, 900.0, 900.0, 600.0);
-        assert_eq!(restored_frame(low, &[MAIN], MIN), Some(low));
+        assert_eq!(restored_frame(low, &[MAIN], MIN, f64::INFINITY), Some(low));
     }
 
     #[test]
     fn values_that_are_not_a_frame_are_not_restored() {
         assert_eq!(
-            restored_frame(rect(f64::NAN, 0.0, 900.0, 600.0), &[MAIN], MIN),
+            restored_frame(
+                rect(f64::NAN, 0.0, 900.0, 600.0),
+                &[MAIN],
+                MIN,
+                f64::INFINITY
+            ),
             None
         );
         assert_eq!(
-            restored_frame(rect(0.0, 0.0, 0.0, 600.0), &[MAIN], MIN),
+            restored_frame(rect(0.0, 0.0, 0.0, 600.0), &[MAIN], MIN, f64::INFINITY),
             None
         );
     }

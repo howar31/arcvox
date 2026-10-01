@@ -73,6 +73,13 @@ pub struct BenchState {
 impl BenchState {
     /// Stops a recording in progress and drops its audio, so the microphone
     /// is released.
+    /// Stops a run in progress.
+    pub fn abort_run(&self) {
+        if let Some(task) = self.task.lock().unwrap().take() {
+            task.abort();
+        }
+    }
+
     pub fn discard_recording(&self) {
         let rec = self.recording.lock().unwrap().take();
         if let Some(rec) = rec {
