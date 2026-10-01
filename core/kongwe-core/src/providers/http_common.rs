@@ -77,6 +77,13 @@ pub fn classify_status(label: &str, status: StatusCode, body: &str) -> ProviderE
             format!("{label}: HTTP {status}"),
         )
         .with_hint("check the API key"),
+        // Servers answer 404 for an unknown model as well as for a wrong
+        // path; the body tells them apart.
+        404 if body.to_ascii_lowercase().contains("model") => ProviderError::new(
+            ErrorCode::ProviderError,
+            format!("{label}: HTTP 404 {snippet}"),
+        )
+        .with_hint("model not found on the server; check the model name of this engine"),
         404 => ProviderError::new(
             ErrorCode::ProviderError,
             format!("{label}: HTTP 404 {snippet}"),
@@ -118,6 +125,22 @@ mod tests {
             "audio/transcriptions",
         );
         assert_eq!(url.as_str(), "http://localhost:8000/audio/transcriptions");
+    }
+
+    #[test]
+    fn a_404_naming_a_model_points_at_the_model_name() {
+        let e = classify_status(
+            "Speaches",
+            StatusCode::NOT_FOUND,
+            r#"{"detail":"Model 'x/y' is not installed locally."}"#,
+        );
+        assert!(e.hint.as_deref().unwrap().contains("model not found"));
+        let e = classify_status(
+            "Speaches",
+            StatusCode::NOT_FOUND,
+            r#"{"detail":"Not Found"}"#,
+        );
+        assert!(e.hint.as_deref().unwrap().contains("base URL"));
     }
 
     #[tokio::test]

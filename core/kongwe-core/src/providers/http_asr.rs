@@ -83,6 +83,13 @@ fn whisper_language(tag: &str) -> String {
         .to_ascii_lowercase()
 }
 
+/// The configured timeout is the allowance for a short clip; a longer clip
+/// gets twice its own length on top, since a server may transcribe slower
+/// than real time.
+fn request_timeout(base: Duration, clip_secs: f32) -> Duration {
+    base + Duration::from_secs_f32(clip_secs.max(0.0) * 2.0)
+}
+
 #[derive(Deserialize)]
 struct TranscriptionResponse {
     text: String,
@@ -98,11 +105,12 @@ impl AsrProvider for HttpAsrProvider {
         hint: &AsrHint,
     ) -> Result<Transcript, ProviderError> {
         let wav = encode_wav_pcm16(audio);
+        let timeout = request_timeout(self.timeout, audio.duration_secs());
         let resp = send_with_retry(&self.label, || {
             let mut req = self
                 .client
                 .post(self.url.clone())
-                .timeout(self.timeout)
+                .timeout(timeout)
                 .multipart(self.form(&wav, hint));
             if let Some(key) = &self.api_key {
                 req = req.bearer_auth(key);
@@ -114,6 +122,12 @@ impl AsrProvider for HttpAsrProvider {
         })
         .await?;
         let parsed: TranscriptionResponse = resp.json().await.map_err(|e| {
+            if e.is_timeout() {
+                return ProviderError::new(
+                    ErrorCode::ProviderTimeout,
+                    format!("{}: request timed out", self.label),
+                );
+            }
             ProviderError::new(
                 ErrorCode::ProviderError,
                 format!("{}: bad transcription response: {e}", self.label),
@@ -129,6 +143,13 @@ impl AsrProvider for HttpAsrProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timeout_grows_with_the_clip_length() {
+        let base = Duration::from_secs(30);
+        assert_eq!(request_timeout(base, 0.0), base);
+        assert_eq!(request_timeout(base, 40.0), Duration::from_secs(110));
+    }
     use serde_json::json;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};

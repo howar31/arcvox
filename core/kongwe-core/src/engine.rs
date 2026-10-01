@@ -25,6 +25,7 @@ use crate::SAMPLE_RATE;
 /// Shorter utterances are rejected before any provider call.
 pub const MIN_UTTERANCE_SECS: f32 = 0.2;
 const EVENT_BUFFER: usize = 256;
+const PRUNE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(86_400);
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -123,7 +124,7 @@ impl Engine {
         let client = reqwest::Client::builder().build().expect("reqwest client");
         let registry =
             ProviderRegistry::with_factories(client.clone(), opts.secrets.clone(), opts.factories);
-        Ok(Engine {
+        let engine = Engine {
             inner: Arc::new(Inner {
                 dirs,
                 config,
@@ -137,7 +138,47 @@ impl Engine {
                 #[cfg(test)]
                 tail_delay_ms: AtomicU64::new(0),
             }),
-        })
+        };
+        engine.spawn_daily_prune();
+        Ok(engine)
+    }
+
+    /// Applies the retention settings once a day for as long as the engine
+    /// lives, so a process that stays up for weeks still expires old entries.
+    fn spawn_daily_prune(&self) {
+        let weak = Arc::downgrade(&self.inner);
+        self.inner.runtime.spawn(async move {
+            let mut tick = tokio::time::interval(PRUNE_INTERVAL);
+            // The first tick fires at once; `open_with` has just pruned.
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                let Some(inner) = weak.upgrade() else {
+                    return;
+                };
+                let general = inner.config.current().general.clone();
+                let recordings = inner.dirs.recordings_dir();
+                let history = inner.history.clone();
+                drop(inner);
+                let pruned = tokio::task::spawn_blocking(move || {
+                    history.prune(
+                        general.history_retention_days,
+                        general.recording_retention_days,
+                        &recordings,
+                    )
+                })
+                .await;
+                match pruned {
+                    Ok(Ok(report)) => tracing::info!(
+                        rows = report.rows_deleted,
+                        recordings = report.recordings_deleted,
+                        "retention applied"
+                    ),
+                    Ok(Err(e)) => tracing::warn!(error = %e, "retention failed"),
+                    Err(e) => tracing::warn!(error = %e, "retention task failed"),
+                }
+            }
+        });
     }
 
     /// Loads the default profile's ASR provider in the background so the
@@ -410,6 +451,12 @@ async fn run_session(
         return;
     }
 
+    tracing::info!(
+        session = %session_id,
+        profile = %profile.id.0,
+        audio_ms = (clip.duration_secs() * 1000.0) as u64,
+        "session started"
+    );
     let config = inner.config.current();
     let base_prompt = inner
         .config
@@ -426,6 +473,7 @@ async fn run_session(
     let pipeline = match Pipeline::build(&config, &profile, &inner.registry) {
         Ok(p) => p,
         Err(err) => {
+            tracing::warn!(session = %session_id, code = ?err.code, error = %err.message, "session could not start its steps");
             let _ = tx
                 .send(Event::Error {
                     step: None,
@@ -444,7 +492,8 @@ async fn run_session(
     let clip = Arc::new(clip);
     let outcome = match pipeline.run(clip.clone(), &ctx, &tx).await {
         Ok(o) => o,
-        Err(_) => {
+        Err(err) => {
+            tracing::warn!(session = %session_id, code = ?err.code, error = %err.message, "session failed");
             send_done_once(&tx, &flags.done_sent, &session_id, None).await;
             inner.schedule_idle_unload();
             return;
@@ -455,6 +504,13 @@ async fn run_session(
     // WAV write, a history insert), so tell `cancel` not to abort us
     // anymore: past this point, the `cancelled` checks below are what undo
     // a cancel, not `Session::cancel`'s `task.abort()`.
+    tracing::info!(
+        session = %session_id,
+        asr_ms = outcome.asr_ms,
+        llm_ms = ?outcome.llm_ms,
+        degraded = outcome.degraded,
+        "session processed"
+    );
     flags.tail_started.store(true, Ordering::SeqCst);
     if flags.cancelled.load(Ordering::SeqCst) {
         return;
@@ -505,39 +561,42 @@ async fn run_session(
         llm_changed: outcome.llm_changed,
     };
     let history = inner.history.clone();
+    let claim = flags.clone();
     #[cfg(test)]
     let tail_delay_ms = inner.tail_delay_ms.load(Ordering::SeqCst);
-    let history_id = match tokio::task::spawn_blocking(move || {
+    // The row is committed only if this task wins `done_sent`: the single
+    // point that decides who reports the session's one Done. When `cancel`
+    // already claimed it (and sent Done(None)), the row and its statistics
+    // are rolled back instead of being written and taken back afterwards.
+    let (inserted, claimed) = tokio::task::spawn_blocking(move || {
         // Test-only hook: lets a test land a `cancel()` deterministically
         // while this closure is running, instead of racing real I/O timing.
         #[cfg(test)]
         if tail_delay_ms > 0 {
             std::thread::sleep(std::time::Duration::from_millis(tail_delay_ms));
         }
-        history.insert(new)
+        let mut claimed = None;
+        let inserted = history.insert_if(new, || {
+            let won = !claim.done_sent.swap(true, Ordering::SeqCst);
+            claimed = Some(won);
+            won
+        });
+        (inserted, claimed)
     })
     .await
-    {
-        Ok(Ok(id)) => Some(id),
-        _ => None,
-    };
+    .unwrap_or((Ok(None), None));
+    if let Err(e) = &inserted {
+        tracing::warn!(session = %session_id, error = %e, "history insert failed");
+    }
+    let history_id = inserted.ok().flatten();
 
-    // The insert has already happened (or failed); it can only be taken
-    // back with an explicit delete now, not prevented. This swap is the
-    // single point where ownership of the session's one and only Done is
-    // decided: whoever transitions `done_sent` from false to true (a
-    // `false` result here) owns reporting the real outcome; if `cancel`
-    // already claimed it (a `true` result, meaning it already sent
-    // Done(None) to the client), undo what was just written instead of
-    // reporting it as kept.
-    if flags.done_sent.swap(true, Ordering::SeqCst) {
-        if let Some(id) = history_id {
-            let history = inner.history.clone();
-            let _ = tokio::task::spawn_blocking(move || history.delete(id)).await;
-        }
+    // The insert can fail before it asks; the claim is then still open.
+    let won = claimed.unwrap_or_else(|| !flags.done_sent.swap(true, Ordering::SeqCst));
+    if !won {
         if let Some(p) = &audio_path {
             let _ = std::fs::remove_file(p);
         }
+        tracing::info!(session = %session_id, "cancelled before the result was stored");
         return;
     }
 
@@ -1065,6 +1124,7 @@ pub(crate) mod tests {
             }
         ));
         assert!(r.engine.history().list_recent(10).unwrap().is_empty());
+        assert_eq!(r.engine.history().stats(0, 0).unwrap().totals.count, 0);
         let recordings = r.engine.dirs().recordings_dir();
         let left_a_file = std::fs::read_dir(&recordings)
             .map(|mut entries| entries.next().is_some())
@@ -1121,6 +1181,7 @@ pub(crate) mod tests {
             }
         ));
         assert!(r.engine.history().list_recent(10).unwrap().is_empty());
+        assert_eq!(r.engine.history().stats(0, 0).unwrap().totals.count, 0);
         let recordings = r.engine.dirs().recordings_dir();
         let left_a_file = std::fs::read_dir(&recordings)
             .map(|mut entries| entries.next().is_some())

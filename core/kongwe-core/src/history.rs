@@ -138,7 +138,7 @@ pub(crate) fn upgrade(conn: &Connection, recordings_dir: &Path) -> Result<(), Hi
     conn.execute_batch(STATS_SCHEMA)?;
     // A failed backfill leaves the history usable; it runs again at the next open.
     if let Err(e) = stats::backfill(conn, recordings_dir) {
-        eprintln!("warning: statistics backfill failed: {e}");
+        tracing::warn!(error = %e, "statistics backfill failed");
     }
     Ok(())
 }
@@ -224,6 +224,19 @@ impl HistoryStore {
     /// Writes the row and adds it to its statistics bucket in one transaction.
     /// When only the bucket write fails, the row is still stored.
     pub fn insert(&self, u: NewUtterance) -> Result<HistoryId, HistoryError> {
+        Ok(self
+            .insert_if(u, || true)?
+            .expect("an unconditional insert is always kept"))
+    }
+
+    /// `insert`, except that `keep` is asked once the row and its bucket are
+    /// written and before they are committed; `false` discards both, so a
+    /// dictation withdrawn at the last moment is neither stored nor counted.
+    pub fn insert_if(
+        &self,
+        u: NewUtterance,
+        keep: impl FnOnce() -> bool,
+    ) -> Result<Option<HistoryId>, HistoryError> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
         let id = insert_row(&tx, &u)?;
@@ -245,13 +258,19 @@ impl HistoryStore {
         );
         match added {
             Ok(()) => {
+                if !keep() {
+                    return Ok(None);
+                }
                 tx.commit()?;
-                Ok(HistoryId(id))
+                Ok(Some(HistoryId(id)))
             }
             Err(e) => {
                 drop(tx);
-                eprintln!("warning: statistics write failed, keeping the history row: {e}");
-                Ok(HistoryId(insert_row(&conn, &u)?))
+                tracing::warn!(error = %e, "statistics write failed, keeping the history row");
+                if !keep() {
+                    return Ok(None);
+                }
+                Ok(Some(HistoryId(insert_row(&conn, &u)?)))
             }
         }
     }
@@ -411,7 +430,9 @@ impl HistoryStore {
 
     /// Deletes rows older than `history_days` and recording files older than
     /// `recording_days` (the row keeps its text; `audio_path` is cleared
-    /// once the file is actually gone).
+    /// once the file is actually gone). A value of 0 keeps that kind forever.
+    /// Recording files in `recordings_dir` that no row refers to are removed
+    /// once they are older than `recording_days`.
     ///
     /// File removal is best effort and never aborts the prune: a file that
     /// is missing, lives outside `recordings_dir`, or fails to delete (for
@@ -428,8 +449,13 @@ impl HistoryStore {
         recordings_dir: &Path,
     ) -> Result<PruneReport, HistoryError> {
         let now = now_unix();
-        let history_cutoff = now - history_days as i64 * 86_400;
-        let recording_cutoff = now - recording_days as i64 * 86_400;
+        // A cutoff before every timestamp selects nothing: 0 days keeps all.
+        let cutoff = |days: u32| match days {
+            0 => i64::MIN,
+            d => now - i64::from(d) * 86_400,
+        };
+        let history_cutoff = cutoff(history_days);
+        let recording_cutoff = cutoff(recording_days);
         let conn = self.conn.lock().unwrap();
         let mut report = PruneReport::default();
 
@@ -473,6 +499,11 @@ impl HistoryStore {
             "DELETE FROM utterances WHERE ts < ?1",
             params![history_cutoff],
         )?;
+
+        if recording_days > 0 {
+            report.recordings_deleted +=
+                sweep_unreferenced(&conn, recordings_dir, recording_cutoff)?;
+        }
         Ok(report)
     }
 
@@ -517,6 +548,48 @@ fn recording_of(
     Ok(path
         .map(PathBuf::from)
         .filter(|p| inside(p, recordings_dir) && p.is_file()))
+}
+
+/// Removes the `.wav` files directly inside `recordings_dir` that no row
+/// refers to and that were last written before `cutoff`. Returns how many.
+/// A file that cannot be read or removed is skipped.
+fn sweep_unreferenced(
+    conn: &Connection,
+    recordings_dir: &Path,
+    cutoff: i64,
+) -> Result<usize, HistoryError> {
+    let Ok(entries) = std::fs::read_dir(recordings_dir) else {
+        return Ok(0);
+    };
+    let mut stmt =
+        conn.prepare("SELECT audio_path FROM utterances WHERE audio_path IS NOT NULL")?;
+    let referenced: std::collections::HashSet<PathBuf> = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .map(|p| p.map(PathBuf::from))
+        .collect::<Result<_, _>>()?;
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_wav = path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("wav"));
+        if !is_wav || referenced.contains(&path) {
+            continue;
+        }
+        let written = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64);
+        if written.is_some_and(|t| t < cutoff)
+            && path.is_file()
+            && std::fs::remove_file(&path).is_ok()
+        {
+            removed += 1;
+        }
+    }
+    Ok(removed)
 }
 
 /// Removes a row's recording file and clears the reference. True when a
@@ -656,6 +729,82 @@ mod tests {
         );
         assert!(s.get(fresh).unwrap().is_some());
         assert_eq!(s.list_recent(10).unwrap().len(), 2);
+    }
+
+    fn age(path: &Path, days: u64) {
+        let when = std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86_400);
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(when)
+            .unwrap();
+    }
+
+    #[test]
+    fn prune_removes_old_recordings_that_no_row_refers_to() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rec = tmp.path().join("recordings");
+        std::fs::create_dir_all(&rec).unwrap();
+        let orphan_old = rec.join("orphan-old.wav");
+        let orphan_new = rec.join("orphan-new.wav");
+        let kept = rec.join("kept.wav");
+        let other = rec.join("notes.txt");
+        for p in [&orphan_old, &orphan_new, &kept, &other] {
+            std::fs::write(p, b"x").unwrap();
+        }
+        age(&orphan_old, 30);
+        age(&kept, 30);
+        age(&other, 30);
+        let s = HistoryStore::open_in_memory().unwrap();
+        // The row is recent, so its (old) file is still referenced.
+        s.insert(new(now_unix(), Some(kept.clone()))).unwrap();
+        let report = s.prune(90, 7, &rec).unwrap();
+        assert_eq!(report.recordings_deleted, 1);
+        assert!(!orphan_old.exists());
+        assert!(orphan_new.exists());
+        assert!(kept.exists());
+        assert!(other.exists());
+    }
+
+    #[test]
+    fn zero_retention_keeps_everything() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rec = tmp.path().join("recordings");
+        std::fs::create_dir_all(&rec).unwrap();
+        let wav = rec.join("a.wav");
+        let orphan = rec.join("orphan.wav");
+        std::fs::write(&wav, b"x").unwrap();
+        std::fs::write(&orphan, b"x").unwrap();
+        age(&orphan, 4000);
+        let s = HistoryStore::open_in_memory().unwrap();
+        let id = s
+            .insert(new(now_unix() - 4000 * 86_400, Some(wav.clone())))
+            .unwrap();
+        assert_eq!(s.prune(0, 0, &rec).unwrap(), PruneReport::default());
+        assert!(wav.exists() && orphan.exists());
+        assert_eq!(s.get(id).unwrap().unwrap().audio_path, Some(wav.clone()));
+
+        // Rows forever, recordings for a week: the text stays, the file goes.
+        let report = s.prune(0, 7, &rec).unwrap();
+        assert_eq!(
+            report,
+            PruneReport {
+                rows_deleted: 0,
+                recordings_deleted: 2
+            }
+        );
+        assert!(s.get(id).unwrap().is_some());
+    }
+
+    #[test]
+    fn insert_if_discards_the_row_and_its_count_when_not_kept() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        assert_eq!(s.insert_if(new(1, None), || false).unwrap(), None);
+        assert!(s.list_recent(10).unwrap().is_empty());
+        assert_eq!(s.stats(0, 0).unwrap().totals.count, 0);
+        assert!(s.insert_if(new(1, None), || true).unwrap().is_some());
+        assert_eq!(s.stats(0, 0).unwrap().totals.count, 1);
     }
 
     #[test]
