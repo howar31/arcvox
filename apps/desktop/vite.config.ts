@@ -19,6 +19,7 @@ export default defineConfig({
       input: {
         settings: resolve(__dirname, "settings.html"),
         widget: resolve(__dirname, "widget.html"),
+        panel: resolve(__dirname, "panel.html"),
       },
     },
   },

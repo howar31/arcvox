@@ -292,6 +292,18 @@
     <button type="button" class="btn" aria-pressed={placing} onclick={() => setPlacing(!placing)}>{t(placing ? "general.widget_done" : "general.widget_show")}</button>
     <button type="button" class="btn quiet" onclick={resetWidget}>{t("general.widget_reset")}</button>
   </Row>
+  {#if draft}
+    <Row label={t("general.widget_size")}>
+      <select bind:value={draft.widget_size} aria-label={t("general.widget_size")}>
+        <option value="small">{t("general.widget_size_small")}</option>
+        <option value="medium">{t("general.widget_size_medium")}</option>
+        <option value="large">{t("general.widget_size_large")}</option>
+      </select>
+    </Row>
+    <Row label={t("general.show_transcript")} help={t("general.show_transcript_help")}>
+      <Switch bind:checked={draft.show_transcript} label={t("general.show_transcript")} />
+    </Row>
+  {/if}
 </Group>
 
 {#if general}

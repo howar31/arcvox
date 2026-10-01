@@ -25,6 +25,7 @@ pub fn client_update(
     );
     *state.language.lock().unwrap() = language;
     state.ui.set_language(language);
+    state.ui.set_scale(settings.widget_size.scale());
     Ok(settings)
 }
 

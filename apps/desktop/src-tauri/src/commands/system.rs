@@ -34,6 +34,24 @@ pub fn widget_placing(state: State<'_, AppState>, on: bool) {
     state.ui.set_placing(on);
 }
 
+/// The factor of the widget size the user chose.
+#[tauri::command]
+pub fn widget_scale(state: State<'_, AppState>) -> f64 {
+    state.ui.scale()
+}
+
+/// The widget measured the length its labels need in each shape.
+#[tauri::command]
+pub fn widget_measure(state: State<'_, AppState>, wide: f64, tall: f64) {
+    state.ui.measured(wide, tall);
+}
+
+/// The panel next to the widget has content of this size, or none.
+#[tauri::command]
+pub fn panel_fit(state: State<'_, AppState>, width: Option<f64>, height: Option<f64>) {
+    state.ui.panel_fit(width.zip(height));
+}
+
 #[tauri::command]
 pub fn widget_reset_position(state: State<'_, AppState>) {
     state.ui.reset_positions();

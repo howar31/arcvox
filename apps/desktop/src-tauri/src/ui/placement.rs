@@ -8,11 +8,11 @@ use serde::{Deserialize, Serialize};
 
 pub const FILE_NAME: &str = "widget.json";
 
-/// The horizontal pill.
-pub const WIDE: Size = Size { w: 320.0, h: 64.0 };
-/// The vertical pill, used at a left or right edge while there is only a
-/// short label to show.
-pub const TALL: Size = Size { w: 48.0, h: 148.0 };
+/// The widget's short side at the small size: the height of the horizontal
+/// pill and the width of the vertical one.
+pub const SHORT: f64 = 48.0;
+/// Gap between the widget and the panel next to it.
+const PANEL_GAP: f64 = 12.0;
 /// Gap between the default position and the bottom of the display.
 const BOTTOM_MARGIN: f64 = 48.0;
 /// Gap kept between the widget and the display's edges.
@@ -24,6 +24,47 @@ const DOCK_DISTANCE: f64 = 24.0;
 pub struct Size {
     pub w: f64,
     pub h: f64,
+}
+
+/// The widget's long side in each shape. It holds the longest state label
+/// of the interface language, which the widget measures and reports.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Long {
+    /// Width of the horizontal pill.
+    pub wide: f64,
+    /// Height of the vertical pill.
+    pub tall: f64,
+}
+
+impl Long {
+    /// Used at the small size until the widget has measured its labels.
+    pub const DEFAULT: Long = Long {
+        wide: 140.0,
+        tall: 148.0,
+    };
+
+    /// The default at another size.
+    pub fn scaled(scale: f64) -> Long {
+        Long {
+            wide: (Self::DEFAULT.wide * scale).ceil(),
+            tall: (Self::DEFAULT.tall * scale).ceil(),
+        }
+    }
+
+    /// A measured value kept within sane bounds.
+    pub fn measured(wide: f64, tall: f64) -> Long {
+        let bound = |v: f64, fallback: f64| {
+            if v.is_finite() {
+                v.ceil().clamp(SHORT * 2.0, 400.0)
+            } else {
+                fallback
+            }
+        };
+        Long {
+            wide: bound(wide, Self::DEFAULT.wide),
+            tall: bound(tall, Self::DEFAULT.tall),
+        }
+    }
 }
 
 /// A rectangle in global points; `y` grows downwards.
@@ -40,11 +81,11 @@ impl Rect {
         (self.x + self.w / 2.0, self.y + self.h / 2.0)
     }
 
-    fn right(&self) -> f64 {
+    pub fn right(&self) -> f64 {
         self.x + self.w
     }
 
-    fn bottom(&self) -> f64 {
+    pub fn bottom(&self) -> f64 {
         self.y + self.h
     }
 
@@ -79,32 +120,84 @@ pub struct Anchor {
     pub dock: Dock,
 }
 
-/// Bottom center, `BOTTOM_MARGIN` above the display's lower edge.
-pub fn default_anchor(display: Rect) -> Anchor {
+/// Bottom center, `BOTTOM_MARGIN` above the display's lower edge, for a
+/// widget `short` high.
+pub fn default_anchor(display: Rect, short: f64) -> Anchor {
     Anchor {
         x: 0.5,
-        y: (display.h - BOTTOM_MARGIN - WIDE.h / 2.0) / display.h,
+        y: (display.h - BOTTOM_MARGIN - short / 2.0) / display.h,
         dock: Dock::None,
     }
 }
 
-/// A docked widget is vertical while it shows only the ring and a short
-/// label (`compact`); text that needs room uses the horizontal pill.
-pub fn size_for(dock: Dock, compact: bool) -> Size {
-    if compact && dock != Dock::None {
-        TALL
+/// A widget docked to a left or right edge is vertical.
+pub fn size_for(dock: Dock, long: Long, short: f64) -> Size {
+    if dock == Dock::None {
+        Size {
+            w: long.wide,
+            h: short,
+        }
     } else {
-        WIDE
+        Size {
+            w: short,
+            h: long.tall,
+        }
+    }
+}
+
+/// `wanted`, moved so that `extent` stays inside `start..start + length`
+/// with the edge margin on both sides.
+fn fit(start: f64, length: f64, wanted: f64, extent: f64) -> f64 {
+    let low = start + EDGE_MARGIN;
+    let high = (start + length - extent - EDGE_MARGIN).max(low);
+    wanted.clamp(low, high)
+}
+
+/// The frame of the panel that belongs to the widget at `widget`. Next to a
+/// horizontal widget it is centred above, or below when there is no room
+/// above; next to a vertical widget it is on the side with more room,
+/// centred on the widget. It is kept inside the display.
+pub fn panel_frame(display: Rect, widget: Rect, size: Size) -> Rect {
+    let (x, y) = if widget.h > widget.w {
+        let room_left = widget.x - display.x;
+        let room_right = display.right() - widget.right();
+        let x = if room_left > room_right {
+            widget.x - PANEL_GAP - size.w
+        } else {
+            widget.right() + PANEL_GAP
+        };
+        let y = fit(
+            display.y,
+            display.h,
+            widget.center().1 - size.h / 2.0,
+            size.h,
+        );
+        (x, y)
+    } else {
+        let above = widget.y - PANEL_GAP - size.h;
+        let y = if above >= display.y + EDGE_MARGIN {
+            above
+        } else {
+            widget.bottom() + PANEL_GAP
+        };
+        let x = fit(
+            display.x,
+            display.w,
+            widget.center().0 - size.w / 2.0,
+            size.w,
+        );
+        (x, y)
+    };
+    Rect {
+        x,
+        y,
+        w: size.w,
+        h: size.h,
     }
 }
 
 /// The widget's frame on `display`, kept inside the display.
 pub fn frame(display: Rect, anchor: Anchor, size: Size) -> Rect {
-    let fit = |start: f64, length: f64, wanted: f64, extent: f64| {
-        let low = start + EDGE_MARGIN;
-        let high = (start + length - extent - EDGE_MARGIN).max(low);
-        wanted.clamp(low, high)
-    };
     // A value read from a hand-edited file may be anything.
     let unit = |v: f64| {
         if v.is_finite() {
@@ -133,11 +226,11 @@ pub fn frame(display: Rect, anchor: Anchor, size: Size) -> Rect {
 
 /// The anchor for a widget dropped at `dropped` on `display`. It docks
 /// when it is dropped at a left or right edge, or so close to one that the
-/// horizontal pill would end up against that edge anyway.
-pub fn anchor_after_drag(display: Rect, dropped: Rect) -> Anchor {
+/// horizontal pill (`wide` across) would end up against that edge anyway.
+pub fn anchor_after_drag(display: Rect, dropped: Rect, wide: f64) -> Anchor {
     let (cx, cy) = dropped.center();
-    let left_gap = (dropped.x).min(cx - WIDE.w / 2.0) - display.x;
-    let right_gap = display.right() - (dropped.right()).max(cx + WIDE.w / 2.0);
+    let left_gap = (dropped.x).min(cx - wide / 2.0) - display.x;
+    let right_gap = display.right() - (dropped.right()).max(cx + wide / 2.0);
     let dock = if left_gap <= DOCK_DISTANCE && left_gap <= right_gap {
         Dock::Left
     } else if right_gap <= DOCK_DISTANCE {
@@ -222,6 +315,13 @@ mod tests {
             .all(|d| d.abs() < 1e-6)
     }
 
+    const LONG: Long = Long {
+        wide: 140.0,
+        tall: 148.0,
+    };
+    const WIDE: Size = Size { w: 140.0, h: 48.0 };
+    const TALL: Size = Size { w: 48.0, h: 148.0 };
+
     fn rect(x: f64, y: f64, size: Size) -> Rect {
         Rect {
             x,
@@ -233,29 +333,86 @@ mod tests {
 
     #[test]
     fn the_default_is_the_bottom_center_of_the_display() {
-        let f = frame(MAIN, default_anchor(MAIN), WIDE);
-        assert!(close(f, rect(596.0, 870.0, WIDE)), "{f:?}");
-        let f = frame(SIDE, default_anchor(SIDE), WIDE);
-        assert!(close(f, rect(1512.0 + 800.0, 200.0 + 968.0, WIDE)), "{f:?}");
+        let f = frame(MAIN, default_anchor(MAIN, SHORT), WIDE);
+        assert!(close(f, rect(686.0, 886.0, WIDE)), "{f:?}");
+        let f = frame(SIDE, default_anchor(SIDE, SHORT), WIDE);
+        assert!(close(f, rect(1512.0 + 890.0, 200.0 + 984.0, WIDE)), "{f:?}");
     }
 
     #[test]
-    fn a_docked_widget_is_vertical_only_while_compact() {
-        assert_eq!(size_for(Dock::Left, true), TALL);
-        assert_eq!(size_for(Dock::Right, true), TALL);
-        assert_eq!(size_for(Dock::Left, false), WIDE);
-        assert_eq!(size_for(Dock::None, true), WIDE);
+    fn a_docked_widget_is_vertical() {
+        assert_eq!(size_for(Dock::Left, LONG, SHORT), TALL);
+        assert_eq!(size_for(Dock::Right, LONG, SHORT), TALL);
+        assert_eq!(size_for(Dock::None, LONG, SHORT), WIDE);
+        assert_eq!(size_for(Dock::None, LONG, 56.0), Size { w: 140.0, h: 56.0 });
     }
 
     #[test]
-    fn a_docked_widget_keeps_its_edge_and_height_in_both_shapes() {
+    fn a_measured_length_is_rounded_up_and_bounded() {
+        assert_eq!(
+            Long::measured(113.2, 116.5),
+            Long {
+                wide: 114.0,
+                tall: 117.0
+            }
+        );
+        let odd = Long::measured(f64::NAN, 9000.0);
+        assert_eq!(odd.wide, Long::DEFAULT.wide);
+        assert_eq!(odd.tall, 400.0);
+        assert_eq!(
+            Long::scaled(4.0 / 3.0),
+            Long {
+                wide: 187.0,
+                tall: 198.0
+            }
+        );
+        assert_eq!(Long::measured(10.0, 10.0).wide, 96.0);
+    }
+
+    #[test]
+    fn the_panel_is_above_a_horizontal_widget_or_below_without_room() {
+        let size = Size { w: 340.0, h: 174.0 };
+        let widget = rect(686.0, 886.0, WIDE);
+        assert_eq!(
+            panel_frame(MAIN, widget, size),
+            rect(586.0, 886.0 - 12.0 - 174.0, size)
+        );
+        let high = rect(686.0, 100.0, WIDE);
+        assert_eq!(panel_frame(MAIN, high, size), rect(586.0, 160.0, size));
+        // Near a side edge the panel is pushed inwards.
+        let corner = rect(12.0, 886.0, WIDE);
+        assert_eq!(panel_frame(MAIN, corner, size).x, 12.0);
+        // On a second display the display's own origin counts.
+        let top = rect(1512.0 + 800.0, 200.0 + 20.0, WIDE);
+        assert_eq!(panel_frame(SIDE, top, size).y, 200.0 + 20.0 + 48.0 + 12.0);
+    }
+
+    #[test]
+    fn the_panel_is_on_the_roomier_side_of_a_vertical_widget() {
+        let size = Size { w: 340.0, h: 174.0 };
+        let left = rect(12.0, 417.0, TALL);
+        assert_eq!(
+            panel_frame(MAIN, left, size),
+            rect(12.0 + 48.0 + 12.0, 417.0 + 74.0 - 87.0, size)
+        );
+        let right = rect(1512.0 - 60.0, 417.0, TALL);
+        assert_eq!(
+            panel_frame(MAIN, right, size).x,
+            1512.0 - 60.0 - 12.0 - 340.0
+        );
+        // Near the bottom the panel is pushed up to stay on the display.
+        let low = rect(1512.0 - 60.0, 982.0 - 160.0, TALL);
+        assert_eq!(panel_frame(MAIN, low, size).y, 982.0 - 12.0 - 174.0);
+    }
+
+    #[test]
+    fn a_docked_widget_sits_at_its_edge() {
         let anchor = Anchor {
             x: 0.0,
             y: 0.5,
             dock: Dock::Left,
         };
         assert_eq!(frame(MAIN, anchor, TALL), rect(12.0, 417.0, TALL));
-        assert_eq!(frame(MAIN, anchor, WIDE), rect(12.0, 459.0, WIDE));
         let anchor = Anchor {
             dock: Dock::Right,
             ..anchor
@@ -263,10 +420,6 @@ mod tests {
         assert_eq!(
             frame(SIDE, anchor, TALL),
             rect(1512.0 + 1920.0 - 60.0, 200.0 + 466.0, TALL)
-        );
-        assert_eq!(
-            frame(SIDE, anchor, WIDE),
-            rect(1512.0 + 1920.0 - 332.0, 200.0 + 508.0, WIDE)
         );
     }
 
@@ -284,39 +437,40 @@ mod tests {
             dock: Dock::None,
         };
         let f = frame(MAIN, beyond, WIDE);
-        assert_eq!(f.x, 1512.0 - 320.0 - 12.0);
-        assert!(f.y >= 12.0 && f.y <= 982.0 - 64.0 - 12.0);
+        assert_eq!(f.x, 1512.0 - 140.0 - 12.0);
+        assert!(f.y >= 12.0 && f.y <= 982.0 - 48.0 - 12.0);
     }
 
     #[test]
     fn a_drop_away_from_the_edges_keeps_the_center() {
         let dropped = rect(400.0, 300.0, WIDE);
-        let anchor = anchor_after_drag(MAIN, dropped);
+        let anchor = anchor_after_drag(MAIN, dropped, LONG.wide);
         assert_eq!(anchor.dock, Dock::None);
         assert!(close(frame(MAIN, anchor, WIDE), dropped));
     }
 
     #[test]
     fn a_drop_at_a_side_edge_docks_there() {
-        let anchor = anchor_after_drag(MAIN, rect(20.0, 300.0, WIDE));
+        let anchor = anchor_after_drag(MAIN, rect(20.0, 300.0, WIDE), LONG.wide);
         assert_eq!(anchor.dock, Dock::Left);
-        let anchor = anchor_after_drag(MAIN, rect(1512.0 - 330.0, 300.0, WIDE));
+        let anchor = anchor_after_drag(MAIN, rect(1512.0 - 150.0, 300.0, WIDE), LONG.wide);
         assert_eq!(anchor.dock, Dock::Right);
-        let anchor = anchor_after_drag(SIDE, rect(1512.0 + 4.0, 500.0, WIDE));
+        let anchor = anchor_after_drag(SIDE, rect(1512.0 + 4.0, 500.0, WIDE), LONG.wide);
         assert_eq!(anchor.dock, Dock::Left);
-        // The height of the drop is kept.
-        assert!((frame(SIDE, anchor, WIDE).y - 500.0).abs() < 1e-6);
+        // The centre of the drop is kept: the vertical widget is centred on it.
+        let centre = frame(SIDE, anchor, TALL).center().1;
+        assert!((centre - 524.0).abs() < 1e-6);
     }
 
     #[test]
     fn a_vertical_widget_undocks_only_when_the_horizontal_one_would_clear_the_edge() {
         // Pulled a little away from the left edge: the horizontal pill
         // would still sit against the edge, so it stays docked.
-        let near = anchor_after_drag(MAIN, rect(80.0, 300.0, TALL));
+        let near = anchor_after_drag(MAIN, rect(40.0, 300.0, TALL), LONG.wide);
         assert_eq!(near.dock, Dock::Left);
-        let clear = anchor_after_drag(MAIN, rect(400.0, 300.0, TALL));
+        let clear = anchor_after_drag(MAIN, rect(400.0, 300.0, TALL), LONG.wide);
         assert_eq!(clear.dock, Dock::None);
-        assert!(close(frame(MAIN, clear, WIDE), rect(264.0, 342.0, WIDE)));
+        assert!(close(frame(MAIN, clear, WIDE), rect(354.0, 350.0, WIDE)));
     }
 
     #[test]

@@ -27,11 +27,11 @@ The Speed test page records a sentence, or uses a kept history recording, and ru
 
 The macOS client needs the Accessibility permission to insert text and the Microphone permission to record.
 
-While macOS reports Secure Input (a password field has the keyboard), Arcvox does not insert text; the widget shows the result with a Copy button. This depends on the application turning Secure Input on. Terminal does so for password prompts; in iTerm2 it is the "Secure Keyboard Entry" option; a terminal that never turns it on cannot be told apart from ordinary typing, so text dictated at its password prompt is inserted.
+While macOS reports Secure Input (a password field has the keyboard), Arcvox does not insert text; a panel next to the widget shows the result with a Copy button. This depends on the application turning Secure Input on. Terminal does so for password prompts; in iTerm2 it is the "Secure Keyboard Entry" option; a terminal that never turns it on cannot be told apart from ordinary typing, so text dictated at its password prompt is inserted.
 
 The recording shortcut is the fn key at first. Settings > General takes up to five shortcuts, recorded by pressing them: a modifier key alone (left and right are different keys), several modifiers, modifiers with one more key, or a mouse button other than the left and right ones. A combination or mouse button that is a shortcut is not passed on to the application in front. Letters, digits and symbols alone, combinations the system or most applications use, Esc and Caps Lock cannot be shortcuts. Every shortcut works the same way: hold to speak, press twice quickly for hands-free dictation.
 
-A dictation that fails stays on the widget with its detail and a Copy button until it is dismissed or the next dictation starts. Hands-free dictation can end by itself after a pause: Settings > General.
+A dictation that fails is explained in a panel next to the widget, with its detail and a Copy button, until it is dismissed or the next dictation starts. Hands-free dictation can end by itself after a pause: Settings > General. The floating widget has three sizes, and the recognised text shown while a dictation is rewritten can be switched off, in the same place.
 
 Requests to an engine over the network are tried again after a connection failure, a server error or a timeout; the number of retries is set in Settings > General. When recordings are kept, a dictation that failed is listed in the history with its recording and can be processed again there. Any history row with a recording can be run again with the same or another profile, and the new result replaces the text only when accepted.
 

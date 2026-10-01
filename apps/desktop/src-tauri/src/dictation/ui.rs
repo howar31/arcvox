@@ -86,6 +86,12 @@ impl UiMessage {
             retry,
         }
     }
+
+    /// A short notice that the widget itself shows, with nothing further
+    /// to read in the panel.
+    pub fn is_notice(&self) -> bool {
+        matches!(self.msg, Msg::WidgetCancelled | Msg::WidgetNoSpeech)
+    }
 }
 
 pub trait Ui: Send + Sync {
@@ -95,6 +101,24 @@ pub trait Ui: Send + Sync {
     fn message(&self, message: UiMessage);
     /// The final ASR text, sent while the rewrite step is still running.
     fn transcript(&self, text: String);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cancelled_and_no_speech_are_notices() {
+        assert!(UiMessage::info(Msg::WidgetCancelled).is_notice());
+        assert!(UiMessage::info(Msg::WidgetNoSpeech).is_notice());
+        // The engine reports an utterance without speech as an error with a detail.
+        assert!(UiMessage::error(Msg::WidgetNoSpeech, Some("no speech".into())).is_notice());
+        assert!(!UiMessage::error(Msg::WidgetEmptyResult, None).is_notice());
+        assert!(!UiMessage::copyable(Msg::WidgetAppChanged, "text".into()).is_notice());
+        let failure =
+            UiMessage::failure(Msg::WidgetAsrFailed, "x".into(), ErrorCode::Internal, false);
+        assert!(!failure.is_notice());
+    }
 }
 
 #[cfg(test)]
