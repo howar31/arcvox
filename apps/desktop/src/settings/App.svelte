@@ -93,7 +93,7 @@
     </aside>
 
     <main class="main" bind:this={main}>
-      <div class="page">
+      <div class="page" class:plain={route.page === "home"}>
         {#if config.error}
           <div class="banner" role="alert"><Ring tone="live" /><span>{t("common.engine_error", { detail: config.error })}</span></div>
         {/if}
@@ -139,6 +139,8 @@
   /* Positioned: absolutely placed descendants (visually hidden labels) stay inside the scroll area. */
   .main { position: relative; overflow-x: hidden; overflow-y: auto; min-width: 0; }
   .page { padding: 30px var(--page-x) 80px; max-width: 736px; min-height: 100%; }
+  /* The overview has no save bar to leave room for; the default window height shows all of it. */
+  .page.plain { padding-bottom: var(--page-x); }
   .banner { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 22px; padding: 12px var(--row-x); border-radius: var(--radius-group); background: color-mix(in srgb, var(--live) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--live) 35%, transparent); }
   .banner :global(.ring) { margin-top: 3px; }
 </style>
