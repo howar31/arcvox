@@ -29,6 +29,8 @@ export interface ProbeResult { ok: boolean; failure: { kind: string; message?: s
 export interface Utterance {
   id: number; ts: number; profile_id: string; app_name: string | null; raw_text: string; refined_text: string; final_text: string;
   degraded: boolean; has_audio: boolean; asr_ms: number; llm_ms: number | null;
+  /** Length and size of the recording, when one is kept. */
+  audio_ms: number | null; audio_bytes: number | null;
 }
 export type InsertMethod = "paste" | "type" | "ax";
 export interface ClientSettings {
@@ -43,7 +45,7 @@ export interface ClientSettings {
 }
 export interface Permissions { accessibility: boolean }
 export interface RunningApp { bundle_id: string; name: string }
-export interface SystemInfo { version: string; config_dir: string; data_dir: string; cache_dir: string }
+export interface SystemInfo { version: string; config_dir: string; data_dir: string; cache_dir: string; recordings_dir: string }
 export interface CmdError { message: string }
 
 export const getConfig = () => invoke<Config>("config_get");
@@ -58,10 +60,30 @@ export const setDictionary = (entries: DictionaryEntry[]) => invoke<Config>("dic
 export const getPrompt = () => invoke<string>("prompt_get");
 export const setPrompt = (text: string) => invoke<void>("prompt_set", { text });
 export const restorePrompt = () => invoke<string>("prompt_restore");
-export const listHistory = (limit = 200) => invoke<Utterance[]>("history_list", { limit });
-export interface HistoryStats { count: number; chars: number; total_ms: number }
-/** Totals of the history from `since` (seconds since the epoch) on. */
-export const historyStats = (since: number) => invoke<HistoryStats>("history_stats", { since });
+/** Recent rows; `query` keeps rows whose text contains it, `withAudio` rows with a recording. */
+export const listHistory = (limit = 200, query = "", withAudio = false) => invoke<Utterance[]>("history_list", { limit, query, withAudio });
+export const historyAudio = (id: number) => invoke<ArrayBuffer>("history_audio", { id });
+export const deleteRecording = (id: number) => invoke<void>("history_delete_recording", { id });
+/** Deletes every recording and returns how many files were removed. */
+export const clearRecordings = () => invoke<number>("history_clear_recordings");
+export const revealRecording = (id: number) => invoke<void>("history_reveal_recording", { id });
+export interface HistoryStorage { rows: number; recordings: number; recording_bytes: number }
+export const historyStorage = () => invoke<HistoryStorage>("history_storage");
+export interface StatsTotals {
+  count: number; chars: number; audio_ms: number; timed_count: number; timed_chars: number; speed_chars: number; speed_audio_ms: number;
+  asr_ms: number; llm_ms: number; llm_count: number; changed: number; degraded: number; unrewritten: number; dict_fixes: number; snippets: number;
+  han: number; latin: number; kana: number; max_chars: number; max_audio_ms: number; max_total_ms: number; max_cpm: number;
+}
+/** `day` counts local days since the epoch. */
+export interface StatsDay { day: number; count: number; chars: number }
+export interface StatsNamed { name: string; count: number; chars: number }
+export interface Stats {
+  totals: StatsTotals; saved_ms: number | null; days: StatsDay[]; hours: number[];
+  apps: StatsNamed[]; profiles: StatsNamed[]; active_days: StatsDay[];
+}
+/** Statistics from `since` (seconds since the epoch) on, grouped by the local time `tzOffsetSecs` east of UTC. */
+export const getStats = (since: number, tzOffsetSecs: number) => invoke<Stats>("stats_get", { since, tzOffsetSecs });
+export const resetStats = () => invoke<void>("stats_reset");
 export const deleteHistory = (id: number) => invoke<void>("history_delete", { id });
 export const clearHistory = () => invoke<void>("history_clear");
 export const setSecret = (keyRef: string, value: string) => invoke<void>("secrets_set", { keyRef, value });
@@ -119,7 +141,10 @@ export function onModelDownloadProgress(cb: (p: DownloadProgress) => void): Prom
   return listen<DownloadProgress>("model-download-progress", (e) => cb(e.payload));
 }
 export function formatBytes(n: number): string {
-  return n >= 1e9 ? `${(n / 1e9).toFixed(2)} GB` : `${Math.round(n / 1e6)} MB`;
+  if (n >= 1e9) return `${(n / 1e9).toFixed(2)} GB`;
+  if (n >= 1e7) return `${Math.round(n / 1e6)} MB`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)} MB`;
+  return `${Math.round(n / 1e3)} KB`;
 }
 export type NativeStatusKind = "ready" | "needs_download" | "locale_unsupported" | "os_too_old" | "not_eligible" | "intelligence_off" | "model_not_ready" | "failed";
 export interface NativeStatusView { status: NativeStatusKind; reason: string | null }

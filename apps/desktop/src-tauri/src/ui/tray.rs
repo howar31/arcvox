@@ -182,6 +182,7 @@ fn status_msg(state: UiState) -> Msg {
 /// argument. Anything else is ignored rather than interpolated into `eval`.
 const SETTINGS_PAGES: &[&str] = &[
     "home",
+    "flow",
     "engines",
     "general",
     "providers",
@@ -222,7 +223,15 @@ mod tests {
 
     #[test]
     fn settings_pages_are_reachable_and_unknown_pages_are_not() {
-        for page in ["home", "engines", "speed", "general", "models", "providers"] {
+        for page in [
+            "home",
+            "flow",
+            "engines",
+            "speed",
+            "general",
+            "models",
+            "providers",
+        ] {
             assert!(SETTINGS_PAGES.contains(&page), "{page}");
         }
         assert!(!SETTINGS_PAGES.contains(&"javascript:alert(1)"));

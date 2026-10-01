@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { Utterance } from "./api";
-import { averageSeconds, groupByDay, seconds, showsRaw, totalSeconds } from "./historyView";
+import { clipLength, groupByDay, seconds, showsRaw, totalSeconds } from "./historyView";
 
 const at = (d: Date) => Math.floor(d.getTime() / 1000);
 const u = (id: number, when: Date, raw = "raw", fin = "final", degraded = false): Utterance => ({
   id, ts: at(when), profile_id: "default", app_name: "Notes", raw_text: raw, refined_text: fin, final_text: fin,
-  degraded, has_audio: false, asr_ms: 1180, llm_ms: degraded ? null : 940,
+  degraded, has_audio: false, asr_ms: 1180, llm_ms: degraded ? null : 940, audio_ms: null, audio_bytes: null,
 });
 
 describe("groupByDay", () => {
@@ -70,12 +70,10 @@ describe("totalSeconds", () => {
   });
 });
 
-describe("averageSeconds", () => {
-  it("divides the time by the number of dictations", () => {
-    expect(averageSeconds({ count: 4, total_ms: 8600 })).toBe("2.1");
-  });
-
-  it("is null without dictations", () => {
-    expect(averageSeconds({ count: 0, total_ms: 0 })).toBeNull();
+describe("clipLength", () => {
+  it("shows minutes and two-digit seconds", () => {
+    expect(clipLength(6400)).toBe("0:06");
+    expect(clipLength(161000)).toBe("2:41");
+    expect(clipLength(0)).toBe("0:00");
   });
 });

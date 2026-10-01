@@ -47,10 +47,8 @@ function hostOf(url: string | null): string | null {
   try { return new URL(url).host || url; } catch { return url; }
 }
 
-/** Route argument of a profile that is not saved yet; "+" never appears in an id from `slugId`. */
-export const NEW_PROFILE = "+new";
-/** Ids `slugId` never returns: "new" was the route argument of an unsaved profile in earlier builds. */
-const RESERVED_IDS = ["new", NEW_PROFILE];
+/** Ids `slugId` never returns: earlier builds used them as the route argument of an unsaved profile. */
+const RESERVED_IDS = ["new", "+new"];
 
 /** A new profile that starts from the engines, language and steps of `base`. */
 export function blankProfile(base: Profile): Profile {
@@ -73,46 +71,4 @@ export function slugId(name: string, taken: string[]): string {
   let n = slug ? 2 : 1;
   while (used.has(`${stem}-${n}`)) n++;
   return `${stem}-${n}`;
-}
-
-/**
- * Returns a copy of the steps with the step at `index` moved by `delta` places. Moves past either
- * end, and moves that would take speech recognition out of the first place, return the steps unchanged.
- */
-export function moveStep(steps: StepSpec[], index: number, delta: number): StepSpec[] {
-  const next = steps.map((s) => ({ ...s }));
-  const to = index + delta;
-  if (index < 0 || index >= next.length || to < 0 || to >= next.length) return next;
-  if (next[index].step === "asr" || next[to].step === "asr") return next;
-  [next[index], next[to]] = [next[to], next[index]];
-  return next;
-}
-
-export type AddableStep = "opencc" | "llm" | "rules";
-
-/**
- * Returns a copy of the profile with a step of `kind` added at the end. An `llm` step added while
- * rewriting is off selects the first engine in `chatEngineIds`; with no such engine nothing is added.
- */
-export function addStep(profile: Profile, kind: AddableStep, chatEngineIds: string[]): Profile {
-  const steps: StepSpec[] = profile.steps.map((s) => ({ ...s }));
-  let llm = profile.llm_provider;
-  if (kind === "llm" && llm === null) {
-    if (chatEngineIds.length === 0) return { ...profile, steps };
-    llm = chatEngineIds[0];
-  }
-  steps.push(kind === "opencc" ? { step: "opencc", config: "s2twp" } : { step: kind });
-  return { ...profile, llm_provider: llm, steps };
-}
-
-/**
- * Returns a copy of the profile without the step at `index`. Removing the last `llm` step turns
- * rewriting off; speech recognition and indexes out of range leave the steps unchanged.
- */
-export function removeStep(profile: Profile, index: number): Profile {
-  const steps: StepSpec[] = profile.steps.map((s) => ({ ...s }));
-  if (index < 0 || index >= steps.length || steps[index].step === "asr") return { ...profile, steps };
-  steps.splice(index, 1);
-  const llm = steps.some((s) => s.step === "llm") ? profile.llm_provider : null;
-  return { ...profile, llm_provider: llm, steps };
 }

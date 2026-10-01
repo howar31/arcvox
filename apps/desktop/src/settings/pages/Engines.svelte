@@ -12,6 +12,7 @@
   import { rowStatus } from "../../lib/models.svelte";
   import { engineMeta } from "../../lib/profileEdit";
   import { baseName, describeProbe, NATIVE_FM } from "../../lib/providerForm";
+  import { engineDescription, engineRecommended } from "../../lib/stages";
   import { guard } from "../../lib/guard.svelte";
   import { go } from "../../lib/route";
   import { config } from "../../lib/store.svelte";
@@ -82,27 +83,14 @@
   });
 
   // Engines
-  function describe(p: ProviderConfig): string {
-    if (p.kind === "native") return t(p.native_id === NATIVE_FM ? "engines.desc.apple_foundation_models" : "engines.desc.apple_dictation");
-    if (p.kind === "http") {
-      const host = engineMeta(p, installedIds).detail ?? "";
-      return p.model ? t("engines.desc.http", { host, model: p.model }) : host;
-    }
-    if (p.model_id) {
-      const entry = manifest?.models.find((m) => m.id === p.model_id);
-      return (entry && modelDescription(entry)) || p.model_id;
-    }
-    if (p.model_path) return t("engines.desc.custom", { file: baseName(p.model_path) });
-    return t("engines.desc.no_model");
-  }
+  const describe = (p: ProviderConfig) => engineDescription(p, manifest);
   function usersLine(p: ProviderConfig): string {
     const users = usedBy(config.value, p.id);
     if (users.length === 0) return t("engines.not_in_use");
     const names = users.map((u) => (u.isDefault ? t("engines.default_user", { name: u.name }) : u.name)).join(t("engines.list_sep"));
     return t("engines.in_use", { names });
   }
-  const recommended = (p: ProviderConfig): boolean =>
-    p.kind === "embedded" && !!p.model_id && !!manifest?.models.find((m) => m.id === p.model_id)?.recommended;
+  const recommended = (p: ProviderConfig) => engineRecommended(p, manifest);
 
   async function test(p: ProviderConfig) {
     rowProbes = { ...rowProbes, [p.id]: { state: "wait", text: t("engines.testing") } };

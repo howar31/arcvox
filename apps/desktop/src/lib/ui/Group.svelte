@@ -10,7 +10,7 @@
 </section>
 
 <style>
-  h2 { font: 600 var(--text-sm)/1 var(--font); color: var(--ink-2); margin: 26px 4px 10px; }
-  .untitled { margin-top: 18px; }
+  h2 { font: 600 var(--text-sm)/1 var(--font); color: var(--ink-2); margin: var(--gap-group) 4px 12px; }
+  .untitled { margin-top: 22px; }
   .group { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-group); }
 </style>

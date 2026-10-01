@@ -29,7 +29,7 @@
 <style>
   .head { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 22px; }
   .grow { flex: 1; min-width: 0; }
-  h1 { font: 600 var(--text-title)/1.2 var(--font-round); margin: 0; letter-spacing: .01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  h1 { font: 700 var(--text-title)/1.2 var(--font-round); margin: 0; letter-spacing: .01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   p { margin: 6px 0 0; color: var(--ink-2); }
   .actions { display: flex; align-items: center; gap: 8px; flex: none; }
   .crumb { display: flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: var(--text-sm); margin-bottom: 6px; min-width: 0; }

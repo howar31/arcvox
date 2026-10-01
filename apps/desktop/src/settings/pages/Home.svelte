@@ -1,160 +1,179 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import {
-    errorMessage, historyStats, listHistory, listMicrophones, modelsInstalled, openPrivacyPane, permissions, upsertProfile, widgetCopy,
-    type HistoryStats, type Profile, type ProviderConfig, type Utterance,
+    errorMessage, formatBytes, getStats, historyStorage, listMicrophones, modelsInstalled, openPrivacyPane, permissions,
+    type HistoryStorage, type InstalledModel, type Stats,
   } from "../../lib/api";
-  import { appName, ensureAppNames } from "../../lib/apps.svelte";
-  import { formatDateTime, formatShortDate, formatTime, uiLocale } from "../../lib/format";
-  import { averageSeconds } from "../../lib/historyView";
+  import { uiLocale } from "../../lib/format";
+  import { guard } from "../../lib/guard.svelte";
   import { t } from "../../lib/i18n";
-  import { defaultProfile, profileName } from "../../lib/labels";
-  import { appsSummary, engineMeta, withLlm } from "../../lib/profileEdit";
+  import { defaultProfile } from "../../lib/labels";
   import { go } from "../../lib/route";
+  import { engineLine, micLine, outputLine } from "../../lib/stages";
+  import {
+    dayDate, durationParts, fillDays, groupSums, heatLevel, localDay, percent, periodStart, speed, streaks, topWithOthers, type Period,
+  } from "../../lib/statsView";
   import { client, config } from "../../lib/store.svelte";
+  import BarList from "../../lib/ui/BarList.svelte";
+  import Columns from "../../lib/ui/Columns.svelte";
   import Empty from "../../lib/ui/Empty.svelte";
-  import Group from "../../lib/ui/Group.svelte";
-  import Icon from "../../lib/ui/Icon.svelte";
+  import Heatmap from "../../lib/ui/Heatmap.svelte";
   import PageHead from "../../lib/ui/PageHead.svelte";
   import Ring from "../../lib/ui/Ring.svelte";
-  import Row from "../../lib/ui/Row.svelte";
-  import Tag from "../../lib/ui/Tag.svelte";
+  import Segmented from "../../lib/ui/Segmented.svelte";
+  import StatTile from "../../lib/ui/StatTile.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
-  import ProfileForm from "./ProfileForm.svelte";
 
-  type Role = "asr" | "llm";
+  const PERIODS: Period[] = ["today", "week", "month", "all"];
+  const PERIOD_KEY = "kongwe.stats.period";
+  /** Days the heatmap covers. */
+  const HEAT_DAYS = 140;
+  /** Characters a minute the saved-time estimate assumes for typing. */
+  const TYPING_SPEED = 40;
 
-  let access = $state<boolean | null>(null);
+  function storedPeriod(): Period {
+    try {
+      const v = localStorage.getItem(PERIOD_KEY);
+      return PERIODS.includes(v as Period) ? (v as Period) : "month";
+    } catch { return "month"; }
+  }
+
+  let period = $state<Period>(storedPeriod());
+  let stats = $state<Stats | null>(null);
+  let failed = $state(false);
+  let storage = $state<HistoryStorage | null>(null);
+  let models = $state<InstalledModel[] | null>(null);
   let mics = $state<string[]>([]);
-  let installedIds = $state<Set<string> | null>(null);
-  let installedPaths = $state<Set<string>>(new Set());
-  let recent = $state<Utterance[] | null>(null);
-  // Totals of today and of the last seven days, today included.
-  let stats = $state<{ today: HistoryStats; week: HistoryStats } | null>(null);
-  // The profile open in the editor: its id, or NEW_PROFILE.
-  let editing = $state<string | null>(null);
+  let access = $state<boolean | null>(null);
+  let now = $state(new Date());
 
+  async function load(of: Period = period) {
+    now = new Date();
+    try {
+      stats = await getStats(periodStart(of, now), -now.getTimezoneOffset() * 60);
+      failed = false;
+    } catch (e) {
+      if (stats === null) failed = true;
+      toast.error(errorMessage(e));
+    }
+    historyStorage().then((s) => { storage = s; }).catch(() => { storage = null; });
+    modelsInstalled().then((m) => { models = m; }).catch(() => { models = null; });
+  }
   async function checkAccess() {
     try { access = (await permissions()).accessibility; } catch { access = null; }
-  }
-
-  async function loadRecent() {
-    try { recent = await listHistory(3); } catch (e) { recent ??= []; toast.error(errorMessage(e)); }
-  }
-
-  async function loadStats() {
-    const midnight = new Date();
-    midnight.setHours(0, 0, 0, 0);
-    const today = Math.floor(midnight.getTime() / 1000);
-    midnight.setDate(midnight.getDate() - 6);
-    const week = Math.floor(midnight.getTime() / 1000);
-    try {
-      const [a, b] = await Promise.all([historyStats(today), historyStats(week)]);
-      stats = { today: a, week: b };
-    } catch {
-      // The totals are left out; the list below reports a history that cannot be read.
-      stats = null;
-    }
   }
 
   onMount(() => {
     checkAccess();
     listMicrophones().then((m) => { mics = m; }).catch(() => { mics = []; });
-    modelsInstalled().then((m) => { installedIds = new Set(m.map((x) => x.id)); installedPaths = new Set(m.map((x) => x.path)); }).catch(() => { installedIds = null; });
-    loadRecent();
-    loadStats();
-    const onFocus = () => { checkAccess(); loadRecent(); loadStats(); };
+    const onFocus = () => { checkAccess(); load(); };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   });
-
-  // The profile whose flow is shown: the default one until another is picked.
-  let shownId = $state<string | null>(null);
-  // The default profile first, the others in their stored order.
-  const profiles = $derived([...(config.value?.profiles ?? [])].sort((a, b) => Number(b.is_default) - Number(a.is_default)));
-  const profile = $derived(profiles.find((p) => p.id === shownId) ?? defaultProfile(config.value));
-  const providers = $derived(config.value?.providers ?? []);
-  const choices = $derived({
-    asr: providers.filter((p) => p.capabilities.transcribe),
-    llm: providers.filter((p) => p.capabilities.chat),
+  // Reloads when the period changes; the load itself must not count as something to react to.
+  $effect(() => {
+    const chosen = period;
+    try { localStorage.setItem(PERIOD_KEY, chosen); } catch { /* The choice is not remembered. */ }
+    untrack(() => { load(chosen); });
   });
 
-  $effect(() => { if (profile) ensureAppNames(profile.matcher.app_ids); });
+  const num = (n: number) => n.toLocaleString(uiLocale());
+  const secs = (ms: number) => t("home.secs", { n: (ms / 1000).toLocaleString(uiLocale(), { minimumFractionDigits: 1, maximumFractionDigits: 1 }) });
+  const dateOf = (day: number) => dayDate(day).toLocaleDateString(uiLocale(), { month: "numeric", day: "numeric" });
+  const share = (count: number, whole: number) => t("home.row.count_share", { n: num(count), p: String(percent(count, whole)) });
 
-  const find = (id: string | null): ProviderConfig | null => providers.find((p) => p.id === id) ?? null;
-
-  // Capture stage
-  const mic = $derived(client.value?.microphone ?? "builtin");
-  const micName = $derived(mic === "builtin" ? t("home.mic.builtin_name") : mic === "default" ? t("general.mic_default") : mic);
-  const micAbsent = $derived(mic !== "builtin" && mic !== "default" && !mics.includes(mic));
-  const micMeta = $derived(
-    mic === "builtin" ? t("home.mic.builtin") : mic === "default" ? t("home.mic.default") : micAbsent ? t("home.mic.absent") : t("home.mic.device"),
-  );
-
-  function engineLine(id: string | null): { name: string; known: boolean; meta: string; missing: boolean } {
-    if (id === null) return { name: t("home.no_rewrite"), known: true, meta: t("home.no_rewrite_meta"), missing: false };
-    const p = find(id);
-    if (!p) return { name: id, known: false, meta: "", missing: false };
-    const m = engineMeta(p, installedIds ?? new Set(), installedIds ? installedPaths : undefined);
-    if (m.kind === "builtin") return { name: p.label, known: true, meta: t("home.meta.builtin"), missing: false };
-    if (m.kind === "external") return { name: p.label, known: true, meta: m.detail ?? t("home.meta.external"), missing: false };
-    if (installedIds === null) return { name: p.label, known: true, meta: t("home.meta.local"), missing: false };
-    return { name: p.label, known: true, meta: t(m.ready ? "home.meta.local_ready" : "home.meta.local_missing"), missing: !m.ready };
+  /** A length of time as figures with units: hours and minutes, or minutes and seconds when short. */
+  function span(ms: number): { value: string; unit?: string }[] {
+    const p = durationParts(ms);
+    if (p.hours > 0) return [{ value: num(p.hours), unit: t("home.unit.hours") }, { value: String(p.minutes), unit: t("home.unit.minutes") }];
+    if (p.minutes > 0) return [{ value: String(p.minutes), unit: t("home.unit.minutes") }, { value: String(p.seconds), unit: t("home.unit.seconds") }];
+    return [{ value: String(p.seconds), unit: t("home.unit.seconds") }];
   }
+  const spanText = (ms: number) => span(ms).map((p) => `${p.value} ${p.unit}`).join(" ");
 
-  const hasOpencc = $derived(!!profile?.steps.some((s) => s.step === "opencc"));
+  const totals = $derived(stats?.totals ?? null);
+  const empty = $derived(!!totals && totals.count === 0);
+  const today = $derived(localDay(now));
 
-  // The selects are one-way bound: after a failed save the element is put back on the stored value,
-  // so the menu shows what is in use and choosing the same option again fires a change.
-  async function changeEngine(role: Role, select: HTMLSelectElement) {
-    if (!profile) return;
-    const value = select.value;
-    const next = role === "asr" ? { ...profile, asr_provider: value } : withLlm(profile, value === "" ? null : value);
-    try {
-      await upsertProfile($state.snapshot(next) as Profile);
-      toast.ok(t("common.saved"));
-    } catch (e) {
-      const current = config.value?.profiles.find((p) => p.id === profile.id);
-      select.value = (role === "asr" ? current?.asr_provider : current?.llm_provider) ?? "";
-      toast.error(errorMessage(e));
-    }
-  }
-  async function changeMic(select: HTMLSelectElement) {
-    if (!client.value) return;
-    try {
-      await client.save({ ...$state.snapshot(client.value), microphone: select.value });
-      toast.ok(t("common.saved"));
-    } catch (e) {
-      select.value = client.value?.microphone ?? "builtin";
-      toast.error(errorMessage(e));
-    }
-  }
+  // Days used: always over all time.
+  const heat = $derived.by(() => {
+    const rows = stats?.active_days ?? [];
+    const from = today - HEAT_DAYS + 1;
+    const chars = fillDays(rows, from, today);
+    const max = Math.max(0, ...chars);
+    return {
+      levels: chars.map((c) => heatLevel(c, max)),
+      titles: chars.map((c, i) => t("home.days.cell", { date: dateOf(from + i), n: num(c) })),
+    };
+  });
+  const runs = $derived(streaks((stats?.active_days ?? []).map((d) => d.day), today));
+  const periodDays = $derived.by(() => {
+    if (!stats) return { used: 0, span: 0 };
+    const first = period === "all" ? (stats.active_days[0]?.day ?? today) : localDay(new Date(periodStart(period, now) * 1000));
+    return { used: stats.days.length, span: today - first + 1 };
+  });
 
-  /** The first applications of a profile as one phrase; null when it has none. */
-  function appsList(p: Profile): string | null {
-    const names = [...p.matcher.app_ids.map(appName), ...p.matcher.url_patterns];
-    if (names.length === 0) return null;
-    const { shown, more } = appsSummary(names);
-    const list = shown.join(t("home.list_sep"));
-    return more > 0 ? t("home.apps_more", { names: list, count: String(more) }) : list;
-  }
-  function flowHelp(p: Profile): string {
-    if (p.is_default) return t("home.flow_help", { name: p.name });
-    const apps = appsList(p);
-    return apps === null ? t("home.flow_help_unused") : t("home.flow_help_other", { apps });
-  }
+  // Characters per day, by week when the period is long.
+  const daily = $derived.by(() => {
+    if (!stats || stats.days.length === 0) return null;
+    const first = period === "all" ? stats.days[0].day : localDay(new Date(periodStart(period, now) * 1000));
+    const perDay = fillDays(stats.days, first, today);
+    const weekly = perDay.length > 90;
+    const values = weekly ? groupSums(perDay, 7) : perDay;
+    const peak = stats.days.reduce((a, b) => (b.chars > a.chars ? b : a));
+    const marks = [0, 0.25, 0.5, 0.75, 1].map((f) => dateOf(first + Math.round((perDay.length - 1) * f)));
+    return {
+      values, weekly, peak,
+      labels: perDay.length > 4 ? marks : [dateOf(first), dateOf(today)],
+      titles: values.map((v, i) => t("home.days.cell", { date: dateOf(first + i * (weekly ? 7 : 1)), n: num(v) })),
+    };
+  });
 
-  async function copy(text: string) {
-    try { await widgetCopy(text); toast.ok(t("home.copied")); } catch (e) { toast.error(errorMessage(e)); }
-  }
+  const apps = $derived.by(() => {
+    if (!stats || !totals) return [];
+    const { top, others } = topWithOthers(stats.apps, 5);
+    const rows = top.map((a) => ({ label: a.name || t("home.app_unknown"), value: a.count, note: share(a.count, totals.count), muted: !a.name }));
+    if (others) rows.push({ label: t("home.apps.others", { n: String(others.names) }), value: others.count, note: share(others.count, totals.count), muted: true });
+    return rows;
+  });
+  const profiles = $derived.by(() => {
+    if (!stats || !totals) return [];
+    return stats.profiles.map((p) => {
+      const known = config.value?.profiles.find((x) => x.id === p.name);
+      return { label: known ? known.name : `${p.name}${t("history.deleted_profile")}`, value: p.count, note: share(p.count, totals.count), muted: !known };
+    });
+  });
+  const scripts = $derived.by(() => {
+    if (!totals) return [];
+    const whole = totals.han + totals.latin + totals.kana;
+    return ([["han", totals.han], ["latin", totals.latin], ["kana", totals.kana]] as const)
+      .filter(([, n]) => n > 0)
+      .map(([k, n]) => ({ label: t(`home.lang.${k}`), value: n, note: `${percent(n, whole)}%` }));
+  });
 
-  function when(ts: number): { short: string; full: string } {
-    const today = new Date().toDateString() === new Date(ts * 1000).toDateString();
-    return { short: today ? formatTime(ts) : formatShortDate(ts), full: formatDateTime(ts) };
-  }
+  const cpm = $derived(totals ? speed(totals.speed_chars, totals.speed_audio_ms) : null);
+  const modelBytes = $derived((models ?? []).reduce((n, m) => n + m.size_bytes, 0));
+
+  // The default profile's flow in one line.
+  const flowLine = $derived.by(() => {
+    const p = defaultProfile(config.value);
+    if (!p) return null;
+    const providers = config.value?.providers ?? [];
+    const installed = { ids: models ? new Set(models.map((m) => m.id)) : null, paths: new Set((models ?? []).map((m) => m.path)) };
+    return [
+      micLine(client.value?.microphone ?? "builtin", mics).name,
+      engineLine(providers, p.asr_provider, installed).name,
+      engineLine(providers, p.llm_provider, installed).name,
+      outputLine(p).name,
+    ].join(t("home.flow_sep"));
+  });
 </script>
 
-<PageHead title={t("nav.home")} description={t("home.description")} />
+<PageHead title={t("nav.home")} description={t("home.description")}>
+  {#snippet actions()}
+    <Segmented options={PERIODS.map((p) => ({ value: p, label: t(`home.period.${p}`) }))} bind:value={period} label={t("home.period.label")} />
+  {/snippet}
+</PageHead>
 
 {#if access === false}
   <div class="attention" role="alert">
@@ -164,158 +183,151 @@
   </div>
 {/if}
 
-{#if profile}
-  {@const asr = engineLine(profile.asr_provider)}
-  {@const llm = engineLine(profile.llm_provider)}
-  <div class="bar">
-    <h2>{profile.is_default ? t("home.flow_default") : t("home.flow_of", { name: profile.name })}</h2>
-    {#if profiles.length > 1}
-      <span class="menu pick">
-        <Tag tone="accent"><Ring tone="accent" size="sm" /><span class="picked">{profile.name}</span><Icon name="chevron-down" size={12} /></Tag>
-        <select value={profile.id} aria-label={t("home.pick_profile")} onchange={(e) => (shownId = e.currentTarget.value)}>
-          {#each profiles as p (p.id)}<option value={p.id}>{p.is_default ? t("home.default_option", { name: p.name }) : p.name}</option>{/each}
-        </select>
-      </span>
-    {:else}
-      <Tag tone="accent"><Ring tone="accent" size="sm" />{t("home.profile_tag", { name: profile.name })}</Tag>
-    {/if}
+{#if failed}
+  <div class="card">
+    <Empty text={t("home.load_failed")}>
+      {#snippet action()}<button type="button" class="btn" onclick={() => load()}>{t("history.retry")}</button>{/snippet}
+    </Empty>
   </div>
-  <div class="path">
-    <div class="stage">
-      <div class="role">{t("home.stage.capture")}</div>
-      <div class="what" title={micName}>{micName}</div>
-      <div class="meta" class:warn={micAbsent}>{micMeta}</div>
-      <span class="menu act">
-        <span class="btn quiet" aria-hidden="true">{t("home.change")}</span>
-        <select value={mic} aria-label={t("home.change_mic")} onchange={(e) => changeMic(e.currentTarget)}>
-          <option value="builtin">{t("general.mic_builtin")}</option>
-          <option value="default">{t("general.mic_default")}</option>
-          {#each mics as m (m)}<option value={m}>{m}</option>{/each}
-          {#if micAbsent}<option value={mic} disabled>{mic}</option>{/if}
-        </select>
-      </span>
-    </div>
-    {#each [["asr", profile.asr_provider, asr], ["llm", profile.llm_provider, llm]] as const as [role, id, line] (role)}
-      <div class="stage engine">
-        <div class="role">{t(`home.stage.${role}`)}</div>
-        <div class="what" title={line.name}>
-          {#if line.known}{line.name}{:else}<span class="unknown">{line.name}</span>{/if}
+{:else if totals && stats}
+  {#if empty}<p class="hint">{t("home.empty.intro")}</p>{/if}
+
+  <div class="tiles">
+    <StatTile parts={[{ value: num(totals.chars) }]} label={t("home.tile.chars")} detail={totals.count ? t("home.tile.chars_detail", { n: num(Math.round(totals.chars / totals.count)) }) : undefined} />
+    <StatTile parts={[{ value: num(totals.count) }]} label={t("home.tile.count")} detail={periodDays.span > 1 && totals.count ? t("home.tile.count_detail", { n: num(Math.round(totals.count / periodDays.span)) }) : undefined} />
+    <StatTile parts={span(totals.audio_ms)} label={t("home.tile.audio")} detail={t("home.tile.audio_detail")} />
+    <StatTile parts={stats.saved_ms === null ? [{ value: t("home.none") }] : span(stats.saved_ms)} label={t("home.tile.saved")} detail={t("home.tile.saved_detail", { n: String(TYPING_SPEED) })} />
+  </div>
+
+  <div class="cards">
+    <section class="card wide">
+      <h2>{t("home.days.title")}<em>{t("home.days.range")}</em></h2>
+      <p class="sub">{t("home.days.sub")}</p>
+      <div class="heatwrap">
+        <Heatmap levels={heat.levels} titles={heat.titles} />
+        <div class="facts">
+          <div><b class="num">{t("home.days.n", { n: String(runs.current) })}</b><span>{t("home.days.current")}</span></div>
+          <div><b class="num">{t("home.days.n", { n: String(runs.longest) })}</b><span>{t("home.days.longest")}</span></div>
+          <div><b class="num">{periodDays.used} / {periodDays.span}</b><span>{t("home.days.active")}</span></div>
         </div>
-        <div class="meta" class:warn={!line.known || line.missing}>
-          {#if !line.known}<Tag tone="warn">{t("home.not_found")}</Tag>{:else}{line.meta}{/if}
-        </div>
-        {#if line.missing}
-          <button type="button" class="btn quiet act" onclick={() => go("engines", role)}>{t("home.download")}</button>
-        {:else}
-          <span class="menu act">
-            <span class="btn quiet" aria-hidden="true">{t("home.change")}</span>
-            <select value={id ?? ""} aria-label={t(`home.change_${role}`)} onchange={(e) => changeEngine(role, e.currentTarget)}>
-              {#if role === "llm"}<option value="">{t("home.no_rewrite")}</option>{/if}
-              {#each choices[role] as p (p.id)}<option value={p.id}>{p.label}</option>{/each}
-              {#if id !== null && !choices[role].some((p) => p.id === id)}<option value={id} disabled>{id}</option>{/if}
-            </select>
-          </span>
-        {/if}
       </div>
-    {/each}
-    <div class="stage">
-      <div class="role">{t("home.stage.output")}</div>
-      <div class="what">{t("home.output_paste")}</div>
-      <div class="meta">{t(hasOpencc ? "home.output_opencc" : "home.output_plain")}</div>
-      <button type="button" class="btn quiet act" onclick={() => (editing = profile.id)}>{t("home.adjust")}</button>
+    </section>
+
+    <section class="card wide">
+      <h2>{t(daily?.weekly ? "home.daily.title_weekly" : "home.daily.title")}{#if daily}<em>{t("home.daily.peak", { n: num(daily.peak.chars), date: dateOf(daily.peak.day) })}</em>{/if}</h2>
+      <p class="sub">{t(daily?.weekly ? "home.daily.sub_weekly" : "home.daily.sub")}</p>
+      {#if daily}<Columns values={daily.values} labels={daily.labels} titles={daily.titles} />{:else}<p class="none">{t("home.empty.block")}</p>{/if}
+    </section>
+
+    <section class="card">
+      <h2>{t("home.apps.title")}{#if stats.apps.length}<em>{t("home.apps.total", { n: String(stats.apps.length) })}</em>{/if}</h2>
+      <p class="sub">{t("home.apps.sub")}</p>
+      {#if apps.length}<BarList rows={apps} />{:else}<p class="none">{t("home.empty.block")}</p>{/if}
+    </section>
+
+    <section class="card">
+      <h2>{t("home.profiles.title")}</h2>
+      <p class="sub">{t("home.profiles.sub")}</p>
+      {#if profiles.length}<BarList rows={profiles} />{:else}<p class="none">{t("home.empty.block")}</p>{/if}
+    </section>
+
+    <section class="card">
+      <h2>{t("home.hours.title")}</h2>
+      <p class="sub">{t("home.hours.sub")}</p>
+      {#if empty}<p class="none">{t("home.empty.block")}</p>{:else}
+        <Columns values={stats.hours} height={72} labels={["0", "6", "12", "18", "23"]} titles={stats.hours.map((n, h) => t("home.hours.cell", { h: String(h), n: num(n) }))} />
+      {/if}
+    </section>
+
+    <section class="card">
+      <h2>{t("home.speed.title")}</h2>
+      <p class="sub">{t("home.speed.sub")}</p>
+      {#if cpm === null}<p class="none">{t("home.empty.speed")}</p>{:else}
+        <dl class="kv">
+          <dt>{t("home.speed.average")}</dt><dd>{t("home.speed.cpm", { n: num(cpm) })}</dd>
+          <dt>{t("home.speed.fastest")}</dt><dd>{t("home.speed.cpm", { n: num(totals.max_cpm) })}</dd>
+          <dt>{t("home.speed.clip")}</dt><dd>{secs(totals.timed_count ? totals.audio_ms / totals.timed_count : 0)}</dd>
+          <dt>{t("home.speed.longest_audio")}</dt><dd>{spanText(totals.max_audio_ms)}</dd>
+          <dt>{t("home.speed.longest_chars")}</dt><dd>{t("home.chars", { n: num(totals.max_chars) })}</dd>
+        </dl>
+      {/if}
+    </section>
+
+    <section class="card">
+      <h2>{t("home.rewrite.title")}</h2>
+      <p class="sub">{t("home.rewrite.sub")}</p>
+      {#if empty}<p class="none">{t("home.empty.block")}</p>{:else}
+        <dl class="kv">
+          <dt>{t("home.rewrite.changed")}</dt><dd>{share(totals.changed, totals.count)}</dd>
+          <dt>{t("home.rewrite.fixes")}</dt><dd>{t("home.times", { n: num(totals.dict_fixes) })}</dd>
+          <dt>{t("home.rewrite.snippets")}</dt><dd>{t("home.times", { n: num(totals.snippets) })}</dd>
+          <dt>{t("home.rewrite.none")}</dt><dd>{t("home.items", { n: num(totals.unrewritten) })}</dd>
+          <dt>{t("home.rewrite.failed")}</dt><dd>{t("home.items", { n: num(totals.degraded) })}</dd>
+        </dl>
+      {/if}
+    </section>
+
+    <section class="card">
+      <h2>{t("home.time.title")}</h2>
+      <p class="sub">{t("home.time.sub")}</p>
+      {#if empty}<p class="none">{t("home.empty.block")}</p>{:else}
+        <dl class="kv">
+          <dt>{t("home.time.average")}</dt><dd>{secs((totals.asr_ms + totals.llm_ms) / totals.count)}</dd>
+          <dt>{t("home.time.asr")}</dt><dd>{secs(totals.asr_ms / totals.count)}</dd>
+          <dt>{t("home.time.llm")}</dt><dd>{totals.llm_count ? secs(totals.llm_ms / totals.llm_count) : t("home.none")}</dd>
+          <dt>{t("home.time.slowest")}</dt><dd>{secs(totals.max_total_ms)}</dd>
+        </dl>
+      {/if}
+    </section>
+
+    <section class="card">
+      <h2>{t("home.lang.title")}</h2>
+      <p class="sub">{t("home.lang.sub")}</p>
+      {#if scripts.length}<BarList rows={scripts} />{:else}<p class="none">{t("home.empty.block")}</p>{/if}
+    </section>
+
+    <section class="card">
+      <h2>{t("home.storage.title")}</h2>
+      <p class="sub">{t("home.storage.sub")}</p>
+      <dl class="kv">
+        <dt>{t("home.storage.rows")}</dt><dd>{storage ? t("home.items", { n: num(storage.rows) }) : t("home.none")}</dd>
+        <dt>{t("home.storage.recordings")}</dt><dd>{storage ? t("home.storage.count_size", { n: num(storage.recordings), size: formatBytes(storage.recording_bytes) }) : t("home.none")}</dd>
+        <dt>{t("home.storage.models")}</dt><dd>{models ? t("home.storage.count_size", { n: num(models.length), size: formatBytes(modelBytes) }) : t("home.none")}</dd>
+      </dl>
+    </section>
+  </div>
+
+  {#if flowLine}
+    <div class="status">
+      <Ring tone="accent" />
+      <span class="grow">{t("home.flow_line", { flow: flowLine })}</span>
+      <button type="button" class="btn quiet" onclick={() => guard.request(() => go("flow"))}>{t("home.flow_button")}</button>
     </div>
-  </div>
-  <p class="help">{flowHelp(profile)}</p>
-{/if}
-
-{#if stats}
-  {@const number = (n: number) => n.toLocaleString(uiLocale())}
-  {@const average = (s: HistoryStats) => { const v = averageSeconds(s); return v === null ? t("home.stat.none") : t("home.stat.secs", { secs: v }); }}
-  <div class="bar"><h2>{t("home.today")}</h2></div>
-  <div class="stats">
-    {#each [
-      [t("home.stat.count"), number(stats.today.count), number(stats.week.count)],
-      [t("home.stat.chars"), number(stats.today.chars), number(stats.week.chars)],
-      [t("home.stat.average"), average(stats.today), average(stats.week)],
-    ] as [label, value, week] (label)}
-      <div class="stat">
-        <div class="role">{label}</div>
-        <div class="value num">{value}</div>
-        <div class="meta">{t("home.stat.week", { value: week })}</div>
-      </div>
-    {/each}
-  </div>
-{/if}
-
-{#if recent !== null && config.value}
-  <div class="bar">
-    <h2>{t("home.recent")}</h2>
-    {#if recent.length}<button type="button" class="btn quiet link" onclick={() => go("history")}>{t("home.see_all")}</button>{/if}
-  </div>
-  <div class="titled">
-    <Group>
-      {#each recent as u (u.id)}
-        {@const time = when(u.ts)}
-        <Row>
-          <span class="time" title={time.full}>{time.short}</span>
-          <span class="who">
-            <span class="final">{u.final_text}</span>
-            <span class="sub line">{[u.app_name, profileName(config.value, u.profile_id)].filter(Boolean).join(t("home.meta_sep"))}</span>
-          </span>
-          <button type="button" class="btn quiet icon-btn" aria-label={t("widget.copy")} title={t("widget.copy")} onclick={() => copy(u.final_text)}><Icon name="copy" /></button>
-        </Row>
-      {:else}
-        <Empty text={t("home.recent_empty")} />
-      {/each}
-    </Group>
-  </div>
-{/if}
-
-{#if editing !== null}
-  {#key editing}<ProfileForm arg={editing} bind:open={() => true, (v) => { if (!v) editing = null; }} />{/key}
+  {/if}
 {/if}
 
 <style>
-  .attention { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; padding: 12px var(--row-x); border-radius: var(--radius-group); background: color-mix(in srgb, var(--live) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--live) 35%, transparent); }
+  .attention { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; padding: 14px var(--row-x); border-radius: var(--radius-group); background: color-mix(in srgb, var(--live) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--live) 35%, transparent); }
   .grow { flex: 1; min-width: 0; }
-
-  .bar { display: flex; align-items: center; gap: 10px; min-height: 22px; margin: 26px 4px 10px; }
-  .bar h2 { flex: 1; min-width: 0; margin: 0; font: 600 var(--text-sm)/1 var(--font); color: var(--ink-2); }
-  .bar .link { height: 22px; font-size: var(--text-sm); margin-right: -8px; }
-
-  /* The processing flow: one strip, one stage per step. The window's minimum width keeps the four stages side by side. */
-  .path { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-group); overflow: hidden; }
-  .stage { padding: 16px var(--row-x) 14px; position: relative; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; }
-  .stage + .stage { border-left: 1px solid var(--line); }
-  .stage + .stage::before { content: ""; position: absolute; left: -5px; top: 24px; width: 8px; height: 8px; border-top: 1.5px solid var(--ink-3); border-right: 1.5px solid var(--ink-3); transform: rotate(45deg); background: var(--surface); }
-  .stage.engine { background: linear-gradient(var(--accent-soft), var(--accent-soft)); }
-  .role { font-size: var(--text-xs); color: var(--ink-2); }
-  .what { font: 600 var(--text-lg)/1.3 var(--font-round); margin: 10px 0 4px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .meta { font-size: var(--text-sm); color: var(--ink-2); max-width: 100%; flex: 1; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-  .meta.warn, .unknown { color: var(--warn); }
-  .act { margin: 10px 0 0 -8px; }
-
-  /* A native menu: the select is invisible and covers the quiet button. */
-  .menu { position: relative; display: inline-flex; }
-  .menu select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; padding: 0; border: 0; cursor: default; }
-  .menu:hover .btn { background: var(--accent-soft); }
-  /* The profile picker: the tag is the button. */
-  .pick { min-width: 0; max-width: 50%; }
-  .pick :global(.tag) { min-width: 0; max-width: 100%; }
-  .picked { overflow: hidden; text-overflow: ellipsis; }
-  .pick:has(select:focus-visible) :global(.tag) { outline: 2px solid var(--accent); outline-offset: 1px; }
-  .menu:has(select:focus-visible) .btn { outline: 2px solid var(--accent); outline-offset: 1px; }
-
-  .who { display: flex; flex-direction: column; flex: 1; min-width: 0; }
-  .line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* Today's totals: one strip, like the flow above it. */
-  .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-group); overflow: hidden; }
-  .stat { padding: 14px var(--row-x) 13px; min-width: 0; }
-  .stat + .stat { border-left: 1px solid var(--line); }
-  .value { font: 600 22px/1.25 var(--font-round); margin: 6px 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .final { line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
-  .icon-btn { width: var(--control); padding: 0; margin-right: -8px; align-self: flex-start; color: var(--ink-2); }
-  .icon-btn:hover { color: var(--ink); }
-  .time { width: 50px; flex: none; align-self: flex-start; padding-top: 2px; color: var(--ink-2); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
-  .titled :global(.section.untitled) { margin-top: 0; }
+  .hint { margin: 0 4px 18px; color: var(--ink-2); }
+  .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+  .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 14px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-group); padding: var(--card-pad); min-width: 0; }
+  .wide { grid-column: 1 / -1; }
+  /* A wide window fits three cards in a row. */
+  @container (min-width: 1040px) {
+    .cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  }
+  h2 { margin: 0 0 4px; font-size: var(--text-lg); font-weight: 600; display: flex; align-items: baseline; gap: 12px; }
+  h2 em { font-style: normal; font-weight: 400; font-size: var(--text-sm); color: var(--ink-2); margin-left: auto; text-align: right; }
+  .sub { margin: 0 0 18px; color: var(--ink-2); font-size: var(--text-sm); }
+  .none { margin: 0; color: var(--ink-3); font-size: var(--text-control); }
+  .heatwrap { display: flex; gap: 36px; align-items: flex-start; }
+  .facts { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .facts b { display: block; font: 700 23px/1.15 var(--font-round); }
+  .facts span { color: var(--ink-2); font-size: var(--text-sm); }
+  .kv { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 11px 16px; margin: 0; font-size: var(--text-control); }
+  .kv dt { color: var(--ink-2); }
+  .kv dd { margin: 0; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+  .status { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding: 14px var(--row-x); border-radius: var(--radius-group); background: var(--surface); border: 1px solid var(--line); font-size: var(--text-control); color: var(--ink-2); }
 </style>

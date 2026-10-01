@@ -1,13 +1,17 @@
 <script lang="ts" module>
   /** 16 x 16 outline icons drawn with the current text color. */
   const PATHS = {
-    home: '<circle cx="8" cy="8" r="5.5"/>',
+    home: '<path d="M3 13V8M6.5 13V3.5M10 13V9.5M13.5 13V6"/>',
+    flow: '<rect x="1.5" y="5.5" width="3.4" height="5" rx="1"/><rect x="6.3" y="5.5" width="3.4" height="5" rx="1"/><rect x="11.1" y="5.5" width="3.4" height="5" rx="1"/>',
     profiles: '<rect x="2.5" y="3" width="11" height="10" rx="2"/><path d="M5.5 6.5h5M5.5 9.5h3"/>',
     engines: '<rect x="3" y="3" width="10" height="10" rx="2"/><path d="M6 1.5v1.5M10 1.5v1.5M6 13v1.5M10 13v1.5M1.5 6h1.5M1.5 10h1.5M13 6h1.5M13 10h1.5"/>',
     dictionary: '<path d="M3.5 2.5h7a2 2 0 0 1 2 2v9h-7a2 2 0 0 1-2-2z"/><path d="M6 6h4M6 8.5h2.5"/>',
     prompt: '<path d="M3 4h10M3 8h10M3 12h6"/>',
     history: '<circle cx="8" cy="8" r="5.5"/><path d="M8 5v3l2 1.5"/>',
-    general: '<circle cx="8" cy="8" r="2"/><path d="M8 1.8v2M8 12.2v2M1.8 8h2M12.2 8h2M3.6 3.6l1.4 1.4M11 11l1.4 1.4M3.6 12.4 5 11M11 5l1.4-1.4"/>',
+    general: '<path d="M2.5 5h4M10.5 5h3M2.5 11h2M8.5 11h5"/><circle cx="8.5" cy="5" r="1.7"/><circle cx="6.5" cy="11" r="1.7"/>',
+    play: '<path d="M5 3.2v9.6L12.5 8z"/>',
+    pause: '<path d="M5.5 3.5v9M10.5 3.5v9"/>',
+    search: '<circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2 13.5 13.5"/>',
     speed: '<path d="M2.5 11a5.5 5.5 0 1 1 11 0"/><path d="M8 11l2.5-3.5"/>',
     about: '<circle cx="8" cy="8" r="5.5"/><path d="M8 7.5V11M8 5.2v.1"/>',
     plus: '<path d="M8 3v10M3 8h10"/>',

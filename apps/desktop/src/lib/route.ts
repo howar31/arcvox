@@ -1,17 +1,17 @@
-export type Page = "home" | "profiles" | "engines" | "dictionary" | "prompt" | "history" | "general" | "speed" | "about";
+export type Page = "home" | "history" | "flow" | "dictionary" | "prompt" | "general" | "engines" | "speed" | "about";
 
 /** Sidebar layout: an optional group label key and its pages, in order. */
 export const NAV: { group: string | null; pages: Page[] }[] = [
-  { group: null, pages: ["home"] },
-  { group: "nav.group.dictation", pages: ["profiles", "engines", "dictionary", "prompt", "history"] },
-  { group: "nav.group.app", pages: ["general", "speed", "about"] },
+  { group: null, pages: ["home", "history"] },
+  { group: "nav.group.dictation", pages: ["flow", "dictionary", "prompt"] },
+  { group: "nav.group.settings", pages: ["general", "engines", "speed", "about"] },
 ];
 
 const PAGES = new Set<string>(NAV.flatMap((g) => g.pages));
 /** Earlier page names that now live on another page. */
-const ALIASES: Record<string, Page> = { providers: "engines", models: "engines" };
+const ALIASES: Record<string, Page> = { providers: "engines", models: "engines", profiles: "flow" };
 
-/** Reads `#<page>` or `#<page>/<arg>`; unknown pages resolve to the overview. */
+/** Reads `#<page>` or `#<page>/<arg>`; unknown pages resolve to the home page. */
 export function parseRoute(hash: string): { page: Page; arg: string | null } {
   const body = hash.replace(/^#/, "");
   const slash = body.indexOf("/");

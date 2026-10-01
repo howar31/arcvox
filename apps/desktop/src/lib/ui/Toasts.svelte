@@ -17,7 +17,7 @@
 
 <style>
   .toasts { position: fixed; top: 12px; right: 16px; z-index: 60; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; max-width: min(360px, calc(100vw - 32px)); pointer-events: none; }
-  .toast { pointer-events: auto; display: flex; align-items: center; gap: 10px; min-height: 42px; padding: 8px 8px 8px 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); animation: enter .15s ease-out; }
+  .toast { pointer-events: auto; display: flex; align-items: center; gap: 10px; min-height: 46px; padding: 8px 8px 8px 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); animation: enter .15s ease-out; }
   .toast.error { border-color: color-mix(in srgb, var(--live) 40%, var(--line)); }
   .message { flex: 1; min-width: 0; overflow-wrap: anywhere; }
   button { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--ink-3); flex: none; cursor: default; }
