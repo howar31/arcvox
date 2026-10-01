@@ -149,6 +149,7 @@ pub fn run() {
                     // recording; release the microphone now.
                     if let Some(state) = window.app_handle().try_state::<AppState>() {
                         state.bench.discard_recording();
+                        crate::commands::bench::cancel_run(window.app_handle(), &state);
                         // Nothing is left to end the positioning of the widget either.
                         state.ui.set_placing(false);
                     }

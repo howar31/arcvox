@@ -75,6 +75,8 @@ pub struct TauriUi {
     /// True while the settings window keeps the widget visible so the user
     /// can position it.
     placing: AtomicBool,
+    /// The message on the widget stays until dismissed or replaced.
+    sticky: AtomicBool,
 }
 
 impl TauriUi {
@@ -93,6 +95,7 @@ impl TauriUi {
             dragging: Arc::new(AtomicBool::new(false)),
             hide_waiting: Arc::new(AtomicBool::new(false)),
             placing: AtomicBool::new(false),
+            sticky: AtomicBool::new(false),
         })
     }
 
@@ -119,6 +122,7 @@ impl TauriUi {
     /// Only a message needs the horizontal pill there; the transcript is
     /// shown in the horizontal pill only.
     fn show(&self, compact: bool) {
+        self.sticky.store(false, Ordering::SeqCst);
         *self.hide_deadline.lock().unwrap() = None;
         self.generation.fetch_add(1, Ordering::SeqCst);
         let app = self.app.clone();
@@ -132,7 +136,7 @@ impl TauriUi {
     /// deadline (e.g. a 4 s error hide must not cut a 15 s copyable-message
     /// hide short just because `Idle` follows right after).
     fn hide_after(&self, delay: Duration) {
-        if self.placing.load(Ordering::SeqCst) {
+        if self.placing.load(Ordering::SeqCst) || self.sticky.load(Ordering::SeqCst) {
             return;
         }
         let deadline = Instant::now() + delay;
@@ -169,6 +173,7 @@ impl TauriUi {
     /// generation is bumped first so a pending `hide_after` sleeper finds a
     /// stale generation when it wakes and does nothing.
     pub fn dismiss(&self) {
+        self.sticky.store(false, Ordering::SeqCst);
         self.generation.fetch_add(1, Ordering::SeqCst);
         *self.hide_deadline.lock().unwrap() = None;
         hide_panel_now(&self.app, &self.layout);
@@ -324,6 +329,7 @@ impl Ui for TauriUi {
     fn message(&self, message: UiMessage) {
         let language = self.language();
         let copyable = message.copyable.is_some();
+        let sticky = message.sticky;
         let _ = self.app.emit_to(
             widget::WINDOW,
             "widget-message",
@@ -339,6 +345,7 @@ impl Ui for TauriUi {
             },
         );
         self.show(false);
+        self.sticky.store(sticky, Ordering::SeqCst);
         self.hide_after(if copyable {
             HIDE_AFTER_COPYABLE
         } else {

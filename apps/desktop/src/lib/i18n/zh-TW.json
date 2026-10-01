@@ -498,5 +498,9 @@
   "general.stats_reset": "重設統計",
   "general.stats_reset_title": "要重設統計嗎？",
   "general.stats_reset_body": "首頁的所有數字會歸零，歷史紀錄不會刪除。",
-  "general.stats_reset_done": "已重設統計"
+  "general.stats_reset_done": "已重設統計",
+  "engines.discard_body": "這個引擎的變更還沒有儲存，關閉對話框會捨棄這些變更。",
+  "home.output_opencc_other": "以 {config} 轉換字形",
+  "flow.model_missing": "所選引擎的模型尚未下載。",
+  "flow.to_download": "前往下載"
 }

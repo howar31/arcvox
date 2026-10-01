@@ -381,14 +381,21 @@ pub fn bench_start(
 /// speech models loaded only for the test are freed.
 #[tauri::command]
 pub fn bench_cancel(app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
-    if let Some(task) = state.bench.task.lock().unwrap().take() {
-        task.abort();
-        if let Ok(engine) = engine(&state) {
-            tauri::async_runtime::spawn(async move { engine.unload_unreferenced_asr().await });
-        }
+    cancel_run(&app, &state);
+    Ok(())
+}
+
+/// Stops a run in progress and tells the page; also used when the settings
+/// window closes, since the page can no longer be seen.
+pub fn cancel_run(app: &AppHandle, state: &AppState) {
+    let Some(task) = state.bench.task.lock().unwrap().take() else {
+        return;
+    };
+    task.abort();
+    if let Some(engine) = state.engine.lock().unwrap().clone() {
+        tauri::async_runtime::spawn(async move { engine.unload_unreferenced_asr().await });
     }
     let _ = app.emit_to(SETTINGS_WINDOW, "bench-done", BenchDone {});
-    Ok(())
 }
 
 #[cfg(test)]

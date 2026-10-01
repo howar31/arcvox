@@ -1,4 +1,5 @@
 import type { ManifestView, Profile, ProviderConfig } from "./api";
+import { scriptChoice } from "./flowEdit";
 import { t } from "./i18n";
 import { modelDescription } from "./labels";
 import { engineMeta } from "./profileEdit";
@@ -36,8 +37,9 @@ export function engineLine(providers: ProviderConfig[], id: string | null, insta
 
 /** The output stage. */
 export function outputLine(profile: Profile): StageLine {
-  const converts = profile.steps.some((s) => s.step === "opencc");
-  return { name: t("home.output_paste"), meta: t(converts ? "home.output_opencc" : "home.output_plain"), known: true, missing: false };
+  const script = scriptChoice(profile);
+  const meta = script === "tw" ? t("home.output_opencc") : script === "none" ? t("home.output_plain") : t("home.output_opencc_other", { config: script.other });
+  return { name: t("home.output_paste"), meta, known: true, missing: false };
 }
 
 /** One sentence about what an engine is. */

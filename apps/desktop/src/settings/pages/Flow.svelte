@@ -5,7 +5,7 @@
     setDefaultProfile, upsertProfile, type InstalledModel, type ManifestView, type PresetView, type Profile,
   } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
-  import { appliesDictionary, convertsScript, selectedProfile, withDictionary, withScript } from "../../lib/flowEdit";
+  import { appliesDictionary, scriptChoice, selectedProfile, withDictionary, withScript } from "../../lib/flowEdit";
   import { guard } from "../../lib/guard.svelte";
   import { t } from "../../lib/i18n";
   import { isImeKey } from "../../lib/ime";
@@ -307,6 +307,9 @@
       engines={asrChoices} selected={draft.asr_provider} label={t("flow.asr_engines")} {manifest} {installed}
       stale={stale(draft.asr_provider, asrChoices)} onpick={(id) => { if (id) draft!.asr_provider = id; }}
     />
+    {#if lines.asr.missing}
+      <p class="missing"><span>{t("flow.model_missing")}</span><button type="button" class="btn" onclick={() => guard.request(() => go("engines", "asr"))}>{t("flow.to_download")}</button></p>
+    {/if}
     <Group title={t("flow.asr_settings")}>
       <Row label={t("profiles.language_hint")} help={t("profiles.language_help")}>
         <select class="field" bind:value={() => draft!.language_hint ?? "", (v) => (draft!.language_hint = v || null)} aria-label={t("profiles.language_hint")}>
@@ -323,6 +326,9 @@
       none={{ name: t("home.no_rewrite"), help: t("home.no_rewrite_meta") }}
       stale={stale(draft.llm_provider, llmChoices)} onpick={(id) => (draft = withLlm(snapshot(), id))}
     />
+    {#if lines.llm.missing}
+      <p class="missing"><span>{t("flow.model_missing")}</span><button type="button" class="btn" onclick={() => guard.request(() => go("engines", "llm"))}>{t("flow.to_download")}</button></p>
+    {/if}
     {#if draft.llm_provider !== null}
       <div class="bar"><h2>{t("profiles.prompt_addition")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("prompt"))}>{t("flow.see_prompt")}</button></div>
       <textarea rows="4" bind:value={draft.prompt_addition} aria-label={t("profiles.prompt_addition")}></textarea>
@@ -348,9 +354,15 @@
   {:else}
     <Group title={t("home.stage.output")}>
       <Row label={t("flow.script")} help={t("flow.script_help")}>
+        {@const script = scriptChoice(draft)}
+        <!-- A configuration set outside this page is shown by its name and kept until another choice is made. -->
         <Segmented
-          options={[{ value: "tw", label: t("flow.script_tw") }, { value: "none", label: t("flow.script_none") }]}
-          bind:value={() => (convertsScript(draft!) ? "tw" : "none"), (v) => (draft = withScript(snapshot(), v === "tw"))}
+          options={[
+            { value: "tw", label: t("flow.script_tw") },
+            ...(typeof script === "object" ? [{ value: "other", label: script.other }] : []),
+            { value: "none", label: t("flow.script_none") },
+          ]}
+          bind:value={() => (typeof script === "object" ? "other" : script), (v) => { if (v !== "other") draft = withScript(snapshot(), v === "tw", true); }}
           label={t("flow.script")}
         />
       </Row>
@@ -449,6 +461,7 @@
   .meta.warn { color: var(--warn); }
 
   .bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: var(--gap-group) 4px 12px; min-height: 20px; }
+  .missing { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 4px 0; color: var(--warn); font-size: var(--text-sm); }
   .bar h2 { margin: 0; font: 600 var(--text-sm)/1 var(--font); color: var(--ink-2); }
   .bar .btn { margin: -10px -8px -10px 0; }
   .field { width: 240px; flex: none; }
