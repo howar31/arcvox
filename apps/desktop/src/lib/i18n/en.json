@@ -384,7 +384,7 @@
   "history.deleted_profile": "(deleted)",
   "history.not_rewritten": "Not rewritten",
   "history.asr_secs": "recognition {secs} s",
-  "history.llm_secs": "rewriting {secs} s",
+  "history.total_secs": "{total} s (recognition {asr}, rewriting {llm})",
   "history.delete": "Delete",
   "history.clear_body": "Every entry and its recording is deleted from this Mac. This cannot be undone.",
   "history.cleared": "History cleared",

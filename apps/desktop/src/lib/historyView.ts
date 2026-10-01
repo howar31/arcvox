@@ -28,6 +28,11 @@ export function seconds(ms: number | null): string | null {
   return ms === null ? null : (ms / 1000).toFixed(1);
 }
 
+/** Recognition plus rewriting, as seconds with one decimal; null when the rewrite did not run. */
+export function totalSeconds(asrMs: number, llmMs: number | null): string | null {
+  return llmMs === null ? null : seconds(asrMs + llmMs);
+}
+
 /** Whether the raw transcript says something the final text does not. */
 export function showsRaw(u: Utterance): boolean {
   const raw = u.raw_text.trim();

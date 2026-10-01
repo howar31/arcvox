@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { clearHistory, deleteHistory, errorMessage, listHistory, widgetCopy, type Utterance } from "../../lib/api";
-  import { groupByDay, seconds, showsRaw } from "../../lib/historyView";
+  import { groupByDay, seconds, showsRaw, totalSeconds } from "../../lib/historyView";
   import { formatDateTime, formatDay, formatTime } from "../../lib/format";
   import { t } from "../../lib/i18n";
   import { config } from "../../lib/store.svelte";
@@ -51,7 +51,7 @@
     return p ? { name: p.name, deleted: false } : { name: id, deleted: !!config.value && !!id };
   }
   type Part = { kind: "text"; text: string } | { kind: "profile"; name: string; deleted: boolean } | { kind: "degraded" };
-  /** The meta line: application, profile, the not-rewritten tag, and the step timings. */
+  /** The meta line: application, profile, the not-rewritten tag, and the time taken. */
   function parts(u: Utterance): Part[] {
     const out: Part[] = [];
     if (u.app_name) out.push({ kind: "text", text: u.app_name });
@@ -59,8 +59,9 @@
     if (u.degraded) out.push({ kind: "degraded" });
     const asr = seconds(u.asr_ms);
     const llm = seconds(u.llm_ms);
-    if (asr !== null) out.push({ kind: "text", text: t("history.asr_secs", { secs: asr }) });
-    if (llm !== null) out.push({ kind: "text", text: t("history.llm_secs", { secs: llm }) });
+    const total = totalSeconds(u.asr_ms, u.llm_ms);
+    if (asr !== null && llm !== null && total !== null) out.push({ kind: "text", text: t("history.total_secs", { total, asr, llm }) });
+    else if (asr !== null) out.push({ kind: "text", text: t("history.asr_secs", { secs: asr }) });
     return out;
   }
 
