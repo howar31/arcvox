@@ -21,6 +21,15 @@ use app_menu::AppMenu;
 use tray::Tray;
 
 const HIDE_AFTER_IDLE: Duration = Duration::from_millis(1200);
+/// After a dictation whose final text is shown in the panel: the time the
+/// panel takes to turn the recognised text into the final one, and a moment
+/// to read it.
+const HIDE_AFTER_REWRITE: Duration = Duration::from_millis(3000);
+/// How long a message waits in the panel while the recognised text turns
+/// into the final one; the message stays that much longer.
+const MESSAGE_AFTER_REWRITE: Duration = Duration::from_millis(2600);
+/// The same when the processing changed nothing: only the moment to read.
+const HIDE_AFTER_SAME_TEXT: Duration = Duration::from_millis(1000);
 const HIDE_AFTER_NOTICE: Duration = Duration::from_millis(4000);
 /// A message in the panel has more to read than a notice on the widget.
 const HIDE_AFTER_ERROR: Duration = Duration::from_millis(6000);
@@ -86,6 +95,13 @@ pub struct TauriUi {
     placing: AtomicBool,
     /// The message on the widget stays until dismissed or replaced.
     sticky: AtomicBool,
+    /// The recognised text the panel shows for the dictation in progress.
+    transcript: Mutex<Option<String>>,
+    /// How long the widget stays after this dictation, when its final text
+    /// is shown in the panel.
+    linger: Mutex<Option<Duration>>,
+    /// When the panel began to turn the recognised text into the final one.
+    rewrite_at: Mutex<Option<Instant>>,
 }
 
 impl TauriUi {
@@ -114,6 +130,9 @@ impl TauriUi {
             hide_waiting: Arc::new(AtomicBool::new(false)),
             placing: AtomicBool::new(false),
             sticky: AtomicBool::new(false),
+            transcript: Mutex::new(None),
+            linger: Mutex::new(None),
+            rewrite_at: Mutex::new(None),
         })
     }
 
@@ -368,11 +387,20 @@ impl Ui for TauriUi {
         });
         match state {
             UiState::Recording | UiState::Locked | UiState::Processing | UiState::Inserting => {
+                if matches!(state, UiState::Recording | UiState::Locked) {
+                    // A new dictation: nothing of the last one is shown.
+                    *self.transcript.lock().unwrap() = None;
+                    *self.linger.lock().unwrap() = None;
+                    *self.rewrite_at.lock().unwrap() = None;
+                }
                 self.show()
             }
             // Stays as it is: visible, with its message if it has one.
             UiState::Idle if placing => {}
-            UiState::Idle => self.hide_after(HIDE_AFTER_IDLE),
+            UiState::Idle => {
+                let linger = self.linger.lock().unwrap().take();
+                self.hide_after(linger.unwrap_or(HIDE_AFTER_IDLE))
+            }
             UiState::NoAccessibility | UiState::EngineError => {}
         }
     }
@@ -383,7 +411,29 @@ impl Ui for TauriUi {
             .emit_to(widget::WINDOW, "widget-level", LevelPayload { rms });
     }
 
+    fn refined(&self, text: String) {
+        // Without the recognised text on the panel there is nothing to turn into the final text.
+        let Some(transcript) = self.transcript.lock().unwrap().clone() else {
+            return;
+        };
+        *self.linger.lock().unwrap() = Some(if transcript == text {
+            HIDE_AFTER_SAME_TEXT
+        } else {
+            *self.rewrite_at.lock().unwrap() = Some(Instant::now());
+            HIDE_AFTER_REWRITE
+        });
+        let language = self.language();
+        self.emit(
+            "widget-refined",
+            TranscriptPayload {
+                text,
+                language: language.tag(),
+            },
+        );
+    }
+
     fn transcript(&self, text: String) {
+        *self.transcript.lock().unwrap() = Some(text.clone());
         let language = self.language();
         self.emit(
             "widget-transcript",
@@ -399,6 +449,17 @@ impl Ui for TauriUi {
         let copyable = message.copyable.is_some();
         let sticky = message.sticky;
         let notice = message.is_notice();
+        // The message takes the panel, after the change of the text when
+        // there is one to show.
+        *self.linger.lock().unwrap() = None;
+        let wait = self
+            .rewrite_at
+            .lock()
+            .unwrap()
+            .take()
+            .map_or(Duration::ZERO, |at| {
+                MESSAGE_AFTER_REWRITE.saturating_sub(at.elapsed())
+            });
         self.emit(
             "widget-message",
             MessagePayload {
@@ -416,13 +477,15 @@ impl Ui for TauriUi {
         );
         self.show();
         self.sticky.store(sticky, Ordering::SeqCst);
-        self.hide_after(if copyable {
-            HIDE_AFTER_COPYABLE
-        } else if notice {
-            HIDE_AFTER_NOTICE
-        } else {
-            HIDE_AFTER_ERROR
-        });
+        self.hide_after(
+            wait + if copyable {
+                HIDE_AFTER_COPYABLE
+            } else if notice {
+                HIDE_AFTER_NOTICE
+            } else {
+                HIDE_AFTER_ERROR
+            },
+        );
     }
 }
 

@@ -577,10 +577,11 @@
   "panel.copy_detail": "複製詳細資訊",
   "panel.open_settings": "開啟設定",
   "panel.open_history": "開啟歷史紀錄",
-  "general.show_transcript": "處理中顯示辨識原文",
-  "general.show_transcript_help": "改寫進行時，辨識出的文字會顯示在浮動視窗旁的面板。",
+  "general.show_transcript": "處理中顯示聽寫文字",
+  "general.show_transcript_help": "辨識出的文字會顯示在浮動視窗旁的面板；處理完成時，面板會標示修改的地方。",
   "general.widget_size": "大小",
   "general.widget_size_small": "小",
   "general.widget_size_medium": "中",
-  "general.widget_size_large": "大"
+  "general.widget_size_large": "大",
+  "panel.final": "最終文字"
 }

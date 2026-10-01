@@ -209,4 +209,6 @@ export function onBenchDone(cb: () => void): Promise<UnlistenFn> {
   return listen<Record<string, never>>("bench-done", () => cb());
 }
 export interface TranscriptPayload { text: string; language: "zh-TW" | "en" }
+/** The final text of a dictation, sent when the processing is over. */
+export function onWidgetRefined(cb: (p: TranscriptPayload) => void): Promise<UnlistenFn> { return listen<TranscriptPayload>("widget-refined", (e) => cb(e.payload)); }
 export function onWidgetTranscript(cb: (p: TranscriptPayload) => void): Promise<UnlistenFn> { return listen<TranscriptPayload>("widget-transcript", (e) => cb(e.payload)); }

@@ -101,6 +101,8 @@ pub trait Ui: Send + Sync {
     fn message(&self, message: UiMessage);
     /// The final ASR text, sent while the rewrite step is still running.
     fn transcript(&self, text: String);
+    /// The text the processing ended with, sent before it is inserted.
+    fn refined(&self, text: String);
 }
 
 #[cfg(test)]
@@ -154,6 +156,9 @@ pub mod fake {
                 .unwrap()
                 .push(format!("message:{}", message.msg.key()));
             self.messages.lock().unwrap().push(message);
+        }
+        fn refined(&self, text: String) {
+            self.log.lock().unwrap().push(format!("refined:{text}"));
         }
         fn transcript(&self, text: String) {
             self.log.lock().unwrap().push(format!("transcript:{text}"));

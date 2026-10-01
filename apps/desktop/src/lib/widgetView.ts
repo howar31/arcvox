@@ -40,6 +40,8 @@ export interface PanelView {
   title?: string;
   /** Running text without a title: the recognised text, a hint. */
   text?: string;
+  /** The recognised text and the final text it turned into. */
+  rewrite?: { from: string; to: string };
   body?: string;
   /** The dictated text that was not inserted. */
   result?: string;
@@ -60,9 +62,13 @@ const BODIES: Record<string, string | null> = {
 /** Messages that are settled on the engines page. */
 const TO_ENGINES = new Set(["widget.engine_unavailable", "widget.model_missing", "widget.model_corrupt"]);
 
-/** What the panel shows, or null when the widget needs no panel. `hint` is true while a hands-free dictation has just begun. */
-export function panelView(state: WidgetState, message: MessagePayload | null, transcript: string, hint: boolean): PanelView | null {
+/**
+ * What the panel shows, or null when the widget needs no panel. `refined` is the final text once the
+ * processing is over; `hint` is true while a hands-free dictation has just begun.
+ */
+export function panelView(state: WidgetState, message: MessagePayload | null, transcript: string, refined: string | null, hint: boolean): PanelView | null {
   if (!message) {
+    if (transcript && refined !== null) return { caption: t("panel.final"), rewrite: { from: transcript, to: refined }, actions: [], close: false };
     if (state === "processing" && transcript) return { caption: t("panel.recognised"), text: transcript, actions: [], close: false };
     if (state === "locked" && hint) return { text: t("widget.locked"), actions: [], close: false };
     return null;
