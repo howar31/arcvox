@@ -13,7 +13,6 @@
   import General from "./pages/General.svelte";
   import Engines from "./pages/Engines.svelte";
   import Profiles from "./pages/Profiles.svelte";
-  import ProfileDetail from "./pages/ProfileDetail.svelte";
   import Prompt from "./pages/Prompt.svelte";
   import Dictionary from "./pages/Dictionary.svelte";
   import History from "./pages/History.svelte";
@@ -102,8 +101,7 @@
         {:else if route.page === "general"}<General />
         {:else if route.page === "about"}<About />
         {:else if route.page === "engines"}<Engines arg={route.arg} />
-        {:else if route.page === "profiles"}
-          {#if route.arg}{#key route.arg}<ProfileDetail arg={route.arg} />{/key}{:else}<Profiles />{/if}
+        {:else if route.page === "profiles"}<Profiles />
         {:else if route.page === "prompt"}<Prompt />
         {:else if route.page === "dictionary"}<Dictionary />
         {:else if route.page === "history"}<History />
