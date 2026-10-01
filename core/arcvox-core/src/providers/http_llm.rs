@@ -84,6 +84,12 @@ impl LlmProvider for HttpLlmProvider {
         })
         .await?;
         let parsed: ChatResponse = resp.json().await.map_err(|e| {
+            if e.is_timeout() {
+                return ProviderError::new(
+                    ErrorCode::ProviderTimeout,
+                    format!("{}: request timed out", self.label),
+                );
+            }
             ProviderError::new(
                 ErrorCode::ProviderError,
                 format!("{}: bad chat response: {e}", self.label),

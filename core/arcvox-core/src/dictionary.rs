@@ -63,7 +63,8 @@ pub struct AliasCounts {
 /// Replaces every alias with its term, matching against the original text
 /// in a single pass so replacement output is never re-scanned. At each
 /// position the longest matching alias wins, so `台北市` wins over `台北`
-/// when both are aliases.
+/// when both are aliases. An alias edge that is an ASCII letter or digit
+/// only matches at a word boundary, so `js` leaves `json` alone.
 pub fn apply_aliases(entries: &[DictionaryEntry], text: &str) -> String {
     apply_aliases_counted(entries, text).0
 }
@@ -87,8 +88,10 @@ pub fn apply_aliases_counted(entries: &[DictionaryEntry], text: &str) -> (String
     let mut i = 0;
     while i < text.len() {
         let rest = &text[i..];
-        if let Some(&(alias, term, snippet)) =
-            pairs.iter().find(|(alias, _, _)| rest.starts_with(alias))
+        let before = text[..i].chars().next_back();
+        if let Some(&(alias, term, snippet)) = pairs
+            .iter()
+            .find(|(alias, _, _)| rest.starts_with(alias) && at_boundary(alias, before, rest))
         {
             out.push_str(term);
             if snippet {
@@ -109,9 +112,41 @@ pub fn apply_aliases_counted(entries: &[DictionaryEntry], text: &str) -> (String
     (out, counts)
 }
 
+/// False when the alias starts or ends with an ASCII letter or digit and
+/// the neighbouring character in the text continues that word.
+fn at_boundary(alias: &str, before: Option<char>, rest: &str) -> bool {
+    let word = |c: char| c.is_ascii_alphanumeric();
+    let starts_word = alias.chars().next().is_some_and(word);
+    let ends_word = alias.chars().next_back().is_some_and(word);
+    let after = rest[alias.len()..].chars().next();
+    !(starts_word && before.is_some_and(word)) && !(ends_word && after.is_some_and(word))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ascii_alias_needs_a_word_boundary() {
+        let d = vec![entry("JavaScript", &["js"], false)];
+        assert_eq!(apply_aliases(&d, "json and js"), "json and JavaScript");
+        assert_eq!(apply_aliases(&d, "nodejs"), "nodejs");
+        assert_eq!(apply_aliases(&d, "用js寫"), "用JavaScript寫");
+        assert_eq!(apply_aliases(&d, "js, js."), "JavaScript, JavaScript.");
+    }
+
+    #[test]
+    fn cjk_alias_matches_inside_running_text() {
+        let d = vec![entry("語音", &["弧克"], false)];
+        assert_eq!(apply_aliases(&d, "用弧克輸入法abc"), "用語音輸入法abc");
+    }
+
+    #[test]
+    fn mixed_alias_checks_only_its_ascii_edge() {
+        let d = vec![entry("C++ 語言", &["c加加"], false)];
+        assert_eq!(apply_aliases(&d, "abc加加"), "abc加加");
+        assert_eq!(apply_aliases(&d, "學c加加很久"), "學C++ 語言很久");
+    }
 
     fn entry(term: &str, aliases: &[&str], hint: bool) -> DictionaryEntry {
         DictionaryEntry {
