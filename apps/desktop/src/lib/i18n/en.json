@@ -165,7 +165,7 @@
   "common.dismiss": "Dismiss",
   "common.ms": "ms",
   "common.seconds": "s",
-  "home.description": "Hold fn to speak; the text appears at the cursor when you let go. Double-press fn to lock recording.",
+  "home.description": "Hold fn to speak; text appears at the cursor on release. Double-press fn to lock.",
   "general.accessibility_help": "Used to insert text into other applications",
   "general.input_device": "Input device",
   "general.context_help": "Sent with each dictation so the rewrite can match where you are writing.",
