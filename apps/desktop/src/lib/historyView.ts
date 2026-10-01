@@ -39,8 +39,12 @@ export function clipLength(ms: number): string {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
-/** Whether the raw transcript says something the final text does not. */
-export function showsRaw(u: Utterance): boolean {
+/** How the raw transcript relates to the final text: absent, changed by the rewrite, left as it was by the rewrite,
+ * inserted because the rewrite failed, or the profile does not rewrite. */
+export function rawState(u: Utterance): "none" | "changed" | "same" | "failed" | "off" {
   const raw = u.raw_text.trim();
-  return raw !== "" && raw !== u.final_text.trim();
+  if (raw === "") return "none";
+  if (raw !== u.final_text.trim()) return "changed";
+  if (u.degraded) return "failed";
+  return u.llm_ms === null ? "off" : "same";
 }

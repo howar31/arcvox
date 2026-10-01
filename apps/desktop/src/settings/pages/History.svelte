@@ -5,7 +5,7 @@
     type HistoryStorage, type Redo, type Utterance,
   } from "../../lib/api";
   import { formatDateTime, formatDay, formatTime } from "../../lib/format";
-  import { clipLength, groupByDay, seconds, showsRaw, totalSeconds } from "../../lib/historyView";
+  import { clipLength, groupByDay, rawState, seconds, totalSeconds } from "../../lib/historyView";
   import { t } from "../../lib/i18n";
   import { isImeKey } from "../../lib/ime";
   import { config } from "../../lib/store.svelte";
@@ -254,8 +254,9 @@
               {#if u.error !== null}
                 <div class="label">{t("history.error_label")}</div>
                 <div class="problem">{u.error}</div>
-              {:else if showsRaw(u)}
-                <div class="label">{t("history.raw_label")}</div>
+              {:else if rawState(u) !== "none"}
+                {@const raw = rawState(u)}
+                <div class="label">{t("history.raw_label")}{#if raw !== "changed"}<span class="same" class:kept={raw === "same"} class:bad={raw === "failed"}>{t(raw === "same" ? "history.raw_same" : raw === "failed" ? "history.not_rewritten" : "history.rewrite_off")}</span>{/if}</div>
                 <div class="raw">{u.raw_text.trim()}</div>
               {/if}
               {#if u.has_audio}
@@ -364,6 +365,9 @@
   .detail { padding: 0 var(--row-x) 18px calc(var(--row-x) + 68px); }
   .label { margin: 10px 0 5px; font-size: var(--text-xs); font-weight: 600; color: var(--ink-2); }
   .detail > .label:first-child { margin-top: 0; }
+  .same { margin-left: 10px; font-weight: 400; }
+  .same.bad { color: var(--warn); }
+  .same.kept { color: var(--ok); }
   .raw { color: var(--ink-2); line-height: 1.55; overflow-wrap: anywhere; white-space: pre-line; -webkit-user-select: text; user-select: text; }
   .final.none { color: var(--ink-2); }
   .problem { color: var(--live); line-height: 1.55; overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }
