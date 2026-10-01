@@ -3,13 +3,17 @@
   import { tick } from "svelte";
   import { isImeKey } from "../ime";
 
-  let { open = $bindable(false), title, children, actions, onclose }: {
+  let { open = $bindable(false), title, size = "md", children, actions, onclose, beforeclose }: {
     open?: boolean;
     title: string;
+    /** "lg" is a wide dialog for a long form. */
+    size?: "md" | "lg";
     children: Snippet;
     actions?: Snippet;
     /** Called when the user dismisses the dialog with Esc or the backdrop. */
     onclose?: () => void;
+    /** Asked before Esc or the backdrop closes the dialog; returning false keeps it open. */
+    beforeclose?: () => boolean;
   } = $props();
 
   let box: HTMLDivElement | undefined = $state();
@@ -33,6 +37,7 @@
   });
 
   function dismiss() {
+    if (beforeclose && !beforeclose()) return;
     open = false;
     onclose?.();
   }
@@ -52,7 +57,7 @@
 {#if open}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) dismiss(); }} {onkeydown}>
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby={titleId} tabindex="-1" bind:this={box}>
+    <div class="modal" class:lg={size === "lg"} role="dialog" aria-modal="true" aria-labelledby={titleId} tabindex="-1" bind:this={box}>
       <h2 id={titleId}>{title}</h2>
       <div class="body">{@render children()}</div>
       {#if actions}<div class="actions">{@render actions()}</div>{/if}
@@ -62,9 +67,15 @@
 
 <style>
   .scrim { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 24px; background: var(--scrim); }
-  .modal { width: min(440px, 100%); max-height: calc(100vh - 48px); overflow: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 20px 20px 16px; }
+  /* The title and the actions stay in place; a long body scrolls between them. */
+  .modal { width: min(440px, 100%); max-height: calc(100vh - 48px); display: flex; flex-direction: column; overflow: hidden; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
   .modal:focus { outline: none; }
-  h2 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
-  .body { color: var(--ink-2); }
-  .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+  h2 { flex: none; margin: 0; padding: 20px 20px 8px; font-size: 14px; font-weight: 600; }
+  .body { flex: 0 1 auto; min-height: 0; overflow-y: auto; padding: 0 20px; color: var(--ink-2); }
+  .body:last-child { padding-bottom: 16px; }
+  .actions { flex: none; display: flex; justify-content: flex-end; gap: 8px; padding: 20px 20px 16px; }
+  .lg { width: min(620px, 100%); }
+  .lg h2 { padding: 16px 20px 14px; border-bottom: 1px solid var(--line); }
+  .lg .body { padding: 0 20px 20px; background: var(--page); color: var(--ink); }
+  .lg .actions { padding: 12px 20px; border-top: 1px solid var(--line); }
 </style>

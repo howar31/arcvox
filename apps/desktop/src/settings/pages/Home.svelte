@@ -19,6 +19,7 @@
   import Row from "../../lib/ui/Row.svelte";
   import Tag from "../../lib/ui/Tag.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
+  import ProfileForm from "./ProfileForm.svelte";
 
   type Role = "asr" | "llm";
 
@@ -27,6 +28,8 @@
   let installedIds = $state<Set<string> | null>(null);
   let installedPaths = $state<Set<string>>(new Set());
   let recent = $state<Utterance[] | null>(null);
+  // The profile open in the editor: its id, or NEW_PROFILE.
+  let editing = $state<string | null>(null);
 
   async function checkAccess() {
     try { access = (await permissions()).accessibility; } catch { access = null; }
@@ -189,14 +192,14 @@
       <div class="role">{t("home.stage.output")}</div>
       <div class="what">{t("home.output_paste")}</div>
       <div class="meta">{t(hasOpencc ? "home.output_opencc" : "home.output_plain")}</div>
-      <button type="button" class="btn quiet act" onclick={() => go("profiles", profile.id)}>{t("home.adjust")}</button>
+      <button type="button" class="btn quiet act" onclick={() => (editing = profile.id)}>{t("home.adjust")}</button>
     </div>
   </div>
   <p class="help">{t("home.flow_help", { name: profile.name })}</p>
 
   <Group title={t("home.by_app")}>
     {#each others as p (p.id)}
-      <Row onclick={() => go("profiles", p.id)}>
+      <Row onclick={() => (editing = p.id)}>
         <span class="who">
           <span class="name line">{p.name}</span>
           <span class="sub line">{appsLine(p)}</span>
@@ -205,7 +208,7 @@
       </Row>
     {:else}
       <Empty text={t("home.by_app_empty")}>
-        {#snippet action()}<button type="button" class="btn" onclick={() => go("profiles", NEW_PROFILE)}>{t("home.add_profile")}</button>{/snippet}
+        {#snippet action()}<button type="button" class="btn" onclick={() => (editing = NEW_PROFILE)}>{t("home.add_profile")}</button>{/snippet}
       </Empty>
     {/each}
   </Group>
@@ -233,6 +236,10 @@
       {/each}
     </Group>
   </div>
+{/if}
+
+{#if editing !== null}
+  {#key editing}<ProfileForm arg={editing} bind:open={() => true, (v) => { if (!v) editing = null; }} />{/key}
 {/if}
 
 <style>

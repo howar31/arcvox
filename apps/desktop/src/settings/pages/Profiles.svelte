@@ -4,7 +4,6 @@
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { t } from "../../lib/i18n";
   import { appsSummary, NEW_PROFILE } from "../../lib/profileEdit";
-  import { go } from "../../lib/route";
   import { config } from "../../lib/store.svelte";
   import Empty from "../../lib/ui/Empty.svelte";
   import Group from "../../lib/ui/Group.svelte";
@@ -15,10 +14,13 @@
   import Row from "../../lib/ui/Row.svelte";
   import Tag from "../../lib/ui/Tag.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
+  import ProfileForm from "./ProfileForm.svelte";
 
   let presets = $state<PresetView[]>([]);
   let adding = $state(false);
   let busy = $state(false);
+  // The profile open in the editor: its id, or NEW_PROFILE.
+  let editing = $state<string | null>(null);
 
   onMount(() => {
     profilesPresets().then((p) => { presets = p; }).catch((e) => toast.error(t("profiles.presets_failed", { detail: errorMessage(e) })));
@@ -43,7 +45,7 @@
 
   function addBlank() {
     adding = false;
-    go("profiles", NEW_PROFILE);
+    editing = NEW_PROFILE;
   }
 
   async function addPreset(id: string) {
@@ -51,13 +53,13 @@
     const before = new Set((config.value?.profiles ?? []).map((p) => p.id));
     try {
       const next = await profilesAddPreset(id, t(`profiles.preset.${id}`));
-      // Store the result first so the detail page finds the new profile without waiting for the change event.
+      // Store the result first so the editor finds the new profile without waiting for the change event.
       config.value = next;
       // The backend suffixes the id when it is taken, so the new profile is the one that was not there before.
       const created = next.profiles.find((p) => !before.has(p.id));
       adding = false;
       toast.ok(t("common.saved"));
-      if (created) go("profiles", created.id);
+      if (created) editing = created.id;
     } catch (e) {
       toast.error(errorMessage(e));
     } finally {
@@ -83,7 +85,7 @@
 {#if config.value}
   <Group>
     {#each profiles as p (p.id)}
-      <Row onclick={() => go("profiles", p.id)}>
+      <Row onclick={() => (editing = p.id)}>
         {#snippet leading()}<Ring tone={p.is_default ? "accent" : "off"} />{/snippet}
         <span class="who">
           <span class="title">
@@ -117,6 +119,10 @@
     <button type="button" class="btn" disabled={busy} onclick={() => (adding = false)}>{t("common.cancel")}</button>
   {/snippet}
 </Modal>
+
+{#if editing !== null}
+  {#key editing}<ProfileForm arg={editing} bind:open={() => true, (v) => { if (!v) editing = null; }} />{/key}
+{/if}
 
 <style>
   /* The name keeps its room up to a limit; the engine pair gives way first. */
