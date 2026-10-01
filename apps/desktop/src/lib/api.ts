@@ -33,7 +33,11 @@ export interface Utterance {
   audio_ms: number | null; audio_bytes: number | null;
   /** Why the dictation failed; such a row has no text yet. */
   error: string | null;
+  /** The kind of failure, when it was kept. */
+  error_code: string | null;
 }
+/** What processing a row again gave: a result, or why the engines failed. */
+export interface RedoOutcome { redo: Redo | null; failure: { code: string; detail: string } | null }
 /** The result of processing a row's recording again; `applied` when it was stored at once (the row had failed). */
 export interface Redo {
   applied: boolean; profile_id: string; raw_text: string; final_text: string; degraded: boolean; asr_ms: number; llm_ms: number | null;
@@ -71,7 +75,7 @@ export const restorePrompt = () => invoke<string>("prompt_restore");
 /** Recent rows; `query` keeps rows whose text contains it, `withAudio` rows with a recording. */
 export const listHistory = (limit = 200, query = "", withAudio = false) => invoke<Utterance[]>("history_list", { limit, query, withAudio });
 export const historyAudio = (id: number) => invoke<ArrayBuffer>("history_audio", { id });
-export const reprocessHistory = (id: number, profileId: string | null) => invoke<Redo>("history_reprocess", { id, profileId });
+export const reprocessHistory = (id: number, profileId: string | null) => invoke<RedoOutcome>("history_reprocess", { id, profileId });
 export const applyRedo = (id: number, redo: Redo) => invoke<void>("history_apply_redo", { id, redo });
 export const deleteRecording = (id: number) => invoke<void>("history_delete_recording", { id });
 /** Deletes every recording and returns how many files were removed. */
@@ -124,7 +128,8 @@ export function onConfigChanged(cb: (c: Config) => void): Promise<UnlistenFn> {
 export type WidgetState = "idle" | "recording" | "locked" | "processing" | "inserting" | "placing" | "no_accessibility" | "engine_error";
 export interface StatePayload { state: WidgetState; language: "zh-TW" | "en" }
 export interface LevelPayload { rms: number }
-export interface MessagePayload { kind: "info" | "error"; key: string; detail: string | null; copyable: string | null; language: "zh-TW" | "en" }
+/** `code` is the kind of failure of a failed dictation; `retry` says it was kept for a retry from the history. */
+export interface MessagePayload { kind: "info" | "error"; key: string; detail: string | null; copyable: string | null; code: string | null; retry: boolean; language: "zh-TW" | "en" }
 export function onWidgetState(cb: (p: StatePayload) => void): Promise<UnlistenFn> { return listen<StatePayload>("widget-state", (e) => cb(e.payload)); }
 export function onWidgetLevel(cb: (p: LevelPayload) => void): Promise<UnlistenFn> { return listen<LevelPayload>("widget-level", (e) => cb(e.payload)); }
 export function onWidgetMessage(cb: (p: MessagePayload) => void): Promise<UnlistenFn> { return listen<MessagePayload>("widget-message", (e) => cb(e.payload)); }

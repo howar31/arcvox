@@ -554,7 +554,12 @@ impl Controller {
                 let failure = if matches!(code, ErrorCode::NoSpeech | ErrorCode::NoAudio) {
                     UiMessage::error(msg, Some(detail))
                 } else {
-                    UiMessage::failure(msg, detail)
+                    // The core keeps a failed dictation only with recordings on.
+                    let kept = self
+                        .engine
+                        .as_ref()
+                        .is_some_and(|e| e.config().current().general.keep_recordings);
+                    UiMessage::failure(msg, detail, code, kept)
                 };
                 if let State::Processing { failure: f, .. } = &mut self.state {
                     *f = Some(failure);
@@ -1510,6 +1515,8 @@ mod tests {
             "{messages:?}"
         );
         assert!(m.sticky, "{messages:?}");
+        assert_eq!(m.code, Some(ErrorCode::ProviderError), "{messages:?}");
+        assert!(!m.retry, "recordings are not kept in this rig");
         assert!(r.platform.calls().is_empty(), "{:?}", r.platform.calls());
     }
 

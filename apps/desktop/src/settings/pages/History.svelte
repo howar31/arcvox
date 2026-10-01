@@ -4,6 +4,7 @@
     applyRedo, clearHistory, clearRecordings, deleteHistory, deleteRecording, errorMessage, formatBytes, historyStorage, listHistory, reprocessHistory, revealRecording, widgetCopy,
     type HistoryStorage, type Redo, type Utterance,
   } from "../../lib/api";
+  import { failureText } from "../../lib/failure";
   import { formatDateTime, formatDay, formatTime } from "../../lib/format";
   import { clipLength, groupByDay, rawState, seconds, totalSeconds } from "../../lib/historyView";
   import { t } from "../../lib/i18n";
@@ -121,9 +122,10 @@
     busy[u.id] = true;
     delete results[u.id];
     try {
-      const r = await reprocessHistory(u.id, chosen[u.id] || null);
-      if (r.applied) toast.ok(t("history.retry_done"));
-      else results[u.id] = r;
+      const { redo: r, failure } = await reprocessHistory(u.id, chosen[u.id] || null);
+      if (failure) toast.error(failureText(failure.code, failure.detail));
+      else if (r?.applied) toast.ok(t("history.retry_done"));
+      else if (r) results[u.id] = r;
     } catch (e) {
       toast.error(errorMessage(e));
     }
@@ -253,7 +255,12 @@
             <div class="detail">
               {#if u.error !== null}
                 <div class="label">{t("history.error_label")}</div>
-                <div class="problem">{u.error}</div>
+                {@const reason = failureText(u.error_code, u.error)}
+                <div class="problem">{reason}</div>
+                {#if reason !== u.error}
+                  <div class="label">{t("history.error_detail")}</div>
+                  <div class="tech">{u.error}</div>
+                {/if}
               {:else if rawState(u) !== "none"}
                 {@const raw = rawState(u)}
                 <div class="label">{t("history.raw_label")}{#if raw !== "changed"}<span class="same" class:kept={raw === "same"} class:bad={raw === "failed"}>{t(raw === "same" ? "history.raw_same" : raw === "failed" ? "history.not_rewritten" : "history.rewrite_off")}</span>{/if}</div>
@@ -371,6 +378,7 @@
   .raw { color: var(--ink-2); line-height: 1.55; overflow-wrap: anywhere; white-space: pre-line; -webkit-user-select: text; user-select: text; }
   .final.none { color: var(--ink-2); }
   .problem { color: var(--live); line-height: 1.55; overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }
+  .tech { color: var(--ink-2); font: var(--text-sm)/1.5 var(--font-mono); overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }
   .again { display: flex; align-items: center; gap: 10px; }
   .again select { width: 240px; flex: none; }
   .again .btn { flex: none; }

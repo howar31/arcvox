@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { onWidgetLevel, onWidgetMessage, onWidgetState, onWidgetTranscript, uiLanguage, widgetCopy, widgetDismiss, widgetDragStart, type MessagePayload, type WidgetState } from "../lib/api";
   import { setLanguage, t, type Lang } from "../lib/i18n";
+  import { failureShort } from "../lib/failure";
   import Icon from "../lib/ui/Icon.svelte";
 
   // A local named "state" collides with the $state rune during type checking.
@@ -76,10 +77,13 @@
 <div class="pill" {onpointerdown}>
   <span class="ring {tone}" style:--halo="{halo}px" aria-hidden="true"></span>
   {#if message}
-    {@const second = message.copyable ?? message.detail}
+    {@const short = failureShort(message.code)}
+    {@const hint = short ? short + (message.retry ? t("widget.retry_suffix") : "") : message.retry ? t("widget.retry_hint") : null}
+    <!-- A failure is explained in the interface language; the engine's own words stay available to copy. -->
+    {@const second = hint ?? message.copyable ?? message.detail}
     <div class="text">
       <span class="line wrap" title={t(message.key)}>{t(message.key)}</span>
-      {#if second}<small class:mono={!!message.copyable && message.kind !== "error"} title={second}>{second}</small>{/if}
+      {#if second}<small class:mono={!!message.copyable && message.kind !== "error"} title={hint && message.copyable ? message.copyable : second}>{second}</small>{/if}
     </div>
     {#if message.copyable}
       <!-- On a failure the copy is of the detail, a secondary action: an icon leaves the message its room. -->

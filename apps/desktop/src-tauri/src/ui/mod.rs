@@ -51,6 +51,9 @@ struct MessagePayload {
     key: &'static str,
     detail: Option<String>,
     copyable: Option<String>,
+    /// The kind of failure, when the message reports a failed dictation.
+    code: Option<&'static str>,
+    retry: bool,
     language: &'static str,
 }
 
@@ -341,6 +344,8 @@ impl Ui for TauriUi {
                 key: message.msg.key(),
                 detail: message.detail,
                 copyable: message.copyable,
+                code: message.code.map(|c| c.name()),
+                retry: message.retry,
                 language: language.tag(),
             },
         );

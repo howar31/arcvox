@@ -27,6 +27,21 @@ pub struct UtteranceDto {
     pub audio_bytes: Option<u64>,
     /// Why the dictation failed; such a row has no text yet.
     pub error: Option<String>,
+    /// The kind of failure, when it was kept.
+    pub error_code: Option<String>,
+}
+
+/// What `history_reprocess` returns: a result, or why the engines failed.
+#[derive(Debug, Clone, Serialize)]
+pub struct RedoOutcome {
+    pub redo: Option<RedoDto>,
+    pub failure: Option<FailureDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FailureDto {
+    pub code: &'static str,
+    pub detail: String,
 }
 
 /// The result of processing a row's recording again.
@@ -67,34 +82,46 @@ impl RedoDto {
 /// own. A row that had failed takes the result at once, or the new reason
 /// when this attempt fails too; a row that has text is left as it is and
 /// the result is returned for the user to accept.
-pub async fn reprocess(engine: &Engine, id: i64, profile_id: Option<String>) -> CmdResult<RedoDto> {
+pub async fn reprocess(
+    engine: &Engine,
+    id: i64,
+    profile_id: Option<String>,
+) -> CmdResult<RedoOutcome> {
     let id = HistoryId(id);
     let history = engine.history();
     let was_failed = history.get(id)?.is_some_and(|u| u.error.is_some());
     let done = match engine.reprocess(id, profile_id.map(ProfileId)).await {
         Ok(done) => done,
-        Err(e) => {
-            if let ReprocessError::Failed(why) = &e {
-                history.set_error(id, why)?;
-            }
-            return Err(e.into());
+        Err(ReprocessError::Failed { code, text }) => {
+            history.set_error(id, code, &text)?;
+            return Ok(RedoOutcome {
+                redo: None,
+                failure: Some(FailureDto {
+                    code: code.name(),
+                    detail: text,
+                }),
+            });
         }
+        Err(e) => return Err(e.into()),
     };
     let applied = was_failed && history.apply_redo(id, &done.redo)?;
     let r = done.redo;
-    Ok(RedoDto {
-        applied,
-        profile_id: r.profile_id.0,
-        raw_text: r.raw_text,
-        final_text: r.final_text,
-        degraded: r.degraded,
-        asr_ms: r.asr_ms,
-        llm_ms: r.llm_ms,
-        dict_fixes: r.dict_fixes,
-        snippets: r.snippets,
-        llm_changed: r.llm_changed,
-        asr_label: done.asr_label,
-        llm_label: done.llm_label,
+    Ok(RedoOutcome {
+        failure: None,
+        redo: Some(RedoDto {
+            applied,
+            profile_id: r.profile_id.0,
+            raw_text: r.raw_text,
+            final_text: r.final_text,
+            degraded: r.degraded,
+            asr_ms: r.asr_ms,
+            llm_ms: r.llm_ms,
+            dict_fixes: r.dict_fixes,
+            snippets: r.snippets,
+            llm_changed: r.llm_changed,
+            asr_label: done.asr_label,
+            llm_label: done.llm_label,
+        }),
     })
 }
 
@@ -103,7 +130,7 @@ pub async fn history_reprocess(
     state: State<'_, AppState>,
     id: i64,
     profile_id: Option<String>,
-) -> CmdResult<RedoDto> {
+) -> CmdResult<RedoOutcome> {
     let e = engine(&state)?;
     reprocess(&e, id, profile_id).await
 }
@@ -144,6 +171,7 @@ impl UtteranceDto {
             audio_ms: u.audio_ms.filter(|_| audio_bytes.is_some()),
             audio_bytes,
             error: u.error,
+            error_code: u.error_code,
         }
     }
 }
