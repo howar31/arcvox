@@ -138,7 +138,8 @@
   .state { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 10px; font-size: 12px; color: var(--ink-2); line-height: 1.35; }
   .state-link { border: 0; background: none; padding: 0; color: var(--ink-2); text-align: left; cursor: default; }
   .state-link:hover { text-decoration: underline; }
-  .main { overflow: auto; min-width: 0; }
+  /* Positioned: absolutely placed descendants (visually hidden labels) stay inside the scroll area. */
+  .main { position: relative; overflow-x: hidden; overflow-y: auto; min-width: 0; }
   .page { padding: 26px 32px 80px; max-width: 664px; min-height: 100%; }
   .banner { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 20px; padding: 10px 14px; border-radius: 10px; background: color-mix(in srgb, var(--live) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--live) 35%, transparent); }
   .banner :global(.ring) { margin-top: 3px; }

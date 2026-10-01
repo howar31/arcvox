@@ -35,7 +35,8 @@
 
 /* Base */
 * { box-sizing: border-box; }
-html, body { height: 100%; }
+/* The window never scrolls as a whole; each view owns its scroll area. */
+html, body { height: 100%; overflow: hidden; }
 body { margin: 0; font: 13px/1.5 var(--font); color: var(--ink); background: var(--page); -webkit-font-smoothing: antialiased; }
 body.widget { background: transparent; }
 button, select, input, textarea { font: inherit; color: inherit; }
