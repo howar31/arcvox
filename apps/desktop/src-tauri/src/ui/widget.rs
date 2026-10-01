@@ -58,10 +58,10 @@ pub fn convert_to_panel<R: Runtime>(_app: &AppHandle<R>) -> tauri::Result<()> {
     Ok(())
 }
 
-struct Display {
+pub(super) struct Display {
     /// The name the position is saved under.
-    key: String,
-    rect: Rect,
+    pub(super) key: String,
+    pub(super) rect: Rect,
 }
 
 // All geometry below is in global points with the origin at the top left of
@@ -69,7 +69,7 @@ struct Display {
 // that monitor's scale and the pointer in pixels of the primary display's
 // scale, so each value is divided by the scale it was reported in.
 
-fn displays<R: Runtime>(app: &AppHandle<R>) -> Vec<Display> {
+pub(super) fn displays<R: Runtime>(app: &AppHandle<R>) -> Vec<Display> {
     app.available_monitors()
         .unwrap_or_default()
         .into_iter()
@@ -96,7 +96,7 @@ fn pointer<R: Runtime>(app: &AppHandle<R>) -> Option<(f64, f64)> {
     Some((p.x, p.y))
 }
 
-fn window_frame<R: Runtime>(window: &WebviewWindow<R>) -> Option<Rect> {
+pub(super) fn window_frame<R: Runtime>(window: &WebviewWindow<R>) -> Option<Rect> {
     let scale = window.scale_factor().ok()?;
     let origin = window.outer_position().ok()?.to_logical::<f64>(scale);
     let size = window.outer_size().ok()?.to_logical::<f64>(scale);
@@ -111,7 +111,11 @@ fn window_frame<R: Runtime>(window: &WebviewWindow<R>) -> Option<Rect> {
 /// Moves and resizes the window in one step, so a change of shape never
 /// shows the new size at the old place. Must be called on the main thread.
 #[cfg(target_os = "macos")]
-fn apply_frame<R: Runtime>(window: &WebviewWindow<R>, frame: Rect, displays: &[Display]) {
+pub(super) fn apply_frame<R: Runtime>(
+    window: &WebviewWindow<R>,
+    frame: Rect,
+    displays: &[Display],
+) {
     use objc2_app_kit::NSWindow;
     use objc2_foundation::{NSPoint, NSRect, NSSize};
 
@@ -132,7 +136,11 @@ fn apply_frame<R: Runtime>(window: &WebviewWindow<R>, frame: Rect, displays: &[D
 }
 
 #[cfg(not(target_os = "macos"))]
-fn apply_frame<R: Runtime>(window: &WebviewWindow<R>, frame: Rect, _displays: &[Display]) {
+pub(super) fn apply_frame<R: Runtime>(
+    window: &WebviewWindow<R>,
+    frame: Rect,
+    _displays: &[Display],
+) {
     let _ = window.set_size(tauri::LogicalSize::new(frame.w, frame.h));
     let _ = window.set_position(tauri::LogicalPosition::new(frame.x, frame.y));
 }

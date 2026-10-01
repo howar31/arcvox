@@ -17,6 +17,7 @@ use crate::platform::Platform;
 use crate::providers::{build_factories, BUNDLED_MANIFEST};
 use crate::secrets::KeychainStore;
 use crate::settings::ClientSettings;
+use crate::ui::window_state::{WindowState, SETTINGS_WINDOW};
 use crate::ui::TauriUi;
 use crate::vad::EarshotVad;
 
@@ -31,6 +32,7 @@ pub struct AppState {
     pub language: Mutex<Language>,
     pub engine_error: Mutex<Option<String>>,
     pub bench: BenchState,
+    pub window_state: WindowState,
 }
 
 pub fn run() {
@@ -112,9 +114,19 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == SETTINGS_WINDOW
+                && matches!(
+                    event,
+                    tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_)
+                )
+            {
+                if let Some(state) = window.app_handle().try_state::<AppState>() {
+                    state.window_state.changed(window.app_handle());
+                }
+            }
             // Closing the settings window hides it; the app lives in the tray.
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "settings" {
+                if window.label() == SETTINGS_WINDOW {
                     api.prevent_close();
                     let _ = window.hide();
                     // The speed test page is gone, so nothing will stop its
@@ -155,6 +167,8 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
     let audio: Arc<dyn AudioSource> = Arc::new(CpalSource);
 
     crate::ui::widget::convert_to_panel(&app)?;
+    let window_state = WindowState::new(dirs.config_dir.clone());
+    window_state.restore(&app);
     let ui = Arc::new(TauriUi::new(app.clone(), language, &dirs.config_dir)?);
 
     let secrets = Arc::new(KeychainStore::new());
@@ -225,6 +239,7 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         language: Mutex::new(language),
         engine_error: Mutex::new(engine_error.clone()),
         bench: BenchState::default(),
+        window_state,
     });
 
     {

@@ -4,6 +4,7 @@
 pub mod placement;
 pub mod tray;
 pub mod widget;
+pub mod window_state;
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
