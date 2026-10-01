@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import { permissions, uiLanguage } from "../lib/api";
   import { setLanguage, t, type Lang } from "../lib/i18n";
   import { client, config } from "../lib/store.svelte";
@@ -25,6 +26,9 @@
   let ready = $state(false);
   let accessibility = $state<boolean | null>(null);
   let main: HTMLElement | undefined = $state();
+  // Shown after a first press of the quit shortcut, for as long as a second press quits.
+  let quitHint = $state(false);
+  let quitTimer: ReturnType<typeof setTimeout> | undefined;
 
   async function checkPermissions() {
     try { accessibility = (await permissions()).accessibility; } catch { accessibility = null; }
@@ -47,6 +51,11 @@
     const onFocus = () => { checkPermissions(); };
     window.addEventListener("hashchange", onHash);
     window.addEventListener("focus", onFocus);
+    const quitArmed = listen<number>("quit-armed", (e) => {
+      quitHint = true;
+      clearTimeout(quitTimer);
+      quitTimer = setTimeout(() => { quitHint = false; }, e.payload);
+    });
     (async () => {
       setLanguage((await uiLanguage()) as Lang);
       langReady = true;
@@ -57,6 +66,8 @@
     return () => {
       window.removeEventListener("hashchange", onHash);
       window.removeEventListener("focus", onFocus);
+      quitArmed.then((off) => off());
+      clearTimeout(quitTimer);
     };
   });
 </script>
@@ -120,6 +131,9 @@
   </Modal>
   <Toasts />
 {/if}
+{#if quitHint && langReady}
+  <div class="quit-hint" role="status">{t("shell.quit_again")}</div>
+{/if}
 
 <style>
   .loading { height: 100vh; display: grid; place-items: center; color: var(--ink-2); }
@@ -142,5 +156,6 @@
   /* The overview has no save bar to leave room for; the default window height shows all of it. */
   .page.plain { padding-bottom: var(--page-x); }
   .banner { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 22px; padding: 12px var(--row-x); border-radius: var(--radius-group); background: color-mix(in srgb, var(--live) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--live) 35%, transparent); }
+  .quit-hint { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 80; padding: 14px 24px; border-radius: 14px; background: var(--pill-bg); color: var(--pill-ink); font-size: var(--text-lg); font-weight: 600; white-space: nowrap; box-shadow: var(--shadow); pointer-events: none; }
   .banner :global(.ring) { margin-top: 3px; }
 </style>

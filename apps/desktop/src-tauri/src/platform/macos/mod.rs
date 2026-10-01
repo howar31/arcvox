@@ -7,6 +7,7 @@ pub mod modifier_monitor;
 pub mod pasteboard;
 pub mod post_keys;
 pub mod secure_input;
+pub mod terminate;
 
 use std::sync::mpsc::Sender;
 

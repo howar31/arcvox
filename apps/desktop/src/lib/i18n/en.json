@@ -156,6 +156,7 @@
   "shell.ready": "Ready, hold fn to speak",
   "shell.needs_access": "Accessibility permission needed",
   "shell.engine_error": "Engine failed to start",
+  "shell.quit_again": "Press ⌘Q again to quit Arcvox",
   "common.unsaved": "Unsaved changes",
   "common.revert": "Revert",
   "common.discard_title": "Discard unsaved changes?",

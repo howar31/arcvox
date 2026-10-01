@@ -156,6 +156,7 @@
   "shell.ready": "待命中，按住 fn 說話",
   "shell.needs_access": "需要輔助使用權限",
   "shell.engine_error": "引擎無法啟動",
+  "shell.quit_again": "再按一次 ⌘Q 結束 Arcvox",
   "common.unsaved": "有尚未儲存的變更",
   "common.revert": "還原",
   "common.discard_title": "要捨棄尚未儲存的變更嗎？",
