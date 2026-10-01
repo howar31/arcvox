@@ -45,7 +45,16 @@ html, body { height: 100%; overflow: hidden; }
 body { margin: 0; font: var(--text)/1.5 var(--font); color: var(--ink); background: var(--page); -webkit-font-smoothing: antialiased; }
 body.widget { background: transparent; }
 button, select, input, textarea { font: inherit; color: inherit; }
-input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
+input[type="radio"] { accent-color: var(--accent); }
+/* A checkbox as tall as the text next to it. */
+input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none; display: inline-grid; place-content: center; flex: none; width: 18px; height: 18px; margin: 0;
+  border: 1.5px solid var(--line-strong); border-radius: 5px; background: var(--surface); vertical-align: -4px; cursor: default;
+}
+input[type="checkbox"]::after { content: ""; width: 5px; height: 9px; margin-top: -2px; border: solid var(--accent-ink); border-width: 0 2px 2px 0; transform: rotate(45deg); opacity: 0; }
+input[type="checkbox"]:checked { background: var(--accent); border-color: var(--accent); }
+input[type="checkbox"]:checked::after { opacity: 1; }
+input[type="checkbox"]:disabled { opacity: .5; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 code { font-family: var(--font-mono); font-size: var(--text-sm); }
 
@@ -71,6 +80,8 @@ select {
   background-size: 4px 4px; background-repeat: no-repeat;
 }
 input[type="number"] { width: 84px; text-align: right; font-variant-numeric: tabular-nums; }
+/* No stepper arrows inside the field; the arrow keys still step the value. */
+input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 /* The text box of an add row (next to its Add button): one width on every page. */
 .add-input { width: 220px; flex: 0 1 220px; }
 input::placeholder, textarea::placeholder { color: var(--ink-3); }

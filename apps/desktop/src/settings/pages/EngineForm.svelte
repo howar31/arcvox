@@ -9,6 +9,7 @@
   import { defaultProfile, modelLabel } from "../../lib/labels";
   import { baseName, capsForNative, capsForRuntime, describeProbe, NATIVE_DICTATION, NATIVE_FM } from "../../lib/providerForm";
   import { config } from "../../lib/store.svelte";
+  import Icon from "../../lib/ui/Icon.svelte";
   import Modal from "../../lib/ui/Modal.svelte";
   import Ring from "../../lib/ui/Ring.svelte";
   import Segmented from "../../lib/ui/Segmented.svelte";
@@ -232,7 +233,7 @@
       </div>
 
       <details>
-        <summary>{t("engines.advanced")}</summary>
+        <summary><span class="chev"><Icon name="chevron-right" size={14} /></span>{t("engines.advanced")}</summary>
         <div class="fields adv">
           {#if editing.kind === "embedded"}
             <label for="f-runtime-{uid}">{t("engines.runtime")}</label>
@@ -277,7 +278,10 @@
   .status { display: flex; align-items: center; gap: 8px; min-height: var(--control); min-width: 0; }
   .grow { flex: 1; min-width: 0; }
   details { border-top: 1px solid var(--line); padding-top: 10px; }
-  summary { color: var(--ink-2); cursor: default; width: max-content; }
+  summary { display: flex; align-items: center; gap: 6px; color: var(--ink-2); cursor: default; width: max-content; list-style: none; }
+  summary::-webkit-details-marker { display: none; }
+  .chev { display: flex; transition: transform .15s; }
+  details[open] .chev { transform: rotate(90deg); }
   .adv { margin-top: 10px; align-items: start; }
   .adv > .lbl, .adv > label { line-height: var(--control); }
   .caps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; }

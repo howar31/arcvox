@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { benchCancel, benchClipFromHistory, benchClipStatus, benchHistoryCandidates, benchRecordStart, benchRecordStop, benchStart, errorMessage, onBenchDone, onBenchLevel, onBenchProgress, type BenchRun, type ClipCandidate, type ClipStatus, type ProviderConfig } from "../../lib/api";
+  import { benchClipFromHistory, benchClipStatus, benchHistoryCandidates, benchRecordStart, benchRecordStop, errorMessage, onBenchLevel, type ClipCandidate, type ClipStatus, type ProviderConfig } from "../../lib/api";
+  import { bench } from "../../lib/bench.svelte";
   import { formatDateTime } from "../../lib/format";
   import { t } from "../../lib/i18n";
   import { defaultProfile, providerLabel } from "../../lib/labels";
@@ -23,11 +24,11 @@
   let levelBars = $state<number[]>(Array(12).fill(0.1));
   let candidates = $state<ClipCandidate[]>([]);
   let pickedCandidate = $state<number | null>(null);
-  let selectedAsr = $state<string[]>([]);
-  let selectedLlm = $state<string[]>([]);
-  let running = $state(false);
-  let remaining = $state(0);
-  let runs = $state<BenchRun[]>([]);
+  // The run itself is kept in the store: it goes on while another page is shown.
+  const running = $derived(bench.running);
+  // An engine deleted since it was ticked no longer counts.
+  const selectedAsr = $derived((bench.asr ?? []).filter((id) => asrProviders.some((p) => p.id === id)));
+  const selectedLlm = $derived((bench.llm ?? []).filter((id) => llmProviders.some((p) => p.id === id)));
 
   const asrProviders = $derived((config.value?.providers ?? []).filter((p) => p.capabilities.transcribe));
   const llmProviders = $derived((config.value?.providers ?? []).filter((p) => p.capabilities.chat));
@@ -71,10 +72,14 @@
   }
 
   onMount(() => {
-    const profile = defaultProfile(config.value);
-    const ids = new Set((config.value?.providers ?? []).map((p) => p.id));
-    if (profile && ids.has(profile.asr_provider)) selectedAsr = [profile.asr_provider];
-    if (profile?.llm_provider && ids.has(profile.llm_provider)) selectedLlm = [profile.llm_provider];
+    bench.watch();
+    // The first visit ticks the default profile's engines; later visits keep the choice.
+    if (bench.asr === null || bench.llm === null) {
+      const profile = defaultProfile(config.value);
+      const ids = new Set((config.value?.providers ?? []).map((p) => p.id));
+      bench.asr = profile && ids.has(profile.asr_provider) ? [profile.asr_provider] : [];
+      bench.llm = profile?.llm_provider && ids.has(profile.llm_provider) ? [profile.llm_provider] : [];
+    }
     benchClipStatus().then((c) => { clip = c; }).catch(fail);
     benchHistoryCandidates().then((c) => {
       candidates = c;
@@ -85,11 +90,6 @@
     const unlisteners: (() => void)[] = [];
     const keep = (p: Promise<() => void>) => p.then((u) => { if (disposed) u(); else unlisteners.push(u); });
     keep(onBenchLevel(onLevel));
-    keep(onBenchProgress(({ run, remaining: n }) => {
-      runs = [...runs, run];
-      remaining = n;
-    }));
-    keep(onBenchDone(() => { running = false; remaining = 0; }));
     return () => {
       disposed = true;
       unlisteners.forEach((u) => u());
@@ -137,20 +137,11 @@
       ? [defaultAsr as string, ...selectedAsr.filter((id) => id !== defaultAsr)]
       : [...selectedAsr];
     const llm = [...selectedLlm];
-    runs = [];
-    running = true;
-    remaining = 2 * (asr.length + llm.length);
-    try {
-      await benchStart(asr, llm, t("speed.sentence"));
-    } catch (e) {
-      running = false;
-      remaining = 0;
-      fail(e);
-    }
+    try { await bench.start(asr, llm, t("speed.sentence")); } catch (e) { fail(e); }
   }
 
   async function cancel() {
-    try { await benchCancel(); } catch (e) { fail(e); }
+    try { await bench.cancel(); } catch (e) { fail(e); }
   }
 
   const clipTone = $derived(recording ? "live" : clip?.present ? "ok" : "off");
@@ -208,27 +199,27 @@
 {/snippet}
 
 <Group title={t("speed.engines")}>
-  {@render engineList("speed-asr", t("speed.role.asr"), asrProviders, selectedAsr, (next) => { selectedAsr = next; })}
-  {@render engineList("speed-llm", t("speed.role.llm"), llmProviders, selectedLlm, (next) => { selectedLlm = next; })}
+  {@render engineList("speed-asr", t("speed.role.asr"), asrProviders, selectedAsr, (next) => { bench.asr = next; })}
+  {@render engineList("speed-llm", t("speed.role.llm"), llmProviders, selectedLlm, (next) => { bench.llm = next; })}
 </Group>
 
 <div class="run">
   <span class="sub caution">{t("speed.warning")}</span>
   {#if running}
-    <span class="sub num" role="status">{t("speed.remaining", { n: String(remaining) })}</span>
+    <span class="sub num" role="status">{t("speed.remaining", { n: String(bench.remaining) })}</span>
     <button type="button" class="btn" onclick={cancel}>{t("speed.stop")}</button>
   {/if}
   <button type="button" class="btn primary" onclick={start} disabled={!canStart}>{t("speed.start")}</button>
 </div>
 
-{#if runs.length > 0}
+{#if bench.runs.length > 0}
   <Group title={t("speed.results")}>
     <div class="cols sub" aria-hidden="true">
       <span class="grow">{t("speed.col.engine")}</span>
       <span class="val">{t("speed.col.load")}</span>
       <span class="val">{t("speed.col.infer")}</span>
     </div>
-    {#each runs as run, i (i)}
+    {#each bench.runs as run, i (i)}
       <Row>
         <div class="result">
           <div class="title">
