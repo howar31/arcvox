@@ -52,6 +52,9 @@ pub fn run() {
             crate::commands::system::ui_language,
             crate::commands::system::widget_copy,
             crate::commands::system::widget_dismiss,
+            crate::commands::system::widget_drag_start,
+            crate::commands::system::widget_placing,
+            crate::commands::system::widget_reset_position,
             crate::commands::system::system_open_settings_window,
             crate::commands::system::system_list_microphones,
             crate::commands::system::system_permissions,
@@ -118,6 +121,8 @@ pub fn run() {
                     // recording; release the microphone now.
                     if let Some(state) = window.app_handle().try_state::<AppState>() {
                         state.bench.discard_recording();
+                        // Nothing is left to end the positioning of the widget either.
+                        state.ui.set_placing(false);
                     }
                     #[cfg(target_os = "macos")]
                     let _ = window
@@ -150,7 +155,7 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
     let audio: Arc<dyn AudioSource> = Arc::new(CpalSource);
 
     crate::ui::widget::convert_to_panel(&app)?;
-    let ui = Arc::new(TauriUi::new(app.clone(), language)?);
+    let ui = Arc::new(TauriUi::new(app.clone(), language, &dirs.config_dir)?);
 
     let secrets = Arc::new(KeychainStore::new());
     // A stalled connection fails the read instead of hanging a download or its Cancel.

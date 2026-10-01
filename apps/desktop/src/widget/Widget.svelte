@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { onWidgetLevel, onWidgetMessage, onWidgetState, onWidgetTranscript, uiLanguage, widgetCopy, widgetDismiss, type MessagePayload, type WidgetState } from "../lib/api";
+  import { onWidgetLevel, onWidgetMessage, onWidgetState, onWidgetTranscript, uiLanguage, widgetCopy, widgetDismiss, widgetDragStart, type MessagePayload, type WidgetState } from "../lib/api";
   import { setLanguage, t, type Lang } from "../lib/i18n";
   import Icon from "../lib/ui/Icon.svelte";
 
@@ -10,15 +10,20 @@
   let message = $state<MessagePayload | null>(null);
   // Raw transcript shown while the rewrite runs.
   let transcript = $state("");
+  // At a left or right edge of the display the window is tall and the pill is vertical.
+  const portrait = window.matchMedia("(orientation: portrait)");
+  let vertical = $state(portrait.matches);
 
   onMount(() => {
     // Until the language is known the widget stays in English; each event carries it too.
     uiLanguage().then((l) => setLanguage(l as Lang)).catch(() => {});
+    const onShape = () => { vertical = portrait.matches; };
+    portrait.addEventListener("change", onShape);
     const unsubs = [
       onWidgetState((p) => {
         setLanguage(p.language);
         widgetState = p.state;
-        if (p.state !== "idle") message = null;
+        if (p.state !== "idle" && p.state !== "placing") message = null;
         if (p.state !== "processing" && p.state !== "inserting") transcript = "";
         if (p.state !== "recording" && p.state !== "locked") level = 0;
       }),
@@ -26,7 +31,10 @@
       onWidgetMessage((p) => { setLanguage(p.language); message = p; transcript = ""; }),
       onWidgetTranscript((p) => { transcript = p.text; }),
     ];
-    return () => { unsubs.forEach((u) => u.then((f) => f())); };
+    return () => {
+      portrait.removeEventListener("change", onShape);
+      unsubs.forEach((u) => u.then((f) => f()));
+    };
   });
 
   const listening = $derived(widgetState === "recording" || widgetState === "locked");
@@ -36,19 +44,27 @@
     if (message) return message.kind === "error" ? "live" : "accent";
     if (listening) return "live";
     if (widgetState === "processing") return "think";
-    if (widgetState === "inserting") return "accent";
+    if (widgetState === "inserting" || widgetState === "placing") return "accent";
     return "off";
   });
   const label = $derived.by(() => {
-    if (widgetState === "processing" && transcript) return transcript;
+    // The vertical pill has room for a short label only.
+    if (widgetState === "processing" && transcript && !vertical) return transcript;
     switch (widgetState) {
       case "recording": return t("widget.listening");
-      case "locked": return t("widget.locked");
+      case "locked": return t(vertical ? "widget.locked_short" : "widget.locked");
       case "processing": return t("widget.processing");
       case "inserting": return t("widget.inserting");
+      case "placing": return t("widget.placing");
       default: return "";
     }
   });
+
+  // The pill can be dragged anywhere that is not a button; the app moves the window.
+  function onpointerdown(e: PointerEvent) {
+    if (e.button !== 0 || (e.target as Element).closest("button")) return;
+    widgetDragStart().catch(() => {});
+  }
 
   function dismiss() {
     widgetDismiss();
@@ -56,7 +72,8 @@
   }
 </script>
 
-<div class="pill">
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="pill" {onpointerdown}>
   <span class="ring {tone}" style:--halo="{halo}px" aria-hidden="true"></span>
   {#if message}
     {@const second = message.copyable ?? message.detail}
@@ -76,7 +93,7 @@
 </div>
 
 <style>
-  .pill { width: 100vw; height: 100vh; border-radius: 32px; padding: 0 16px 0 22px; display: flex; align-items: center; gap: 12px; overflow: hidden; background: var(--pill-bg); color: var(--pill-ink); box-shadow: inset 0 0 0 1px var(--pill-line); font-size: 13px; line-height: 1.35; }
+  .pill { width: 100vw; height: 100vh; border-radius: 32px; padding: 0 16px 0 22px; display: flex; align-items: center; gap: 12px; overflow: hidden; background: var(--pill-bg); color: var(--pill-ink); box-shadow: inset 0 0 0 1px var(--pill-line); font-size: 13px; line-height: 1.35; user-select: none; -webkit-user-select: none; cursor: default; }
   .ring { flex: none; width: 20px; height: 20px; border-radius: 50%; border: 3px solid var(--pill-ink-2); }
   .ring.live { border-color: var(--pill-live); box-shadow: 0 0 0 var(--halo) var(--pill-live-halo); transition: box-shadow 80ms linear; }
   .ring.accent { border-color: var(--pill-accent); }
@@ -92,6 +109,12 @@
   button:focus-visible { outline-color: var(--pill-accent); }
   .copy { padding: 0 12px; }
   .close { width: 26px; margin-left: -4px; background: none; color: var(--pill-ink-2); }
+  /* Vertical: the ring on top, a short label written downwards. */
+  @media (orientation: portrait) {
+    .pill { flex-direction: column; padding: 14px 0; gap: 10px; }
+    .text { min-height: 0; align-items: center; }
+    .line { writing-mode: vertical-rl; max-height: 100%; letter-spacing: .06em; }
+  }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) {
     /* Without the spin, a full ring: a still gap would read as a fault. */

@@ -38,7 +38,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 kongwe-inference = { path = "../../../core/kongwe-inference", features = ["metal"] }
 tauri-nspanel = "2"
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSData", "NSLocale", "NSObject", "NSEnumerator", "NSFileManager", "NSURL"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSData", "NSLocale", "NSObject", "NSEnumerator", "NSFileManager", "NSURL", "NSGeometry"] }
 objc2-app-kit = { version = "0.3", features = ["NSEvent", "NSPasteboard", "NSPasteboardItem", "NSWorkspace", "NSRunningApplication", "NSScreen", "NSResponder", "NSWindow", "libc", "block2"] }
 block2 = "0.6"
 core-graphics = "0.25"
