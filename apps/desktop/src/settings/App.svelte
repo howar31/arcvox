@@ -13,7 +13,7 @@
   import Home from "./pages/Home.svelte";
   import General from "./pages/General.svelte";
   import Engines from "./pages/Engines.svelte";
-  import Profiles from "./pages/Profiles.svelte";
+  import Flow from "./pages/Flow.svelte";
   import Prompt from "./pages/Prompt.svelte";
   import Dictionary from "./pages/Dictionary.svelte";
   import History from "./pages/History.svelte";
@@ -77,6 +77,7 @@
 {:else}
   <div class="shell">
     <aside class="sidebar">
+      <div class="brand"><span class="mark"></span><span>Arcvox</span></div>
       <nav aria-label={t("app.title")}>
         {#each NAV as g, gi (gi)}
           {#if g.group}<div class="nav-group">{t(g.group)}</div>{/if}
@@ -87,7 +88,7 @@
               class:on={route.page === p}
               aria-current={route.page === p ? "page" : undefined}
               onclick={() => guard.request(() => go(p))}
-            ><Icon name={p} size={17} /><span>{t(`nav.${p}`)}</span></button>
+            ><Icon name={p} size={18} /><span>{t(`nav.${p}`)}</span></button>
           {/each}
         {/each}
       </nav>
@@ -104,7 +105,7 @@
     </aside>
 
     <main class="main" bind:this={main}>
-      <div class="page" class:plain={route.page === "home"}>
+      <div class="page" class:wide={route.page === "home" || route.page === "history"}>
         {#if config.error}
           <div class="banner" role="alert"><Ring tone="live" /><span>{t("common.engine_error", { detail: config.error })}</span></div>
         {/if}
@@ -112,7 +113,7 @@
         {:else if route.page === "general"}<General />
         {:else if route.page === "about"}<About />
         {:else if route.page === "engines"}<Engines arg={route.arg} />
-        {:else if route.page === "profiles"}<Profiles />
+        {:else if route.page === "flow"}<Flow arg={route.arg} />
         {:else if route.page === "prompt"}<Prompt />
         {:else if route.page === "dictionary"}<Dictionary />
         {:else if route.page === "history"}<History />
@@ -137,11 +138,13 @@
 
 <style>
   .loading { height: 100vh; display: grid; place-items: center; color: var(--ink-2); }
-  .shell { display: grid; grid-template-columns: 224px minmax(0, 1fr); height: 100vh; }
-  .sidebar { background: var(--sidebar); border-right: 1px solid var(--line); padding: 16px 12px; display: flex; flex-direction: column; gap: 3px; min-height: 0; overflow-y: auto; }
+  .shell { display: grid; grid-template-columns: 248px minmax(0, 1fr); height: 100vh; }
+  .sidebar { background: var(--sidebar); border-right: 1px solid var(--line); padding: 18px 14px 14px; display: flex; flex-direction: column; gap: 3px; min-height: 0; overflow-y: auto; }
+  .brand { display: flex; align-items: center; gap: 11px; padding: 6px 12px 18px; font: 600 21px/1 var(--font-round); letter-spacing: .01em; }
+  .mark { width: 26px; height: 26px; border-radius: 50%; border: 6px solid var(--accent); flex: none; }
   nav { display: flex; flex-direction: column; gap: 3px; }
-  .nav-group { font-size: var(--text-xs); font-weight: 600; color: var(--ink-2); padding: 18px 12px 6px; }
-  .nav { display: flex; align-items: center; gap: 11px; height: 38px; padding: 0 12px; border-radius: 9px; font-size: 14px; border: 0; background: none; color: var(--ink); text-align: left; cursor: default; white-space: nowrap; }
+  .nav-group { font-size: var(--text-xs); font-weight: 600; color: var(--ink-2); padding: 20px 12px 6px; }
+  .nav { display: flex; align-items: center; gap: 12px; height: 46px; padding: 0 12px; border-radius: 10px; font-size: var(--text); border: 0; background: none; color: var(--ink); text-align: left; cursor: default; white-space: nowrap; }
   .nav span { overflow: hidden; text-overflow: ellipsis; }
   .nav :global(.icon) { opacity: .75; }
   .nav:hover { background: var(--line); }
@@ -152,9 +155,10 @@
   .state-link:hover { text-decoration: underline; }
   /* Positioned: absolutely placed descendants (visually hidden labels) stay inside the scroll area. */
   .main { position: relative; overflow-x: hidden; overflow-y: auto; min-width: 0; }
-  .page { padding: 30px var(--page-x) 80px; max-width: 736px; min-height: 100%; }
-  /* The overview has no save bar to leave room for; the default window height shows all of it. */
-  .page.plain { padding-bottom: var(--page-x); }
+  /* Centered once the window is wider than the content; pages can lay themselves out by this width. */
+  .page { padding: var(--page-top) var(--page-x) 80px; max-width: 880px; min-height: 100%; margin: 0 auto; container-type: inline-size; }
+  /* Pages that show data use more of a wide window than pages of settings. */
+  .page.wide { max-width: 1320px; }
   .banner { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 22px; padding: 12px var(--row-x); border-radius: var(--radius-group); background: color-mix(in srgb, var(--live) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--live) 35%, transparent); }
   .quit-hint { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 80; padding: 14px 24px; border-radius: 14px; background: var(--pill-bg); color: var(--pill-ink); font-size: var(--text-lg); font-weight: 600; white-space: nowrap; box-shadow: var(--shadow); pointer-events: none; }
   .banner :global(.ring) { margin-top: 3px; }

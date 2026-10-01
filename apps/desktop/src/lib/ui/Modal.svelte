@@ -68,13 +68,13 @@
 <style>
   .scrim { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 24px; background: var(--scrim); }
   /* The title and the actions stay in place; a long body scrolls between them. */
-  .modal { width: min(480px, 100%); max-height: calc(100vh - 48px); display: flex; flex-direction: column; overflow: hidden; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); }
+  .modal { width: min(540px, 100%); max-height: calc(100vh - 48px); display: flex; flex-direction: column; overflow: hidden; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-group); box-shadow: var(--shadow); }
   .modal:focus { outline: none; }
   h2 { flex: none; margin: 0; padding: 22px 22px 10px; font-size: var(--text-lg); font-weight: 600; }
   .body { flex: 0 1 auto; min-height: 0; overflow-y: auto; padding: 0 22px; color: var(--ink-2); }
   .body:last-child { padding-bottom: 18px; }
   .actions { flex: none; display: flex; justify-content: flex-end; gap: 10px; padding: 22px 22px 18px; }
-  .lg { width: min(700px, 100%); }
+  .lg { width: min(780px, 100%); }
   .lg h2 { padding: 18px 22px 16px; border-bottom: 1px solid var(--line); }
   .lg .body { padding: 0 22px 22px; background: var(--page); color: var(--ink); }
   .lg .actions { padding: 14px 22px; border-top: 1px solid var(--line); }

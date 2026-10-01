@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
-  import { errorMessage, listMicrophones, openPrivacyPane, permissions, requestAccessibility, updateGeneral, widgetPlacing, widgetResetPosition, type ClientSettings, type General, type InsertMethod } from "../../lib/api";
+  import { clearRecordings, errorMessage, formatBytes, historyStorage, resetStats, reveal, systemInfo, listMicrophones, openPrivacyPane, permissions, requestAccessibility, updateGeneral, widgetPlacing, widgetResetPosition, type ClientSettings, type General, type HistoryStorage, type InsertMethod } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { t } from "../../lib/i18n";
   import { client, config } from "../../lib/store.svelte";
@@ -16,6 +16,7 @@
   import NumberField from "../../lib/ui/NumberField.svelte";
   import SaveBar from "../../lib/ui/SaveBar.svelte";
   import Icon from "../../lib/ui/Icon.svelte";
+  import Modal from "../../lib/ui/Modal.svelte";
   import AddPerApp from "./AddPerApp.svelte";
 
   let mics = $state<string[]>([]);
@@ -69,8 +70,31 @@
     try { accessibility = (await permissions()).accessibility; } catch { accessibility = null; }
   }
 
+  // Recordings on disk, and the two confirmations of this group.
+  let storage = $state<HistoryStorage | null>(null);
+  let confirmRecordings = $state(false);
+  let confirmStats = $state(false);
+  const loadStorage = () => historyStorage().then((s) => { storage = s; }).catch(() => { storage = null; });
+
+  async function revealRecordings() {
+    try { await reveal((await systemInfo()).recordings_dir); } catch (e) { toast.error(errorMessage(e)); }
+  }
+  async function clearAllRecordings() {
+    confirmRecordings = false;
+    try {
+      const n = await clearRecordings();
+      toast.ok(t("history.recordings_cleared", { n: String(n) }));
+    } catch (e) { toast.error(errorMessage(e)); }
+    loadStorage();
+  }
+  async function resetStatistics() {
+    confirmStats = false;
+    try { await resetStats(); toast.ok(t("general.stats_reset_done")); } catch (e) { toast.error(errorMessage(e)); }
+  }
+
   onMount(() => {
     reset();
+    loadStorage();
     listMicrophones().then((m) => (mics = m)).catch(() => {});
     checkAccess();
     isEnabled().then((v) => (autostart = v)).catch(() => {});
@@ -260,6 +284,13 @@
     <Row label={t("general.recording_retention")}>
       <NumberField bind:value={general.recording_retention_days} min={1} unit={t("common.days")} label={t("general.recording_retention")} />
     </Row>
+    <Row label={t("general.recordings_usage")} help={storage ? t("general.recordings_usage_value", { n: storage.recordings.toLocaleString(), size: formatBytes(storage.recording_bytes) }) : undefined}>
+      <button type="button" class="btn quiet" onclick={revealRecordings}>{t("history.reveal")}</button>
+      <button type="button" class="btn danger" disabled={!storage?.recordings} onclick={() => (confirmRecordings = true)}>{t("history.clear_recordings")}</button>
+    </Row>
+    <Row label={t("general.stats")} help={t("general.stats_help")}>
+      <button type="button" class="btn danger" onclick={() => (confirmStats = true)}>{t("general.stats_reset")}</button>
+    </Row>
   </Group>
 
   <Group title={t("general.processing")}>
@@ -276,6 +307,22 @@
 {/if}
 
 <SaveBar {dirty} {saving} message={problem} onsave={save} onrevert={reset} />
+
+<Modal bind:open={confirmRecordings} title={t("history.clear_recordings_title")}>
+  <p>{t("history.clear_recordings_body")}</p>
+  {#snippet actions()}
+    <button type="button" class="btn" onclick={() => (confirmRecordings = false)}>{t("common.cancel")}</button>
+    <button type="button" class="btn danger" onclick={clearAllRecordings}>{t("history.clear_recordings")}</button>
+  {/snippet}
+</Modal>
+
+<Modal bind:open={confirmStats} title={t("general.stats_reset_title")}>
+  <p>{t("general.stats_reset_body")}</p>
+  {#snippet actions()}
+    <button type="button" class="btn" onclick={() => (confirmStats = false)}>{t("common.cancel")}</button>
+    <button type="button" class="btn danger" onclick={resetStatistics}>{t("general.stats_reset")}</button>
+  {/snippet}
+</Modal>
 
 <style>
   .value { color: var(--ink-2); }

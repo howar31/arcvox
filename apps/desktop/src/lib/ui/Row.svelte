@@ -33,11 +33,11 @@
 {/if}
 
 <style>
-  .item { display: flex; align-items: center; gap: 14px; min-height: var(--row-min); padding: var(--row-y) var(--row-x); width: 100%; }
+  .item { display: flex; align-items: center; gap: 16px; min-height: var(--row-min); padding: var(--row-y) var(--row-x); width: 100%; }
   .item + :global(.item) { border-top: 1px solid var(--line); }
   .label { display: block; flex: 1; min-width: 0; }
-  .text { display: block; }
-  .label small { display: block; color: var(--ink-2); font-size: var(--text-sm); overflow-wrap: anywhere; }
+  .text { display: block; font-weight: 600; }
+  .label small { display: block; color: var(--ink-2); font-size: var(--text-sm); margin-top: 2px; overflow-wrap: anywhere; }
   .link { border: 0; border-radius: 0; background: none; text-align: left; cursor: default; }
   .link:hover { background: var(--sunken); }
   .link:first-child { border-top-left-radius: calc(var(--radius-group) - 1px); border-top-right-radius: calc(var(--radius-group) - 1px); }

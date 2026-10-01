@@ -8,6 +8,11 @@ describe("formatBytes", () => {
   it("uses whole megabytes below that", () => {
     expect(formatBytes(574041195)).toBe("574 MB");
   });
+  it("uses megabytes with one decimal below ten, and kilobytes below one", () => {
+    expect(formatBytes(1_840_000)).toBe("1.8 MB");
+    expect(formatBytes(192_044)).toBe("192 KB");
+    expect(formatBytes(0)).toBe("0 KB");
+  });
 });
 
 import { rowStatus } from "./models.svelte";

@@ -18,9 +18,9 @@
   --pill-line: rgba(255,255,255,.08); --pill-button: rgba(255,255,255,.12); --pill-button-hover: rgba(255,255,255,.2);
 
   /* Type scale and density of the settings window. */
-  --text: 14.5px; --text-control: 13.5px; --text-sm: 12.5px; --text-xs: 11.5px; --text-lg: 15.5px; --text-title: 25px;
-  --control: 32px; --radius: 8px; --radius-group: 14px;
-  --row-min: 54px; --row-y: 10px; --row-x: 18px; --page-x: 28px;
+  --text: 16px; --text-control: 14.5px; --text-sm: 13.5px; --text-xs: 12.5px; --text-lg: 18px; --text-title: 31px; --text-stat: 36px;
+  --control: 36px; --radius: 10px; --radius-group: 18px;
+  --row-min: 70px; --row-y: 17px; --row-x: 24px; --page-x: 48px; --page-top: 44px; --gap-group: 36px; --card-pad: 28px;
 
   --font: -apple-system, BlinkMacSystemFont, "PingFang TC", "Segoe UI", "Microsoft JhengHei", sans-serif;
   --font-round: ui-rounded, "SF Pro Rounded", -apple-system, "PingFang TC", "Segoe UI", sans-serif;
@@ -51,10 +51,10 @@ button, select, input, textarea { font: inherit; color: inherit; }
 input[type="radio"] { accent-color: var(--accent); }
 /* A checkbox as tall as the text next to it. */
 input[type="checkbox"] {
-  appearance: none; -webkit-appearance: none; display: inline-grid; place-content: center; flex: none; width: 18px; height: 18px; margin: 0;
+  appearance: none; -webkit-appearance: none; display: inline-grid; place-content: center; flex: none; width: 20px; height: 20px; margin: 0;
   border: 1.5px solid var(--line-strong); border-radius: 5px; background: var(--surface); vertical-align: -4px; cursor: default;
 }
-input[type="checkbox"]::after { content: ""; width: 5px; height: 9px; margin-top: -2px; border: solid var(--accent-ink); border-width: 0 2px 2px 0; transform: rotate(45deg); opacity: 0; }
+input[type="checkbox"]::after { content: ""; width: 6px; height: 10px; margin-top: -2px; border: solid var(--accent-ink); border-width: 0 2px 2px 0; transform: rotate(45deg); opacity: 0; }
 input[type="checkbox"]:checked { background: var(--accent); border-color: var(--accent); }
 input[type="checkbox"]:checked::after { opacity: 1; }
 input[type="checkbox"]:disabled { opacity: .5; }
@@ -62,7 +62,7 @@ input[type="checkbox"]:disabled { opacity: .5; }
 code { font-family: var(--font-mono); font-size: var(--text-sm); }
 
 /* Buttons */
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: var(--control); padding: 0 14px; border-radius: var(--radius); border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font-size: var(--text-control); white-space: nowrap; cursor: default; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: var(--control); padding: 0 16px; border-radius: var(--radius); border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font-size: var(--text-control); white-space: nowrap; cursor: default; }
 .btn:hover { background: var(--sunken); }
 .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; }
 .btn.primary:hover { background: color-mix(in srgb, var(--accent) 88%, var(--ink)); }
