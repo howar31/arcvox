@@ -1,4 +1,4 @@
-import { onWidgetInserted, onWidgetLevel, onWidgetMessage, onWidgetRefined, onWidgetState, onWidgetTranscript, uiLanguage, widgetScale, type MessagePayload, type WidgetState } from "./api";
+import { onWidgetEnter, onWidgetInserted, onWidgetLeave, onWidgetLevel, onWidgetMessage, onWidgetRefined, onWidgetState, onWidgetTranscript, uiLanguage, widgetScale, type MessagePayload, type WidgetState } from "./api";
 import { currentLanguage, setLanguage, type Lang } from "./i18n";
 import { messageDelay } from "./rewriteTiming";
 
@@ -9,6 +9,8 @@ const HINT_MS = 4000;
 export class WidgetFeed {
   state = $state<WidgetState>("idle");
   message = $state<MessagePayload | null>(null);
+  /** True from the moment the widget is shown until it is told to leave; its window stays for the leaving motion. */
+  open = $state(false);
   /** Recognised text, from the moment it is known until the widget goes. */
   transcript = $state("");
   /** The final text, once the processing is over. */
@@ -87,6 +89,8 @@ export class WidgetFeed {
         else show(p);
       }),
       onWidgetInserted(() => { this.inserted = true; }),
+      onWidgetEnter(() => { this.open = true; }),
+      onWidgetLeave(() => { this.open = false; }),
       onWidgetTranscript((p) => { this.transcript = p.text; this.refined = null; }),
       onWidgetRefined((p) => {
         if (!this.transcript) return;

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import { openSettingsWindow, panelFit, widgetCopy, widgetDismiss } from "../lib/api";
+  import { onMount, untrack } from "svelte";
+  import { onPanelPlaced, openSettingsWindow, panelFit, widgetCopy, widgetDismiss, type PanelEdge } from "../lib/api";
   import { t } from "../lib/i18n";
   import { panelView, type PanelAction } from "../lib/widgetView";
   import { WidgetFeed } from "../lib/widgetEvents.svelte";
@@ -15,13 +15,39 @@
   let held = $state<{ w: number; h: number } | null>(null);
   const still = window.matchMedia("(prefers-reduced-motion: reduce)");
 
-  onMount(() => feed.listen());
+  /** How long the panel takes to close; the transition below has the same length. */
+  const CLOSE_MS = 170;
+  /** The edge that faces the widget: the panel opens from it and closes towards it. */
+  let edge = $state<PanelEdge>("bottom");
+  /** The window is on screen at its place with the content it was told about. */
+  let placed = $state(false);
+
+  onMount(() => {
+    const stop = feed.listen();
+    const placing = onPanelPlaced((e) => { edge = e; placed = true; });
+    return () => { stop(); placing.then((off) => off()); };
+  });
 
   const view = $derived.by(() => {
     void feed.language;
     void feed.scale;
     return panelView(feed.state, feed.message, feed.transcript, feed.refined, feed.hint);
   });
+  // What is drawn: the content, or the last content while the panel closes.
+  let kept = $state<typeof view>(null);
+  let closing: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => {
+    const next = view;
+    clearTimeout(closing);
+    if (next) kept = next;
+    else if (!untrack(() => placed) || still.matches) kept = null;
+    else closing = setTimeout(() => { kept = null; }, CLOSE_MS);
+  });
+  // The widget leaves: its window goes too, and the next content is placed anew.
+  $effect(() => {
+    if (!feed.open) placed = false;
+  });
+  const open = $derived(placed && feed.open && view !== null);
   // One value for one pair of texts, whatever else changes meanwhile.
   const pair = $derived(view?.rewrite ? view.rewrite.from + "\u0000" + view.rewrite.to : null);
 
@@ -37,10 +63,14 @@
 
   // The window takes the size of the content; without content it is hidden.
   $effect(() => {
-    if (!view || !box) {
+    // The widget appears again: the window has to be placed again for content that is still there.
+    const shown = feed.open;
+    if (!kept || !box) {
+      placed = false;
       panelFit(null, null).catch(() => {});
       return;
     }
+    if (!shown) return;
     const r = held ? { width: held.w, height: held.h } : box.getBoundingClientRect();
     panelFit(r.width, r.height).catch(() => {});
   });
@@ -48,8 +78,8 @@
   const LABELS: Record<PanelAction, string> = { copy: "widget.copy", copy_detail: "panel.copy_detail", open_engines: "panel.open_settings", open_history: "panel.open_history" };
 
   function run(action: PanelAction) {
-    if (action === "copy" && view?.result) widgetCopy(view.result).catch(() => {});
-    else if (action === "copy_detail" && view?.detail) widgetCopy(view.detail).catch(() => {});
+    if (action === "copy" && kept?.result) widgetCopy(kept.result).catch(() => {});
+    else if (action === "copy_detail" && kept?.detail) widgetCopy(kept.detail).catch(() => {});
     else if (action === "open_engines" || action === "open_history") {
       openSettingsWindow(action === "open_engines" ? "engines" : "history").catch(() => {});
       dismiss();
@@ -62,36 +92,45 @@
   }
 </script>
 
-{#if view}
-  <div class="panel" bind:this={box} style:width={held ? held.w + "px" : null} style:height={held ? held.h + "px" : null}>
-    {#if view.caption}<div class="caption">{view.caption}</div>{/if}
-    {#if view.title}
+{#if kept}
+  <div class="panel" class:open data-edge={edge} bind:this={box} style:width={held ? held.w + "px" : null} style:height={held ? held.h + "px" : null}>
+    {#if kept.caption}<div class="caption">{kept.caption}</div>{/if}
+    {#if kept.title}
       <div class="head">
-        <div class="title">{view.title}</div>
-        {#if view.close}<button type="button" class="close" onclick={dismiss} aria-label={t("widget.dismiss")} title={t("widget.dismiss")}><Icon name="x" size={14 * feed.scale} /></button>{/if}
+        <div class="title">{kept.title}</div>
+        {#if kept.close}<button type="button" class="close" onclick={dismiss} aria-label={t("widget.dismiss")} title={t("widget.dismiss")}><Icon name="x" size={14 * feed.scale} /></button>{/if}
       </div>
     {/if}
-    {#if view.text}<div class="text">{view.text}</div>{/if}
-    {#if view.rewrite}
-      <div class="text">{#key pair}<Rewrite from={view.rewrite.from} to={view.rewrite.to} animate={!still.matches} ondone={() => { held = null; }} />{/key}</div>
+    {#if kept.text}<div class="text">{kept.text}</div>{/if}
+    {#if kept.rewrite}
+      <div class="text">{#key pair}<Rewrite from={kept.rewrite.from} to={kept.rewrite.to} animate={!still.matches} ondone={() => { held = null; }} />{/key}</div>
     {/if}
-    {#if view.body}<div class="body">{view.body}</div>{/if}
-    {#if view.result}<div class="quote result">{view.result}</div>{/if}
-    {#if view.detail}<div class="quote">{view.detail}</div>{/if}
-    {#if view.actions.length}
+    {#if kept.body}<div class="body">{kept.body}</div>{/if}
+    {#if kept.result}<div class="quote result">{kept.result}</div>{/if}
+    {#if kept.detail}<div class="quote">{kept.detail}</div>{/if}
+    {#if kept.actions.length}
       <div class="actions">
-        {#each view.actions as action (action)}<button type="button" onclick={() => run(action)}>{t(LABELS[action])}</button>{/each}
+        {#each kept.actions as action (action)}<button type="button" onclick={() => run(action)}>{t(LABELS[action])}</button>{/each}
       </div>
     {/if}
   </div>
-  {#if view.rewrite}
-    <div class="panel ghost" bind:this={ghost} aria-hidden="true"><div class="caption">{view.caption}</div><div class="text">{view.rewrite.to}</div></div>
+  {#if kept.rewrite}
+    <div class="panel ghost" bind:this={ghost} aria-hidden="true"><div class="caption">{kept.caption}</div><div class="text">{kept.rewrite.to}</div></div>
   {/if}
 {/if}
 
 <style>
   /* Sized by its content, whatever the size of the window at that moment. */
   .panel { position: fixed; left: 0; top: 0; width: max-content; min-width: calc(200 * var(--u)); max-width: calc(372 * var(--u)); border-radius: calc(20 * var(--u)); padding: calc(18 * var(--u)) calc(20 * var(--u)); background: var(--pill-bg); color: var(--pill-ink); box-shadow: inset 0 0 0 1px var(--pill-line); font-size: calc(13 * var(--u)); line-height: 1.6; user-select: none; -webkit-user-select: none; cursor: default; }
+  /* Opens from the edge that faces the widget and closes towards it; the content does not move. */
+  .panel { --r: calc(20 * var(--u)); opacity: 0; clip-path: inset(100% 0 0 0 round var(--r)); transition: clip-path 130ms cubic-bezier(.4, 0, 1, 1), opacity 40ms linear 130ms; }
+  .panel[data-edge="top"] { clip-path: inset(0 0 100% 0 round var(--r)); }
+  .panel[data-edge="left"] { clip-path: inset(0 100% 0 0 round var(--r)); }
+  .panel[data-edge="right"] { clip-path: inset(0 0 0 100% round var(--r)); }
+  .panel.open { opacity: 1; clip-path: inset(0 0 0 0 round var(--r)); transition: opacity 40ms linear, clip-path 200ms cubic-bezier(.2, .8, .2, 1) 40ms; }
+  @media (prefers-reduced-motion: reduce) {
+    .panel, .panel.open { transition: none; }
+  }
   .ghost { visibility: hidden; pointer-events: none; }
   .caption { font-size: calc(11 * var(--u)); color: var(--pill-ink-2); margin-bottom: calc(6 * var(--u)); }
   .head { display: flex; align-items: flex-start; gap: calc(12 * var(--u)); }

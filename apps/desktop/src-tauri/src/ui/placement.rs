@@ -196,6 +196,39 @@ pub fn panel_frame(display: Rect, widget: Rect, size: Size) -> Rect {
     }
 }
 
+/// The edge of the panel that faces its widget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edge {
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+impl Edge {
+    pub fn name(self) -> &'static str {
+        match self {
+            Edge::Top => "top",
+            Edge::Bottom => "bottom",
+            Edge::Left => "left",
+            Edge::Right => "right",
+        }
+    }
+}
+
+/// Which edge of the panel at `panel` faces the widget at `widget`.
+pub fn facing_edge(widget: Rect, panel: Rect) -> Edge {
+    if panel.bottom() <= widget.y {
+        Edge::Bottom
+    } else if panel.y >= widget.bottom() {
+        Edge::Top
+    } else if panel.right() <= widget.x {
+        Edge::Right
+    } else {
+        Edge::Left
+    }
+}
+
 /// The widget's frame on `display`, kept inside the display.
 pub fn frame(display: Rect, anchor: Anchor, size: Size) -> Rect {
     // A value read from a hand-edited file may be anything.
@@ -512,5 +545,34 @@ mod tests {
             WidgetPositions::load(dir.path()),
             WidgetPositions::default()
         );
+    }
+
+    #[test]
+    fn the_panel_knows_which_of_its_edges_faces_the_widget() {
+        let size = Size { w: 240.0, h: 100.0 };
+        let across = Rect {
+            x: 600.0,
+            y: 900.0,
+            w: 140.0,
+            h: 48.0,
+        };
+        assert_eq!(
+            facing_edge(across, panel_frame(MAIN, across, size)),
+            Edge::Bottom
+        );
+        let top = Rect { y: 20.0, ..across };
+        assert_eq!(facing_edge(top, panel_frame(MAIN, top, size)), Edge::Top);
+        let right = Rect {
+            x: 1452.0,
+            y: 400.0,
+            w: 48.0,
+            h: 148.0,
+        };
+        assert_eq!(
+            facing_edge(right, panel_frame(MAIN, right, size)),
+            Edge::Right
+        );
+        let left = Rect { x: 12.0, ..right };
+        assert_eq!(facing_edge(left, panel_frame(MAIN, left, size)), Edge::Left);
     }
 }

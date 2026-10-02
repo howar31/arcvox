@@ -120,7 +120,7 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="pill" class:listening {onpointerdown}>
+<div class="pill" class:listening class:open={feed.open} {onpointerdown}>
   <canvas class="wave" bind:this={canvas} aria-hidden="true"></canvas>
   <!-- A new ring when its colour or its motion changes, so the motion plays from its start. -->
   {#key ring.tone + ring.motion}
@@ -149,6 +149,11 @@
   .pill, .measure { display: flex; align-items: center; gap: calc(14 * var(--u)); padding: 0 calc(22 * var(--u)) 0 calc(14 * var(--u)); }
   .pill, .measure, .probe { font-size: calc(13 * var(--u)); line-height: 1.35; white-space: nowrap; }
   .pill { position: relative; width: 100vw; height: 100vh; border-radius: calc(24 * var(--u)); overflow: hidden; background: var(--pill-bg); color: var(--pill-ink); box-shadow: inset 0 0 0 1px var(--pill-line); user-select: none; -webkit-user-select: none; cursor: default; }
+  /* Appearing: the round end with the ring first, then the widget opens towards its label, which comes last. Leaving is the same backwards, and shorter. */
+  .pill { opacity: 0; clip-path: inset(0 calc(100% - 48 * var(--u)) 0 0 round calc(24 * var(--u))); transition: clip-path 140ms cubic-bezier(.4, 0, 1, 1), opacity 60ms linear 140ms; }
+  .pill.open { opacity: 1; clip-path: inset(0 0 0 0 round calc(24 * var(--u))); transition: opacity 80ms linear, clip-path 200ms cubic-bezier(.2, .8, .2, 1) 80ms; }
+  .label { opacity: 0; transition: opacity 60ms linear; }
+  .pill.open .label { opacity: 1; transition: opacity 120ms linear 160ms; }
   .measure, .probe { position: fixed; left: 0; top: 0; width: max-content; visibility: hidden; pointer-events: none; }
   /* Behind the ring and the label. */
   .wave { position: absolute; left: 0; top: 0; width: 100%; height: 100%; color: var(--pill-accent); pointer-events: none; }
@@ -176,6 +181,7 @@
   /* Vertical: the ring on top, the label written downwards. */
   @media (orientation: portrait) {
     .pill { flex-direction: column; padding: calc(14 * var(--u)) 0 calc(22 * var(--u)); }
+    .pill:not(.open) { clip-path: inset(0 0 calc(100% - 48 * var(--u)) 0 round calc(24 * var(--u))); }
     .ring.shake { animation-name: shake-down; }
     .label { writing-mode: vertical-rl; letter-spacing: .12em; }
   }
@@ -194,5 +200,6 @@
     path { stroke-dashoffset: 0; }
     circle { opacity: 1; }
     .listening .track:first-child { opacity: .5; transform: scale(1.5); }
+    .pill, .pill.open, .label, .pill.open .label { transition: none; }
   }
 </style>
