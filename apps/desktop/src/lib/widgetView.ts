@@ -17,19 +17,50 @@ const NOTICES: Record<string, string> = {
   "widget.cancelled": "widget.cancelled",
   "widget.no_speech": "widget.no_speech_short",
 };
+const INSERTED = "widget.inserted";
 const FAILED = "widget.failed";
 const NOT_INSERTED = "widget.not_inserted";
 const REWRITE_FAILED = "widget.rewrite_failed";
 
 /** Every label the widget can show; its long side holds the longest of them. */
-export const LABEL_KEYS: string[] = [...Object.values(STATE_LABELS), ...Object.values(NOTICES), FAILED, NOT_INSERTED, REWRITE_FAILED];
+export const LABEL_KEYS: string[] = [...Object.values(STATE_LABELS), ...Object.values(NOTICES), INSERTED, FAILED, NOT_INSERTED, REWRITE_FAILED];
 
-/** The key of the widget's label, or null when it shows the ring alone. */
-export function labelKey(state: WidgetState, message: MessagePayload | null): string | null {
-  if (!message) return STATE_LABELS[state] ?? null;
+/** The text exists but is not in the application, or is not what the processing should have made of it. */
+function needsAttention(message: MessagePayload): boolean {
+  return message.key === "widget.degraded" || (message.kind === "info" && !!message.copyable);
+}
+
+/**
+ * The key of the widget's label, or null when it shows the ring alone.
+ * `inserted`: the text was put into the application and nothing happened since.
+ */
+export function labelKey(state: WidgetState, message: MessagePayload | null, inserted = false): string | null {
+  if (!message) return STATE_LABELS[state] ?? (inserted && state === "idle" ? INSERTED : null);
   if (message.key in NOTICES) return NOTICES[message.key];
   if (message.key === "widget.degraded") return REWRITE_FAILED;
-  return message.kind === "info" && message.copyable ? NOT_INSERTED : FAILED;
+  return needsAttention(message) ? NOT_INSERTED : FAILED;
+}
+
+export interface RingView {
+  /** The colour: the kind of outcome. Listening and working share one, red is for a failure only. */
+  tone: "accent" | "ok" | "quiet" | "warn" | "fail";
+  /** What the ring does when this begins; `level`, `spin` and `drag` go on for as long as it lasts. */
+  motion: "level" | "spin" | "close" | "once" | "twice" | "settle" | "shake" | "drag" | "none";
+  glyph: "check" | "bang" | "cross" | null;
+}
+
+export function ringView(state: WidgetState, message: MessagePayload | null, inserted: boolean): RingView {
+  if (message) {
+    if (message.key in NOTICES) return { tone: "quiet", motion: "settle", glyph: null };
+    if (needsAttention(message)) return { tone: "warn", motion: "twice", glyph: "bang" };
+    return { tone: "fail", motion: "shake", glyph: "cross" };
+  }
+  if (state === "recording" || state === "locked") return { tone: "accent", motion: "level", glyph: null };
+  if (state === "processing") return { tone: "accent", motion: "spin", glyph: null };
+  if (state === "inserting") return { tone: "accent", motion: "close", glyph: null };
+  if (state === "placing") return { tone: "quiet", motion: "drag", glyph: null };
+  if (inserted) return { tone: "ok", motion: "once", glyph: "check" };
+  return { tone: "quiet", motion: "none", glyph: null };
 }
 
 export type PanelAction = "copy" | "copy_detail" | "open_engines" | "open_history";

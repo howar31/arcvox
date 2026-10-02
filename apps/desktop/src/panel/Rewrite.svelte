@@ -46,7 +46,7 @@
   /* The transitions last as long as MOVE in rewriteTiming.ts. */
   .unit { display: inline-block; white-space: pre; vertical-align: top; overflow: hidden; }
   .armed .unit { transition: max-width 600ms cubic-bezier(.3, .7, .2, 1), opacity 600ms, color 600ms; }
-  .del { text-decoration: line-through; color: var(--pill-live); }
+  .del { text-decoration: line-through; color: var(--pill-fail); }
   .ins { color: var(--pill-accent); }
   .laid { visibility: hidden; }
   /* Before the move the added text takes no room; after it the removed text takes none. */

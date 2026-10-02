@@ -164,7 +164,7 @@ pub fn text(lang: Language, msg: Msg) -> &'static str {
         (Language::En, Msg::WidgetLocked) => "Press the shortcut again to finish",
         (Language::ZhTw, Msg::WidgetProcessing) => "處理中",
         (Language::En, Msg::WidgetProcessing) => "Processing",
-        (Language::ZhTw, Msg::WidgetInserting) => "輸入中",
+        (Language::ZhTw, Msg::WidgetInserting) => "填入中",
         (Language::En, Msg::WidgetInserting) => "Inserting",
         (Language::ZhTw, Msg::WidgetNoSpeech) => "沒有偵測到語音",
         (Language::En, Msg::WidgetNoSpeech) => "No speech detected",

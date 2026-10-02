@@ -566,6 +566,7 @@
   "shortcut.refuse.duplicate": "This shortcut is already in the list.",
   "shortcut.refuse.limit": "The limit of shortcuts is reached.",
   "general.shortcut_reset": "Restore default",
+  "widget.inserted": "Inserted",
   "widget.failed": "Failed",
   "widget.not_inserted": "Not inserted",
   "widget.rewrite_failed": "No rewrite",

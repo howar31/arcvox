@@ -12,10 +12,10 @@
   --knob: #FFFFFF; --knob-shadow: 0 1px 2px rgba(0,0,0,.25);
   --lift: 0 1px 2px rgba(0,0,0,.12);
 
-  /* Widget pill: the same in both themes. */
-  --pill-bg: rgba(22,23,27,.92); --pill-ink: #F1F2F5; --pill-ink-2: #A3A9B7;
-  --pill-live: #FF6B4F; --pill-live-halo: rgba(255,107,79,.22); --pill-accent: #8FA2FF;
-  --pill-line: rgba(255,255,255,.08); --pill-button: rgba(255,255,255,.12); --pill-button-hover: rgba(255,255,255,.2);
+  /* Widget and panel. */
+  --pill-bg: rgba(255,255,255,.94); --pill-ink: #15171C; --pill-ink-2: #5A6070;
+  --pill-accent: #2747D6; --pill-ok: #198754; --pill-warn: #B7700B; --pill-fail: #E4472B;
+  --pill-line: rgba(21,23,28,.16); --pill-button: rgba(21,23,28,.07); --pill-button-hover: rgba(21,23,28,.13);
 
   /* Type scale and density of the settings window. */
   --text: 16px; --text-control: 14.5px; --text-sm: 13.5px; --text-xs: 12.5px; --text-lg: 18px; --text-title: 31px; --text-stat: 36px;
@@ -35,6 +35,9 @@
     --live: #FF6B4F; --ok: #4CC38A; --warn: #E2A33B;
     --shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 32px rgba(0,0,0,.45);
     --scrim: rgba(0,0,0,.5);
+    --pill-bg: rgba(22,23,27,.92); --pill-ink: #F1F2F5; --pill-ink-2: #A3A9B7;
+    --pill-accent: #8FA2FF; --pill-ok: #4CC38A; --pill-warn: #E2A33B; --pill-fail: #FF6B4F;
+    --pill-line: rgba(255,255,255,.08); --pill-button: rgba(255,255,255,.12); --pill-button-hover: rgba(255,255,255,.2);
   }
 }
 

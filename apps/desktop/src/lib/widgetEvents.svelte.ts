@@ -1,4 +1,4 @@
-import { onWidgetLevel, onWidgetMessage, onWidgetRefined, onWidgetState, onWidgetTranscript, uiLanguage, widgetScale, type MessagePayload, type WidgetState } from "./api";
+import { onWidgetInserted, onWidgetLevel, onWidgetMessage, onWidgetRefined, onWidgetState, onWidgetTranscript, uiLanguage, widgetScale, type MessagePayload, type WidgetState } from "./api";
 import { currentLanguage, setLanguage, type Lang } from "./i18n";
 import { messageDelay } from "./rewriteTiming";
 
@@ -13,9 +13,14 @@ export class WidgetFeed {
   transcript = $state("");
   /** The final text, once the processing is over. */
   refined = $state<string | null>(null);
+  /** True from the moment the text was put into the application until something else happens. */
+  inserted = $state(false);
   /** When the final text arrived. */
   private refinedAt = 0;
-  level = $state(0);
+  /** The loudest input level since it was last taken, and whether one arrived at all. */
+  private peak = 0;
+  private fresh = false;
+  private lastLevel = 0;
   /** True for a moment after a hands-free dictation began. */
   hint = $state(false);
   /** Changes with the interface language, so texts are read again. */
@@ -35,6 +40,14 @@ export class WidgetFeed {
     this.language = lang;
   }
 
+  /** The input level (RMS) since the last call; the previous one when no block of audio arrived in between. */
+  takeLevel(): number {
+    if (this.fresh) this.lastLevel = this.peak;
+    this.peak = 0;
+    this.fresh = false;
+    return this.lastLevel;
+  }
+
   /** Starts listening; returns the function that stops it. */
   listen(): () => void {
     // Until the language is known the texts are in English; each event carries it too.
@@ -44,7 +57,7 @@ export class WidgetFeed {
     // A message that waits for the change of the text to be seen.
     let waiting: ReturnType<typeof setTimeout> | undefined;
     const still = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const show = (p: MessagePayload) => { this.message = p; this.transcript = ""; this.refined = null; };
+    const show = (p: MessagePayload) => { this.message = p; this.transcript = ""; this.refined = null; this.inserted = false; };
     const unsubs = [
       onWidgetState((p) => {
         this.setLanguage(p.language);
@@ -55,15 +68,16 @@ export class WidgetFeed {
           hintTimer = setTimeout(() => { this.hint = false; }, HINT_MS);
         } else if (p.state !== "locked") this.hint = false;
         this.state = p.state;
+        if (p.state !== "idle") this.inserted = false;
         // A new dictation drops a message that was still waiting.
         if (p.state === "recording" || p.state === "locked" || p.state === "processing") clearTimeout(waiting);
         if (p.state !== "idle" && p.state !== "placing") this.message = null;
         // The two texts stay through the insertion and the moment after it; a new dictation clears them.
         if (p.state === "recording" || p.state === "locked" || p.state === "placing") this.refined = null;
         if (p.state !== "processing" && p.state !== "inserting" && this.refined === null) this.transcript = "";
-        if (p.state !== "recording" && p.state !== "locked") this.level = 0;
+        if (p.state !== "recording" && p.state !== "locked") this.peak = this.lastLevel = 0;
       }),
-      onWidgetLevel((p) => { this.level = p.rms; }),
+      onWidgetLevel((p) => { this.peak = Math.max(this.peak, p.rms); this.fresh = true; }),
       onWidgetMessage((p) => {
         this.setLanguage(p.language);
         clearTimeout(waiting);
@@ -72,6 +86,7 @@ export class WidgetFeed {
         if (wait > 0) waiting = setTimeout(() => show(p), wait);
         else show(p);
       }),
+      onWidgetInserted(() => { this.inserted = true; }),
       onWidgetTranscript((p) => { this.transcript = p.text; this.refined = null; }),
       onWidgetRefined((p) => {
         if (!this.transcript) return;
