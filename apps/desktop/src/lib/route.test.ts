@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { NAV, parseRoute, routeHash, shouldIntercept } from "./route";
+import { NAV, navPage, parseRoute, routeHash, shouldIntercept } from "./route";
 
 test("an empty hash opens the overview", () => {
   expect(parseRoute("")).toEqual({ page: "home", arg: null });
@@ -37,8 +37,15 @@ test("an argument round-trips through the hash", () => {
 test("the navigation lists every page once", () => {
   const pages = NAV.flatMap((g) => g.pages);
   expect(new Set(pages).size).toBe(pages.length);
-  expect(NAV.map((g) => g.pages)).toEqual([["home", "history"], ["flow", "engines", "prompt", "dictionary"], ["general", "recording", "data", "advanced", "speed"], ["about"]]);
+  expect(NAV.map((g) => g.pages)).toEqual([["home", "history"], ["flow", "engines", "prompt", "dictionary"], ["general", "recording", "data", "advanced"], ["about"]]);
   expect(NAV.map((g) => g.group)).toEqual([null, "nav.group.dictation", "nav.group.settings", null]);
+});
+
+test("the speed test has no sidebar entry and counts as the engines page there", () => {
+  expect(NAV.flatMap((g) => g.pages)).not.toContain("speed");
+  expect(parseRoute("#speed")).toEqual({ page: "speed", arg: null });
+  expect(navPage("speed")).toBe("engines");
+  expect(navPage("flow")).toBe("flow");
 });
 
 test("a hash change from outside is held only when the page has unsaved changes and the route differs", () => {

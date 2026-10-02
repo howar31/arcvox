@@ -403,6 +403,15 @@ impl Ui for TauriUi {
             }
             UiState::NoAccessibility | UiState::EngineError => {}
         }
+        if state == UiState::Idle {
+            self.history_changed();
+        }
+    }
+
+    fn history_changed(&self) {
+        let _ = self
+            .app
+            .emit_to(window_state::SETTINGS_WINDOW, "history-changed", ());
     }
 
     fn level(&self, rms: f32) {

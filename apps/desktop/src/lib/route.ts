@@ -8,11 +8,19 @@ export type SettingsPage = (typeof SETTINGS_PAGES)[number];
 export const NAV: { group: string | null; pages: Page[] }[] = [
   { group: null, pages: ["home", "history"] },
   { group: "nav.group.dictation", pages: ["flow", "engines", "prompt", "dictionary"] },
-  { group: "nav.group.settings", pages: [...SETTINGS_PAGES, "speed"] },
+  { group: "nav.group.settings", pages: [...SETTINGS_PAGES] },
   { group: null, pages: ["about"] },
 ];
 
-const PAGES = new Set<string>(NAV.flatMap((g) => g.pages));
+/** Pages without a sidebar entry, and the entry that stands for each. */
+const UNDER: Partial<Record<Page, Page>> = { speed: "engines" };
+
+/** The sidebar entry that is current while `page` is shown. */
+export function navPage(page: Page): Page {
+  return UNDER[page] ?? page;
+}
+
+const PAGES = new Set<string>([...NAV.flatMap((g) => g.pages), ...Object.keys(UNDER)]);
 /** Earlier page names that now live on another page. */
 const ALIASES: Record<string, Page> = { providers: "engines", models: "engines", profiles: "flow" };
 

@@ -152,7 +152,7 @@
   );
 </script>
 
-<PageHead title={t("speed.title")} description={t("speed.description")} />
+<PageHead title={t("speed.title")} description={t("speed.description")} crumb={{ label: t("nav.engines"), page: "engines" }} />
 
 <Group title={t("speed.clip")}>
   <div class="read">
