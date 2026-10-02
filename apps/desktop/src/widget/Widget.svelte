@@ -2,12 +2,17 @@
   import { onMount } from "svelte";
   import { widgetDragStart, widgetMeasure } from "../lib/api";
   import { t } from "../lib/i18n";
-  import { LABEL_KEYS, labelKey } from "../lib/widgetView";
+  import { LevelHistory, TICK, eased, mapped } from "../lib/level";
+  import { LABEL_KEYS, labelKey, ringView } from "../lib/widgetView";
   import { WidgetFeed } from "../lib/widgetEvents.svelte";
 
   const feed = new WidgetFeed();
   // The ring, the gap and the padding around an empty label, and a label written across and downwards.
   let rest: HTMLElement, across: HTMLElement, down: HTMLElement;
+  // The level while listening: two outlines around the ring, and bars passing behind the label.
+  let inner = $state<HTMLElement | null>(null), outer = $state<HTMLElement | null>(null), canvas: HTMLCanvasElement;
+  // In units. A sample of the level moves `step` along the widget; nothing is drawn around the ring, the bars fade in from `from` to `to`.
+  const WAVE = { alpha: 0.2, step: 2, pitch: 5, thick: 3, from: 40, to: 58 };
 
   onMount(() => feed.listen());
 
@@ -27,18 +32,83 @@
   });
 
   const listening = $derived(feed.state === "recording" || feed.state === "locked");
-  // Halo around the live ring, in px: grows with the input level, clamped.
-  const halo = $derived(listening ? (2 + 7 * Math.min(1, Math.max(0, feed.level * 4))) * feed.scale : 0);
-  const tone = $derived.by(() => {
-    if (feed.message) return feed.message.kind === "error" ? "live" : "accent";
-    if (listening) return "live";
-    if (feed.state === "processing") return "think";
-    if (feed.state === "inserting" || feed.state === "placing") return "accent";
-    return "off";
+
+  $effect(() => {
+    if (!listening || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const history = new LevelHistory(160);
+    const color = getComputedStyle(canvas).color;
+    let level = 0, sampled = performance.now(), painted = 0;
+    const paint = () => {
+      const now = painted = performance.now();
+      // The picture moves on between two samples: the newest one is reached when the next is due.
+      const age = 1 - Math.min(1, (now - sampled) / TICK);
+      if (inner) outline(inner, history.at(age), 0.7, 0.68);
+      if (outer) outline(outer, history.at(age + 2), 1.4, 0.54);
+      wave(history, age, now, color);
+    };
+    const timer = setInterval(() => {
+      // Frames are not delivered to a window the system counts as hidden: the level is still shown, at this pace.
+      if (sampled - painted > TICK) paint();
+      level = eased(level, mapped(feed.takeLevel()));
+      history.push(level);
+      sampled = performance.now();
+    }, TICK);
+    let frame = requestAnimationFrame(function next() {
+      paint();
+      frame = requestAnimationFrame(next);
+    });
+    return () => {
+      clearInterval(timer);
+      cancelAnimationFrame(frame);
+      canvas.getContext("2d")!.clearRect(0, 0, canvas.width, canvas.height);
+    };
   });
+
+  /** An outline whose radius is the level: on the ring at silence, `gain` ring radii further at full level. */
+  function outline(node: HTMLElement, level: number, gain: number, strength: number) {
+    node.style.transform = `scale(${(1 + gain * level).toFixed(3)})`;
+    node.style.opacity = (0.12 + strength * level).toFixed(2);
+  }
+
+  /** The last seconds as bars, the newest at the widget's end, moving towards the ring. */
+  function wave(history: LevelHistory, age: number, now: number, color: string) {
+    const u = feed.scale, dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+    }
+    const g = canvas.getContext("2d")!;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, canvas.width, canvas.height);
+    // Drawn along the long side (x) and across the short side (y); an upright widget swaps the two.
+    const upright = h > w;
+    if (upright) g.setTransform(0, dpr, dpr, 0, 0, 0);
+    else g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const along = upright ? h : w, mid = (upright ? w : h) / 2;
+    const step = WAVE.step * u, pitch = WAVE.pitch * u, thick = WAVE.thick * u, reach = mid - 3 * u;
+    g.globalAlpha = WAVE.alpha;
+    g.fillStyle = color;
+    for (let x = along - (((now / TICK) * step) % pitch); x > WAVE.from * u - pitch; x -= pitch) {
+      const half = thick / 2 + reach * history.at((along - x - thick / 2) / step + age);
+      g.beginPath();
+      g.roundRect(x, mid - half, thick, half * 2, thick / 2);
+      g.fill();
+    }
+    const fade = g.createLinearGradient(WAVE.from * u, 0, WAVE.to * u, 0);
+    fade.addColorStop(0, "rgba(0,0,0,0)");
+    fade.addColorStop(1, "rgba(0,0,0,1)");
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = "destination-in";
+    g.fillStyle = fade;
+    g.fillRect(0, 0, along, mid * 2);
+    g.globalCompositeOperation = "source-over";
+  }
+
+  const ring = $derived(ringView(feed.state, feed.message, feed.inserted));
   const label = $derived.by(() => {
     void feed.language;
-    const key = labelKey(feed.state, feed.message);
+    const key = labelKey(feed.state, feed.message, feed.inserted);
     return key ? t(key) : "";
   });
 
@@ -50,8 +120,22 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="pill" {onpointerdown}>
-  <span class="ring {tone}" style:--halo="{halo}px" aria-hidden="true"></span>
+<div class="pill" class:listening {onpointerdown}>
+  <canvas class="wave" bind:this={canvas} aria-hidden="true"></canvas>
+  <!-- A new ring when its colour or its motion changes, so the motion plays from its start. -->
+  {#key ring.tone + ring.motion}
+    <span class="ring {ring.tone} {ring.motion}" aria-hidden="true">
+      {#if ring.motion === "level"}<span class="track" bind:this={inner}></span><span class="track" bind:this={outer}></span>{/if}
+      {#if ring.motion === "once" || ring.motion === "twice"}<span class="pulse"></span>{/if}
+      {#if ring.glyph}
+        <svg viewBox="0 0 14 14">
+          {#if ring.glyph === "check"}<path pathLength="1" d="M3.6 7.4 L6.1 9.8 L10.5 4.7" />
+          {:else if ring.glyph === "bang"}<path pathLength="1" d="M7 3.3 V7.9" /><circle cx="7" cy="10.5" r="1" />
+          {:else}<path pathLength="1" d="M4.5 4.5 L9.5 9.5 M9.5 4.5 L4.5 9.5" />{/if}
+        </svg>
+      {/if}
+    </span>
+  {/key}
   <!-- A new element for each label: a reused one can keep the previous label's length when written downwards. -->
   {#key label}<span class="label">{label}</span>{/key}
 </div>
@@ -64,22 +148,51 @@
   /* The ring keeps its place whatever the label: it sits in the round end, the same distance from three sides. */
   .pill, .measure { display: flex; align-items: center; gap: calc(14 * var(--u)); padding: 0 calc(22 * var(--u)) 0 calc(14 * var(--u)); }
   .pill, .measure, .probe { font-size: calc(13 * var(--u)); line-height: 1.35; white-space: nowrap; }
-  .pill { width: 100vw; height: 100vh; border-radius: calc(24 * var(--u)); overflow: hidden; background: var(--pill-bg); color: var(--pill-ink); box-shadow: inset 0 0 0 1px var(--pill-line); user-select: none; -webkit-user-select: none; cursor: default; }
+  .pill { position: relative; width: 100vw; height: 100vh; border-radius: calc(24 * var(--u)); overflow: hidden; background: var(--pill-bg); color: var(--pill-ink); box-shadow: inset 0 0 0 1px var(--pill-line); user-select: none; -webkit-user-select: none; cursor: default; }
   .measure, .probe { position: fixed; left: 0; top: 0; width: max-content; visibility: hidden; pointer-events: none; }
-  .ring { flex: none; width: calc(20 * var(--u)); height: calc(20 * var(--u)); border-radius: 50%; border: calc(3 * var(--u)) solid var(--pill-ink-2); }
-  .ring.live { border-color: var(--pill-live); box-shadow: 0 0 0 var(--halo) var(--pill-live-halo); transition: box-shadow 80ms linear; }
-  .ring.accent { border-color: var(--pill-accent); }
-  .ring.think { border-color: var(--pill-accent); border-right-color: transparent; animation: spin .9s linear infinite; }
+  /* Behind the ring and the label. */
+  .wave { position: absolute; left: 0; top: 0; width: 100%; height: 100%; color: var(--pill-accent); pointer-events: none; }
+  .ring, .label { position: relative; }
+  /* The colour is the kind of outcome; red is for a failure only. */
+  .ring { --c: var(--pill-ink-2); flex: none; width: calc(20 * var(--u)); height: calc(20 * var(--u)); border-radius: 50%; border: calc(3 * var(--u)) solid var(--c); color: var(--c); }
+  .ring.accent { --c: var(--pill-accent); }
+  .ring.ok { --c: var(--pill-ok); }
+  .ring.warn { --c: var(--pill-warn); }
+  .ring.fail { --c: var(--pill-fail); }
+  .track, .pulse { position: absolute; inset: calc(-3 * var(--u)); border-radius: 50%; border: calc(1.5 * var(--u)) solid var(--c); opacity: 0; pointer-events: none; }
+  svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+  path { fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 1; stroke-dashoffset: 1; animation: draw 260ms ease-out 120ms forwards; }
+  circle { fill: currentColor; opacity: 0; animation: appear 120ms linear 300ms forwards; }
+  /* What is going on: a gap going round while it works, closing when the text goes in; a dashed ring can be dragged. */
+  .ring.spin { border-right-color: transparent; animation: spin .9s linear infinite; }
+  .ring.close { animation: close 260ms ease-out; }
+  .ring.drag { border-style: dashed; animation: spin 7s linear infinite; }
+  /* How it ended: an outline leaves the ring once when the text went in, twice when it needs attention; the ring settles when nothing came of it and shakes on a failure. */
+  .ring.once .pulse { animation: pulse 640ms ease-out 80ms 1; }
+  .ring.twice .pulse { animation: pulse 640ms ease-out 80ms 2; }
+  .ring.settle { animation: settle 320ms ease-out; }
+  .ring.shake { animation: shake 380ms ease-in-out; }
   .probe.down { writing-mode: vertical-rl; letter-spacing: .12em; }
   /* Vertical: the ring on top, the label written downwards. */
   @media (orientation: portrait) {
     .pill { flex-direction: column; padding: calc(14 * var(--u)) 0 calc(22 * var(--u)); }
+    .ring.shake { animation-name: shake-down; }
     .label { writing-mode: vertical-rl; letter-spacing: .12em; }
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes close { 0% { transform: scale(.82); } 60% { transform: scale(1.1); } 100% { transform: scale(1); } }
+  @keyframes pulse { from { transform: scale(1); opacity: .8; } to { transform: scale(2.2); opacity: 0; } }
+  @keyframes settle { from { transform: scale(.72); opacity: .3; } to { transform: scale(1); opacity: 1; } }
+  @keyframes shake { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(calc(-3.5 * var(--u))); } 40% { transform: translateX(calc(3.5 * var(--u))); } 60% { transform: translateX(calc(-2.2 * var(--u))); } 80% { transform: translateX(calc(1.4 * var(--u))); } }
+  @keyframes shake-down { 0%, 100% { transform: translateY(0); } 20% { transform: translateY(calc(-3.5 * var(--u))); } 40% { transform: translateY(calc(3.5 * var(--u))); } 60% { transform: translateY(calc(-2.2 * var(--u))); } 80% { transform: translateY(calc(1.4 * var(--u))); } }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+  @keyframes appear { to { opacity: 1; } }
   @media (prefers-reduced-motion: reduce) {
-    /* Without the spin, a full ring: a still gap would read as a fault. */
-    .ring.think { animation: none; border-right-color: var(--pill-accent); }
-    .ring.live { box-shadow: 0 0 0 calc(5 * var(--u)) var(--pill-live-halo); transition: none; }
+    /* Nothing moves: the ring is whole, its mark is drawn, and one still outline says that it listens. */
+    .ring.spin, .ring.close, .ring.drag, .ring.settle, .ring.shake, .ring.once .pulse, .ring.twice .pulse, path, circle { animation: none; }
+    .ring.spin { border-right-color: var(--c); }
+    path { stroke-dashoffset: 0; }
+    circle { opacity: 1; }
+    .listening .track:first-child { opacity: .5; transform: scale(1.5); }
   }
 </style>

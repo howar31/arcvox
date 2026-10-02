@@ -103,6 +103,8 @@ pub trait Ui: Send + Sync {
     fn transcript(&self, text: String);
     /// The text the processing ended with, sent before it is inserted.
     fn refined(&self, text: String);
+    /// The text was put into the application and nothing is left to report.
+    fn inserted(&self);
 }
 
 #[cfg(test)]
@@ -159,6 +161,9 @@ pub mod fake {
         }
         fn refined(&self, text: String) {
             self.log.lock().unwrap().push(format!("refined:{text}"));
+        }
+        fn inserted(&self) {
+            self.log.lock().unwrap().push("inserted".into());
         }
         fn transcript(&self, text: String) {
             self.log.lock().unwrap().push(format!("transcript:{text}"));

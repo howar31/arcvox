@@ -210,5 +210,7 @@ export function onBenchDone(cb: () => void): Promise<UnlistenFn> {
 }
 export interface TranscriptPayload { text: string; language: "zh-TW" | "en" }
 /** The final text of a dictation, sent when the processing is over. */
+/** The text was put into the application. */
+export function onWidgetInserted(cb: () => void): Promise<UnlistenFn> { return listen("widget-inserted", () => cb()); }
 export function onWidgetRefined(cb: (p: TranscriptPayload) => void): Promise<UnlistenFn> { return listen<TranscriptPayload>("widget-refined", (e) => cb(e.payload)); }
 export function onWidgetTranscript(cb: (p: TranscriptPayload) => void): Promise<UnlistenFn> { return listen<TranscriptPayload>("widget-transcript", (e) => cb(e.payload)); }

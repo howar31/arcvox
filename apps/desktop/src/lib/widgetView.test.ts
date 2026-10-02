@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { MessagePayload } from "./api";
 import { keysOf, setLanguage, t } from "./i18n";
-import { LABEL_KEYS, labelKey, panelView } from "./widgetView";
+import { LABEL_KEYS, labelKey, panelView, ringView } from "./widgetView";
 
 const message = (over: Partial<MessagePayload>): MessagePayload => ({ kind: "error", key: "widget.asr_failed", detail: null, copyable: null, code: null, retry: false, language: "zh-TW", ...over });
 
@@ -20,8 +20,43 @@ describe("widget label", () => {
     expect(labelKey("idle", message({ kind: "info", key: "widget.secure_input", copyable: "文字" }))).toBe("widget.not_inserted");
     expect(labelKey("idle", message({ copyable: "x", code: "provider_timeout" }))).toBe("widget.failed");
   });
+  it("says that the text went in, until something else happens", () => {
+    expect(labelKey("idle", null, true)).toBe("widget.inserted");
+    expect(labelKey("recording", null, true)).toBe("widget.listening");
+    expect(labelKey("idle", message({ key: "widget.degraded" }), true)).toBe("widget.rewrite_failed");
+    expect(LABEL_KEYS).toContain("widget.inserted");
+  });
   it("has a text in both languages for every label", () => {
     for (const lang of ["zh-TW", "en"] as const) for (const key of LABEL_KEYS) expect(keysOf(lang), key).toContain(key);
+  });
+});
+
+describe("ring", () => {
+  it("is the same colour while listening and while working, and moves differently", () => {
+    expect(ringView("recording", null, false)).toEqual({ tone: "accent", motion: "level", glyph: null });
+    expect(ringView("locked", null, false)).toEqual({ tone: "accent", motion: "level", glyph: null });
+    expect(ringView("processing", null, false)).toEqual({ tone: "accent", motion: "spin", glyph: null });
+    expect(ringView("inserting", null, false)).toEqual({ tone: "accent", motion: "close", glyph: null });
+  });
+  it("is green with a check mark once the text went in", () => {
+    expect(ringView("idle", null, true)).toEqual({ tone: "ok", motion: "once", glyph: "check" });
+    expect(ringView("idle", null, false)).toEqual({ tone: "quiet", motion: "none", glyph: null });
+  });
+  it("is grey when nothing came of it or nothing is going on", () => {
+    expect(ringView("idle", message({ kind: "info", key: "widget.cancelled" }), false)).toEqual({ tone: "quiet", motion: "settle", glyph: null });
+    expect(ringView("idle", message({ key: "widget.no_speech", detail: "no speech" }), false).tone).toBe("quiet");
+    expect(ringView("placing", null, false)).toEqual({ tone: "quiet", motion: "drag", glyph: null });
+  });
+  it("asks for attention when the text exists but is not where or what was wanted", () => {
+    const warn = { tone: "warn", motion: "twice", glyph: "bang" };
+    expect(ringView("idle", message({ kind: "info", key: "widget.app_changed", copyable: "文字" }), false)).toEqual(warn);
+    expect(ringView("idle", message({ key: "widget.degraded" }), false)).toEqual(warn);
+  });
+  it("is red only for a failure", () => {
+    const fail = { tone: "fail", motion: "shake", glyph: "cross" };
+    expect(ringView("idle", message({}), false)).toEqual(fail);
+    expect(ringView("idle", message({ key: "widget.empty_result" }), false)).toEqual(fail);
+    expect(ringView("idle", message({ copyable: "x", code: "provider_timeout" }), true)).toEqual(fail);
   });
 });
 

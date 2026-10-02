@@ -705,6 +705,11 @@ impl Controller {
                 });
             }
         }
+        // The widget says that the text went in, unless a notice follows
+        // that says more.
+        if matches!(outcome, Outcome::Inserted) && notice.is_none() {
+            self.deps.ui.inserted();
+        }
         self.go_idle();
         // Shown only for a real insertion: `Outcome::Shown` already used
         // the widget's one message slot for a copyable or empty-result
@@ -1128,6 +1133,10 @@ mod tests {
             .unwrap();
         let inserting = log.iter().position(|l| l == "state:inserting").unwrap();
         assert!(t < inserting);
+        // The widget is told that the text went in, before it goes idle.
+        let inserted = log.iter().position(|l| l == "inserted").unwrap();
+        let idle = log.iter().rposition(|l| l == "state:idle").unwrap();
+        assert!(inserting < inserted && inserted < idle, "{log:?}");
         // The final text follows, still before the insertion.
         let refined = log.iter().position(|l| l.starts_with("refined:")).unwrap();
         assert!(t < refined && refined < inserting);
@@ -1399,6 +1408,8 @@ mod tests {
         )
         .await;
         assert!(r.platform.calls().is_empty());
+        // Neither dictation put its text into an application.
+        assert!(!r.ui.log.lock().unwrap().iter().any(|l| l == "inserted"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1680,6 +1691,8 @@ mod tests {
             last_idle < notice,
             "the degraded notice must be recorded after the widget went idle: {log:?}"
         );
+        // The notice is what the widget shows, not a plain "inserted".
+        assert!(!log.iter().any(|e| e == "inserted"), "{log:?}");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
