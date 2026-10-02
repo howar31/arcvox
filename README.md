@@ -17,7 +17,7 @@ Model files are stored in the models directory shown on the Engines and models p
 
 ## Profiles, dictionary and speed test
 
-Flow > "Add profile" creates a blank profile or one from a preset: mail, chat or code. A preset copies the engines of the default profile and pre-fills the application matchers and a prompt addition for that kind of application. All fields can be edited afterwards.
+The Flow page edits one profile at a time; the menu at its top lists every profile with the applications it is used in, and has a search field when there are many. Flow > "Add profile" creates a blank profile or one from a preset: mail, chat or code. A preset copies the engines of the default profile and pre-fills the application matchers and a prompt addition for that kind of application. All fields can be edited afterwards.
 
 A dictionary term can span several lines. When one of its aliases is spoken, the whole term is inserted as written. For terms of this kind, their aliases are sent as the speech hint in place of the text, and the term is left out of the term list given to the language model.
 
