@@ -37,8 +37,8 @@ test("an argument round-trips through the hash", () => {
 test("the navigation lists every page once", () => {
   const pages = NAV.flatMap((g) => g.pages);
   expect(new Set(pages).size).toBe(pages.length);
-  expect(NAV.map((g) => g.pages)).toEqual([["home", "history"], ["flow", "dictionary", "prompt"], ["general", "engines", "speed", "about"]]);
-  expect(NAV.map((g) => g.group)).toEqual([null, "nav.group.dictation", "nav.group.settings"]);
+  expect(NAV.map((g) => g.pages)).toEqual([["home", "history"], ["flow", "engines", "prompt", "dictionary"], ["general", "recording", "data", "advanced", "speed"], ["about"]]);
+  expect(NAV.map((g) => g.group)).toEqual([null, "nav.group.dictation", "nav.group.settings", null]);
 });
 
 test("a hash change from outside is held only when the page has unsaved changes and the route differs", () => {

@@ -45,6 +45,35 @@ struct CapturePayload {
     cancelled: bool,
 }
 
+/// What the items of the menu-bar menu do.
+pub fn tray_action(app: &tauri::AppHandle<Wry>, id: &str) {
+    use crate::ui::tray;
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    match id {
+        tray::ID_SETTINGS => tray::open_settings(app, Some("general")),
+        tray::ID_QUIT => app.exit(0),
+        tray::ID_FIX => match state.ui.tray().state() {
+            UiState::NoAccessibility => {
+                let _ = crate::commands::system::system_open_privacy_pane("accessibility".into());
+            }
+            _ => tray::open_settings(app, Some("engines")),
+        },
+        tray::ID_COPY_LAST => {
+            let engine = state.engine.lock().unwrap().clone();
+            // Rows of failed dictations have no text.
+            let last = engine
+                .and_then(|e| e.history().list_recent(20).ok())
+                .and_then(|rows| rows.into_iter().find(|u| !u.final_text.is_empty()));
+            if let Some(u) = last {
+                state.platform.clipboard_write_text(&u.final_text);
+            }
+        }
+        _ => {}
+    }
+}
+
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
