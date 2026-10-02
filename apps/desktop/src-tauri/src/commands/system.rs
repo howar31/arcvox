@@ -183,7 +183,15 @@ pub fn system_info(app: AppHandle<Wry>, state: State<'_, AppState>) -> SystemInf
         config_dir: state.dirs.config_dir.display().to_string(),
         data_dir: state.dirs.data_dir.display().to_string(),
         cache_dir: state.dirs.cache_dir.display().to_string(),
-        recordings_dir: state.dirs.recordings_dir().display().to_string(),
+        recordings_dir: state
+            .engine
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|e| e.recordings_dir())
+            .unwrap_or_else(|| state.dirs.recordings_dir())
+            .display()
+            .to_string(),
     }
 }
 

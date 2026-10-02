@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
-  import { clearRecordings, errorMessage, formatBytes, historyStorage, resetStats, reveal, systemInfo, listMicrophones, openPrivacyPane, permissions, requestAccessibility, updateGeneral, widgetPlacing, widgetResetPosition, type ClientSettings, type General, type HistoryStorage, type InsertMethod } from "../../lib/api";
+  import { open as openDialog } from "@tauri-apps/plugin-dialog";
+  import { clearRecordings, errorMessage, formatBytes, historyStorage, openRecordingsDir, recordingsDir, resetStats, setRecordingsDir, type RecordingsDir, listMicrophones, openPrivacyPane, permissions, requestAccessibility, updateGeneral, widgetPlacing, widgetResetPosition, type ClientSettings, type General, type HistoryStorage, type InsertMethod } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { t } from "../../lib/i18n";
   import { client, config } from "../../lib/store.svelte";
@@ -78,8 +79,29 @@
   let confirmStats = $state(false);
   const loadStorage = () => historyStorage().then((s) => { storage = s; }).catch(() => { storage = null; });
 
-  async function revealRecordings() {
-    try { await reveal((await systemInfo()).recordings_dir); } catch (e) { toast.error(errorMessage(e)); }
+  // The folder of the recordings. Changing it moves them at once; it is not part of what Save writes.
+  let folder = $state<RecordingsDir | null>(null);
+  let moving = $state(false);
+  const loadFolder = () => recordingsDir().then((d) => { folder = d; }).catch(() => { folder = null; });
+
+  async function moveRecordings(path: string | null) {
+    moving = true;
+    try {
+      const d = await setRecordingsDir(path);
+      folder = d;
+      const counts = { n: d.moved.toLocaleString(), left: d.left.toLocaleString() };
+      toast.ok(t(d.left ? "general.recordings_dir_left" : "general.recordings_dir_moved", counts));
+    } catch (e) { toast.error(errorMessage(e)); }
+    moving = false;
+    loadStorage();
+  }
+  async function chooseFolder() {
+    const picked = await openDialog({ directory: true, multiple: false, defaultPath: folder?.path });
+    if (typeof picked === "string" && picked !== folder?.path) await moveRecordings(picked);
+  }
+
+  async function openFolder() {
+    try { await openRecordingsDir(); } catch (e) { toast.error(errorMessage(e)); }
   }
   async function clearAllRecordings() {
     confirmRecordings = false;
@@ -97,6 +119,7 @@
   onMount(() => {
     reset();
     loadStorage();
+    loadFolder();
     listMicrophones().then((m) => (mics = m)).catch(() => {});
     checkAccess();
     isEnabled().then((v) => (autostart = v)).catch(() => {});
@@ -311,14 +334,26 @@
     <Row label={t("general.history_retention")} help={t("general.retention_zero_help")}>
       <NumberField bind:value={general.history_retention_days} min={0} unit={t("common.days")} label={t("general.history_retention")} />
     </Row>
-    <Row label={t("general.keep_recordings")}>
+    <Row label={t("general.keep_recordings")} help={t("general.keep_recordings_help")}>
       <Switch bind:checked={general.keep_recordings} label={t("general.keep_recordings")} />
     </Row>
+    {#if folder}
+      <div class="folder">
+        <div class="folder-head">
+          <span class="name">{t("general.recordings_dir")}</span>
+          <span class="folder-actions">
+            <button type="button" class="btn quiet" onclick={openFolder}>{t("general.recordings_dir_open")}</button>
+            <button type="button" class="btn quiet" disabled={moving || folder.is_default} onclick={() => moveRecordings(null)}>{t("general.recordings_dir_reset")}</button>
+            <button type="button" class="btn" disabled={moving} onclick={chooseFolder}>{t("general.recordings_dir_choose")}</button>
+          </span>
+        </div>
+        <small class="sub">{folder.is_default ? t("general.recordings_dir_default", { path: folder.path }) : folder.path}</small>
+      </div>
+    {/if}
     <Row label={t("general.recording_retention")} help={t("general.retention_zero_help")}>
       <NumberField bind:value={general.recording_retention_days} min={0} unit={t("common.days")} label={t("general.recording_retention")} />
     </Row>
     <Row label={t("general.recordings_usage")} help={storage ? t("general.recordings_usage_value", { n: storage.recordings.toLocaleString(), size: formatBytes(storage.recording_bytes) }) : undefined}>
-      <button type="button" class="btn quiet" onclick={revealRecordings}>{t("history.reveal")}</button>
       <button type="button" class="btn danger" disabled={!storage?.recordings} onclick={() => (confirmRecordings = true)}>{t("history.clear_recordings")}</button>
     </Row>
     <Row label={t("general.typing_speed")} help={t("general.typing_speed_help")}>
@@ -370,6 +405,11 @@
   .shortcuts-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .shortcuts-head .btn { margin: -8px -8px -8px 0; }
   .shortcuts .sub { display: block; margin-top: 2px; }
+  /* The folder row: its label and buttons on top, the path below over the full width. */
+  .folder { padding: var(--row-y) var(--row-x); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin-bottom: -1px; }
+  .folder-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .folder-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+  .folder .sub { display: block; margin-top: 6px; color: var(--ink-2); font-size: var(--text-sm); overflow-wrap: anywhere; }
   .ring-space { width: 14px; flex: none; }
   /* The selects of the value column share one width. */
   .wide { width: 220px; }

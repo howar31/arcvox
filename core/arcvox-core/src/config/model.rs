@@ -50,6 +50,8 @@ pub struct General {
     pub retry_count: u32,
     /// Characters a minute the saved-time estimate assumes for typing.
     pub typing_chars_per_min: u32,
+    /// The folder recordings are kept in; the default one when unset.
+    pub recordings_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for General {
@@ -66,6 +68,7 @@ impl Default for General {
             llm_idle_unload_secs: 300,
             retry_count: 1,
             typing_chars_per_min: crate::stats::TYPING_CHARS_PER_MIN,
+            recordings_dir: None,
         }
     }
 }

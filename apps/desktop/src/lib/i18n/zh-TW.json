@@ -584,5 +584,14 @@
   "general.widget_size_small": "小",
   "general.widget_size_medium": "中",
   "general.widget_size_large": "大",
-  "panel.final": "最終文字"
+  "panel.final": "最終文字",
+  "general.keep_recordings_help": "關閉後，失敗的聽寫無法從歷史紀錄重試。",
+  "general.recordings_dir": "錄音資料夾",
+  "general.recordings_dir_default": "{path}（預設）",
+  "general.recordings_dir_choose": "選擇…",
+  "general.recordings_dir_reset": "恢復預設",
+  "general.recordings_dir_moved": "已變更錄音資料夾，搬移了 {n} 個錄音",
+  "general.recordings_dir_left": "已變更錄音資料夾，搬移了 {n} 個錄音，{left} 個無法搬移，留在原資料夾",
+  "failure.interrupted": "聽寫沒有完成。",
+  "general.recordings_dir_open": "開啟資料夾"
 }

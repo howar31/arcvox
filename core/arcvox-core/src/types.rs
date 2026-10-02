@@ -50,6 +50,8 @@ pub enum ErrorCode {
     ModelCorrupt,
     NativeUnavailable,
     InferenceFailed,
+    /// The dictation was recorded and never reached a result.
+    Interrupted,
 }
 
 impl ErrorCode {
@@ -69,6 +71,7 @@ impl ErrorCode {
             ErrorCode::ModelCorrupt => "model_corrupt",
             ErrorCode::NativeUnavailable => "native_unavailable",
             ErrorCode::InferenceFailed => "inference_failed",
+            ErrorCode::Interrupted => "interrupted",
         }
     }
 }

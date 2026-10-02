@@ -1,14 +1,15 @@
 //! The crate's entry point. Owns config, history, and providers; opens sessions.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 
 use crate::audio::encode_wav_pcm16;
 use crate::config::{ConfigStore, FirstRunDefaults, ProviderConfig, ProviderKind, StoreError};
-use crate::history::{HistoryError, HistoryStore, NewUtterance};
+use crate::history::{HistoryError, HistoryStore, MoveReport, NewUtterance};
 use crate::paths::DataDir;
 use crate::pipeline::Pipeline;
 use crate::profile::resolve;
@@ -17,7 +18,7 @@ use crate::providers::factory::ProviderFactory;
 use crate::providers::probe::{probe_http, ProbeFailure, ProbeResult};
 use crate::providers::registry::ProviderRegistry;
 use crate::secrets::SecretStore;
-use crate::session::{Session, SessionFlags};
+use crate::session::{Session, SessionCmd, SessionFlags};
 use crate::steps::PipelineContext;
 use crate::types::{AppInfo, AudioClip, Context, ErrorCode, HistoryId, ProfileId, SessionId};
 use crate::SAMPLE_RATE;
@@ -37,6 +38,10 @@ pub enum EngineError {
     Io(#[from] std::io::Error),
     #[error("unknown session `{0}`")]
     UnknownSession(SessionId),
+    #[error("a dictation is being processed")]
+    Busy,
+    #[error("the folder cannot be used: {0}")]
+    Folder(String),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -91,6 +96,9 @@ struct Inner {
     client: reqwest::Client,
     secrets: Arc<dyn SecretStore>,
     sessions: Mutex<HashMap<SessionId, HistoryId>>,
+    /// Recordings of dictations still being processed. Their history rows
+    /// say "did not finish" until the result replaces them.
+    in_flight: Mutex<HashSet<PathBuf>>,
     /// Used by `start_session` so it can be called from a non-runtime thread
     /// (for example a platform hotkey callback) rather than only from
     /// inside an `async fn` already running on this runtime.
@@ -131,15 +139,43 @@ impl Engine {
         dirs.ensure()?;
         let config = ConfigStore::open_with_defaults(&dirs, &opts.first_run)?;
         let path = dirs.history_path();
-        let history_recordings = dirs.recordings_dir();
+        let general = config.current().general.clone();
+        let recordings = general
+            .recordings_dir
+            .clone()
+            .unwrap_or_else(|| dirs.recordings_dir());
+        let history_recordings = recordings.clone();
         let history = Arc::new(
             tokio::task::spawn_blocking(move || HistoryStore::open(&path, &history_recordings))
                 .await
                 .expect("join")?,
         );
 
-        let general = config.current().general.clone();
-        let recordings = dirs.recordings_dir();
+        // Earlier builds kept recordings in the cache directory. They are the
+        // user's data: they move next to the history, once.
+        let legacy = dirs.legacy_recordings_dir();
+        if general.recordings_dir.is_none() && legacy != recordings && legacy.is_dir() {
+            let h = history.clone();
+            let to = recordings.clone();
+            let moved = tokio::task::spawn_blocking(move || {
+                let report = h.move_recordings(&legacy, &to);
+                // Goes only when nothing is left in it.
+                let _ = std::fs::remove_dir(&legacy);
+                report
+            })
+            .await;
+            match moved {
+                Ok(Ok(report)) if report.moved + report.left > 0 => tracing::info!(
+                    moved = report.moved,
+                    left = report.left,
+                    "recordings moved out of the cache directory"
+                ),
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => tracing::warn!(error = %e, "recordings could not be moved"),
+                Err(e) => tracing::warn!(error = %e, "recordings move task failed"),
+            }
+        }
+
         let h = history.clone();
         // Best effort: a prune failure (or panic) must not prevent opening
         // the engine, so its result is discarded rather than propagated.
@@ -164,6 +200,7 @@ impl Engine {
                 client,
                 secrets: opts.secrets,
                 sessions: Mutex::new(HashMap::new()),
+                in_flight: Mutex::new(HashSet::new()),
                 runtime,
                 idle_generation: AtomicU64::new(0),
                 #[cfg(test)]
@@ -188,7 +225,7 @@ impl Engine {
                     return;
                 };
                 let general = inner.config.current().general.clone();
-                let recordings = inner.dirs.recordings_dir();
+                let recordings = inner.recordings_dir();
                 let history = inner.history.clone();
                 drop(inner);
                 let pruned = tokio::task::spawn_blocking(move || {
@@ -243,6 +280,51 @@ impl Engine {
         &self.inner.dirs
     }
 
+    /// The folder recordings are kept in: the one the user chose, or the
+    /// default one.
+    pub fn recordings_dir(&self) -> PathBuf {
+        self.inner.recordings_dir()
+    }
+
+    /// Whether `path` is the recording of a dictation still being processed.
+    pub fn in_flight(&self, path: &Path) -> bool {
+        self.inner.in_flight.lock().unwrap().contains(path)
+    }
+
+    /// Keeps recordings in `dir` from now on, or in the default folder for
+    /// `None`, and moves the existing ones there.
+    pub async fn set_recordings_dir(
+        &self,
+        dir: Option<PathBuf>,
+    ) -> Result<MoveReport, EngineError> {
+        if !self.inner.in_flight.lock().unwrap().is_empty() {
+            return Err(EngineError::Busy);
+        }
+        let default = self.inner.dirs.recordings_dir();
+        let target = dir.clone().unwrap_or_else(|| default.clone());
+        if !target.is_absolute() {
+            return Err(EngineError::Folder("not an absolute path".into()));
+        }
+        let old = self.inner.recordings_dir();
+        let history = self.inner.history.clone();
+        let to = target.clone();
+        let report = tokio::task::spawn_blocking(move || {
+            std::fs::create_dir_all(&to).map_err(|e| EngineError::Folder(e.to_string()))?;
+            // A folder that cannot be written to is refused before anything moves.
+            let probe = to.join(".arcvox-write-test");
+            std::fs::write(&probe, b"").map_err(|e| EngineError::Folder(e.to_string()))?;
+            let _ = std::fs::remove_file(&probe);
+            Ok::<_, EngineError>(history.move_recordings(&old, &to)?)
+        })
+        .await
+        .expect("join")?;
+        let setting = (target != default).then_some(target);
+        self.inner
+            .config
+            .update(|c| c.general.recordings_dir = setting)?;
+        Ok(report)
+    }
+
     pub async fn probe_provider(&self, cfg: &ProviderConfig) -> ProbeResult {
         match cfg.kind {
             ProviderKind::Http => probe_http(&self.inner.client, cfg, &self.inner.secrets).await,
@@ -270,7 +352,8 @@ impl Engine {
             Arc::new(resolve(&config.profiles, &req.app, req.profile_override.as_ref()).clone());
         let id = SessionId(uuid::Uuid::new_v4().to_string());
         let (events_tx, events_rx) = mpsc::channel(EVENT_BUFFER);
-        let (finish_tx, finish_rx) = oneshot::channel();
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let wav_path = self.inner.recordings_dir().join(format!("{id}.wav"));
         let audio = Arc::new(Mutex::new(Vec::<f32>::new()));
         let flags = Arc::new(SessionFlags::default());
 
@@ -286,7 +369,8 @@ impl Engine {
             profile.clone(),
             req,
             audio.clone(),
-            finish_rx,
+            cmd_rx,
+            wav_path.clone(),
             events_tx.clone(),
             flags.clone(),
         ));
@@ -295,14 +379,17 @@ impl Engine {
             id,
             profile_id: profile.id.clone(),
             audio,
-            finish_tx: Mutex::new(Some(finish_tx)),
+            cmd_tx: Mutex::new(Some(cmd_tx)),
             events_tx,
             events_rx: Mutex::new(Some(events_rx)),
             task: Mutex::new(Some(task)),
             flags,
             on_cancel_done: {
                 let inner = self.inner.clone();
-                Arc::new(move || inner.schedule_idle_unload())
+                Arc::new(move || {
+                    inner.schedule_idle_unload();
+                    inner.discard_held(wav_path.clone());
+                })
             },
         }
     }
@@ -319,7 +406,7 @@ impl Engine {
         profile: Option<ProfileId>,
     ) -> Result<Reprocessed, ReprocessError> {
         let history = self.inner.history.clone();
-        let recordings = self.inner.dirs.recordings_dir();
+        let recordings = self.inner.recordings_dir();
         let (row, clip) = tokio::task::spawn_blocking(move || {
             let row = history.get(id)?.ok_or(ReprocessError::NoRow)?;
             let path = history
@@ -491,6 +578,27 @@ pub(crate) fn model_predicate(dirs: &DataDir, id: &str) -> impl Fn(&ProviderConf
 }
 
 impl Inner {
+    fn recordings_dir(&self) -> PathBuf {
+        self.config
+            .current()
+            .general
+            .recordings_dir
+            .clone()
+            .unwrap_or_else(|| self.dirs.recordings_dir())
+    }
+
+    /// Removes the recording kept for a cancelled dictation, with its row.
+    /// A row that already holds a result or a failure of its own stays.
+    fn discard_held(self: &Arc<Self>, path: PathBuf) {
+        let inner = self.clone();
+        self.runtime.spawn_blocking(move || {
+            if matches!(inner.history.discard_interrupted(&path), Ok(true)) {
+                let _ = std::fs::remove_file(&path);
+            }
+            inner.in_flight.lock().unwrap().remove(&path);
+        });
+    }
+
     /// Arms a timer that unloads every cached LLM provider once the engine
     /// has been idle for `llm_idle_unload_secs`. Zero disables it.
     fn schedule_idle_unload(self: &Arc<Self>) {
@@ -548,42 +656,169 @@ fn failure_text(err: &crate::steps::StepError) -> String {
     }
 }
 
+/// What the row of a kept recording says until the dictation has a result.
+const INTERRUPTED: &str = "the dictation did not finish";
+
+/// The length of a clip in milliseconds, when its rate is known.
+fn clip_ms(clip: &AudioClip) -> Option<u64> {
+    (clip.sample_rate > 0).then(|| clip.samples.len() as u64 * 1000 / u64::from(clip.sample_rate))
+}
+
+/// Marks a recording as belonging to a dictation in progress for as long as
+/// it lives, also when the session task is aborted.
+struct InFlight {
+    inner: Arc<Inner>,
+    path: PathBuf,
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.inner.in_flight.lock().unwrap().remove(&self.path);
+    }
+}
+
+/// Writes the recording as it is, with a row that says the dictation did
+/// not finish, before anything is done with the audio. Only when recordings
+/// are kept. Returns the row, which the result replaces later.
+async fn hold(
+    inner: &Arc<Inner>,
+    profile: &crate::config::Profile,
+    req: &SessionRequest,
+    audio: &Mutex<Vec<f32>>,
+    path: &Path,
+    flags: &Arc<SessionFlags>,
+) -> Option<HistoryId> {
+    if !inner.config.current().general.keep_recordings {
+        return None;
+    }
+    let samples = audio.lock().unwrap().clone();
+    if samples.is_empty() {
+        return None;
+    }
+    let clip = AudioClip {
+        samples,
+        sample_rate: SAMPLE_RATE,
+    };
+    let row = crate::history::FailedUtterance {
+        ts: crate::history::now_unix(),
+        profile_id: profile.id.clone(),
+        app_name: req.app.app_name.clone(),
+        audio_path: path.to_path_buf(),
+        audio_ms: clip_ms(&clip),
+        code: ErrorCode::Interrupted,
+        error: INTERRUPTED.into(),
+    };
+    inner.in_flight.lock().unwrap().insert(path.to_path_buf());
+    let history = inner.history.clone();
+    let flags = flags.clone();
+    let p = path.to_path_buf();
+    let stored = tokio::task::spawn_blocking(move || {
+        if let Some(dir) = p.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(&p, encode_wav_pcm16(&clip))?;
+        let id = history.insert_failed(row).inspect_err(|_| {
+            let _ = std::fs::remove_file(&p);
+        })?;
+        // A cancel that came while this ran found nothing to remove.
+        if flags.cancelled.load(Ordering::SeqCst) {
+            let _ = history.delete(id);
+            let _ = std::fs::remove_file(&p);
+            return Ok(None);
+        }
+        Ok::<_, HistoryError>(Some(id))
+    })
+    .await;
+    match stored {
+        Ok(Ok(id)) => id,
+        _ => {
+            tracing::warn!(path = %path.display(), "the recording could not be kept before processing");
+            None
+        }
+    }
+}
+
+/// The kept recording becomes the part that is processed. When this fails
+/// the whole recording stays.
+async fn replace_held(inner: &Arc<Inner>, id: HistoryId, path: &Path, clip: &AudioClip) {
+    let bytes = encode_wav_pcm16(clip);
+    let audio_ms = clip_ms(clip);
+    let history = inner.history.clone();
+    let p = path.to_path_buf();
+    let replaced = tokio::task::spawn_blocking(move || {
+        // Written beside it and renamed over it, so there is a whole file at every moment.
+        let part = p.with_extension("part.wav");
+        std::fs::write(&part, bytes)?;
+        std::fs::rename(&part, &p).inspect_err(|_| {
+            let _ = std::fs::remove_file(&part);
+        })?;
+        history.set_audio_ms(id, audio_ms)
+    })
+    .await;
+    if !matches!(replaced, Ok(Ok(()))) {
+        tracing::warn!(path = %path.display(), "the kept recording was left untrimmed");
+    }
+}
+
+/// Removes a kept recording and its row: nothing was said, or it was cancelled.
+async fn drop_held(inner: &Arc<Inner>, id: HistoryId, path: &Path) {
+    let history = inner.history.clone();
+    let p = path.to_path_buf();
+    let _ = tokio::task::spawn_blocking(move || {
+        let _ = history.delete(id);
+        let _ = std::fs::remove_file(&p);
+    })
+    .await;
+}
+
 /// Keeps the recording of a dictation that failed, with a history row that
 /// says why, so it can be processed again. Only when recordings are kept;
-/// silence and a cancelled dictation leave nothing.
+/// silence and a cancelled dictation leave nothing. `held` is the row that
+/// already keeps the recording.
 #[allow(clippy::too_many_arguments)]
 async fn keep_failed(
     inner: &Arc<Inner>,
     config: &crate::config::Config,
-    session_id: &SessionId,
     profile: &crate::config::Profile,
     req: &SessionRequest,
     clip: &AudioClip,
     err: &crate::steps::StepError,
     flags: &SessionFlags,
+    held: Option<HistoryId>,
+    path: &Path,
 ) {
-    if !config.general.keep_recordings
-        || matches!(err.code, ErrorCode::NoSpeech | ErrorCode::NoAudio)
-        || flags.cancelled.load(Ordering::SeqCst)
-    {
+    let nothing_to_keep = matches!(err.code, ErrorCode::NoSpeech | ErrorCode::NoAudio)
+        || flags.cancelled.load(Ordering::SeqCst);
+    if let Some(id) = held {
+        if nothing_to_keep {
+            drop_held(inner, id, path).await;
+        } else {
+            let history = inner.history.clone();
+            let (code, text) = (err.code, failure_text(err));
+            let named =
+                tokio::task::spawn_blocking(move || history.set_error(id, code, &text)).await;
+            if !matches!(named, Ok(Ok(()))) {
+                tracing::warn!(path = %path.display(), "the reason of the failure could not be stored");
+            }
+        }
         return;
     }
-    let path = inner
-        .dirs
-        .recordings_dir()
-        .join(format!("{session_id}.wav"));
+    if !config.general.keep_recordings || nothing_to_keep {
+        return;
+    }
+    let path = path.to_path_buf();
     let bytes = encode_wav_pcm16(clip);
     let failed = crate::history::FailedUtterance {
         ts: crate::history::now_unix(),
         profile_id: profile.id.clone(),
         app_name: req.app.app_name.clone(),
         audio_path: path.clone(),
-        audio_ms: (clip.sample_rate > 0)
-            .then(|| clip.samples.len() as u64 * 1000 / u64::from(clip.sample_rate)),
+        audio_ms: clip_ms(clip),
         code: err.code,
         error: failure_text(err),
     };
     let history = inner.history.clone();
+    let shown = path.clone();
     let stored = tokio::task::spawn_blocking(move || {
         std::fs::write(&path, bytes)?;
         history.insert_failed(failed).inspect_err(|_| {
@@ -592,7 +827,7 @@ async fn keep_failed(
     })
     .await;
     if !matches!(stored, Ok(Ok(_))) {
-        tracing::warn!(session = %session_id, "the failed dictation could not be kept");
+        tracing::warn!(path = %shown.display(), "the failed dictation could not be kept");
     }
 }
 
@@ -603,22 +838,57 @@ async fn run_session(
     profile: Arc<crate::config::Profile>,
     req: SessionRequest,
     audio: Arc<Mutex<Vec<f32>>>,
-    finish_rx: oneshot::Receiver<()>,
+    mut cmd_rx: mpsc::UnboundedReceiver<SessionCmd>,
+    wav_path: PathBuf,
     tx: mpsc::Sender<Event>,
     flags: Arc<SessionFlags>,
 ) {
-    if finish_rx.await.is_err() {
-        send_done_once(&tx, &flags.done_sent, &session_id, None).await;
-        inner.schedule_idle_unload();
-        return;
+    let _in_flight = InFlight {
+        inner: inner.clone(),
+        path: wav_path.clone(),
+    };
+    // The row that keeps the recording until there is a result.
+    let mut held: Option<HistoryId> = None;
+    let range = loop {
+        match cmd_rx.recv().await {
+            Some(SessionCmd::Store) => {
+                if held.is_none() {
+                    held = hold(&inner, &profile, &req, &audio, &wav_path, &flags).await;
+                }
+            }
+            Some(SessionCmd::Finish(range)) => break range,
+            None => {
+                // Ended without `finish`. A cancel removes what was kept;
+                // a session that was dropped leaves the row and its
+                // recording, to be processed again from the history.
+                send_done_once(&tx, &flags.done_sent, &session_id, None).await;
+                inner.schedule_idle_unload();
+                return;
+            }
+        }
+    };
+    if held.is_none() {
+        held = hold(&inner, &profile, &req, &audio, &wav_path, &flags).await;
     }
 
-    let samples = std::mem::take(&mut *audio.lock().unwrap());
+    let mut samples = std::mem::take(&mut *audio.lock().unwrap());
+    let mut trimmed = false;
+    if let Some(range) = range {
+        let end = range.end.min(samples.len());
+        let start = range.start.min(end);
+        if (start, end) != (0, samples.len()) {
+            samples = samples[start..end].to_vec();
+            trimmed = true;
+        }
+    }
     let clip = AudioClip {
         samples,
         sample_rate: SAMPLE_RATE,
     };
     if clip.duration_secs() < MIN_UTTERANCE_SECS {
+        if let Some(id) = held {
+            drop_held(&inner, id, &wav_path).await;
+        }
         let _ = tx
             .send(Event::Error {
                 step: None,
@@ -631,6 +901,9 @@ async fn run_session(
         send_done_once(&tx, &flags.done_sent, &session_id, None).await;
         inner.schedule_idle_unload();
         return;
+    }
+    if let (Some(id), true) = (held, trimmed) {
+        replace_held(&inner, id, &wav_path, &clip).await;
     }
 
     tracing::info!(
@@ -657,14 +930,7 @@ async fn run_session(
         Err(err) => {
             tracing::warn!(session = %session_id, code = ?err.code, error = %err.message, "session could not start its steps");
             keep_failed(
-                &inner,
-                &config,
-                &session_id,
-                &profile,
-                &req,
-                &clip,
-                &err,
-                &flags,
+                &inner, &config, &profile, &req, &clip, &err, &flags, held, &wav_path,
             )
             .await;
             let _ = tx
@@ -688,14 +954,7 @@ async fn run_session(
         Err(err) => {
             tracing::warn!(session = %session_id, code = ?err.code, error = %err.message, "session failed");
             keep_failed(
-                &inner,
-                &config,
-                &session_id,
-                &profile,
-                &req,
-                &clip,
-                &err,
-                &flags,
+                &inner, &config, &profile, &req, &clip, &err, &flags, held, &wav_path,
             )
             .await;
             send_done_once(&tx, &flags.done_sent, &session_id, None).await;
@@ -720,20 +979,21 @@ async fn run_session(
         return;
     }
 
-    let audio_path = if config.general.keep_recordings {
-        let path = inner
-            .dirs
-            .recordings_dir()
-            .join(format!("{session_id}.wav"));
+    // A recording kept before the processing is already in place; `cancel`
+    // removes it with its row. Otherwise it is written now.
+    let audio_path = if held.is_some() {
+        Some(wav_path.clone())
+    } else if config.general.keep_recordings {
         let bytes = encode_wav_pcm16(&clip);
-        let p = path.clone();
+        let p = wav_path.clone();
         match tokio::task::spawn_blocking(move || std::fs::write(&p, bytes)).await {
-            Ok(Ok(())) => Some(path),
+            Ok(Ok(())) => Some(wav_path.clone()),
             _ => None,
         }
     } else {
         None
     };
+    let written_here = audio_path.clone().filter(|_| held.is_none());
 
     // Because `tail_started` is now set, `cancel` will not abort this task
     // (see `Session::cancel`), so this check is guaranteed to run rather
@@ -741,7 +1001,7 @@ async fn run_session(
     // cancelled, undo the WAV write above instead of leaving an orphan
     // recording for a cancelled session.
     if flags.cancelled.load(Ordering::SeqCst) {
-        if let Some(p) = &audio_path {
+        if let Some(p) = &written_here {
             let _ = std::fs::remove_file(p);
         }
         return;
@@ -755,11 +1015,10 @@ async fn run_session(
         refined_text: outcome.final_text.clone(),
         final_text: outcome.final_text,
         degraded: outcome.degraded,
-        audio_path: audio_path.clone(),
+        audio_path,
         asr_ms: outcome.asr_ms,
         llm_ms: outcome.llm_ms,
-        audio_ms: (clip.sample_rate > 0)
-            .then(|| clip.samples.len() as u64 * 1000 / u64::from(clip.sample_rate)),
+        audio_ms: clip_ms(&clip),
         dict_fixes: outcome.dict_fixes,
         snippets: outcome.snippets,
         llm_changed: outcome.llm_changed,
@@ -772,6 +1031,7 @@ async fn run_session(
     // point that decides who reports the session's one Done. When `cancel`
     // already claimed it (and sent Done(None)), the row and its statistics
     // are rolled back instead of being written and taken back afterwards.
+    // The row that kept the recording goes in the same step.
     let (inserted, claimed) = tokio::task::spawn_blocking(move || {
         // Test-only hook: lets a test land a `cancel()` deterministically
         // while this closure is running, instead of racing real I/O timing.
@@ -780,7 +1040,7 @@ async fn run_session(
             std::thread::sleep(std::time::Duration::from_millis(tail_delay_ms));
         }
         let mut claimed = None;
-        let inserted = history.insert_if(new, || {
+        let inserted = history.insert_replacing(new, held, || {
             let won = !claim.done_sent.swap(true, Ordering::SeqCst);
             claimed = Some(won);
             won
@@ -797,7 +1057,7 @@ async fn run_session(
     // The insert can fail before it asks; the claim is then still open.
     let won = claimed.unwrap_or_else(|| !flags.done_sent.swap(true, Ordering::SeqCst));
     if !won {
-        if let Some(p) = &audio_path {
+        if let Some(p) = &written_here {
             let _ = std::fs::remove_file(p);
         }
         tracing::info!(session = %session_id, "cancelled before the result was stored");
@@ -1618,5 +1878,242 @@ pub(crate) mod tests {
         };
         let row = r.engine.history().get(*id).unwrap().unwrap();
         assert!(row.degraded);
+    }
+
+    /// Waits until the history holds what `want` asks for.
+    async fn rows_when(
+        r: &Rig,
+        want: impl Fn(&[crate::history::Utterance]) -> bool,
+    ) -> Vec<crate::history::Utterance> {
+        for _ in 0..200 {
+            let rows = r.engine.history().list_recent(10).unwrap();
+            if want(&rows) {
+                return rows;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("history: {:?}", r.engine.history().list_recent(10).unwrap());
+    }
+
+    #[tokio::test]
+    async fn the_recording_is_kept_before_it_is_processed() {
+        let r = rig(true).await;
+        mock_ok(&r, "原文", "整理後").await;
+        let s = r.engine.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        s.store();
+        // Nothing was asked of the engines yet; the recording is on disk
+        // with a row that says the dictation did not finish.
+        let rows = rows_when(&r, |rows| rows.len() == 1).await;
+        let path = rows[0].audio_path.clone().unwrap();
+        assert_eq!(rows[0].error_code.as_deref(), Some("interrupted"));
+        assert_eq!(rows[0].audio_ms, Some(1000));
+        assert!(path.starts_with(r.engine.recordings_dir()) && path.is_file());
+        assert!(r.engine.in_flight(&path));
+
+        s.finish();
+        let events = drain(&s).await;
+        let Some(Event::Done {
+            history_id: Some(id),
+            ..
+        }) = events.last()
+        else {
+            panic!("{events:?}")
+        };
+        // The result took that row's place and kept the file.
+        let rows = r.engine.history().list_recent(10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, *id);
+        assert_eq!(rows[0].error, None);
+        assert_eq!(rows[0].audio_path.as_deref(), Some(path.as_path()));
+        assert!(path.is_file());
+        for _ in 0..100 {
+            if !r.engine.in_flight(&path) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(!r.engine.in_flight(&path));
+    }
+
+    #[tokio::test]
+    async fn a_session_dropped_after_store_leaves_its_recording_to_retry() {
+        let r = rig(true).await;
+        let s = r.engine.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        s.store();
+        drop(s);
+        let rows = rows_when(&r, |rows| rows.len() == 1).await;
+        assert_eq!(rows[0].error_code.as_deref(), Some("interrupted"));
+        let path = rows[0].audio_path.clone().unwrap();
+        assert!(path.is_file());
+        for _ in 0..100 {
+            if !r.engine.in_flight(&path) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(!r.engine.in_flight(&path));
+        // It can be processed again like any failed row.
+        mock_ok(&r, "原文", "整理後").await;
+        let again = r.engine.reprocess(rows[0].id, None).await.unwrap();
+        assert_eq!(again.redo.final_text, "整理後");
+    }
+
+    #[tokio::test]
+    async fn a_cancel_after_store_leaves_nothing() {
+        let r = rig(true).await;
+        let s = r.engine.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        s.store();
+        let rows = rows_when(&r, |rows| rows.len() == 1).await;
+        let path = rows[0].audio_path.clone().unwrap();
+        s.cancel();
+        rows_when(&r, |rows| rows.is_empty()).await;
+        for _ in 0..100 {
+            if !path.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn the_kept_recording_becomes_the_part_that_was_processed() {
+        let r = rig(true).await;
+        mock_ok(&r, "原文", "整理後").await;
+        let s = r.engine.start_session(SessionRequest::default());
+        let mut audio = one_second();
+        audio.extend(one_second());
+        s.push_audio(&audio);
+        s.store();
+        let half = SAMPLE_RATE as usize / 2;
+        s.finish_range(half..half + SAMPLE_RATE as usize);
+        let events = drain(&s).await;
+        let Some(Event::Done {
+            history_id: Some(id),
+            ..
+        }) = events.last()
+        else {
+            panic!("{events:?}")
+        };
+        let row = r.engine.history().get(*id).unwrap().unwrap();
+        assert_eq!(row.audio_ms, Some(1000));
+        let bytes = std::fs::read(row.audio_path.unwrap()).unwrap();
+        let clip = crate::audio::decode_wav_pcm16(&bytes).unwrap();
+        assert_eq!(clip.samples.len(), SAMPLE_RATE as usize);
+        // No leftover of the replacement.
+        let names: Vec<_> = std::fs::read_dir(r.engine.recordings_dir())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(names.len(), 1, "{names:?}");
+    }
+
+    #[tokio::test]
+    async fn a_failure_names_its_reason_in_the_row_that_kept_the_recording() {
+        let r = rig(true).await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("bad audio"))
+            .mount(&r.asr)
+            .await;
+        let s = r.engine.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        s.store();
+        s.finish();
+        drain(&s).await;
+        let rows = r.engine.history().list_recent(10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].error_code.as_deref(), Some("provider_error"));
+        assert!(rows[0].audio_path.as_ref().unwrap().is_file());
+    }
+
+    #[tokio::test]
+    async fn nothing_is_written_when_recordings_are_not_kept() {
+        let r = rig(false).await;
+        let s = r.engine.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        s.store();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(r.engine.history().list_recent(10).unwrap().is_empty());
+        assert_eq!(
+            std::fs::read_dir(r.engine.recordings_dir())
+                .unwrap()
+                .count(),
+            0
+        );
+        s.cancel();
+    }
+
+    #[tokio::test]
+    async fn recordings_follow_the_folder_the_user_chose() {
+        let r = rig(true).await;
+        mock_ok(&r, "原文", "整理後").await;
+        let s = r.engine.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        s.finish();
+        let events = drain(&s).await;
+        let Some(Event::Done {
+            history_id: Some(id),
+            ..
+        }) = events.last()
+        else {
+            panic!("{events:?}")
+        };
+        let default = r.engine.recordings_dir();
+        let chosen = r._tmp.path().join("elsewhere");
+
+        let report = r
+            .engine
+            .set_recordings_dir(Some(chosen.clone()))
+            .await
+            .unwrap();
+        assert_eq!(report.moved, 1);
+        assert_eq!(r.engine.recordings_dir(), chosen);
+        let row = r.engine.history().get(*id).unwrap().unwrap();
+        let moved = row.audio_path.unwrap();
+        assert!(moved.starts_with(&chosen) && moved.is_file());
+        // A new dictation lands there too, and can be processed again.
+        r.engine.reprocess(*id, None).await.unwrap();
+
+        // Back to the default folder.
+        r.engine.set_recordings_dir(None).await.unwrap();
+        assert_eq!(r.engine.recordings_dir(), default);
+        assert_eq!(r.engine.config().current().general.recordings_dir, None);
+        let row = r.engine.history().get(*id).unwrap().unwrap();
+        assert!(row.audio_path.unwrap().starts_with(&default));
+
+        assert!(matches!(
+            r.engine.set_recordings_dir(Some("relative".into())).await,
+            Err(EngineError::Folder(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn recordings_of_an_earlier_build_move_out_of_the_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = DataDir::custom(tmp.path());
+        let legacy = dirs.legacy_recordings_dir();
+        let old = legacy.join("a.wav");
+        {
+            let e = Engine::open(dirs.clone(), Arc::new(MemorySecretStore::default()))
+                .await
+                .unwrap();
+            std::fs::create_dir_all(&legacy).unwrap();
+            std::fs::write(&old, b"RIFF").unwrap();
+            let mut row = crate::history::tests_support::utterance();
+            row.audio_path = Some(old.clone());
+            e.history().insert(row).unwrap();
+        }
+        let e = Engine::open(dirs.clone(), Arc::new(MemorySecretStore::default()))
+            .await
+            .unwrap();
+        let rows = e.history().list_recent(10).unwrap();
+        let new = dirs.recordings_dir().join("a.wav");
+        assert_eq!(rows[0].audio_path.as_deref(), Some(new.as_path()));
+        assert!(new.is_file() && !old.exists() && !legacy.exists());
     }
 }

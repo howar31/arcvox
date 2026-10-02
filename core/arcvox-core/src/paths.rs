@@ -1,7 +1,7 @@
 //! Per-user data directories. Data never lives under the install directory.
 //!
-//! macOS: config + history in `~/Library/Application Support/Arcvox`,
-//!        recordings + models in `~/Library/Caches/Arcvox`.
+//! macOS: config + history + recordings in `~/Library/Application Support/Arcvox`,
+//!        models in `~/Library/Caches/Arcvox`.
 //! Windows: config in `%APPDATA%\Arcvox` (roaming),
 //!          history + recordings + models in `%LOCALAPPDATA%\Arcvox`.
 //! Linux: XDG config / data / cache dirs under `arcvox`.
@@ -12,9 +12,9 @@ use std::path::{Path, PathBuf};
 pub struct DataDir {
     /// `config.json`, `prompts/`.
     pub config_dir: PathBuf,
-    /// `history.sqlite`.
+    /// `history.sqlite`, `recordings/`.
     pub data_dir: PathBuf,
-    /// `recordings/`, `models/`, `bench/`.
+    /// `models/`, `bench/`.
     pub cache_dir: PathBuf,
 }
 
@@ -81,7 +81,13 @@ impl DataDir {
     pub fn history_path(&self) -> PathBuf {
         self.data_dir.join("history.sqlite")
     }
+    /// Where recordings are kept unless the user chose another folder:
+    /// next to the history, since they are the user's data.
     pub fn recordings_dir(&self) -> PathBuf {
+        self.data_dir.join("recordings")
+    }
+    /// Where earlier builds kept recordings.
+    pub fn legacy_recordings_dir(&self) -> PathBuf {
         self.cache_dir.join("recordings")
     }
     pub fn models_dir(&self) -> PathBuf {
@@ -109,8 +115,9 @@ mod tests {
             d.history_path(),
             PathBuf::from("/tmp/kw/data/history.sqlite")
         );
+        assert_eq!(d.recordings_dir(), PathBuf::from("/tmp/kw/data/recordings"));
         assert_eq!(
-            d.recordings_dir(),
+            d.legacy_recordings_dir(),
             PathBuf::from("/tmp/kw/cache/recordings")
         );
     }

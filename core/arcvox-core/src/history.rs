@@ -93,6 +93,14 @@ pub struct Storage {
     pub recording_bytes: u64,
 }
 
+/// What moving the recordings to another folder did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MoveReport {
+    pub moved: usize,
+    /// Files that could not be moved; they and their rows are unchanged.
+    pub left: usize,
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct PruneReport {
     pub rows_deleted: usize,
@@ -274,8 +282,23 @@ impl HistoryStore {
         u: NewUtterance,
         keep: impl FnOnce() -> bool,
     ) -> Result<Option<HistoryId>, HistoryError> {
+        self.insert_replacing(u, None, keep)
+    }
+
+    /// `insert_if`, and when the row is kept, the row `replaces` goes in the
+    /// same step: the one that held the recording while the dictation was
+    /// processed.
+    pub fn insert_replacing(
+        &self,
+        u: NewUtterance,
+        replaces: Option<HistoryId>,
+        keep: impl FnOnce() -> bool,
+    ) -> Result<Option<HistoryId>, HistoryError> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
+        if let Some(old) = replaces {
+            tx.execute("DELETE FROM utterances WHERE id = ?1", params![old.0])?;
+        }
         let id = insert_row(&tx, &u)?;
         let added = stats::add(
             &tx,
@@ -306,6 +329,9 @@ impl HistoryStore {
                 tracing::warn!(error = %e, "statistics write failed, keeping the history row");
                 if !keep() {
                     return Ok(None);
+                }
+                if let Some(old) = replaces {
+                    conn.execute("DELETE FROM utterances WHERE id = ?1", params![old.0])?;
                 }
                 Ok(Some(HistoryId(insert_row(&conn, &u)?)))
             }
@@ -345,6 +371,71 @@ impl HistoryStore {
             params![error, code.name(), id.0],
         )?;
         Ok(())
+    }
+
+    /// The length of a failed row's recording, after the file was replaced.
+    pub fn set_audio_ms(&self, id: HistoryId, audio_ms: Option<u64>) -> Result<(), HistoryError> {
+        self.conn.lock().unwrap().execute(
+            "UPDATE utterances SET audio_ms = ?1 WHERE id = ?2",
+            params![audio_ms.map(|v| v as i64), id.0],
+        )?;
+        Ok(())
+    }
+
+    /// Removes the row that holds the recording at `path` for a dictation
+    /// still being processed. True when there was one; a row that reached a
+    /// result, or failed for a reason of its own, is left alone.
+    pub fn discard_interrupted(&self, path: &Path) -> Result<bool, HistoryError> {
+        let removed = self.conn.lock().unwrap().execute(
+            "DELETE FROM utterances WHERE audio_path = ?1 AND error_code = ?2",
+            params![
+                path.to_string_lossy().to_string(),
+                ErrorCode::Interrupted.name()
+            ],
+        )?;
+        Ok(removed > 0)
+    }
+
+    /// Moves every recording directly inside `from` into `to` and points
+    /// the rows at the new place. A file that cannot be moved, or whose name
+    /// is taken in `to`, stays where it is with its row unchanged.
+    pub fn move_recordings(&self, from: &Path, to: &Path) -> Result<MoveReport, HistoryError> {
+        let mut report = MoveReport::default();
+        if from == to {
+            return Ok(report);
+        }
+        let Ok(entries) = std::fs::read_dir(from) else {
+            return Ok(report);
+        };
+        std::fs::create_dir_all(to)?;
+        let conn = self.conn.lock().unwrap();
+        for entry in entries.flatten() {
+            let old = entry.path();
+            let is_wav = old
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("wav"));
+            let Some(name) = old.file_name().filter(|_| is_wav && old.is_file()) else {
+                continue;
+            };
+            let new = to.join(name);
+            // A rename works within one volume; across volumes the file is copied.
+            let moved = !new.exists()
+                && (std::fs::rename(&old, &new).is_ok()
+                    || (std::fs::copy(&old, &new).is_ok() && std::fs::remove_file(&old).is_ok()));
+            if !moved {
+                report.left += 1;
+                continue;
+            }
+            report.moved += 1;
+            conn.execute(
+                "UPDATE utterances SET audio_path = ?1 WHERE audio_path = ?2",
+                params![
+                    new.to_string_lossy().to_string(),
+                    old.to_string_lossy().to_string()
+                ],
+            )?;
+        }
+        Ok(report)
     }
 
     /// Writes the result of processing a row's recording again. A row that
@@ -787,6 +878,31 @@ fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Utterance> {
         error: r.get(12)?,
         error_code: r.get(13)?,
     })
+}
+
+/// A plain row for tests in other modules.
+#[cfg(test)]
+pub(crate) mod tests_support {
+    use super::*;
+
+    pub(crate) fn utterance() -> NewUtterance {
+        NewUtterance {
+            ts: now_unix(),
+            profile_id: ProfileId("default".into()),
+            app_name: None,
+            raw_text: "raw".into(),
+            refined_text: "refined".into(),
+            final_text: "refined".into(),
+            degraded: false,
+            audio_path: None,
+            asr_ms: 0,
+            llm_ms: None,
+            audio_ms: None,
+            dict_fixes: 0,
+            snippets: 0,
+            llm_changed: false,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1260,5 +1376,114 @@ mod tests {
         assert!(!present.exists());
         assert_eq!(s.get(gone).unwrap().unwrap().audio_path, None);
         assert_eq!(s.list(10, None, true).unwrap().len(), 0);
+    }
+
+    fn held(path: &Path) -> FailedUtterance {
+        FailedUtterance {
+            ts: 100,
+            profile_id: ProfileId("default".into()),
+            app_name: None,
+            audio_path: path.to_path_buf(),
+            audio_ms: Some(2000),
+            code: ErrorCode::Interrupted,
+            error: "the dictation did not finish".into(),
+        }
+    }
+
+    #[test]
+    fn the_result_replaces_the_row_that_held_the_recording() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let path = PathBuf::from("/rec/a.wav");
+        let holding = s.insert_failed(held(&path)).unwrap();
+        let id = s
+            .insert_replacing(new(100, Some(path.clone())), Some(holding), || true)
+            .unwrap()
+            .unwrap();
+        let rows = s.list_recent(10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, id);
+        assert_eq!(rows[0].error, None);
+        assert_eq!(rows[0].audio_path, Some(path));
+    }
+
+    #[test]
+    fn a_withdrawn_result_leaves_the_holding_row() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let path = PathBuf::from("/rec/a.wav");
+        let holding = s.insert_failed(held(&path)).unwrap();
+        let kept = s
+            .insert_replacing(new(100, Some(path)), Some(holding), || false)
+            .unwrap();
+        assert_eq!(kept, None);
+        let rows = s.list_recent(10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, holding);
+    }
+
+    #[test]
+    fn only_a_row_still_being_processed_is_discarded() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let a = PathBuf::from("/rec/a.wav");
+        let b = PathBuf::from("/rec/b.wav");
+        s.insert_failed(held(&a)).unwrap();
+        let failed = s.insert_failed(held(&b)).unwrap();
+        s.set_error(failed, ErrorCode::ProviderTimeout, "timed out")
+            .unwrap();
+        s.insert(new(100, Some(PathBuf::from("/rec/c.wav"))))
+            .unwrap();
+
+        assert!(s.discard_interrupted(&a).unwrap());
+        assert!(!s.discard_interrupted(&a).unwrap());
+        assert!(!s.discard_interrupted(&b).unwrap());
+        assert!(!s.discard_interrupted(Path::new("/rec/c.wav")).unwrap());
+        assert_eq!(s.list_recent(10).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn the_length_of_a_held_recording_can_be_corrected() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let id = s.insert_failed(held(Path::new("/rec/a.wav"))).unwrap();
+        s.set_audio_ms(id, Some(1200)).unwrap();
+        assert_eq!(s.get(id).unwrap().unwrap().audio_ms, Some(1200));
+    }
+
+    #[test]
+    fn recordings_move_to_another_folder_with_their_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let from = tmp.path().join("old");
+        let to = tmp.path().join("new");
+        std::fs::create_dir_all(&from).unwrap();
+        std::fs::create_dir_all(&to).unwrap();
+        let moved = from.join("a.wav");
+        let taken = from.join("b.wav");
+        let stray = from.join("c.wav");
+        for p in [&moved, &taken, &stray] {
+            std::fs::write(p, b"x").unwrap();
+        }
+        std::fs::write(from.join("notes.txt"), b"x").unwrap();
+        // The name is already used in the new folder.
+        std::fs::write(to.join("b.wav"), b"other").unwrap();
+        let s = HistoryStore::open_in_memory().unwrap();
+        let a = s.insert(new(100, Some(moved.clone()))).unwrap();
+        let b = s.insert(new(100, Some(taken.clone()))).unwrap();
+
+        let report = s.move_recordings(&from, &to).unwrap();
+
+        assert_eq!(report, MoveReport { moved: 2, left: 1 });
+        assert_eq!(
+            s.get(a).unwrap().unwrap().audio_path,
+            Some(to.join("a.wav"))
+        );
+        assert!(to.join("a.wav").is_file() && !moved.exists());
+        assert_eq!(s.get(b).unwrap().unwrap().audio_path, Some(taken.clone()));
+        assert!(taken.is_file());
+        assert!(to.join("c.wav").is_file() && !stray.exists());
+        assert!(from.join("notes.txt").is_file());
+        // The same folder, or one that does not exist: nothing to do.
+        assert_eq!(s.move_recordings(&to, &to).unwrap(), MoveReport::default());
+        assert_eq!(
+            s.move_recordings(&tmp.path().join("none"), &to).unwrap(),
+            MoveReport::default()
+        );
     }
 }
