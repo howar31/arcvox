@@ -22,10 +22,10 @@
   import SaveBar from "../../lib/ui/SaveBar.svelte";
   import Segmented from "../../lib/ui/Segmented.svelte";
   import Switch from "../../lib/ui/Switch.svelte";
-  import Tag from "../../lib/ui/Tag.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
   import AddPerApp from "./AddPerApp.svelte";
   import EnginePicker from "./flow/EnginePicker.svelte";
+  import ProfilePicker from "./flow/ProfilePicker.svelte";
 
   /** `arg` is the id of the profile to show; without it the default profile is shown. */
   let { arg }: { arg: string | null } = $props();
@@ -251,11 +251,9 @@
 <PageHead title={t("nav.flow")} description={t("flow.description")} />
 
 {#if config.value && draft && source && lines}
-  <div class="tabs" role="tablist" aria-label={t("flow.profiles")}>
-    {#each profiles as p (p.id)}
-      <button type="button" class="tab" class:on={p.id === source.id} role="tab" aria-selected={p.id === source.id} onclick={() => guard.request(() => go("flow", p.id))}>{p.name}</button>
-    {/each}
-    <button type="button" class="tab add" onclick={() => guard.request(() => { revert(); adding = true; })}><Icon name="plus" size={14} />{t("flow.add")}</button>
+  <div class="pick">
+    <ProfilePicker {profiles} current={source.id} name={draft.name.trim() || source.name} {applies} onpick={(id) => guard.request(() => go("flow", id))} />
+    <button type="button" class="btn add" onclick={() => guard.request(() => { revert(); adding = true; })}><Icon name="plus" size={14} />{t("flow.add")}</button>
   </div>
 
   <div class="who">
@@ -266,10 +264,7 @@
         onkeydown={(e) => { if (e.key === "Enter" && !isImeKey(e)) renaming = false; else if (e.key === "Escape") { draft!.name = source.name; renaming = false; e.stopPropagation(); } }}
         onblur={() => { if (draft?.name.trim()) renaming = false; }}
       />
-    {:else}
-      <span class="name">{draft.name}</span>
     {/if}
-    {#if source.is_default}<Tag tone="accent">{t("profiles.default")}</Tag>{/if}
     <span class="where">{applies(draft)}</span>
     {#if !renaming}<button type="button" class="btn quiet" onclick={startRename}>{t("flow.rename")}</button>{/if}
     {#if !source.is_default}
@@ -432,13 +427,9 @@
 </Modal>
 
 <style>
-  .tabs { display: flex; flex-wrap: wrap; gap: 8px; }
-  .tab { display: inline-block; height: 40px; max-width: 260px; padding: 0 18px; border-radius: 20px; border: 1px solid var(--line-strong); background: var(--surface); font-size: var(--text-control); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
-  .tab:hover { background: var(--sunken); }
-  .tab.on { background: var(--accent); border-color: transparent; color: var(--accent-ink); font-weight: 600; }
-  .tab.add { display: inline-flex; align-items: center; gap: 7px; border-style: dashed; color: var(--accent); }
-  .who { display: flex; align-items: center; gap: 10px; min-height: var(--control); margin: 24px 4px 12px; }
-  .name { font-size: var(--text-lg); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40%; flex: none; }
+  .pick { display: flex; align-items: center; gap: 10px; }
+  .pick .add { height: 44px; border-radius: 12px; flex: none; }
+  .who { display: flex; align-items: center; gap: 10px; min-height: var(--control); margin: 12px 4px 12px; }
   .name-field { width: 240px; flex: none; }
   .where { flex: 1; min-width: 0; color: var(--ink-2); font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .who .btn:last-child { margin-right: -8px; }
