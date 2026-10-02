@@ -221,6 +221,12 @@ export interface TranscriptPayload { text: string; language: "zh-TW" | "en" }
 /** The final text of a dictation, sent when the processing is over. */
 /** The text was put into the application. */
 export function onHistoryChanged(cb: () => void): Promise<UnlistenFn> { return listen("history-changed", () => cb()); }
+/** The widget is shown after it was hidden, or is about to be hidden. */
+export function onWidgetEnter(cb: () => void): Promise<UnlistenFn> { return listen("widget-enter", () => cb()); }
+export function onWidgetLeave(cb: () => void): Promise<UnlistenFn> { return listen("widget-leave", () => cb()); }
+export type PanelEdge = "top" | "bottom" | "left" | "right";
+/** The panel's window is on screen at its place; the payload is the edge that faces the widget. */
+export function onPanelPlaced(cb: (edge: PanelEdge) => void): Promise<UnlistenFn> { return listen<PanelEdge>("panel-placed", (e) => cb(e.payload)); }
 export function onWidgetInserted(cb: () => void): Promise<UnlistenFn> { return listen("widget-inserted", () => cb()); }
 export function onWidgetRefined(cb: (p: TranscriptPayload) => void): Promise<UnlistenFn> { return listen<TranscriptPayload>("widget-refined", (e) => cb(e.payload)); }
 export function onWidgetTranscript(cb: (p: TranscriptPayload) => void): Promise<UnlistenFn> { return listen<TranscriptPayload>("widget-transcript", (e) => cb(e.payload)); }

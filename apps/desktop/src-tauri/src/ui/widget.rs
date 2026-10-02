@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use tauri::{AppHandle, Manager, Runtime, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewWindow};
 
 #[cfg(target_os = "macos")]
 use objc2_app_kit::{NSWindowCollectionBehavior, NSWindowStyleMask};
@@ -322,12 +322,15 @@ impl Layout {
         let Some(display) = placement::display_at(&rects, widget.center()).map(|i| rects[i]) else {
             return;
         };
-        apply_frame(
-            &window,
-            placement::panel_frame(display, widget, size),
-            displays,
-        );
+        let frame = placement::panel_frame(display, widget, size);
+        apply_frame(&window, frame, displays);
         order_front(app, PANEL);
+        // The panel opens from the edge that faces the widget.
+        let _ = app.emit_to(
+            PANEL,
+            "panel-placed",
+            placement::facing_edge(widget, frame).name(),
+        );
     }
 
     /// Forgets every saved position.

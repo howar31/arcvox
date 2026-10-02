@@ -38,6 +38,9 @@ const HIDE_AFTER_COPYABLE: Duration = Duration::from_millis(15_000);
 const DRAG_TICK: Duration = Duration::from_millis(8);
 /// The widget state shown while the user is asked to position the widget.
 const PLACING: &str = "placing";
+/// How long the windows stay after the widget was told to leave: the
+/// length of the leaving motion in the page, and a little more.
+const LEAVE: Duration = Duration::from_millis(240);
 
 #[derive(Serialize, Clone)]
 struct StatePayload {
@@ -86,6 +89,11 @@ pub struct TauriUi {
     hide_deadline: Arc<Mutex<Option<Instant>>>,
     /// Position and shape of the widget; locked on the main thread only.
     layout: Arc<Mutex<widget::Layout>>,
+    /// True from a show until the widget is told to leave.
+    visible: Arc<AtomicBool>,
+    /// Bumped on every show and every leave; the windows are hidden after
+    /// the leaving motion only if it is unchanged.
+    leaving: Arc<AtomicU64>,
     /// True while the user drags the widget.
     dragging: Arc<AtomicBool>,
     /// A hide came due during a drag and waits for the drop.
@@ -126,6 +134,8 @@ impl TauriUi {
                 config_dir.to_path_buf(),
                 scale,
             ))),
+            visible: Arc::new(AtomicBool::new(false)),
+            leaving: Arc::new(AtomicU64::new(0)),
             dragging: Arc::new(AtomicBool::new(false)),
             hide_waiting: Arc::new(AtomicBool::new(false)),
             placing: AtomicBool::new(false),
@@ -186,6 +196,11 @@ impl TauriUi {
         self.sticky.store(false, Ordering::SeqCst);
         *self.hide_deadline.lock().unwrap() = None;
         self.generation.fetch_add(1, Ordering::SeqCst);
+        // A hide that waits for the leaving motion is called off.
+        self.leaving.fetch_add(1, Ordering::SeqCst);
+        if !self.visible.swap(true, Ordering::SeqCst) {
+            self.emit("widget-enter", ());
+        }
         let app = self.app.clone();
         let layout = self.layout.clone();
         let _ = self
@@ -244,6 +259,8 @@ impl TauriUi {
         let hide_waiting = self.hide_waiting.clone();
         let layout = self.layout.clone();
         let app = self.app.clone();
+        let visible = self.visible.clone();
+        let leaving = self.leaving.clone();
         std::thread::spawn(move || {
             std::thread::sleep(delay);
             if generation.load(Ordering::SeqCst) == gen {
@@ -251,7 +268,7 @@ impl TauriUi {
                 if dragging.load(Ordering::SeqCst) {
                     hide_waiting.store(true, Ordering::SeqCst);
                 } else {
-                    hide_panel_now(&app, &layout);
+                    leave(&app, &layout, &visible, &leaving);
                 }
             }
         });
@@ -264,7 +281,7 @@ impl TauriUi {
         self.sticky.store(false, Ordering::SeqCst);
         self.generation.fetch_add(1, Ordering::SeqCst);
         *self.hide_deadline.lock().unwrap() = None;
-        hide_panel_now(&self.app, &self.layout);
+        leave(&self.app, &self.layout, &self.visible, &self.leaving);
     }
 
     /// Follows the pointer until the mouse button is released, then keeps
@@ -366,12 +383,36 @@ fn is_session(state: UiState) -> bool {
     )
 }
 
-fn hide_panel_now(app: &AppHandle<Wry>, layout: &Arc<Mutex<widget::Layout>>) {
-    let target = app.clone();
+/// Tells the widget and its panel to leave, and hides their windows once
+/// the leaving motion is over, unless the widget is shown again meanwhile.
+fn leave(
+    app: &AppHandle<Wry>,
+    layout: &Arc<Mutex<widget::Layout>>,
+    visible: &Arc<AtomicBool>,
+    leaving: &Arc<AtomicU64>,
+) {
+    let token = leaving.fetch_add(1, Ordering::SeqCst) + 1;
+    let wait = if visible.swap(false, Ordering::SeqCst) {
+        for window in [widget::WINDOW, widget::PANEL] {
+            let _ = app.emit_to(window, "widget-leave", ());
+        }
+        LEAVE
+    } else {
+        Duration::ZERO
+    };
+    let app = app.clone();
     let layout = layout.clone();
-    let _ = app.run_on_main_thread(move || {
-        layout.lock().unwrap().hidden();
-        widget::hide(&target);
+    let leaving = leaving.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(wait);
+        let target = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if leaving.load(Ordering::SeqCst) != token {
+                return;
+            }
+            layout.lock().unwrap().hidden();
+            widget::hide(&target);
+        });
     });
 }
 
