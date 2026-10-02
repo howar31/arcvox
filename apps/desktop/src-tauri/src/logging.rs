@@ -26,5 +26,21 @@ pub fn init(data_dir: &Path) -> Option<LogGuard> {
     } else {
         registry.init();
     }
+    log_panics();
     Some(LogGuard(guard))
+}
+
+/// A panic on any thread goes to the log file with its place and its
+/// backtrace; a thread that ends this way leaves no other trace.
+fn log_panics() {
+    let earlier = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current();
+        tracing::error!(
+            thread = thread.name().unwrap_or("unnamed"),
+            backtrace = %std::backtrace::Backtrace::force_capture(),
+            "panic: {info}"
+        );
+        earlier(info);
+    }));
 }
