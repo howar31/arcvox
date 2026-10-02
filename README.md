@@ -21,7 +21,7 @@ The Profiles page edits one profile at a time; the menu at its top lists every p
 
 A dictionary term can span several lines. When one of its aliases is spoken, the whole term is inserted as written. For terms of this kind, their aliases are sent as the speech hint in place of the text, and the term is left out of the term list given to the language model.
 
-The Speed test page records a sentence, or uses a kept history recording, and runs it through the selected engines with a cold run and a warm run each. It measures speed only. Results are not saved.
+The Speed test page, opened from the link at the foot of the Engines and models page, records a sentence, or uses a kept history recording, and runs it through the selected engines with a cold run and a warm run each. It measures speed only. Results are not saved.
 
 ## Permissions and password fields
 

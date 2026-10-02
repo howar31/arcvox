@@ -5,7 +5,7 @@
   import { setLanguage, t, type Lang } from "../lib/i18n";
   import { firstShortcut } from "../lib/shortcut";
   import { client, config } from "../lib/store.svelte";
-  import { go, NAV, parseRoute, routeHash, SETTINGS_PAGES, shouldIntercept, type SettingsPage } from "../lib/route";
+  import { go, NAV, navPage, parseRoute, routeHash, SETTINGS_PAGES, shouldIntercept, type SettingsPage } from "../lib/route";
   import { guard } from "../lib/guard.svelte";
   import Icon from "../lib/ui/Icon.svelte";
   import Ring from "../lib/ui/Ring.svelte";
@@ -30,6 +30,7 @@
   // Shown after a first press of the quit shortcut, for as long as a second press quits.
   let quitHint = $state(false);
   let quitTimer: ReturnType<typeof setTimeout> | undefined;
+  const current = $derived(navPage(route.page));
   const section = $derived((SETTINGS_PAGES as readonly string[]).includes(route.page) ? (route.page as SettingsPage) : null);
 
   async function checkPermissions() {
@@ -87,8 +88,8 @@
             <button
               type="button"
               class="nav"
-              class:on={route.page === p}
-              aria-current={route.page === p ? "page" : undefined}
+              class:on={current === p}
+              aria-current={current === p ? "page" : undefined}
               onclick={() => guard.request(() => go(p))}
             ><Icon name={p} size={18} /><span>{t(`nav.${p}`)}</span></button>
           {/each}

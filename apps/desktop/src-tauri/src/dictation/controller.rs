@@ -705,10 +705,12 @@ impl Controller {
             if let Some(engine) = self.engine.clone() {
                 let id = session.id().clone();
                 let final_text = text.clone();
+                let ui = self.deps.ui.clone();
                 self.deps.runtime.spawn(async move {
                     if let Err(e) = engine.record_final(&id, &final_text).await {
                         tracing::debug!(error = %e, "record_final failed");
                     }
+                    ui.history_changed();
                 });
             }
         }

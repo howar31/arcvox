@@ -200,6 +200,9 @@
 {/snippet}
 
 <Group title={t("engines.catalogue")}>
+  {#snippet actions()}
+    <button type="button" class="btn" onclick={refreshManifest} disabled={refreshing}><Icon name="refresh" size={14} />{t("common.refresh")}</button>
+  {/snippet}
   {#if !manifest}
     <Row><span class="sub">{t("common.loading")}</span></Row>
   {/if}
@@ -251,9 +254,10 @@
     <button type="button" class="link" onclick={() => reveal(dir).catch((e) => toast.error(errorMessage(e)))} disabled={!dir}>{t("engines.reveal")}</button>
     <button type="button" class="link" onclick={importFile}>{t("engines.import")}</button>
   </p>
+  {#if manifest}<p class="help">{t(`engines.source.${manifest.source}`)}</p>{/if}
   <p class="help">
-    {#if manifest}{t(`engines.source.${manifest.source}`)}{/if}
-    <button type="button" class="link" onclick={refreshManifest} disabled={refreshing}>{t("engines.refresh")}</button>
+    {t("engines.speed")}
+    <button type="button" class="link" onclick={() => guard.request(() => go("speed"))}>{t("speed.title")}</button>
   </p>
 </div>
 

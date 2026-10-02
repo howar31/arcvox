@@ -105,6 +105,8 @@ pub trait Ui: Send + Sync {
     fn refined(&self, text: String);
     /// The text was put into the application and nothing is left to report.
     fn inserted(&self);
+    /// The stored dictations changed: a dictation ended or its final text was recorded.
+    fn history_changed(&self) {}
 }
 
 #[cfg(test)]

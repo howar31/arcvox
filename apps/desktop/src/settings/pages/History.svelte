@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
-    applyRedo, clearHistory, clearRecordings, deleteHistory, deleteRecording, errorMessage, formatBytes, historyStorage, listHistory, openRecordingsDir, reprocessHistory, revealRecording, widgetCopy,
+    applyRedo, clearHistory, clearRecordings, deleteHistory, deleteRecording, errorMessage, formatBytes, historyStorage, listHistory, onHistoryChanged, openRecordingsDir, reprocessHistory, revealRecording, widgetCopy,
     type HistoryStorage, type Redo, type Utterance,
   } from "../../lib/api";
   import { failureText } from "../../lib/failure";
@@ -23,6 +23,7 @@
 
   /** How long typing pauses before the search runs. */
   const SEARCH_DELAY_MS = 250;
+  const CHANGE_DELAY_MS = 400;
 
   let rows = $state<Utterance[] | null>(null);
   let storage = $state<HistoryStorage | null>(null);
@@ -61,7 +62,15 @@
     reload();
     const onFocus = () => { reload(); };
     window.addEventListener("focus", onFocus);
-    return () => { window.removeEventListener("focus", onFocus); clearTimeout(timer); };
+    // A dictation that ended while the page is shown. The row of a dictation still being
+    // finished is not listed yet, so the list is read a moment later.
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    onHistoryChanged(() => {
+      clearTimeout(timer);
+      timer = setTimeout(reload, CHANGE_DELAY_MS);
+    }).then((u) => { if (disposed) u(); else unlisten = u; });
+    return () => { disposed = true; unlisten?.(); window.removeEventListener("focus", onFocus); clearTimeout(timer); };
   });
 
   function search() {
