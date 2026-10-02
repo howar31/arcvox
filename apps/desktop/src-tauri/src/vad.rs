@@ -36,7 +36,17 @@ impl Default for EarshotVad {
 impl Vad for EarshotVad {
     fn is_speech(&mut self, frame: &[f32]) -> bool {
         debug_assert_eq!(frame.len(), FRAME_SAMPLES);
-        self.detector.predict_f32(frame) > self.threshold
+        // The detector takes samples within [-1, 1]. A loud input, or the
+        // resampler next to a clipped peak, goes past that.
+        let mut bounded = [0.0f32; FRAME_SAMPLES];
+        for (out, sample) in bounded.iter_mut().zip(frame) {
+            *out = if sample.is_finite() {
+                sample.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            };
+        }
+        self.detector.predict_f32(&bounded) > self.threshold
     }
 }
 
@@ -103,6 +113,16 @@ impl SilenceWatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn samples_outside_the_range_are_taken() {
+        // A loud input, or the resampler next to a clipped peak, goes past 1.0.
+        for value in [1.2f32, 5.0, -5.0, f32::INFINITY, f32::NAN] {
+            let samples = vec![value; FRAME_SAMPLES * 4];
+            let mut vad = EarshotVad::default();
+            let _ = trim(&samples, &mut vad);
+        }
+    }
 
     #[test]
     fn a_pause_counts_only_after_speech() {

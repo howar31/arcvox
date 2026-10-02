@@ -1,6 +1,7 @@
 //! State machine: Idle -> Armed (fn down, stream open) -> Recording ->
 //! Processing -> insertion -> Idle. See the design's section 6.2.
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
@@ -123,18 +124,60 @@ impl Controller {
                 .next_deadline()
                 .map(|d| d.saturating_duration_since(Instant::now()))
                 .unwrap_or(Duration::from_secs(3600));
-            match rx.recv_timeout(timeout) {
-                Ok(ControllerMsg::Shutdown) => break,
-                Ok(msg) => self.handle(msg),
-                Err(RecvTimeoutError::Timeout) => {
+            let msg = match rx.recv_timeout(timeout) {
+                Ok(ControllerMsg::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
+                Ok(msg) => Some(msg),
+                Err(RecvTimeoutError::Timeout) => None,
+            };
+            // A panic in one step must not end this thread: nothing would
+            // answer the shortcut any more and the widget would stay on
+            // its last state.
+            let step = catch_unwind(AssertUnwindSafe(|| match msg {
+                Some(msg) => self.handle(msg),
+                None => {
                     let gestures = self.recognizer.on_tick(Instant::now());
                     for g in gestures {
                         self.on_gesture(g);
                     }
                 }
-                Err(RecvTimeoutError::Disconnected) => break,
+            }));
+            if let Err(panic) = step {
+                let detail = panic
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "unknown failure".into());
+                // The recovery itself is guarded: the loop goes on either way.
+                let _ = catch_unwind(AssertUnwindSafe(|| self.recover(detail)));
             }
         }
+    }
+
+    /// Drops whatever dictation was in progress, tells the user, and is
+    /// ready for the next one.
+    fn recover(&mut self, detail: String) {
+        match std::mem::replace(&mut self.state, State::Idle) {
+            State::Idle => {}
+            State::Armed { capture } => {
+                capture.stop();
+            }
+            State::Recording {
+                session, capture, ..
+            } => {
+                capture.stop();
+                session.cancel();
+            }
+            State::Processing { session, .. } => session.cancel(),
+        }
+        // The shortcut may have been held or released during the failure.
+        self.recognizer = Recognizer::new(&self.settings.hotkey);
+        self.deps.ui.message(UiMessage::failure(
+            Msg::WidgetAsrFailed,
+            detail,
+            ErrorCode::Internal,
+            false,
+        ));
+        self.go_idle();
     }
 
     fn handle(&mut self, msg: ControllerMsg) {
@@ -696,6 +739,8 @@ mod tests {
     struct PeakVad;
     impl Vad for PeakVad {
         fn is_speech(&mut self, frame: &[f32]) -> bool {
+            // A frame it cannot take, like a detector's own range check.
+            assert!(frame.iter().all(|s| s.abs() < 50.0), "sample out of range");
             frame.iter().any(|s| s.abs() > 0.1)
         }
     }
@@ -1011,6 +1056,47 @@ mod tests {
         wait_state(r, UiState::Recording, "recording").await;
         speak_and_wait(r, secs).await;
         r.modifier.send(fn_up()).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_failure_inside_a_step_is_reported_and_dictation_goes_on() {
+        let r = rig(fast_settings()).await;
+        mock_ok(&r, "原文", "整理後").await;
+        r.modifier.send(fn_down()).unwrap();
+        wait_state(&r, UiState::Recording, "recording").await;
+        let before = r.ui.levels.lock().unwrap().len();
+        let tx = r.audio.tx.lock().unwrap().clone().unwrap();
+        tx.send(AudioMsg::Frames {
+            rate: 16_000,
+            mono: vec![100.0; 16_000],
+        })
+        .unwrap();
+        wait_for(|| r.ui.levels.lock().unwrap().len() > before, "level").await;
+        r.modifier.send(fn_up()).unwrap();
+        // The step that trims the recording fails: the user is told, and
+        // the widget is not left on "listening".
+        wait_for(
+            || {
+                r.ui.messages
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|m| m.code == Some(ErrorCode::Internal))
+            },
+            "failure message",
+        )
+        .await;
+        wait_state(&r, UiState::Idle, "idle").await;
+        assert!(r.platform.calls().is_empty());
+
+        // The next dictation works.
+        r.ui.states.lock().unwrap().clear();
+        hold_and_speak(&r, 1.0).await;
+        wait_for(
+            || r.platform.calls().contains(&"paste".to_string()),
+            "paste",
+        )
+        .await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
