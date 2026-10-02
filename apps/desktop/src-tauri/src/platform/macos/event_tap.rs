@@ -57,6 +57,14 @@ const PAIRS: &[(u64, [Side; 2])] = &[
 ];
 const KVK_FUNCTION: u16 = 63;
 const KVK_CAPS_LOCK: u16 = 57;
+/// Sent by the system as a key press right after fn was pressed and
+/// released quickly, in addition to fn's own modifier events.
+const KVK_FN_PRESS: u16 = 179;
+
+/// Whether a key no shortcut can name counts as another key being pressed.
+fn is_other_key(code: u16) -> bool {
+    code != KVK_FN_PRESS
+}
 
 /// Virtual key codes of the keys a shortcut can name besides the modifiers.
 const KEYS: &[(u16, &str)] = &[
@@ -350,7 +358,7 @@ impl TapState {
             CGEventType::KeyDown | CGEventType::KeyUp => {
                 let Some(key) = key_for(code) else {
                     // A key no shortcut can name still ends a short press.
-                    if matches!(kind, CGEventType::KeyDown) {
+                    if matches!(kind, CGEventType::KeyDown) && is_other_key(code) {
                         self.dispatch(vec![Out::Other], at);
                     }
                     return false;
@@ -494,6 +502,13 @@ mod tests {
             modifiers_after(&a, 56, FLAG_SHIFT | 0x2),
             held(&["ShiftLeft"])
         );
+    }
+
+    #[test]
+    fn the_key_event_that_follows_a_short_fn_press_is_not_another_key() {
+        assert!(!is_other_key(KVK_FN_PRESS));
+        // A key without a name, such as a media key, still counts.
+        assert!(is_other_key(200));
     }
 
     #[test]
