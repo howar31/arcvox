@@ -9,8 +9,6 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Most keys in one shortcut.
 pub const MAX_KEYS: usize = 3;
-/// Most shortcuts at once.
-pub const MAX_SHORTCUTS: usize = 5;
 
 /// Every key a shortcut can name, by position on the keyboard. The order
 /// is the order keys are shown in: modifiers first.
@@ -248,8 +246,6 @@ pub enum Refusal {
     /// Used by the system or by most applications.
     Reserved,
     Duplicate,
-    /// The list already holds `MAX_SHORTCUTS`.
-    Limit,
 }
 
 /// Modifier families plus a key that the system or most applications use.
@@ -331,9 +327,6 @@ pub fn refusal(keys: &[Key], existing: &[Shortcut]) -> Option<Refusal> {
     }
     if existing.contains(&s) {
         return Some(Refusal::Duplicate);
-    }
-    if existing.len() >= MAX_SHORTCUTS {
-        return Some(Refusal::Limit);
     }
     None
 }
@@ -699,21 +692,23 @@ mod tests {
     }
 
     #[test]
-    fn duplicates_and_the_limit_are_refused() {
+    fn a_duplicate_is_refused_and_the_list_has_no_limit() {
         let have = vec![sc(&["Fn"]), sc(&["MetaLeft", "KeyD"])];
         assert_eq!(
             refusal(&keys(&["KeyD", "MetaLeft"]), &have),
             Some(Refusal::Duplicate)
         );
         assert_eq!(refusal(&keys(&["MetaRight", "KeyD"]), &have), None);
-        let full = vec![
+        let many = vec![
             sc(&["Fn"]),
             sc(&["AltRight"]),
             sc(&["MetaRight"]),
             sc(&["ControlRight"]),
             sc(&["ShiftRight"]),
+            sc(&["MetaLeft", "KeyD"]),
         ];
-        assert_eq!(refusal(&keys(&["AltLeft"]), &full), Some(Refusal::Limit));
+        assert_eq!(refusal(&keys(&["AltLeft"]), &many), None);
+        assert_eq!(sanitized(&many), many);
     }
 
     #[test]
