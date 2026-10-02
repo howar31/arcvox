@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
-    applyRedo, clearHistory, clearRecordings, deleteHistory, deleteRecording, errorMessage, formatBytes, historyStorage, listHistory, reprocessHistory, revealRecording, widgetCopy,
+    applyRedo, clearHistory, clearRecordings, deleteHistory, deleteRecording, errorMessage, formatBytes, historyStorage, listHistory, openRecordingsDir, reprocessHistory, revealRecording, widgetCopy,
     type HistoryStorage, type Redo, type Utterance,
   } from "../../lib/api";
   import { failureText } from "../../lib/failure";
@@ -165,6 +165,9 @@
     try { await deleteRecording(id); toast.ok(t("history.recording_deleted")); } catch (e) { toast.error(errorMessage(e)); }
     await reload();
   }
+  async function openFolder() {
+    try { await openRecordingsDir(); } catch (e) { toast.error(errorMessage(e)); }
+  }
   async function reveal(id: number) {
     try { await revealRecording(id); } catch (e) { toast.error(errorMessage(e)); }
   }
@@ -210,6 +213,7 @@
       <span>{t("history.summary.recordings", { n: storage.recordings.toLocaleString() })}</span>
       {#if storage.recordings > 0}<span>{t("history.summary.size", { size: formatBytes(storage.recording_bytes) })}</span>{/if}
       <span class="grow"></span>
+      <button type="button" class="btn quiet" onclick={openFolder}>{t("general.recordings_dir_open")}</button>
       {#if storage.recordings > 0}<button type="button" class="btn quiet" onclick={() => (confirmRecordings = true)}>{t("history.clear_recordings")}</button>{/if}
     </div>
   {/if}
@@ -342,7 +346,7 @@
 </Modal>
 
 <style>
-  .summary { display: flex; align-items: center; gap: 26px; min-height: 58px; padding: 10px var(--row-x); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-group); font-size: var(--text-control); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .summary { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 26px; white-space: nowrap; min-height: 58px; padding: 10px var(--row-x); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-group); font-size: var(--text-control); color: var(--ink-2); font-variant-numeric: tabular-nums; }
   .summary .grow { flex: 1; }
   .summary .btn { margin-right: -8px; }
   .tools { display: flex; align-items: center; gap: 12px; margin-top: 14px; }

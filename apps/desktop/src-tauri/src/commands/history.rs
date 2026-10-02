@@ -176,16 +176,20 @@ impl UtteranceDto {
     }
 }
 
+/// `in_flight` says whether a recording belongs to a dictation still being
+/// processed; its row is left out until the result is known.
 pub fn list(
     history: &HistoryStore,
     recordings_dir: &Path,
     limit: usize,
     query: Option<&str>,
     with_audio: bool,
+    in_flight: impl Fn(&Path) -> bool,
 ) -> CmdResult<Vec<UtteranceDto>> {
     Ok(history
         .list(limit, query, with_audio)?
         .into_iter()
+        .filter(|u| !u.audio_path.as_deref().is_some_and(&in_flight))
         .map(|u| UtteranceDto::new(u, recordings_dir))
         // A row whose file is gone has no recording to show.
         .filter(|u| !with_audio || u.has_audio)
@@ -220,10 +224,11 @@ pub fn history_list(
     let e = engine(&state)?;
     list(
         &e.history(),
-        &e.dirs().recordings_dir(),
+        &e.recordings_dir(),
         limit.unwrap_or(200),
         query.as_deref(),
         with_audio.unwrap_or(false),
+        |p| e.in_flight(p),
     )
 }
 
@@ -232,7 +237,7 @@ pub fn history_audio(state: State<'_, AppState>, id: i64) -> CmdResult<tauri::ip
     let e = engine(&state)?;
     Ok(tauri::ipc::Response::new(audio(
         &e.history(),
-        &e.dirs().recordings_dir(),
+        &e.recordings_dir(),
         id,
     )?))
 }
@@ -241,7 +246,7 @@ pub fn history_audio(state: State<'_, AppState>, id: i64) -> CmdResult<tauri::ip
 pub fn history_delete_recording(state: State<'_, AppState>, id: i64) -> CmdResult<()> {
     let e = engine(&state)?;
     e.history()
-        .delete_recording(HistoryId(id), &e.dirs().recordings_dir())?;
+        .delete_recording(HistoryId(id), &e.recordings_dir())?;
     Ok(())
 }
 
@@ -249,13 +254,13 @@ pub fn history_delete_recording(state: State<'_, AppState>, id: i64) -> CmdResul
 #[tauri::command]
 pub fn history_clear_recordings(state: State<'_, AppState>) -> CmdResult<usize> {
     let e = engine(&state)?;
-    Ok(e.history().clear_recordings(&e.dirs().recordings_dir())?)
+    Ok(e.history().clear_recordings(&e.recordings_dir())?)
 }
 
 #[tauri::command]
 pub fn history_reveal_recording(state: State<'_, AppState>, id: i64) -> CmdResult<()> {
     let e = engine(&state)?;
-    let path = recording(&e.history(), &e.dirs().recordings_dir(), id)?;
+    let path = recording(&e.history(), &e.recordings_dir(), id)?;
     std::process::Command::new("open")
         .arg("-R")
         .arg(path)
@@ -273,7 +278,7 @@ pub struct StorageDto {
 #[tauri::command]
 pub fn history_storage(state: State<'_, AppState>) -> CmdResult<StorageDto> {
     let e = engine(&state)?;
-    let s = e.history().storage(&e.dirs().recordings_dir())?;
+    let s = e.history().storage(&e.recordings_dir())?;
     Ok(StorageDto {
         rows: s.rows,
         recordings: s.recordings,
@@ -281,18 +286,66 @@ pub fn history_storage(state: State<'_, AppState>) -> CmdResult<StorageDto> {
     })
 }
 
+/// The folder recordings are kept in.
+#[derive(Debug, Clone, Serialize)]
+pub struct RecordingsDirDto {
+    pub path: String,
+    /// False when the user chose it.
+    pub is_default: bool,
+    /// Recordings moved by this change, and those that could not be moved.
+    pub moved: usize,
+    pub left: usize,
+}
+
+fn recordings_dir_dto(e: &kongwe_core::Engine, moved: usize, left: usize) -> RecordingsDirDto {
+    RecordingsDirDto {
+        path: e.recordings_dir().display().to_string(),
+        is_default: e.config().current().general.recordings_dir.is_none(),
+        moved,
+        left,
+    }
+}
+
+#[tauri::command]
+pub fn recordings_dir_get(state: State<'_, AppState>) -> CmdResult<RecordingsDirDto> {
+    Ok(recordings_dir_dto(&engine(&state)?, 0, 0))
+}
+
+/// Keeps recordings in `path` from now on, or in the default folder without
+/// one, and moves the existing recordings there.
+#[tauri::command]
+pub async fn recordings_dir_set(
+    state: State<'_, AppState>,
+    path: Option<String>,
+) -> CmdResult<RecordingsDirDto> {
+    let e = engine(&state)?;
+    let report = e
+        .set_recordings_dir(path.map(std::path::PathBuf::from))
+        .await?;
+    Ok(recordings_dir_dto(&e, report.moved, report.left))
+}
+
+/// Opens the recordings folder in the file manager.
+#[tauri::command]
+pub fn recordings_dir_open(state: State<'_, AppState>) -> CmdResult<()> {
+    let dir = engine(&state)?.recordings_dir();
+    // It may not exist yet, or was removed by hand.
+    std::fs::create_dir_all(&dir)?;
+    std::process::Command::new("open").arg(dir).spawn()?;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn history_delete(state: State<'_, AppState>, id: i64) -> CmdResult<()> {
     let e = engine(&state)?;
-    e.history()
-        .delete_row(HistoryId(id), &e.dirs().recordings_dir())?;
+    e.history().delete_row(HistoryId(id), &e.recordings_dir())?;
     Ok(())
 }
 
 #[tauri::command]
 pub fn history_clear(state: State<'_, AppState>) -> CmdResult<()> {
     let e = engine(&state)?;
-    e.history().clear_all(&e.dirs().recordings_dir())?;
+    e.history().clear_all(&e.recordings_dir())?;
     Ok(())
 }
 
@@ -339,7 +392,7 @@ mod tests {
             .insert(row(3, "gone", Some(dir.path().join("missing.wav"))))
             .unwrap();
 
-        let rows = list(&history, dir.path(), 10, None, false).unwrap();
+        let rows = list(&history, dir.path(), 10, None, false, |_| false).unwrap();
         let by_text = |t: &str| rows.iter().find(|r| r.final_text == t).unwrap();
         assert!(by_text("kept").has_audio);
         assert_eq!(by_text("kept").audio_bytes, Some(10));
@@ -363,7 +416,7 @@ mod tests {
 
         assert_eq!(audio(&history, dir.path(), id.0).unwrap(), b"RIFFdata");
         let only = |q: Option<&str>, with_audio: bool| {
-            list(&history, dir.path(), 10, q, with_audio)
+            list(&history, dir.path(), 10, q, with_audio, |_| false)
                 .unwrap()
                 .into_iter()
                 .map(|r| r.final_text)

@@ -153,8 +153,10 @@ impl Controller {
         }
     }
 
-    /// Drops whatever dictation was in progress, tells the user, and is
-    /// ready for the next one.
+    /// Lets go of whatever dictation was in progress, tells the user, and
+    /// is ready for the next one. What was recorded is handed to the engine,
+    /// which keeps it when recordings are kept; a dictation already being
+    /// processed runs to its end there and is stored in the history.
     fn recover(&mut self, detail: String) {
         match std::mem::replace(&mut self.state, State::Idle) {
             State::Idle => {}
@@ -164,10 +166,11 @@ impl Controller {
             State::Recording {
                 session, capture, ..
             } => {
-                capture.stop();
-                session.cancel();
+                let samples = capture.stop();
+                session.push_audio(&samples);
+                session.store();
             }
-            State::Processing { session, .. } => session.cancel(),
+            State::Processing { .. } => {}
         }
         // The shortcut may have been held or released during the failure.
         self.recognizer = Recognizer::new(&self.settings.hotkey);
@@ -501,6 +504,11 @@ impl Controller {
             return;
         };
         let samples = capture.stop();
+        // The engine has the whole recording, and keeps it when recordings
+        // are kept, before anything is done with it here: a failure from
+        // this point on leaves it in the history to be processed again.
+        session.push_audio(&samples);
+        session.store();
         let mut vad = (self.deps.vad_factory)();
         match vad::trim(&samples, vad.as_mut()) {
             None => {
@@ -509,8 +517,7 @@ impl Controller {
                 self.go_idle();
             }
             Some(range) => {
-                session.push_audio(&samples[range]);
-                session.finish();
+                session.finish_range(range);
                 self.deps.ui.set_state(UiState::Processing);
                 self.state = State::Processing {
                     session,
@@ -1100,6 +1107,74 @@ mod tests {
         wait_for(
             || r.platform.calls().contains(&"paste".to_string()),
             "paste",
+        )
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_recording_survives_a_failure_after_the_shortcut_is_released() {
+        let r = rig_with(fast_settings(), Vec::new(), |c| {
+            c.general.keep_recordings = true;
+        })
+        .await;
+        r.modifier.send(fn_down()).unwrap();
+        wait_state(&r, UiState::Recording, "recording").await;
+        let before = r.ui.levels.lock().unwrap().len();
+        let tx = r.audio.tx.lock().unwrap().clone().unwrap();
+        tx.send(AudioMsg::Frames {
+            rate: 16_000,
+            mono: vec![100.0; 16_000],
+        })
+        .unwrap();
+        wait_for(|| r.ui.levels.lock().unwrap().len() > before, "level").await;
+        r.modifier.send(fn_up()).unwrap();
+        // Trimming the recording fails. The engine already has it: the
+        // history lists it as not finished, with its recording.
+        let history = r.engine.history();
+        wait_for(
+            || {
+                history.list_recent(10).unwrap().iter().any(|u| {
+                    u.error_code.as_deref() == Some("interrupted")
+                        && u.audio_path.as_ref().is_some_and(|p| p.is_file())
+                        && !r.engine.in_flight(u.audio_path.as_ref().unwrap())
+                })
+            },
+            "the kept recording",
+        )
+        .await;
+        assert_eq!(history.list_recent(10).unwrap().len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn silence_leaves_no_recording_behind() {
+        let r = rig_with(fast_settings(), Vec::new(), |c| {
+            c.general.keep_recordings = true;
+        })
+        .await;
+        r.modifier.send(fn_down()).unwrap();
+        wait_state(&r, UiState::Recording, "recording").await;
+        let before = r.ui.levels.lock().unwrap().len();
+        r.audio.silence(1.0);
+        wait_for(|| r.ui.levels.lock().unwrap().len() > before, "level").await;
+        r.modifier.send(fn_up()).unwrap();
+        wait_for(
+            || {
+                r.ui.messages
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|m| m.msg == Msg::WidgetNoSpeech)
+            },
+            "no speech",
+        )
+        .await;
+        let dir = r.engine.recordings_dir();
+        wait_for(
+            || {
+                r.engine.history().list_recent(10).unwrap().is_empty()
+                    && std::fs::read_dir(&dir).unwrap().count() == 0
+            },
+            "nothing kept",
         )
         .await;
     }

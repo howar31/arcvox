@@ -584,5 +584,14 @@
   "general.widget_size_small": "Small",
   "general.widget_size_medium": "Medium",
   "general.widget_size_large": "Large",
-  "panel.final": "Final text"
+  "panel.final": "Final text",
+  "general.keep_recordings_help": "When off, a failed dictation cannot be retried from History.",
+  "general.recordings_dir": "Recordings folder",
+  "general.recordings_dir_default": "{path} (default)",
+  "general.recordings_dir_choose": "Choose…",
+  "general.recordings_dir_reset": "Use default",
+  "general.recordings_dir_moved": "Recordings folder changed; {n} recordings moved",
+  "general.recordings_dir_left": "Recordings folder changed; {n} recordings moved, {left} could not be moved and stay in the old folder",
+  "failure.interrupted": "The dictation did not finish.",
+  "general.recordings_dir_open": "Open folder"
 }

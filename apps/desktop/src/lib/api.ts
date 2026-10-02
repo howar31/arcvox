@@ -23,6 +23,8 @@ export interface General {
   history_retention_days: number; keep_recordings: boolean; recording_retention_days: number; context_limit_bytes: number;
   asr_timeout_secs: number; llm_timeout_secs: number; llm_temperature: number; llm_max_tokens: number | null;
   llm_idle_unload_secs: number; retry_count: number; typing_chars_per_min: number;
+  /** The folder recordings are kept in; null for the default one. Changed with `setRecordingsDir` only. */
+  recordings_dir: string | null;
 }
 export interface Config { schema_version: number; general: General; providers: ProviderConfig[]; profiles: Profile[]; dictionary: DictionaryEntry[] }
 export interface ProbeResult { ok: boolean; failure: { kind: string; message?: string; reason?: string } | null }
@@ -86,6 +88,13 @@ export const clearRecordings = () => invoke<number>("history_clear_recordings");
 export const revealRecording = (id: number) => invoke<void>("history_reveal_recording", { id });
 export interface HistoryStorage { rows: number; recordings: number; recording_bytes: number }
 export const historyStorage = () => invoke<HistoryStorage>("history_storage");
+/** The folder recordings are kept in, and what the last change of it moved. */
+export interface RecordingsDir { path: string; is_default: boolean; moved: number; left: number }
+export const recordingsDir = () => invoke<RecordingsDir>("recordings_dir_get");
+/** Keeps recordings in `path` from now on (the default folder for null) and moves the existing ones there. */
+/** Opens the recordings folder in the file manager. */
+export const openRecordingsDir = () => invoke<void>("recordings_dir_open");
+export const setRecordingsDir = (path: string | null) => invoke<RecordingsDir>("recordings_dir_set", { path });
 export interface StatsTotals {
   count: number; chars: number; audio_ms: number; timed_count: number; timed_chars: number; speed_chars: number; speed_audio_ms: number;
   asr_ms: number; llm_ms: number; llm_count: number; changed: number; degraded: number; unrewritten: number; dict_fixes: number; snippets: number;

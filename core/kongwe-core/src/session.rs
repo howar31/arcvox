@@ -1,10 +1,12 @@
-//! One dictation. Audio is pushed while the hotkey is held; `finish` runs
-//! the pipeline; events stream back to the client.
+//! One dictation. Audio is pushed while the hotkey is held; `store` keeps
+//! the recording, `finish` runs the pipeline; events stream back to the
+//! client.
 
+use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -34,17 +36,26 @@ pub(crate) struct SessionFlags {
     pub(crate) tail_started: AtomicBool,
 }
 
+/// What a session is told once its recording is complete.
+pub(crate) enum SessionCmd {
+    /// Keep the recording now, before anything is done with it.
+    Store,
+    /// Run the pipeline on this part of the audio, or on all of it.
+    Finish(Option<Range<usize>>),
+}
+
 pub struct Session {
     pub(crate) id: SessionId,
     pub(crate) profile_id: ProfileId,
     pub(crate) audio: Arc<Mutex<Vec<f32>>>,
-    pub(crate) finish_tx: Mutex<Option<oneshot::Sender<()>>>,
+    pub(crate) cmd_tx: Mutex<Option<mpsc::UnboundedSender<SessionCmd>>>,
     pub(crate) events_tx: mpsc::Sender<Event>,
     pub(crate) events_rx: Mutex<Option<mpsc::Receiver<Event>>>,
     pub(crate) task: Mutex<Option<JoinHandle<()>>>,
     pub(crate) flags: Arc<SessionFlags>,
-    /// Runs when `cancel` is the one that sends `Done`, so the engine's idle
-    /// timer restarts on that path as well.
+    /// Runs when `cancel` is the one that sends `Done`: the engine's idle
+    /// timer restarts on that path as well, and a recording kept for this
+    /// dictation is removed.
     pub(crate) on_cancel_done: Arc<dyn Fn() + Send + Sync>,
 }
 
@@ -62,24 +73,47 @@ impl Session {
         self.audio.lock().unwrap().extend_from_slice(pcm);
     }
 
+    /// The recording is complete. When recordings are kept it is written
+    /// now, with a history row that says the dictation did not finish, so
+    /// whatever happens next cannot lose it: the result replaces that row,
+    /// a failure names its reason in it, and a session dropped without
+    /// `finish` or `cancel` leaves it to be processed again from the
+    /// history. Without `store`, `finish` does the same first.
+    pub fn store(&self) {
+        if let Some(tx) = self.cmd_tx.lock().unwrap().as_ref() {
+            let _ = tx.send(SessionCmd::Store);
+        }
+    }
+
     /// Ends recording and starts the pipeline. Calling twice is a no-op.
     pub fn finish(&self) {
-        if let Some(tx) = self.finish_tx.lock().unwrap().take() {
-            let _ = tx.send(());
+        self.end(None);
+    }
+
+    /// `finish` for the part of the audio that holds speech; the kept
+    /// recording becomes that part.
+    pub fn finish_range(&self, range: Range<usize>) {
+        self.end(Some(range));
+    }
+
+    fn end(&self, range: Option<Range<usize>>) {
+        if let Some(tx) = self.cmd_tx.lock().unwrap().take() {
+            let _ = tx.send(SessionCmd::Finish(range));
         }
     }
 
     /// Stops everything. Calling it any number of times is safe. If it wins
     /// the race against `run_session` (the session was still recording,
     /// running its pipeline, or in the middle of recording its tail), it
-    /// emits at most one `Done` with no history id and nothing is recorded.
+    /// emits at most one `Done` with no history id and nothing is recorded:
+    /// a recording kept by `store` is removed with its row.
     /// If the session had already completed, `cancel` is a no-op: no event
     /// is emitted, and the row already recorded for it stays.
     pub fn cancel(&self) {
         self.flags.cancelled.store(true, Ordering::SeqCst);
         // Dropping the sender (rather than sending) wakes a task still
         // waiting to be finished without running the pipeline.
-        self.finish_tx.lock().unwrap().take();
+        self.cmd_tx.lock().unwrap().take();
         // Once the tail has started, a WAV write or history insert may be
         // in flight on the blocking thread pool, which tokio cannot abort;
         // aborting the task here would only tear it down before it reaches
