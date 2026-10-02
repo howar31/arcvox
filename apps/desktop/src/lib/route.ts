@@ -1,10 +1,15 @@
-export type Page = "home" | "history" | "flow" | "dictionary" | "prompt" | "general" | "engines" | "speed" | "about";
+export type Page = "home" | "history" | "flow" | "dictionary" | "prompt" | "engines" | "speed" | "general" | "recording" | "data" | "advanced" | "about";
+
+/** The pages of settings: one set of settings shown in parts. */
+export const SETTINGS_PAGES = ["general", "recording", "data", "advanced"] as const;
+export type SettingsPage = (typeof SETTINGS_PAGES)[number];
 
 /** Sidebar layout: an optional group label key and its pages, in order. */
 export const NAV: { group: string | null; pages: Page[] }[] = [
   { group: null, pages: ["home", "history"] },
-  { group: "nav.group.dictation", pages: ["flow", "dictionary", "prompt"] },
-  { group: "nav.group.settings", pages: ["general", "engines", "speed", "about"] },
+  { group: "nav.group.dictation", pages: ["flow", "engines", "prompt", "dictionary"] },
+  { group: "nav.group.settings", pages: [...SETTINGS_PAGES, "speed"] },
+  { group: null, pages: ["about"] },
 ];
 
 const PAGES = new Set<string>(NAV.flatMap((g) => g.pages));

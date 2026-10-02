@@ -5,7 +5,7 @@
   import { setLanguage, t, type Lang } from "../lib/i18n";
   import { firstShortcut } from "../lib/shortcut";
   import { client, config } from "../lib/store.svelte";
-  import { go, NAV, parseRoute, routeHash, shouldIntercept } from "../lib/route";
+  import { go, NAV, parseRoute, routeHash, SETTINGS_PAGES, shouldIntercept, type SettingsPage } from "../lib/route";
   import { guard } from "../lib/guard.svelte";
   import Icon from "../lib/ui/Icon.svelte";
   import Ring from "../lib/ui/Ring.svelte";
@@ -30,6 +30,7 @@
   // Shown after a first press of the quit shortcut, for as long as a second press quits.
   let quitHint = $state(false);
   let quitTimer: ReturnType<typeof setTimeout> | undefined;
+  const section = $derived((SETTINGS_PAGES as readonly string[]).includes(route.page) ? (route.page as SettingsPage) : null);
 
   async function checkPermissions() {
     try { accessibility = (await permissions()).accessibility; } catch { accessibility = null; }
@@ -81,7 +82,7 @@
       <div class="brand"><span class="mark"></span><span>Arcvox</span></div>
       <nav aria-label={t("app.title")}>
         {#each NAV as g, gi (gi)}
-          {#if g.group}<div class="nav-group">{t(g.group)}</div>{/if}
+          {#if g.group}<div class="nav-group">{t(g.group)}</div>{:else if gi > 0}<div class="nav-gap"></div>{/if}
           {#each g.pages as p (p)}
             <button
               type="button"
@@ -111,7 +112,7 @@
           <div class="banner" role="alert"><Ring tone="live" /><span>{t("common.engine_error", { detail: config.error })}</span></div>
         {/if}
         {#if route.page === "home"}<Home />
-        {:else if route.page === "general"}<General />
+        {:else if section}{#key section}<General {section} />{/key}
         {:else if route.page === "about"}<About />
         {:else if route.page === "engines"}<Engines arg={route.arg} />
         {:else if route.page === "flow"}<Flow arg={route.arg} />
@@ -144,8 +145,9 @@
   .brand { display: flex; align-items: center; gap: 11px; padding: 6px 12px 18px; font: 600 21px/1 var(--font-round); letter-spacing: .01em; }
   .mark { width: 26px; height: 26px; border-radius: 50%; border: 6px solid var(--accent); flex: none; }
   nav { display: flex; flex-direction: column; gap: 3px; }
-  .nav-group { font-size: var(--text-xs); font-weight: 600; color: var(--ink-2); padding: 20px 12px 6px; }
-  .nav { display: flex; align-items: center; gap: 12px; height: 46px; padding: 0 12px; border-radius: 10px; font-size: var(--text); border: 0; background: none; color: var(--ink); text-align: left; cursor: default; white-space: nowrap; }
+  .nav-group { font-size: var(--text-xs); font-weight: 600; color: var(--ink-2); padding: 14px 12px 6px; }
+  .nav-gap { height: 12px; flex: none; }
+  .nav { display: flex; align-items: center; gap: 12px; height: 40px; padding: 0 12px; border-radius: 10px; font-size: var(--text); border: 0; background: none; color: var(--ink); text-align: left; cursor: default; white-space: nowrap; }
   .nav span { overflow: hidden; text-overflow: ellipsis; }
   .nav :global(.icon) { opacity: .75; }
   .nav:hover { background: var(--line); }
