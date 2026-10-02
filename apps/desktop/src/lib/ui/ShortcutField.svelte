@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { errorMessage, onShortcutCapture, shortcutCapture, shortcutCheck } from "../api";
   import { t } from "../i18n";
-  import { keyLabel, MAX_SHORTCUTS, shortcutLabel } from "../shortcut";
+  import { keyLabel, shortcutLabel } from "../shortcut";
   import Icon from "./Icon.svelte";
 
   /** The recording shortcuts: a list that is edited by pressing the keys to add. */
@@ -75,10 +75,8 @@
       {/if}
       <button type="button" class="btn" onclick={stop}>{t("common.cancel")}</button>
     </span>
-  {:else if value.length < MAX_SHORTCUTS}
-    <button type="button" class="btn" onclick={start}><Icon name="plus" size={14} />{t("general.shortcut_add")}</button>
   {:else}
-    <span class="full">{t("general.shortcut_full", { max: String(MAX_SHORTCUTS) })}</span>
+    <button type="button" class="btn" onclick={start}><Icon name="plus" size={14} />{t("general.shortcut_add")}</button>
   {/if}
 </div>
 <p class="refuse" role="alert">{refused}</p>
@@ -94,6 +92,5 @@
   .capture { display: inline-flex; align-items: center; gap: 10px; height: 40px; padding: 0 6px 0 14px; border-radius: 12px; border: 2px dashed var(--accent); background: var(--accent-soft); color: var(--accent); font-size: var(--text-control); }
   .live { display: inline-flex; align-items: center; gap: 6px; }
   .capture .btn { height: 28px; }
-  .full { color: var(--ink-2); font-size: var(--text-sm); }
   .refuse { margin: 10px 0 0; min-height: 20px; color: var(--live); font-size: var(--text-sm); }
 </style>

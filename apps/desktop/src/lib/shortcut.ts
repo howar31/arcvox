@@ -1,8 +1,5 @@
 import { t } from "./i18n";
 
-/** The most shortcuts that can be set. */
-export const MAX_SHORTCUTS = 5;
-
 const MODIFIERS: Record<string, string> = { Meta: "⌘", Alt: "⌥", Control: "⌃", Shift: "⇧" };
 const NAMED: Record<string, string> = {
   Fn: "fn", Space: "Space", Escape: "Esc", Enter: "↩", Tab: "⇥", Backspace: "⌫", Delete: "⌦",

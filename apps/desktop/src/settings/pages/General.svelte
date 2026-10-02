@@ -16,7 +16,7 @@
   import Switch from "../../lib/ui/Switch.svelte";
   import NumberField from "../../lib/ui/NumberField.svelte";
   import ShortcutField from "../../lib/ui/ShortcutField.svelte";
-  import { defaultShortcuts, isDefaultShortcuts, MAX_SHORTCUTS } from "../../lib/shortcut";
+  import { defaultShortcuts, isDefaultShortcuts } from "../../lib/shortcut";
   import SaveBar from "../../lib/ui/SaveBar.svelte";
   import Icon from "../../lib/ui/Icon.svelte";
   import Modal from "../../lib/ui/Modal.svelte";
@@ -240,7 +240,7 @@
         <span class="name">{t("general.shortcuts")}</span>
         <button type="button" class="btn quiet" disabled={isDefaultShortcuts(draft.hotkey.shortcuts)} onclick={() => (draft!.hotkey.shortcuts = defaultShortcuts())}>{t("general.shortcut_reset")}</button>
       </div>
-      <small class="sub">{t("general.shortcuts_help", { max: String(MAX_SHORTCUTS) })}</small>
+      <small class="sub">{t("general.shortcuts_help")}</small>
       <ShortcutField bind:value={draft.hotkey.shortcuts} />
     </div>
     <Row label={t("general.hold_threshold")}>
