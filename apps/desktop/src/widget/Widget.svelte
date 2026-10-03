@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { widgetDragStart, widgetMeasure, widgetMenu } from "../lib/api";
+  import { onWidgetFlip, widgetDragStart, widgetMeasure, widgetMenu } from "../lib/api";
   import { t } from "../lib/i18n";
   import { LevelHistory, TICK, eased, mapped } from "../lib/level";
   import { LABEL_KEYS, READY, RING_AT_REST, labelKey, ringView } from "../lib/widgetView";
@@ -14,7 +14,14 @@
   // In units. A sample of the level moves `step` along the widget; nothing is drawn around the ring, the bars fade in from `from` to `to`.
   const WAVE = { alpha: 0.2, step: 2, pitch: 5, thick: 3, from: 40, to: 58 };
 
-  onMount(() => feed.listen());
+  // A vertical widget at the bottom of the display is turned over: the ring at the bottom, the label above it.
+  let flipped = $state(false);
+
+  onMount(() => {
+    const stop = feed.listen();
+    const flip = onWidgetFlip((f) => { flipped = f; });
+    return () => { stop(); flip.then((off) => off()); };
+  });
 
   // The widget has one size for a language: its long side holds the longest label in each shape.
   $effect(() => {
@@ -60,7 +67,10 @@
     return () => {
       clearInterval(timer);
       cancelAnimationFrame(frame);
-      canvas.getContext("2d")!.clearRect(0, 0, canvas.width, canvas.height);
+      // The last picture was drawn through a transform; the whole canvas is cleared without it.
+      const g = canvas.getContext("2d")!;
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.clearRect(0, 0, canvas.width, canvas.height);
     };
   });
 
@@ -83,7 +93,8 @@
     g.clearRect(0, 0, canvas.width, canvas.height);
     // Drawn along the long side (x) and across the short side (y); an upright widget swaps the two.
     const upright = h > w;
-    if (upright) g.setTransform(0, dpr, dpr, 0, 0, 0);
+    if (upright && flipped) g.setTransform(0, -dpr, dpr, 0, 0, canvas.height);
+    else if (upright) g.setTransform(0, dpr, dpr, 0, 0, 0);
     else g.setTransform(dpr, 0, 0, dpr, 0, 0);
     const along = upright ? h : w, mid = (upright ? w : h) / 2;
     const step = WAVE.step * u, pitch = WAVE.pitch * u, thick = WAVE.thick * u, reach = mid - 3 * u;
@@ -130,7 +141,7 @@
 <svelte:window {oncontextmenu} />
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="pill" class:listening class:open={feed.open || (resting && feed.idle === "label")} class:rest={resting && feed.idle === "ring"} {onpointerdown}>
+<div class="pill" class:listening class:open={feed.open || (resting && feed.idle === "label")} class:rest={resting && feed.idle === "ring"} class:flipped {onpointerdown}>
   <canvas class="wave" bind:this={canvas} aria-hidden="true"></canvas>
   <!-- A new ring when its colour or its motion changes, so the motion plays from its start. -->
   {#key ring.tone + ring.motion}
@@ -194,6 +205,9 @@
   @media (orientation: portrait) {
     .pill { flex-direction: column; padding: calc(14 * var(--u)) 0 calc(22 * var(--u)); }
     .pill:not(.open) { clip-path: inset(0 0 calc(100% - 48 * var(--u)) 0 round calc(24 * var(--u))); }
+    /* Turned over: the ring at the bottom, and the widget opens upwards from it. */
+    .pill.flipped { flex-direction: column-reverse; padding: calc(22 * var(--u)) 0 calc(14 * var(--u)); }
+    .pill.flipped:not(.open) { clip-path: inset(calc(100% - 48 * var(--u)) 0 0 0 round calc(24 * var(--u))); }
     .ring.shake { animation-name: shake-down; }
     .label { writing-mode: vertical-rl; letter-spacing: .12em; }
   }

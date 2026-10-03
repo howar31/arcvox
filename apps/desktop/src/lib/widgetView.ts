@@ -11,6 +11,7 @@ const STATE_LABELS: Partial<Record<WidgetState, string>> = {
   processing: "widget.processing",
   inserting: "widget.inserting",
   placing: "widget.placing",
+  moving: "widget.placing",
 };
 /** Messages the widget shows by itself, with their label. */
 const NOTICES: Record<string, string> = {
@@ -48,7 +49,7 @@ export function labelKey(state: WidgetState, message: MessagePayload | null, ins
  * The same labels as the widget's, except that hands-free dictation has room for a full phrase.
  */
 export function dictationLabelKey(state: WidgetState): string | null {
-  if (state === "placing") return null;
+  if (state === "placing" || state === "moving") return null;
   if (state === "locked") return "shell.hands_free";
   return STATE_LABELS[state] ?? null;
 }
@@ -73,7 +74,7 @@ export function ringView(state: WidgetState, message: MessagePayload | null, ins
   if (state === "recording" || state === "locked") return { tone: "accent", motion: "level", glyph: null };
   if (state === "processing") return { tone: "accent", motion: "spin", glyph: null };
   if (state === "inserting") return { tone: "accent", motion: "close", glyph: null };
-  if (state === "placing") return { tone: "quiet", motion: "drag", glyph: null };
+  if (state === "placing" || state === "moving") return { tone: "quiet", motion: "drag", glyph: null };
   if (inserted) return { tone: "ok", motion: "once", glyph: "check" };
   return { tone: "quiet", motion: "none", glyph: null };
 }
@@ -105,6 +106,8 @@ const BODIES: Record<string, string | null> = {
   "widget.native_unavailable": null,
   "widget.empty_result": null,
 };
+/** How the widget settles where it is dragged, one sentence a line. */
+const PLACING_HINTS = ["panel.placing_center", "panel.placing_side", "panel.placing_bottom", "panel.placing_panel"];
 /** Messages that are settled on the engines page. */
 const TO_ENGINES = new Set(["widget.engine_unavailable", "widget.model_missing", "widget.model_corrupt"]);
 
@@ -117,6 +120,8 @@ export function panelView(state: WidgetState, message: MessagePayload | null, tr
     if (transcript && refined !== null) return { caption: t("panel.final"), rewrite: { from: transcript, to: refined }, actions: [], close: false };
     if (state === "processing" && transcript) return { caption: t("panel.recognised"), text: transcript, actions: [], close: false };
     if (state === "locked" && hint) return { text: t("widget.locked"), actions: [], close: false };
+    // Shown from the settings window to be positioned: the panel is where it will be, and says how the widget settles.
+    if (state === "placing") return { title: t("panel.placing"), body: PLACING_HINTS.map((key) => t(key)).join("\n"), actions: [], close: false };
     return null;
   }
   if (message.key in NOTICES) return null;

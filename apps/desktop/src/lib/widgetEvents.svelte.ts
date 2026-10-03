@@ -77,9 +77,9 @@ export class WidgetFeed {
         if (p.state !== "idle") this.inserted = false;
         // A new dictation drops a message that was still waiting.
         if (p.state === "recording" || p.state === "locked" || p.state === "processing") clearTimeout(waiting);
-        if (p.state !== "idle" && p.state !== "placing") this.message = null;
+        if (p.state !== "idle" && p.state !== "placing" && p.state !== "moving") this.message = null;
         // The two texts stay through the insertion and the moment after it; a new dictation clears them.
-        if (p.state === "recording" || p.state === "locked" || p.state === "placing") this.refined = null;
+        if (p.state === "recording" || p.state === "locked" || p.state === "placing" || p.state === "moving") this.refined = null;
         if (p.state !== "processing" && p.state !== "inserting" && this.refined === null) this.transcript = "";
         if (p.state !== "recording" && p.state !== "locked") this.peak = this.lastLevel = 0;
       }),

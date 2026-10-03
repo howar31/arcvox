@@ -56,7 +56,7 @@ export interface ClientSettings {
   max_utterance_secs: number;
   auto_stop: { enabled: boolean; silence_secs: number };
   show_transcript: boolean;
-  widget_size: "small" | "medium" | "large";
+  widget_size: "x_small" | "small" | "medium" | "large" | "x_large";
   /** What the floating widget shows while no dictation goes on. */
   widget_idle: WidgetIdle;
   /** The display the widget stays on; null shows it on the display under the pointer. */
@@ -156,6 +156,7 @@ export const shortcutCapture = (on: boolean) => invoke<boolean>("shortcut_captur
 export interface CapturePayload { keys: string[]; done: boolean; cancelled: boolean }
 export function onShortcutCapture(cb: (p: CapturePayload) => void): Promise<UnlistenFn> { return listen<CapturePayload>("shortcut-capture", (e) => cb(e.payload)); }
 export const widgetPlacing = (on: boolean) => invoke<void>("widget_placing", { on });
+export const widgetIsPlacing = () => invoke<boolean>("widget_is_placing");
 export const widgetResetPosition = () => invoke<void>("widget_reset_position");
 export const openSettingsWindow = (page?: string) => invoke<void>("system_open_settings_window", { page: page ?? null });
 
@@ -163,7 +164,7 @@ export function onConfigChanged(cb: (c: Config) => void): Promise<UnlistenFn> {
   return listen<Config>("config-changed", (e) => cb(e.payload));
 }
 
-export type WidgetState = "idle" | "recording" | "locked" | "processing" | "inserting" | "placing" | "no_accessibility" | "engine_error";
+export type WidgetState = "idle" | "recording" | "locked" | "processing" | "inserting" | "placing" | "moving" | "no_accessibility" | "engine_error";
 /** What the widget shows while no dictation goes on: nothing, the ring alone, or the whole widget with a label. */
 export type WidgetIdle = "hidden" | "ring" | "label";
 export interface StatePayload { state: WidgetState; language: "zh-TW" | "en"; scale?: number; idle?: WidgetIdle }
@@ -171,11 +172,15 @@ export interface LevelPayload { rms: number }
 /** `code` is the kind of failure of a failed dictation; `retry` says it was kept for a retry from the history. */
 export interface MessagePayload { kind: "info" | "error"; key: string; detail: string | null; copyable: string | null; code: string | null; retry: boolean; language: "zh-TW" | "en" }
 export function onWidgetState(cb: (p: StatePayload) => void): Promise<UnlistenFn> { return listen<StatePayload>("widget-state", (e) => cb(e.payload)); }
+/** The widget is kept on screen to be positioned, or no longer: switched in the settings window or in a menu. */
+export function onWidgetPlacing(cb: (on: boolean) => void): Promise<UnlistenFn> { return listen<boolean>("widget-placing", (e) => cb(e.payload)); }
 /** What the widget shows while idle was chosen, in the settings window or in a menu. */
 export function onWidgetIdle(cb: (idle: WidgetIdle) => void): Promise<UnlistenFn> { return listen<WidgetIdle>("widget-idle", (e) => cb(e.payload)); }
 /** What the app is doing now, and each change of it, for the settings window. */
 export const dictationState = () => invoke<WidgetState>("dictation_state");
 export function onDictationState(cb: (state: WidgetState) => void): Promise<UnlistenFn> { return listen<WidgetState>("dictation-state", (e) => cb(e.payload)); }
+/** Whether the widget is turned over: its ring at the bottom, opening upwards. */
+export function onWidgetFlip(cb: (flipped: boolean) => void): Promise<UnlistenFn> { return listen<boolean>("widget-flip", (e) => cb(e.payload)); }
 export function onWidgetLevel(cb: (p: LevelPayload) => void): Promise<UnlistenFn> { return listen<LevelPayload>("widget-level", (e) => cb(e.payload)); }
 export function onWidgetMessage(cb: (p: MessagePayload) => void): Promise<UnlistenFn> { return listen<MessagePayload>("widget-message", (e) => cb(e.payload)); }
 

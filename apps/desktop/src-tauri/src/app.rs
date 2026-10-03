@@ -58,6 +58,7 @@ pub fn tray_action(app: &tauri::AppHandle<Wry>, id: &str) {
         tray::ID_HISTORY => tray::open_settings(app, Some("history")),
         tray::ID_STATISTICS => tray::open_settings(app, Some("home")),
         tray::ID_QUIT => app.exit(0),
+        tray::ID_PLACE => state.ui.set_placing(!state.ui.is_placing()),
         tray::ID_FIX => match state.ui.tray().state() {
             UiState::NoAccessibility => {
                 let _ = crate::commands::system::system_open_privacy_pane("accessibility".into());
@@ -114,6 +115,7 @@ pub fn run() {
             crate::commands::system::widget_measure,
             crate::commands::system::widget_scale,
             crate::commands::system::widget_idle,
+            crate::commands::system::widget_is_placing,
             crate::commands::system::widget_menu,
             crate::commands::system::dictation_state,
             crate::commands::system::panel_fit,

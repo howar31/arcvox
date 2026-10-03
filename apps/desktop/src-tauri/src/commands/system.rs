@@ -40,6 +40,12 @@ pub fn widget_scale(state: State<'_, AppState>) -> f64 {
     state.ui.scale()
 }
 
+/// Whether the widget is kept on screen to be positioned.
+#[tauri::command]
+pub fn widget_is_placing(state: State<'_, AppState>) -> bool {
+    state.ui.is_placing()
+}
+
 /// What the widget shows while no dictation goes on.
 #[tauri::command]
 pub fn widget_idle(state: State<'_, AppState>) -> &'static str {

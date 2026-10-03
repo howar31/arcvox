@@ -17,8 +17,12 @@ const PANEL_GAP: f64 = 12.0;
 const BOTTOM_MARGIN: f64 = 48.0;
 /// Gap kept between the widget and the display's edges.
 const EDGE_MARGIN: f64 = 12.0;
-/// A widget dropped this close to a left or right edge docks to it.
-const DOCK_DISTANCE: f64 = 24.0;
+/// Gap a horizontal widget and its panel keep to the left and right edges
+/// of the display, so the two can be lined up at a side.
+const SIDE_MARGIN: f64 = 24.0;
+/// A widget dragged this close to a left or right edge docks to it. Closer
+/// than the side margin: a horizontal widget rests at the margin first.
+const DOCK_DISTANCE: f64 = 12.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Size {
@@ -146,11 +150,42 @@ pub fn size_for(dock: Dock, long: Long, short: f64) -> Size {
 }
 
 /// `wanted`, moved so that `extent` stays inside `start..start + length`
-/// with the edge margin on both sides.
-fn fit(start: f64, length: f64, wanted: f64, extent: f64) -> f64 {
-    let low = start + EDGE_MARGIN;
-    let high = (start + length - extent - EDGE_MARGIN).max(low);
+/// with `margin` on both sides.
+fn fit_within(start: f64, length: f64, wanted: f64, extent: f64, margin: f64) -> f64 {
+    let low = start + margin;
+    let high = (start + length - extent - margin).max(low);
     wanted.clamp(low, high)
+}
+
+/// `wanted`, kept inside with the edge margin on both sides.
+fn fit(start: f64, length: f64, wanted: f64, extent: f64) -> f64 {
+    fit_within(start, length, wanted, extent, EDGE_MARGIN)
+}
+
+/// Gap kept between the widget and the camera housing above it.
+const HOUSING_GAP: f64 = 6.0;
+
+/// `frame`, moved down until it is clear of the display's camera housing,
+/// which would hide the part of the widget behind it.
+pub fn clear_of(housing: Option<Rect>, frame: Rect) -> Rect {
+    match housing {
+        Some(h)
+            if frame.x < h.right() && frame.right() > h.x && frame.y < h.bottom() + HOUSING_GAP =>
+        {
+            Rect {
+                y: h.bottom() + HOUSING_GAP,
+                ..frame
+            }
+        }
+        _ => frame,
+    }
+}
+
+/// A vertical widget at the lowest place the display allows is turned over:
+/// its ring is at the bottom and it opens upwards, so the ring can sit in
+/// the corner.
+pub fn flipped(display: Rect, frame: Rect) -> bool {
+    frame.h > frame.w && display.bottom() - frame.bottom() <= EDGE_MARGIN + 0.5
 }
 
 /// The frame of the panel that belongs to the widget at `widget`. Next to a
@@ -180,11 +215,12 @@ pub fn panel_frame(display: Rect, widget: Rect, size: Size) -> Rect {
         } else {
             widget.bottom() + PANEL_GAP
         };
-        let x = fit(
+        let x = fit_within(
             display.x,
             display.w,
             widget.center().0 - size.w / 2.0,
             size.w,
+            SIDE_MARGIN,
         );
         (x, y)
     };
@@ -246,7 +282,13 @@ pub fn frame(display: Rect, anchor: Anchor, size: Size) -> Rect {
         Dock::Right => display.right() - size.w - EDGE_MARGIN,
         Dock::None => {
             let center_x = display.x + unit(anchor.x) * display.w;
-            fit(display.x, display.w, center_x - size.w / 2.0, size.w)
+            fit_within(
+                display.x,
+                display.w,
+                center_x - size.w / 2.0,
+                size.w,
+                SIDE_MARGIN,
+            )
         }
     };
     Rect {
@@ -254,6 +296,31 @@ pub fn frame(display: Rect, anchor: Anchor, size: Size) -> Rect {
         y,
         w: size.w,
         h: size.h,
+    }
+}
+
+/// A dragged widget whose center comes this close to a center line of the
+/// display is held on that line.
+const SNAP_DISTANCE: f64 = 12.0;
+
+/// The frame of a widget dragged to `moved` on `display`: on the display's
+/// vertical or horizontal center line when its center is close to it, so
+/// the user can tell that the widget is centered.
+pub fn snapped(display: Rect, moved: Rect) -> Rect {
+    let (cx, cy) = moved.center();
+    let (mid_x, mid_y) = display.center();
+    Rect {
+        x: if (cx - mid_x).abs() <= SNAP_DISTANCE {
+            mid_x - moved.w / 2.0
+        } else {
+            moved.x
+        },
+        y: if (cy - mid_y).abs() <= SNAP_DISTANCE {
+            mid_y - moved.h / 2.0
+        } else {
+            moved.y
+        },
+        ..moved
     }
 }
 
@@ -413,8 +480,8 @@ mod tests {
         let high = rect(686.0, 100.0, WIDE);
         assert_eq!(panel_frame(MAIN, high, size), rect(586.0, 160.0, size));
         // Near a side edge the panel is pushed inwards.
-        let corner = rect(12.0, 886.0, WIDE);
-        assert_eq!(panel_frame(MAIN, corner, size).x, 12.0);
+        let corner = rect(24.0, 886.0, WIDE);
+        assert_eq!(panel_frame(MAIN, corner, size).x, 24.0);
         // On a second display the display's own origin counts.
         let top = rect(1512.0 + 800.0, 200.0 + 20.0, WIDE);
         assert_eq!(panel_frame(SIDE, top, size).y, 200.0 + 20.0 + 48.0 + 12.0);
@@ -463,15 +530,97 @@ mod tests {
             y: 0.0,
             dock: Dock::None,
         };
-        assert_eq!(frame(MAIN, top_left, WIDE), rect(12.0, 12.0, WIDE));
+        assert_eq!(frame(MAIN, top_left, WIDE), rect(24.0, 12.0, WIDE));
         let beyond = Anchor {
             x: 7.0,
             y: f64::NAN,
             dock: Dock::None,
         };
         let f = frame(MAIN, beyond, WIDE);
-        assert_eq!(f.x, 1512.0 - 140.0 - 12.0);
+        assert_eq!(f.x, 1512.0 - 140.0 - 24.0);
         assert!(f.y >= 12.0 && f.y <= 982.0 - 48.0 - 12.0);
+    }
+
+    #[test]
+    fn a_widget_dragged_near_a_center_line_is_held_on_it() {
+        let size = Size { w: 140.0, h: 48.0 };
+        let (mid_x, mid_y) = MAIN.center();
+        // Close to the vertical center line, far from the horizontal one.
+        let near = rect(mid_x - 70.0 + 9.0, MAIN.y + 40.0, size);
+        let held = snapped(MAIN, near);
+        assert_eq!(held.center().0, mid_x);
+        assert_eq!(held.y, near.y);
+        // Close to both.
+        let both = snapped(MAIN, rect(mid_x - 70.0 - 11.0, mid_y - 24.0 + 12.0, size));
+        assert_eq!(both.center(), (mid_x, mid_y));
+        // Too far from either.
+        let far = rect(mid_x - 70.0 + 13.0, mid_y - 24.0 - 13.0, size);
+        assert_eq!(snapped(MAIN, far), far);
+        // A drop on the center line is kept as the middle of the display.
+        assert_eq!(anchor_after_drag(MAIN, held, size.w).x, 0.5);
+    }
+
+    #[test]
+    fn a_horizontal_widget_at_a_side_lines_up_with_its_panel() {
+        // Dragged towards the right edge, short of docking: it rests at the side margin.
+        let dragged = rect(1512.0 - 140.0 - 15.0, 600.0, WIDE);
+        let anchor = anchor_after_drag(MAIN, dragged, LONG.wide);
+        assert_eq!(anchor.dock, Dock::None);
+        let widget = frame(MAIN, anchor, WIDE);
+        let panel = panel_frame(MAIN, widget, Size { w: 340.0, h: 174.0 });
+        assert_eq!(widget.right(), 1512.0 - 24.0);
+        assert_eq!(panel.right(), widget.right());
+        // Further on it docks.
+        let further = rect(1512.0 - 140.0 - 11.0, 600.0, WIDE);
+        assert_eq!(
+            anchor_after_drag(MAIN, further, LONG.wide).dock,
+            Dock::Right
+        );
+    }
+
+    #[test]
+    fn a_vertical_widget_at_the_bottom_is_turned_over() {
+        let lowest = Anchor {
+            x: 1.0,
+            y: 1.0,
+            dock: Dock::Right,
+        };
+        assert!(flipped(MAIN, frame(MAIN, lowest, TALL)));
+        let higher = Anchor {
+            x: 1.0,
+            y: 0.8,
+            dock: Dock::Right,
+        };
+        assert!(!flipped(MAIN, frame(MAIN, higher, TALL)));
+        // A horizontal widget never is.
+        let bottom = Anchor {
+            x: 0.5,
+            y: 1.0,
+            dock: Dock::None,
+        };
+        assert!(!flipped(MAIN, frame(MAIN, bottom, WIDE)));
+    }
+
+    #[test]
+    fn the_widget_stays_clear_of_the_camera_housing() {
+        let housing = Some(Rect {
+            x: 646.0,
+            y: 0.0,
+            w: 220.0,
+            h: 38.0,
+        });
+        // Under it: moved down, kept where it is sideways.
+        let under = rect(700.0, 12.0, WIDE);
+        assert_eq!(clear_of(housing, under), rect(700.0, 44.0, WIDE));
+        // Reaching under one end of it.
+        let end = rect(520.0, 12.0, WIDE);
+        assert_eq!(clear_of(housing, end).y, 44.0);
+        // Beside it, below it, and on a display without one: as it is.
+        let beside = rect(400.0, 12.0, WIDE);
+        assert_eq!(clear_of(housing, beside), beside);
+        let below = rect(700.0, 300.0, WIDE);
+        assert_eq!(clear_of(housing, below), below);
+        assert_eq!(clear_of(None, under), under);
     }
 
     #[test]
@@ -484,7 +633,7 @@ mod tests {
 
     #[test]
     fn a_drop_at_a_side_edge_docks_there() {
-        let anchor = anchor_after_drag(MAIN, rect(20.0, 300.0, WIDE), LONG.wide);
+        let anchor = anchor_after_drag(MAIN, rect(10.0, 300.0, WIDE), LONG.wide);
         assert_eq!(anchor.dock, Dock::Left);
         let anchor = anchor_after_drag(MAIN, rect(1512.0 - 150.0, 300.0, WIDE), LONG.wide);
         assert_eq!(anchor.dock, Dock::Right);
