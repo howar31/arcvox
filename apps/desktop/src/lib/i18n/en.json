@@ -107,7 +107,7 @@
   "prompt.restore": "Restore default",
   "prompt.restored": "Default restored",
   "prompt.not_loaded": "The stored prompt could not be read, so it cannot be saved over. Restore the default or open this page again.",
-  "about.license": "Apache-2.0. Kongwe and 公威輸入法 are trademarks of the project owner.",
+  "about.license": "Apache-2.0. Kongwe and 公威語音 are trademarks of the project owner.",
   "about.model_licenses": "Model files carry their own licenses, shown on the Engines and models page.",
   "about.config_dir": "Config directory",
   "about.data_dir": "Data directory",
