@@ -59,7 +59,10 @@ export interface ClientSettings {
   widget_size: "small" | "medium" | "large";
   ui_language: "system" | "zh-tw" | "en";
   manifest_url: string | null;
+  /** The statistics page's cards: position and size on its grid; null is the built-in arrangement. */
+  stats_layout: StatsCard[] | null;
 }
+export interface StatsCard { id: string; row: number; col: number; w: number; h: number; hidden: boolean }
 export interface Permissions { accessibility: boolean }
 export interface RunningApp { bundle_id: string; name: string }
 export interface SystemInfo { version: string; config_dir: string; data_dir: string; cache_dir: string; recordings_dir: string }
@@ -101,7 +104,7 @@ export interface StatsTotals {
   han: number; latin: number; kana: number; max_chars: number; max_audio_ms: number; max_total_ms: number; max_cpm: number;
 }
 /** `day` counts local days since the epoch. */
-export interface StatsDay { day: number; count: number; chars: number }
+export interface StatsDay { day: number; count: number; chars: number; audio_ms: number }
 export interface StatsNamed { name: string; count: number; chars: number }
 export interface Stats {
   totals: StatsTotals; saved_ms: number | null; days: StatsDay[]; hours: number[];

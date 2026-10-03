@@ -40,6 +40,22 @@ pub struct ClientSettings {
     /// Overrides the model catalogue location; `None` uses the built-in one.
     #[serde(default)]
     pub manifest_url: Option<String>,
+    /// Where each card of the statistics page sits and how large it is;
+    /// `None` is the built-in arrangement. The page validates it.
+    #[serde(default)]
+    pub stats_layout: Option<Vec<StatsCard>>,
+}
+
+/// One card of the statistics page on its grid of three columns.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatsCard {
+    pub id: String,
+    pub row: u32,
+    pub col: u32,
+    pub w: u32,
+    pub h: u32,
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -143,6 +159,7 @@ impl Default for ClientSettings {
             widget_size: WidgetSize::default(),
             ui_language: UiLanguage::System,
             manifest_url: None,
+            stats_layout: None,
         }
     }
 }

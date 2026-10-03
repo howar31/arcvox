@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { durationParts, fillDays, heatLevel, heatWeeks, localDay, monthLabels, percent, periodStart, speed, streaks, topWithOthers } from "./statsView";
+import { change, durationParts, fillDays, heatLevel, heatWeeks, localDay, monthLabels, percent, periodStart, speed, streaks, topWithOthers } from "./statsView";
 
 describe("statsView", () => {
   const now = new Date(2026, 9, 1, 14, 30);
@@ -30,7 +30,8 @@ describe("statsView", () => {
   });
 
   it("fills missing days and folds the tail of a list", () => {
-    expect(fillDays([{ day: 3, count: 1, chars: 5 }], 2, 4)).toEqual([0, 5, 0]);
+    expect(fillDays([{ day: 3, count: 1, chars: 5, audio_ms: 900 }], 2, 4)).toEqual([0, 5, 0]);
+    expect(fillDays([{ day: 3, count: 1, chars: 5, audio_ms: 900 }], 2, 4, "audio_ms")).toEqual([0, 900, 0]);
     expect(fillDays([], 4, 2)).toEqual([]);
     const rows = ["a", "b", "c"].map((name, i) => ({ name, count: 3 - i, chars: 0 }));
     expect(topWithOthers(rows, 2)).toEqual({ top: rows.slice(0, 2), others: { count: 1, names: 1 } });
@@ -42,8 +43,15 @@ describe("statsView", () => {
     expect(durationParts(2 * 3600_000 + 6 * 60_000 + 7_400)).toEqual({ hours: 2, minutes: 6, seconds: 7 });
   });
 
-  it("shows as many heatmap weeks as fit, between 20 and 52", () => {
-    expect(heatWeeks(0)).toBe(20);
+  it("gives the change as a whole percentage, or nothing without a base", () => {
+    expect(change(112, 100)).toBe(12);
+    expect(change(90, 100)).toBe(-10);
+    expect(change(5, 0)).toBeNull();
+  });
+
+  it("shows as many heatmap weeks as fit, between 10 and 52", () => {
+    expect(heatWeeks(0)).toBe(10);
+    expect(heatWeeks(200)).toBe(11); // 11 columns of 14 plus 10 gaps of 4 is 194
     expect(heatWeeks(356)).toBe(20); // 20 columns of 14 plus 19 gaps of 4
     expect(heatWeeks(373)).toBe(20);
     expect(heatWeeks(374)).toBe(21);
