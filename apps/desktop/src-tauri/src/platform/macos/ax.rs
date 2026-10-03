@@ -3,10 +3,11 @@
 use std::ptr;
 
 use accessibility_sys::{
-    kAXErrorIllegalArgument, kAXErrorNoValue, kAXErrorSuccess, kAXFocusedUIElementAttribute,
-    kAXSelectedTextAttribute, kAXTrustedCheckOptionPrompt, AXError, AXIsProcessTrustedWithOptions,
-    AXUIElementCopyAttributeValue, AXUIElementCreateApplication, AXUIElementGetTypeID,
-    AXUIElementRef, AXUIElementSetAttributeValue, AXUIElementSetMessagingTimeout,
+    kAXErrorAttributeUnsupported, kAXErrorIllegalArgument, kAXErrorNoValue, kAXErrorSuccess,
+    kAXFocusedUIElementAttribute, kAXSelectedTextAttribute, kAXTrustedCheckOptionPrompt, AXError,
+    AXIsProcessTrustedWithOptions, AXUIElementCopyAttributeValue, AXUIElementCreateApplication,
+    AXUIElementGetTypeID, AXUIElementIsAttributeSettable, AXUIElementRef,
+    AXUIElementSetAttributeValue, AXUIElementSetMessagingTimeout,
 };
 use core_foundation::base::{CFGetTypeID, CFRelease, CFType, CFTypeRef, TCFType};
 use core_foundation::boolean::CFBoolean;
@@ -119,6 +120,19 @@ impl AxElement {
         self.focused_element_result().ok()
     }
 
+    /// Whether the element says that `name` can be written.
+    pub fn is_settable(&self, name: &str) -> bool {
+        let key = CFString::new(name);
+        let mut settable: u8 = 0;
+        // SAFETY: `self.0` is a valid `AXUIElementRef` for the lifetime of
+        // `&self`; `key` is a live `CFString`; `settable` is a valid
+        // out-pointer.
+        let err = unsafe {
+            AXUIElementIsAttributeSettable(self.0, key.as_concrete_TypeRef(), &mut settable)
+        };
+        err == kAXErrorSuccess && settable != 0
+    }
+
     pub fn set_attribute_string(&self, name: &str, value: &str) -> Result<(), PlatformError> {
         let key = CFString::new(name);
         let val = CFString::new(value);
@@ -186,5 +200,10 @@ pub fn selected_text(pid: i32) -> Option<String> {
 pub fn insert_at_selection(pid: i32, text: &str) -> Result<(), PlatformError> {
     let app = AxElement::application(pid);
     let focused = app.focused_element_result().map_err(PlatformError::Ax)?;
+    // Some applications (terminals among them) accept the write and report
+    // success without taking the text; they do say that it cannot be set.
+    if !focused.is_settable(kAXSelectedTextAttribute) {
+        return Err(PlatformError::Ax(kAXErrorAttributeUnsupported));
+    }
     focused.set_attribute_string(kAXSelectedTextAttribute, text)
 }
