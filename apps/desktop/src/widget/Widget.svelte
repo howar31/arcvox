@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { widgetDragStart, widgetMeasure } from "../lib/api";
+  import { widgetDragStart, widgetMeasure, widgetMenu } from "../lib/api";
   import { t } from "../lib/i18n";
   import { LevelHistory, TICK, eased, mapped } from "../lib/level";
-  import { LABEL_KEYS, labelKey, ringView } from "../lib/widgetView";
+  import { LABEL_KEYS, READY, RING_AT_REST, labelKey, ringView } from "../lib/widgetView";
   import { WidgetFeed } from "../lib/widgetEvents.svelte";
 
   const feed = new WidgetFeed();
@@ -105,10 +105,12 @@
     g.globalCompositeOperation = "source-over";
   }
 
-  const ring = $derived(ringView(feed.state, feed.message, feed.inserted));
+  // With no dictation going on the widget is off the screen, or rests on it: folded to its round end, or whole with a label.
+  const resting = $derived(!feed.open && feed.idle !== "hidden");
+  const ring = $derived(resting ? RING_AT_REST : ringView(feed.state, feed.message, feed.inserted));
   const label = $derived.by(() => {
     void feed.language;
-    const key = labelKey(feed.state, feed.message, feed.inserted);
+    const key = resting ? (feed.idle === "label" ? READY : null) : labelKey(feed.state, feed.message, feed.inserted);
     return key ? t(key) : "";
   });
 
@@ -117,10 +119,18 @@
     if (e.button !== 0) return;
     widgetDragStart().catch(() => {});
   }
+
+  // The right button opens the menu of the menu-bar icon.
+  function oncontextmenu(e: MouseEvent) {
+    e.preventDefault();
+    widgetMenu().catch(() => {});
+  }
 </script>
 
+<svelte:window {oncontextmenu} />
+
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="pill" class:listening class:open={feed.open} {onpointerdown}>
+<div class="pill" class:listening class:open={feed.open || (resting && feed.idle === "label")} class:rest={resting && feed.idle === "ring"} {onpointerdown}>
   <canvas class="wave" bind:this={canvas} aria-hidden="true"></canvas>
   <!-- A new ring when its colour or its motion changes, so the motion plays from its start. -->
   {#key ring.tone + ring.motion}
@@ -152,6 +162,8 @@
   /* Appearing: the round end with the ring first, then the widget opens towards its label, which comes last. Leaving is the same backwards, and shorter. */
   .pill { opacity: 0; clip-path: inset(0 calc(100% - 48 * var(--u)) 0 0 round calc(24 * var(--u))); transition: clip-path 140ms cubic-bezier(.4, 0, 1, 1), opacity 60ms linear 140ms; }
   .pill.open { opacity: 1; clip-path: inset(0 0 0 0 round calc(24 * var(--u))); transition: opacity 80ms linear, clip-path 200ms cubic-bezier(.2, .8, .2, 1) 80ms; }
+  /* At rest only the round end shows; it stays when the widget closes and is where it opens from. */
+  .pill.rest { opacity: 1; transition: clip-path 140ms cubic-bezier(.4, 0, 1, 1); }
   .label { opacity: 0; transition: opacity 60ms linear; }
   .pill.open .label { opacity: 1; transition: opacity 120ms linear 160ms; }
   .measure, .probe { position: fixed; left: 0; top: 0; width: max-content; visibility: hidden; pointer-events: none; }

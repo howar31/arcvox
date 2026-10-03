@@ -620,5 +620,19 @@
   "general.recordings_dir_moved": "Recordings folder changed; {n} recordings moved",
   "general.recordings_dir_left": "Recordings folder changed; {n} recordings moved, {left} could not be moved and stay in the old folder",
   "failure.interrupted": "The dictation did not finish.",
-  "general.recordings_dir_open": "Open folder"
+  "general.recordings_dir_open": "Open folder",
+  "widget.ready": "Ready",
+  "general.widget_idle": "While idle",
+  "general.widget_idle_help": "The right mouse button on the widget opens the same menu as the menu-bar icon.",
+  "general.widget_idle_hidden": "Hidden",
+  "general.widget_idle_ring": "Ring only",
+  "general.widget_idle_label": "Ring and label",
+  "tray.widget_idle": "Widget while idle",
+  "tray.widget_idle_hidden": "Hidden",
+  "tray.widget_idle_ring": "Ring only",
+  "tray.widget_idle_label": "Ring and label",
+  "general.widget_display": "Display",
+  "general.widget_display_help": "When the chosen display is not connected, the widget shows on the display with the pointer.",
+  "general.widget_display_pointer": "The one with the pointer",
+  "general.widget_display_missing": "{name} (not connected)"
 }

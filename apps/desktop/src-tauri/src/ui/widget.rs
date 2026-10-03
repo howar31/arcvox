@@ -212,6 +212,40 @@ fn hide_window<R: Runtime>(app: &AppHandle<R>, label: &str) {
     }
 }
 
+/// A connected display: the name its position is saved under, and the name
+/// the system shows for it.
+#[derive(serde::Serialize)]
+pub struct DisplayName {
+    key: String,
+    name: String,
+}
+
+/// The connected displays. Main thread only.
+pub fn display_names<R: Runtime>(app: &AppHandle<R>) -> Vec<DisplayName> {
+    #[cfg(target_os = "macos")]
+    let shown = objc2::MainThreadMarker::new()
+        .map(crate::platform::macos::screens::names)
+        .unwrap_or_default();
+    displays(app)
+        .into_iter()
+        .map(|d| {
+            // The window system names a display after its model number;
+            // the system's own name is found by where the display is.
+            #[cfg(target_os = "macos")]
+            let name = shown
+                .iter()
+                .find(|((x, y), _)| (x - d.rect.x).abs() < 1.0 && (y - d.rect.y).abs() < 1.0)
+                .map(|(_, name)| name.clone());
+            #[cfg(not(target_os = "macos"))]
+            let name = None;
+            DisplayName {
+                name: name.unwrap_or_else(|| d.key.clone()),
+                key: d.key,
+            }
+        })
+        .collect()
+}
+
 /// Hides the widget and its panel.
 pub fn hide<R: Runtime>(app: &AppHandle<R>) {
     hide_window(app, PANEL);
@@ -240,6 +274,14 @@ pub struct Layout {
     /// The size of the panel's content while the panel has any.
     panel: Option<Size>,
     drag: Option<Drag>,
+    /// The widget stays on screen with no dictation going on; `folded` when
+    /// only its round end with the ring shows.
+    resting: bool,
+    folded: bool,
+    /// The size of the whole widget where it was last placed.
+    full: Option<Size>,
+    /// The display the user keeps the widget on, when one is chosen.
+    fixed: Option<String>,
 }
 
 impl Layout {
@@ -252,12 +294,63 @@ impl Layout {
             long: Long::scaled(scale),
             panel: None,
             drag: None,
+            resting: false,
+            folded: false,
+            full: None,
+            fixed: None,
         }
+    }
+
+    /// The user chose the display the widget stays on, or none: then it
+    /// shows on the display under the pointer.
+    pub fn set_fixed<R: Runtime>(&mut self, app: &AppHandle<R>, fixed: Option<String>) {
+        if self.fixed == fixed {
+            return;
+        }
+        self.fixed = fixed;
+        if self.display.is_some() && self.drag.is_none() {
+            self.place(app);
+        }
+    }
+
+    /// The part of the widget's frame its window covers: all of it, or the
+    /// round end with the ring while it is folded, so the rest of the frame
+    /// does not take clicks meant for what is under it.
+    fn shown(&self, frame: Rect) -> Rect {
+        if !self.folded {
+            return frame;
+        }
+        let short = self.short();
+        Rect {
+            w: short,
+            h: short,
+            ..frame
+        }
+    }
+
+    /// Keeps the widget on screen with no dictation going on, folded to its
+    /// round end or whole, without its panel.
+    pub fn rest<R: Runtime>(&mut self, app: &AppHandle<R>, folded: bool) {
+        self.resting = true;
+        self.folded = folded;
+        self.panel = None;
+        hide_window(app, PANEL);
+        if self.drag.is_none() {
+            self.place(app);
+        }
+        order_front(app, WINDOW);
     }
 
     /// Puts the widget at its place on the display under the pointer (or
     /// the display it is already on) and orders it front.
     pub fn show<R: Runtime>(&mut self, app: &AppHandle<R>) {
+        if self.resting {
+            // A dictation shows on the display under the pointer, as it
+            // does when the widget was not on screen.
+            self.resting = false;
+            self.folded = false;
+            self.display = None;
+        }
         // A drag owns the frame until the drop.
         if self.drag.is_none() {
             self.place(app);
@@ -266,6 +359,8 @@ impl Layout {
     }
 
     pub fn hidden(&mut self) {
+        self.resting = false;
+        self.folded = false;
         self.display = None;
         // The panel reports its content again before it is shown again.
         self.panel = None;
@@ -354,12 +449,18 @@ impl Layout {
         };
         let displays = displays(app);
         let rects: Vec<Rect> = displays.iter().map(|d| d.rect).collect();
-        let current = self
-            .display
-            .as_ref()
-            .and_then(|key| displays.iter().position(|d| &d.key == key));
+        let named = |key: &Option<String>| {
+            key.as_ref()
+                .and_then(|key| displays.iter().position(|d| &d.key == key))
+        };
         let under_pointer = || pointer(app).and_then(|p| placement::display_at(&rects, p));
-        let Some(display) = current.or_else(under_pointer).and_then(|i| displays.get(i)) else {
+        // The display the user chose, while it is connected; else the one
+        // the widget is on, or the one under the pointer when it appears.
+        let Some(display) = named(&self.fixed)
+            .or_else(|| named(&self.display))
+            .or_else(under_pointer)
+            .and_then(|i| displays.get(i))
+        else {
             return;
         };
         self.display = Some(display.key.clone());
@@ -371,7 +472,8 @@ impl Layout {
             .unwrap_or_else(|| placement::default_anchor(display.rect, self.short()));
         let size = placement::size_for(anchor.dock, self.long, self.short());
         let frame = placement::frame(display.rect, anchor, size);
-        apply_frame(&window, frame, &displays);
+        self.full = Some(size);
+        apply_frame(&window, self.shown(frame), &displays);
         self.place_panel(app, &displays, frame);
     }
 
@@ -382,6 +484,15 @@ impl Layout {
             .and_then(|w| window_frame(&w));
         let (Some(frame), Some(pointer)) = (frame, pointer(app)) else {
             return false;
+        };
+        // A folded widget is dragged as the whole widget it stands for.
+        let frame = match self.full {
+            Some(size) if self.folded => Rect {
+                w: size.w,
+                h: size.h,
+                ..frame
+            },
+            _ => frame,
         };
         self.drag = Some(Drag { pointer, frame });
         true
@@ -406,7 +517,7 @@ impl Layout {
         };
         let displays = displays(app);
         if primary_button_down() {
-            apply_frame(&window, moved, &displays);
+            apply_frame(&window, self.shown(moved), &displays);
             self.place_panel(app, &displays, moved);
             return true;
         }

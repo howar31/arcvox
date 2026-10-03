@@ -57,6 +57,10 @@ export interface ClientSettings {
   auto_stop: { enabled: boolean; silence_secs: number };
   show_transcript: boolean;
   widget_size: "small" | "medium" | "large";
+  /** What the floating widget shows while no dictation goes on. */
+  widget_idle: WidgetIdle;
+  /** The display the widget stays on; null shows it on the display under the pointer. */
+  widget_display: string | null;
   ui_language: "system" | "zh-tw" | "en";
   manifest_url: string | null;
   /** The statistics page's cards: position and size on its grid; null is the built-in arrangement. */
@@ -121,6 +125,9 @@ export const deleteSecret = (keyRef: string) => invoke<void>("secrets_delete", {
 export const getClient = () => invoke<ClientSettings>("client_get");
 export const updateClient = (settings: ClientSettings) => invoke<ClientSettings>("client_update", { settings });
 export const listMicrophones = () => invoke<string[]>("system_list_microphones");
+/** A connected display: the key the setting stores, and the name the system shows for it. */
+export interface DisplayName { key: string; name: string }
+export const listDisplays = () => invoke<DisplayName[]>("system_list_displays");
 export const permissions = () => invoke<Permissions>("system_permissions");
 export const requestAccessibility = () => invoke<boolean>("system_request_accessibility");
 export const openPrivacyPane = (pane: "accessibility" | "microphone") => invoke<void>("system_open_privacy_pane", { pane });
@@ -135,6 +142,9 @@ export const widgetDragStart = () => invoke<void>("widget_drag_start");
 /** The length the widget's labels need in each shape. */
 /** The factor of the widget size the user chose. */
 export const widgetScale = () => invoke<number>("widget_scale");
+export const widgetIdle = () => invoke<WidgetIdle>("widget_idle");
+/** Opens the menu of the menu-bar icon at the pointer. */
+export const widgetMenu = () => invoke<void>("widget_menu");
 export const widgetMeasure = (wide: number, tall: number) => invoke<void>("widget_measure", { wide, tall });
 /** The size of the panel's content; null when it has none. */
 export const panelFit = (width: number | null, height: number | null) => invoke<void>("panel_fit", { width, height });
@@ -154,11 +164,15 @@ export function onConfigChanged(cb: (c: Config) => void): Promise<UnlistenFn> {
 }
 
 export type WidgetState = "idle" | "recording" | "locked" | "processing" | "inserting" | "placing" | "no_accessibility" | "engine_error";
-export interface StatePayload { state: WidgetState; language: "zh-TW" | "en"; scale?: number }
+/** What the widget shows while no dictation goes on: nothing, the ring alone, or the whole widget with a label. */
+export type WidgetIdle = "hidden" | "ring" | "label";
+export interface StatePayload { state: WidgetState; language: "zh-TW" | "en"; scale?: number; idle?: WidgetIdle }
 export interface LevelPayload { rms: number }
 /** `code` is the kind of failure of a failed dictation; `retry` says it was kept for a retry from the history. */
 export interface MessagePayload { kind: "info" | "error"; key: string; detail: string | null; copyable: string | null; code: string | null; retry: boolean; language: "zh-TW" | "en" }
 export function onWidgetState(cb: (p: StatePayload) => void): Promise<UnlistenFn> { return listen<StatePayload>("widget-state", (e) => cb(e.payload)); }
+/** What the widget shows while idle was chosen, in the settings window or in a menu. */
+export function onWidgetIdle(cb: (idle: WidgetIdle) => void): Promise<UnlistenFn> { return listen<WidgetIdle>("widget-idle", (e) => cb(e.payload)); }
 /** What the app is doing now, and each change of it, for the settings window. */
 export const dictationState = () => invoke<WidgetState>("dictation_state");
 export function onDictationState(cb: (state: WidgetState) => void): Promise<UnlistenFn> { return listen<WidgetState>("dictation-state", (e) => cb(e.payload)); }

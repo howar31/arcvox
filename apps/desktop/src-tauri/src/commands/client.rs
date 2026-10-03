@@ -26,6 +26,8 @@ pub fn client_update(
     *state.language.lock().unwrap() = language;
     state.ui.set_language(language);
     state.ui.set_scale(settings.widget_size.scale());
+    state.ui.set_display(settings.widget_display.clone());
+    state.ui.set_idle(settings.widget_idle);
     Ok(settings)
 }
 

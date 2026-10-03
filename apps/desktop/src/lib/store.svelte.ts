@@ -1,4 +1,4 @@
-import { getClient, getConfig, onConfigChanged, updateClient, type ClientSettings, type Config } from "./api";
+import { getClient, getConfig, onConfigChanged, onWidgetIdle, updateClient, type ClientSettings, type Config } from "./api";
 
 class ConfigStore {
   value = $state<Config | null>(null);
@@ -15,6 +15,10 @@ class ClientStore {
   value = $state<ClientSettings | null>(null);
   async load() { this.value = await getClient(); }
   async save(next: ClientSettings) { this.value = await updateClient(next); }
+  /** Follows what a menu changes outside the settings window. */
+  async watch() {
+    return onWidgetIdle((idle) => { if (this.value && this.value.widget_idle !== idle) this.value = { ...this.value, widget_idle: idle }; });
+  }
 }
 
 export const config = new ConfigStore();
