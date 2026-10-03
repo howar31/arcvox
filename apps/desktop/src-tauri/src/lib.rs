@@ -14,6 +14,7 @@ pub mod providers;
 pub mod secrets;
 pub mod settings;
 pub mod shortcut;
+pub mod trust;
 pub mod ui;
 pub mod vad;
 

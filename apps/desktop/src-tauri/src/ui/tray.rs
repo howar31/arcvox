@@ -13,6 +13,7 @@ use crate::i18n::{text, Language, Msg};
 const ICON_IDLE: Image<'static> = tauri::include_image!("./icons/tray-idle.png");
 const ICON_RECORDING: Image<'static> = tauri::include_image!("./icons/tray-recording.png");
 const ICON_PROCESSING: Image<'static> = tauri::include_image!("./icons/tray-processing.png");
+const ICON_PROBLEM: Image<'static> = tauri::include_image!("./icons/tray-problem.png");
 
 pub const ID_STATUS: &str = "status";
 pub const ID_FIX: &str = "fix";
@@ -154,11 +155,10 @@ impl<R: Runtime> Tray<R> {
 
 fn status_icon(state: UiState) -> Image<'static> {
     match state {
-        UiState::Idle | UiState::Inserting | UiState::NoAccessibility | UiState::EngineError => {
-            ICON_IDLE
-        }
+        UiState::Idle | UiState::Inserting => ICON_IDLE,
         UiState::Recording | UiState::Locked => ICON_RECORDING,
         UiState::Processing => ICON_PROCESSING,
+        UiState::NoAccessibility | UiState::EngineError => ICON_PROBLEM,
     }
 }
 
@@ -217,6 +217,22 @@ pub fn open_settings<R: Runtime>(app: &AppHandle<R>, page: Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_problem_shows_in_the_icon_itself() {
+        assert_ne!(
+            status_icon(UiState::NoAccessibility).rgba(),
+            status_icon(UiState::Idle).rgba()
+        );
+        assert_eq!(
+            status_icon(UiState::EngineError).rgba(),
+            status_icon(UiState::NoAccessibility).rgba()
+        );
+        assert_eq!(
+            status_icon(UiState::Inserting).rgba(),
+            status_icon(UiState::Idle).rgba()
+        );
+    }
 
     #[test]
     fn only_a_problem_gets_an_action_under_the_status() {

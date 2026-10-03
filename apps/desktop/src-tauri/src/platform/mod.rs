@@ -80,6 +80,12 @@ pub trait Platform: Send + Sync {
     /// presses. Must be called on the main thread. Returns an error when
     /// the monitor cannot start (for example, accessibility not granted).
     fn start_modifier_monitor(&self, tx: Sender<ModifierEvent>) -> Result<(), PlatformError>;
+    /// Stops delivering shortcut events until the monitor is started again.
+    /// Called when the Accessibility trust is taken away while the app runs.
+    fn stop_modifier_monitor(&self) {}
+    /// Calls `notify` whenever the system reports a change of the
+    /// Accessibility trust; a platform without such a report does nothing.
+    fn watch_accessibility(&self, _notify: Box<dyn Fn() + Send + Sync>) {}
     /// The shortcuts that start a recording.
     fn set_shortcuts(&self, _shortcuts: Vec<Shortcut>) {}
     /// Where the keys pressed while recording a new shortcut are reported.
@@ -145,6 +151,9 @@ pub mod fake {
         fn start_modifier_monitor(&self, tx: Sender<ModifierEvent>) -> Result<(), PlatformError> {
             *self.monitor_tx.lock().unwrap() = Some(tx);
             Ok(())
+        }
+        fn stop_modifier_monitor(&self) {
+            self.record("stop_monitor".into());
         }
         fn frontmost_app(&self) -> Option<FrontmostApp> {
             self.frontmost.lock().unwrap().clone()
