@@ -1,4 +1,4 @@
-import { onWidgetEnter, onWidgetInserted, onWidgetLeave, onWidgetLevel, onWidgetMessage, onWidgetRefined, onWidgetState, onWidgetTranscript, uiLanguage, widgetScale, type MessagePayload, type WidgetState } from "./api";
+import { onWidgetEnter, onWidgetInserted, onWidgetLeave, onWidgetLevel, onWidgetMessage, onWidgetRefined, onWidgetState, onWidgetTranscript, uiLanguage, widgetIdle, widgetScale, type MessagePayload, type WidgetIdle, type WidgetState } from "./api";
 import { currentLanguage, setLanguage, type Lang } from "./i18n";
 import { messageDelay } from "./rewriteTiming";
 
@@ -30,6 +30,8 @@ export class WidgetFeed {
 
   /** The factor of the size the user chose; every measure of the widget and the panel is a multiple of the unit it sets. */
   scale = $state(1);
+  /** What the widget shows while it is not open. */
+  idle = $state<WidgetIdle>("hidden");
 
   private setScale(scale: number | undefined) {
     if (!scale || scale === this.scale) return;
@@ -55,6 +57,7 @@ export class WidgetFeed {
     // Until the language is known the texts are in English; each event carries it too.
     uiLanguage().then((l) => this.setLanguage(l as Lang)).catch(() => {});
     widgetScale().then((s) => this.setScale(s)).catch(() => {});
+    widgetIdle().then((i) => { this.idle = i; }).catch(() => {});
     let hintTimer: ReturnType<typeof setTimeout> | undefined;
     // A message that waits for the change of the text to be seen.
     let waiting: ReturnType<typeof setTimeout> | undefined;
@@ -64,6 +67,7 @@ export class WidgetFeed {
       onWidgetState((p) => {
         this.setLanguage(p.language);
         this.setScale(p.scale);
+        if (p.idle) this.idle = p.idle;
         if (p.state === "locked" && this.state !== "locked") {
           this.hint = true;
           clearTimeout(hintTimer);

@@ -40,6 +40,18 @@ pub fn widget_scale(state: State<'_, AppState>) -> f64 {
     state.ui.scale()
 }
 
+/// What the widget shows while no dictation goes on.
+#[tauri::command]
+pub fn widget_idle(state: State<'_, AppState>) -> &'static str {
+    state.ui.idle().name()
+}
+
+/// Opens the menu of the menu-bar icon at the pointer, over the widget.
+#[tauri::command]
+pub fn widget_menu(state: State<'_, AppState>) {
+    state.ui.popup_menu();
+}
+
 /// What the app is doing now, by the name the state events carry.
 #[tauri::command]
 pub fn dictation_state(state: State<'_, AppState>) -> &'static str {
@@ -91,6 +103,21 @@ pub struct SystemInfo {
 #[tauri::command]
 pub fn system_list_microphones(state: State<'_, AppState>) -> Vec<String> {
     state.audio.list_devices()
+}
+
+/// The connected displays, by the names the widget's positions are saved under.
+#[tauri::command(async)]
+pub fn system_list_displays(app: tauri::AppHandle) -> Vec<crate::ui::widget::DisplayName> {
+    // The system's names are read on the main thread.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = app.clone();
+    let sent = app.run_on_main_thread(move || {
+        let _ = tx.send(crate::ui::widget::display_names(&handle));
+    });
+    match sent {
+        Ok(()) => rx.recv().unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
 }
 
 #[tauri::command]

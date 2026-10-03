@@ -7,6 +7,7 @@ pub mod frontmost;
 pub mod modifier_monitor;
 pub mod pasteboard;
 pub mod post_keys;
+pub mod screens;
 pub mod secure_input;
 pub mod terminate;
 

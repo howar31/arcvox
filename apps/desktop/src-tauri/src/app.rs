@@ -74,7 +74,18 @@ pub fn tray_action(app: &tauri::AppHandle<Wry>, id: &str) {
                 state.platform.clipboard_write_text(&u.final_text);
             }
         }
-        _ => {}
+        other => {
+            // What the widget shows while idle: kept, and applied at once.
+            if let Some(idle) = tray::idle_of(other) {
+                let mut settings = ClientSettings::load(&state.dirs.config_dir);
+                settings.widget_idle = idle;
+                if let Err(e) = settings.save(&state.dirs.config_dir) {
+                    tracing::warn!(error = %e, "widget idle choice not saved");
+                }
+                state.controller.update_settings(settings);
+                state.ui.set_idle(idle);
+            }
+        }
     }
 }
 
@@ -102,10 +113,13 @@ pub fn run() {
             crate::commands::system::widget_reset_position,
             crate::commands::system::widget_measure,
             crate::commands::system::widget_scale,
+            crate::commands::system::widget_idle,
+            crate::commands::system::widget_menu,
             crate::commands::system::dictation_state,
             crate::commands::system::panel_fit,
             crate::commands::system::system_open_settings_window,
             crate::commands::system::system_list_microphones,
+            crate::commands::system::system_list_displays,
             crate::commands::system::system_permissions,
             crate::commands::system::system_request_accessibility,
             crate::commands::system::system_open_privacy_pane,
@@ -293,6 +307,8 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         settings.widget_size.scale(),
         &dirs.config_dir,
     )?);
+    ui.set_display(settings.widget_display.clone());
+    ui.set_idle(settings.widget_idle);
 
     let secrets = Arc::new(KeychainStore::new(app_name.clone()));
     // A stalled connection fails the read instead of hanging a download or its Cancel.

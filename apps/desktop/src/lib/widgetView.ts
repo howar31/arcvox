@@ -17,13 +17,15 @@ const NOTICES: Record<string, string> = {
   "widget.cancelled": "widget.cancelled",
   "widget.no_speech": "widget.no_speech_short",
 };
+/** The label of a widget that stays on screen while no dictation goes on. */
+export const READY = "widget.ready";
 const INSERTED = "widget.inserted";
 const FAILED = "widget.failed";
 const NOT_INSERTED = "widget.not_inserted";
 const REWRITE_FAILED = "widget.rewrite_failed";
 
 /** Every label the widget can show; its long side holds the longest of them. */
-export const LABEL_KEYS: string[] = [...Object.values(STATE_LABELS), ...Object.values(NOTICES), INSERTED, FAILED, NOT_INSERTED, REWRITE_FAILED];
+export const LABEL_KEYS: string[] = [...Object.values(STATE_LABELS), ...Object.values(NOTICES), READY, INSERTED, FAILED, NOT_INSERTED, REWRITE_FAILED];
 
 /** The text exists but is not in the application, or is not what the processing should have made of it. */
 function needsAttention(message: MessagePayload): boolean {
@@ -58,6 +60,9 @@ export interface RingView {
   motion: "level" | "spin" | "close" | "once" | "twice" | "settle" | "shake" | "drag" | "none";
   glyph: "check" | "bang" | "cross" | null;
 }
+
+/** The ring of a widget at rest. */
+export const RING_AT_REST: RingView = { tone: "quiet", motion: "none", glyph: null };
 
 export function ringView(state: WidgetState, message: MessagePayload | null, inserted: boolean): RingView {
   if (message) {

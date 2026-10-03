@@ -36,6 +36,11 @@ pub struct ClientSettings {
     pub show_transcript: bool,
     /// How large the floating widget and its panel are.
     pub widget_size: WidgetSize,
+    /// What the floating widget shows while no dictation goes on.
+    pub widget_idle: WidgetIdle,
+    /// The display the floating widget stays on, by the name its position
+    /// is saved under; `None` shows it on the display under the pointer.
+    pub widget_display: Option<String>,
     pub ui_language: UiLanguage,
     /// Overrides the model catalogue location; `None` uses the built-in one.
     #[serde(default)]
@@ -83,6 +88,31 @@ pub enum WidgetSize {
     #[default]
     Medium,
     Large,
+}
+
+/// What the floating widget shows while no dictation goes on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WidgetIdle {
+    /// Nothing: the widget leaves the screen.
+    #[default]
+    Hidden,
+    /// The ring alone, in the round end of the widget.
+    Ring,
+    /// The whole widget, with a label.
+    Label,
+}
+
+impl WidgetIdle {
+    pub const ALL: [WidgetIdle; 3] = [WidgetIdle::Hidden, WidgetIdle::Ring, WidgetIdle::Label];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            WidgetIdle::Hidden => "hidden",
+            WidgetIdle::Ring => "ring",
+            WidgetIdle::Label => "label",
+        }
+    }
 }
 
 impl WidgetSize {
@@ -157,6 +187,8 @@ impl Default for ClientSettings {
             auto_stop: AutoStop::default(),
             show_transcript: true,
             widget_size: WidgetSize::default(),
+            widget_idle: WidgetIdle::default(),
+            widget_display: None,
             ui_language: UiLanguage::System,
             manifest_url: None,
             stats_layout: None,

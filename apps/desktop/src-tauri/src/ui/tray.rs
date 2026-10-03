@@ -3,13 +3,14 @@
 use std::sync::Mutex;
 
 use tauri::image::Image;
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::dictation::ui::UiState;
 use crate::i18n::{text, Language, Msg};
 use crate::identity;
+use crate::settings::WidgetIdle;
 
 const ICON_IDLE: Image<'static> = tauri::include_image!("./icons/tray-idle.png");
 const ICON_RECORDING: Image<'static> = tauri::include_image!("./icons/tray-recording.png");
@@ -24,6 +25,25 @@ pub const ID_HISTORY: &str = "history";
 pub const ID_STATISTICS: &str = "statistics";
 pub const ID_SETTINGS: &str = "settings";
 pub const ID_QUIT: &str = "quit";
+
+/// The id of the item that chooses what the widget shows while idle.
+fn idle_id(idle: WidgetIdle) -> String {
+    format!("widget-idle-{}", idle.name())
+}
+
+/// The choice an item of the widget's idle menu stands for.
+pub fn idle_of(id: &str) -> Option<WidgetIdle> {
+    WidgetIdle::ALL.into_iter().find(|i| idle_id(*i) == id)
+}
+
+fn idle_msg(idle: WidgetIdle) -> Msg {
+    match idle {
+        WidgetIdle::Hidden => Msg::TrayWidgetIdleHidden,
+        WidgetIdle::Ring => Msg::TrayWidgetIdleRing,
+        WidgetIdle::Label => Msg::TrayWidgetIdleLabel,
+    }
+}
+
 /// The action that resolves what the status line reports, if it reports a problem.
 fn fix_msg(state: UiState) -> Option<Msg> {
     match state {
@@ -42,12 +62,16 @@ pub struct Tray<R: Runtime> {
     /// builds it again from these.
     last_state: Mutex<UiState>,
     language: Mutex<Language>,
+    idle: Mutex<WidgetIdle>,
 }
 
-fn menu<R: Runtime>(
+/// The menu of the menu-bar icon; the widget opens the same one. What its
+/// items do is in `app::tray_action`.
+pub(super) fn menu<R: Runtime>(
     app: &AppHandle<R>,
     language: Language,
     state: UiState,
+    idle: WidgetIdle,
 ) -> tauri::Result<(Menu<R>, MenuItem<R>)> {
     // The first line names the app and the running version, so the version
     // can be read without opening the settings window.
@@ -95,6 +119,25 @@ fn menu<R: Runtime>(
         None::<&str>,
     )?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
+    // What the widget shows while no dictation goes on: the choice in use is ticked.
+    let choices = Submenu::with_id(
+        app,
+        "widget-idle",
+        text(language, Msg::TrayWidgetIdle),
+        true,
+    )?;
+    for choice in WidgetIdle::ALL {
+        choices.append(&CheckMenuItem::with_id(
+            app,
+            idle_id(choice),
+            text(language, idle_msg(choice)),
+            true,
+            choice == idle,
+            None::<&str>,
+        )?)?;
+    }
+    menu.append(&choices)?;
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
     // The windows.
     menu.append(&MenuItem::with_id(
         app,
@@ -123,7 +166,7 @@ fn menu<R: Runtime>(
 
 impl Tray<tauri::Wry> {
     pub fn build(app: &AppHandle<tauri::Wry>, language: Language) -> tauri::Result<Self> {
-        let (first, status) = menu(app, language, UiState::Idle)?;
+        let (first, status) = menu(app, language, UiState::Idle, WidgetIdle::default())?;
         let icon = TrayIconBuilder::with_id("arcvox")
             .icon(ICON_IDLE)
             .icon_as_template(true)
@@ -138,6 +181,7 @@ impl Tray<tauri::Wry> {
             status: Mutex::new(status),
             last_state: Mutex::new(UiState::Idle),
             language: Mutex::new(language),
+            idle: Mutex::new(WidgetIdle::default()),
         })
     }
 }
@@ -147,7 +191,8 @@ impl<R: Runtime> Tray<R> {
     fn rebuild(&self) {
         let language = *self.language.lock().unwrap();
         let state = *self.last_state.lock().unwrap();
-        let Ok((next, status)) = menu(&self.app, language, state) else {
+        let idle = *self.idle.lock().unwrap();
+        let Ok((next, status)) = menu(&self.app, language, state, idle) else {
             return;
         };
         let _ = self.icon.set_menu(Some(next));
@@ -176,6 +221,12 @@ impl<R: Runtime> Tray<R> {
     /// the state it last displayed.
     pub fn set_language(&self, language: Language) {
         *self.language.lock().unwrap() = language;
+        self.rebuild();
+    }
+
+    /// Ticks the choice in use for what the widget shows while idle.
+    pub fn set_idle(&self, idle: WidgetIdle) {
+        *self.idle.lock().unwrap() = idle;
         self.rebuild();
     }
 

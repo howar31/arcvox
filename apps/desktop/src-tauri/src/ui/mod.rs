@@ -13,10 +13,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Wry};
+use tauri::menu::ContextMenu;
+use tauri::{AppHandle, Emitter, Manager, Wry};
 
 use crate::dictation::ui::{MessageKind, Ui, UiMessage, UiState};
 use crate::i18n::Language;
+use crate::settings::WidgetIdle;
 use app_menu::AppMenu;
 use tray::Tray;
 
@@ -50,6 +52,8 @@ struct StatePayload {
     language: &'static str,
     /// The factor of the size the user chose for the widget.
     scale: f64,
+    /// What the widget shows while no dictation goes on.
+    idle: &'static str,
 }
 
 #[derive(Serialize, Clone)]
@@ -82,6 +86,8 @@ pub struct TauriUi {
     language: Mutex<Language>,
     /// The factor of the widget size the user chose.
     scale: Mutex<f64>,
+    /// What the widget shows while no dictation goes on.
+    idle: Arc<Mutex<WidgetIdle>>,
     state: Mutex<UiState>,
     /// Bumped on every show; a scheduled hide fires only if unchanged.
     generation: Arc<AtomicU64>,
@@ -129,6 +135,7 @@ impl TauriUi {
             menu,
             language: Mutex::new(language),
             scale: Mutex::new(scale),
+            idle: Arc::new(Mutex::new(WidgetIdle::Hidden)),
             state: Mutex::new(UiState::Idle),
             generation: Arc::new(AtomicU64::new(0)),
             hide_deadline: Arc::new(Mutex::new(None)),
@@ -180,6 +187,58 @@ impl TauriUi {
         self.emit_current_state();
     }
 
+    /// What the widget shows while no dictation goes on.
+    pub fn idle(&self) -> WidgetIdle {
+        *self.idle.lock().unwrap()
+    }
+
+    /// The user chose what the widget shows while no dictation goes on. A
+    /// widget that shows a dictation or a message takes it when it leaves.
+    pub fn set_idle(&self, idle: WidgetIdle) {
+        *self.idle.lock().unwrap() = idle;
+        self.tray.set_idle(idle);
+        let _ = self.app.emit_to(SETTINGS, "widget-idle", idle.name());
+        self.emit_current_state();
+        if self.visible.load(Ordering::SeqCst) {
+            return;
+        }
+        let app = self.app.clone();
+        let layout = self.layout.clone();
+        let _ = self
+            .app
+            .run_on_main_thread(move || settle(&app, &layout, idle));
+    }
+
+    /// The user chose the display the widget stays on, or none.
+    pub fn set_display(&self, display: Option<String>) {
+        let app = self.app.clone();
+        let layout = self.layout.clone();
+        let _ = self
+            .app
+            .run_on_main_thread(move || layout.lock().unwrap().set_fixed(&app, display));
+    }
+
+    /// Opens the menu of the menu-bar icon over the widget, at the pointer.
+    pub fn popup_menu(&self) {
+        let app = self.app.clone();
+        let language = self.language();
+        let state = *self.state.lock().unwrap();
+        let idle = self.idle();
+        let _ = self.app.run_on_main_thread(move || {
+            let Some(window) = app.get_webview_window(widget::WINDOW) else {
+                return;
+            };
+            match tray::menu(&app, language, state, idle) {
+                Ok((menu, _)) => {
+                    if let Err(e) = menu.popup(window.as_ref().window()) {
+                        tracing::warn!(error = %e, "widget menu not shown");
+                    }
+                }
+                Err(e) => tracing::warn!(error = %e, "widget menu not built"),
+            }
+        });
+    }
+
     fn emit_current_state(&self) {
         let state = *self.state.lock().unwrap();
         let placing = self.placing.load(Ordering::SeqCst);
@@ -200,14 +259,19 @@ impl TauriUi {
         self.generation.fetch_add(1, Ordering::SeqCst);
         // A hide that waits for the leaving motion is called off.
         self.leaving.fetch_add(1, Ordering::SeqCst);
-        if !self.visible.swap(true, Ordering::SeqCst) {
-            self.emit("widget-enter", ());
-        }
+        let enters = !self.visible.swap(true, Ordering::SeqCst);
         let app = self.app.clone();
         let layout = self.layout.clone();
-        let _ = self
-            .app
-            .run_on_main_thread(move || layout.lock().unwrap().show(&app));
+        let _ = self.app.run_on_main_thread(move || {
+            layout.lock().unwrap().show(&app);
+            // After the window has its whole size: a folded widget opens
+            // from its round end into it.
+            if enters {
+                for window in [widget::WINDOW, widget::PANEL] {
+                    let _ = app.emit_to(window, "widget-enter", ());
+                }
+            }
+        });
     }
 
     /// The widget measured the length its labels need in each shape.
@@ -263,6 +327,7 @@ impl TauriUi {
         let app = self.app.clone();
         let visible = self.visible.clone();
         let leaving = self.leaving.clone();
+        let idle = self.idle.clone();
         std::thread::spawn(move || {
             std::thread::sleep(delay);
             if generation.load(Ordering::SeqCst) == gen {
@@ -270,7 +335,7 @@ impl TauriUi {
                 if dragging.load(Ordering::SeqCst) {
                     hide_waiting.store(true, Ordering::SeqCst);
                 } else {
-                    leave(&app, &layout, &visible, &leaving);
+                    leave(&app, &layout, &visible, &leaving, &idle);
                 }
             }
         });
@@ -283,7 +348,13 @@ impl TauriUi {
         self.sticky.store(false, Ordering::SeqCst);
         self.generation.fetch_add(1, Ordering::SeqCst);
         *self.hide_deadline.lock().unwrap() = None;
-        leave(&self.app, &self.layout, &self.visible, &self.leaving);
+        leave(
+            &self.app,
+            &self.layout,
+            &self.visible,
+            &self.leaving,
+            &self.idle,
+        );
     }
 
     /// Follows the pointer until the mouse button is released, then keeps
@@ -360,6 +431,7 @@ impl TauriUi {
                 state,
                 language: self.language().tag(),
                 scale: self.scale(),
+                idle: self.idle().name(),
             },
         );
         let _ = self.app.emit_to(SETTINGS, "dictation-state", state);
@@ -391,13 +463,28 @@ fn is_session(state: UiState) -> bool {
     )
 }
 
-/// Tells the widget and its panel to leave, and hides their windows once
-/// the leaving motion is over, unless the widget is shown again meanwhile.
+/// Puts the widget into what it shows while no dictation goes on: off the
+/// screen, or at rest on it. Main thread only.
+fn settle(app: &AppHandle<Wry>, layout: &Arc<Mutex<widget::Layout>>, idle: WidgetIdle) {
+    let mut layout = layout.lock().unwrap();
+    match idle {
+        WidgetIdle::Hidden => {
+            layout.hidden();
+            widget::hide(app);
+        }
+        WidgetIdle::Ring | WidgetIdle::Label => layout.rest(app, idle == WidgetIdle::Ring),
+    }
+}
+
+/// Tells the widget and its panel to leave, and once the leaving motion is
+/// over hides their windows or leaves the widget at rest, unless the widget
+/// is shown again meanwhile.
 fn leave(
     app: &AppHandle<Wry>,
     layout: &Arc<Mutex<widget::Layout>>,
     visible: &Arc<AtomicBool>,
     leaving: &Arc<AtomicU64>,
+    idle: &Arc<Mutex<WidgetIdle>>,
 ) {
     let token = leaving.fetch_add(1, Ordering::SeqCst) + 1;
     let wait = if visible.swap(false, Ordering::SeqCst) {
@@ -411,6 +498,7 @@ fn leave(
     let app = app.clone();
     let layout = layout.clone();
     let leaving = leaving.clone();
+    let idle = idle.clone();
     std::thread::spawn(move || {
         std::thread::sleep(wait);
         let target = app.clone();
@@ -418,8 +506,8 @@ fn leave(
             if leaving.load(Ordering::SeqCst) != token {
                 return;
             }
-            layout.lock().unwrap().hidden();
-            widget::hide(&target);
+            let idle = *idle.lock().unwrap();
+            settle(&target, &layout, idle);
         });
     });
 }

@@ -620,5 +620,19 @@
   "general.recordings_dir_moved": "已變更錄音資料夾，搬移了 {n} 個錄音",
   "general.recordings_dir_left": "已變更錄音資料夾，搬移了 {n} 個錄音，{left} 個無法搬移，留在原資料夾",
   "failure.interrupted": "聽寫沒有完成。",
-  "general.recordings_dir_open": "開啟資料夾"
+  "general.recordings_dir_open": "開啟資料夾",
+  "widget.ready": "待命中",
+  "general.widget_idle": "待命時",
+  "general.widget_idle_help": "在浮動視窗上按滑鼠右鍵，會開啟與選單列圖示相同的選單。",
+  "general.widget_idle_hidden": "隱藏",
+  "general.widget_idle_ring": "只顯示圓環",
+  "general.widget_idle_label": "顯示圓環與文字",
+  "tray.widget_idle": "浮動視窗待命時",
+  "tray.widget_idle_hidden": "隱藏",
+  "tray.widget_idle_ring": "只顯示圓環",
+  "tray.widget_idle_label": "顯示圓環與文字",
+  "general.widget_display": "顯示的螢幕",
+  "general.widget_display_help": "選定的螢幕沒有連接時，改用游標所在的螢幕。",
+  "general.widget_display_pointer": "游標所在的螢幕",
+  "general.widget_display_missing": "{name}（未連接）"
 }

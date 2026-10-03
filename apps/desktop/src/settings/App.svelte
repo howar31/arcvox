@@ -71,6 +71,7 @@
       langReady = true;
       await Promise.all([config.load(), client.load(), checkPermissions()]);
       await config.watch();
+      await client.watch();
       ready = true;
     })();
     return () => {

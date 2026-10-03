@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
-  import { clearRecordings, errorMessage, formatBytes, historyStorage, openRecordingsDir, recordingsDir, resetStats, setRecordingsDir, type RecordingsDir, listMicrophones, openPrivacyPane, permissions, requestAccessibility, updateGeneral, widgetPlacing, widgetResetPosition, type ClientSettings, type General, type HistoryStorage, type InsertMethod } from "../../lib/api";
+  import { clearRecordings, errorMessage, formatBytes, historyStorage, openRecordingsDir, recordingsDir, resetStats, setRecordingsDir, type RecordingsDir, listDisplays, listMicrophones, openPrivacyPane, permissions, requestAccessibility, updateGeneral, widgetPlacing, widgetResetPosition, type ClientSettings, type DisplayName, type General, type HistoryStorage, type InsertMethod } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { t } from "../../lib/i18n";
   import { client, config } from "../../lib/store.svelte";
@@ -58,6 +58,16 @@
     // A new edit clears the previous validation message.
     JSON.stringify([draft, general]);
     problem = undefined;
+  });
+
+  // A choice made in a menu takes its place in the draft; other unsaved edits stay.
+  $effect(() => {
+    const idle = client.value?.widget_idle;
+    untrack(() => {
+      if (!idle || !draft || !baseClient || JSON.parse(baseClient).widget_idle === idle) return;
+      draft.widget_idle = idle;
+      baseClient = JSON.stringify({ ...JSON.parse(baseClient), widget_idle: idle });
+    });
   });
 
   function reset() {
@@ -121,7 +131,11 @@
     try { await resetStats(); toast.ok(t("general.stats_reset_done")); } catch (e) { toast.error(errorMessage(e)); }
   }
 
+  // The connected displays, for the choice of the one the widget stays on.
+  let displays = $state<DisplayName[]>([]);
+
   onMount(() => {
+    listDisplays().then((d) => { displays = d; }).catch(() => {});
     reset();
     loadStorage();
     loadFolder();
@@ -264,6 +278,22 @@
           <option value="small">{t("general.widget_size_small")}</option>
           <option value="medium">{t("general.widget_size_medium")}</option>
           <option value="large">{t("general.widget_size_large")}</option>
+        </select>
+      </Row>
+      <Row label={t("general.widget_display")} help={t("general.widget_display_help")}>
+        <select value={draft.widget_display ?? ""} onchange={(e) => { draft!.widget_display = e.currentTarget.value || null; }} aria-label={t("general.widget_display")}>
+          <option value="">{t("general.widget_display_pointer")}</option>
+          {#each displays as d (d.key)}<option value={d.key}>{d.name}</option>{/each}
+          {#if draft.widget_display && !displays.some((d) => d.key === draft!.widget_display)}
+            <option value={draft.widget_display}>{t("general.widget_display_missing", { name: draft.widget_display })}</option>
+          {/if}
+        </select>
+      </Row>
+      <Row label={t("general.widget_idle")} help={t("general.widget_idle_help")}>
+        <select bind:value={draft.widget_idle} aria-label={t("general.widget_idle")}>
+          <option value="hidden">{t("general.widget_idle_hidden")}</option>
+          <option value="ring">{t("general.widget_idle_ring")}</option>
+          <option value="label">{t("general.widget_idle_label")}</option>
         </select>
       </Row>
       <Row label={t("general.show_transcript")} help={t("general.show_transcript_help")}>
