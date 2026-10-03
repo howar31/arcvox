@@ -170,9 +170,9 @@
   /* Positioned: absolutely placed descendants (visually hidden labels) stay inside the scroll area. */
   .main { position: relative; overflow-x: hidden; overflow-y: auto; min-width: 0; }
   /* Centered once the window is wider than the content; pages can lay themselves out by this width. */
-  .page { padding: var(--page-top) var(--page-x) 80px; max-width: 880px; min-height: 100%; margin: 0 auto; container-type: inline-size; }
+  .page { padding: var(--page-top) var(--page-x) 80px; --page-max: 880px; max-width: var(--page-max); min-height: 100%; margin: 0 auto; container-type: inline-size; }
   /* Pages that show data use more of a wide window than pages of settings. */
-  .page.wide { max-width: 1320px; }
+  .page.wide { --page-max: 1320px; }
   .banner { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 22px; padding: 12px var(--row-x); border-radius: var(--radius-group); background: color-mix(in srgb, var(--live) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--live) 35%, transparent); }
   .quit-hint { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 80; padding: 14px 24px; border-radius: 14px; background: var(--pill-bg); color: var(--pill-ink); font-size: var(--text-lg); font-weight: 600; white-space: nowrap; box-shadow: var(--shadow); pointer-events: none; }
   .banner :global(.ring) { margin-top: 3px; }

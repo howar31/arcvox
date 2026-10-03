@@ -176,7 +176,6 @@
       // The draft now equals what is stored.
       synced = comparable(next);
       renaming = false;
-      toast.ok(t("common.saved"));
     } catch (e) {
       toast.error(errorMessage(e));
     } finally {
