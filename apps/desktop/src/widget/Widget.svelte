@@ -118,10 +118,10 @@
 
   // With no dictation going on the widget is off the screen, or rests on it: folded to its round end, or whole with a label.
   const resting = $derived(!feed.open && feed.idle !== "hidden");
-  const ring = $derived(resting ? RING_AT_REST : ringView(feed.state, feed.message, feed.inserted));
+  const ring = $derived(resting ? RING_AT_REST : ringView(feed.state, feed.message, feed.done));
   const label = $derived.by(() => {
     void feed.language;
-    const key = resting ? (feed.idle === "label" ? READY : null) : labelKey(feed.state, feed.message, feed.inserted);
+    const key = resting ? (feed.idle === "label" ? READY : null) : labelKey(feed.state, feed.message, feed.done);
     return key ? t(key) : "";
   });
 

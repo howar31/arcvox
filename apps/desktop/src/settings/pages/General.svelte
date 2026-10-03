@@ -232,7 +232,7 @@
   }
 
   function addApp(id: string) {
-    if (draft && !(id in draft.insertion.per_app)) draft.insertion.per_app[id] = "paste";
+    if (draft && !(id in draft.insertion.per_app)) draft.insertion.per_app[id] = draft.insertion.default;
   }
 
   function setMethod(bundle: string, method: string) {
@@ -416,6 +416,27 @@
   {/if}
 
   {#if draft}
+    <Group title={t("general.method")}>
+      <Row label={t("general.method_default")} help={t("general.method_default_help")}>
+        <select class="method" bind:value={draft.insertion.default} aria-label={t("general.method_default")}>
+          <option value="paste">{t("general.method_paste")}</option>
+          <option value="type">{t("general.method_type")}</option>
+          <option value="ax">{t("general.method_ax")}</option>
+          <option value="copy">{t("general.method_copy")}</option>
+        </select>
+      </Row>
+      <Row>
+        <dl class="methods">
+          {#each ["paste", "type", "ax", "copy"] as m (m)}
+            <div><dt>{t("general.method_" + m)}</dt><dd>{t("general.method_" + m + "_help")}</dd></div>
+          {/each}
+        </dl>
+      </Row>
+      <Row label={t("general.keep_on_clipboard")} help={t("general.keep_on_clipboard_help")}>
+        <Switch bind:checked={draft.insertion.keep_on_clipboard} label={t("general.keep_on_clipboard")} />
+      </Row>
+    </Group>
+
     <Group title={t("general.insertion")} help={t("general.insertion_note")}>
       {#each Object.entries(draft.insertion.per_app) as [bundle, method] (bundle)}
         <Row>
@@ -424,6 +445,7 @@
             <option value="paste">{t("general.method_paste")}</option>
             <option value="type">{t("general.method_type")}</option>
             <option value="ax">{t("general.method_ax")}</option>
+            <option value="copy">{t("general.method_copy")}</option>
           </select>
           <button type="button" class="btn quiet icon-btn" onclick={() => { delete draft!.insertion.per_app[bundle]; }} aria-label={t("common.remove")} title={t("common.remove")}><Icon name="trash" /></button>
         </Row>
@@ -467,6 +489,10 @@
   /* The selects of the value column share one width. */
   .wide { width: 220px; }
   .method { width: 170px; }
+  .methods { display: grid; gap: 10px; margin: 0; width: 100%; }
+  .methods div { display: grid; grid-template-columns: 132px 1fr; gap: 16px; }
+  .methods dt { font-weight: 600; font-size: var(--text-sm); }
+  .methods dd { margin: 0; color: var(--ink-2); font-size: var(--text-sm); }
   .bundle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .icon-btn { width: var(--control); padding: 0; margin-right: -8px; color: var(--ink-2); }
   .icon-btn:hover { color: var(--ink); }

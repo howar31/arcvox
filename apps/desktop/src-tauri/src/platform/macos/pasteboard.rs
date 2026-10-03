@@ -48,6 +48,16 @@ pub fn write_text(text: &str) {
     }
 }
 
+/// The pasteboard type by which clipboard histories recognise content that
+/// is about to be replaced again (the nspasteboard.org convention).
+const TRANSIENT_TYPE: &str = "org.nspasteboard.TransientType";
+
+pub fn write_passing(text: &str) {
+    write_text(text);
+    let pb = NSPasteboard::generalPasteboard();
+    pb.setData_forType(Some(&NSData::new()), &NSString::from_str(TRANSIENT_TYPE));
+}
+
 pub fn restore(snapshot: ClipboardSnapshot) {
     let pb = NSPasteboard::generalPasteboard();
     pb.clearContents();

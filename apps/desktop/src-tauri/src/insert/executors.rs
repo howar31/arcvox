@@ -13,33 +13,55 @@ pub const MAX_UNITS_PER_EVENT: usize = 20;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     Inserted,
+    /// The text is on the clipboard and nowhere else.
+    Copied,
     Shown(ShowReason),
 }
 
-pub fn run(plan: &Plan, text: &str, platform: &dyn Platform) -> Outcome {
+/// `keep`: the text is left on the clipboard, whatever the plan.
+pub fn run(plan: &Plan, text: &str, platform: &dyn Platform, keep: bool) -> Outcome {
     match plan {
-        Plan::Show(reason) => Outcome::Shown(*reason),
+        Plan::Show(reason) => {
+            if keep && *reason != ShowReason::EmptyText {
+                platform.clipboard_write_text(text);
+            }
+            Outcome::Shown(*reason)
+        }
+        Plan::Copy => {
+            platform.clipboard_write_text(text);
+            Outcome::Copied
+        }
         Plan::Paste => {
-            paste(text, platform);
+            paste(text, platform, keep);
             Outcome::Inserted
         }
         Plan::Type => {
             platform.type_unicode(text);
+            if keep {
+                platform.clipboard_write_text(text);
+            }
             Outcome::Inserted
         }
         Plan::Ax { pid } => {
             if let Err(e) = platform.ax_insert(*pid, text) {
                 tracing::debug!(error = %e, "ax insert failed, pasting instead");
-                paste(text, platform);
+                paste(text, platform, keep);
+            } else if keep {
+                platform.clipboard_write_text(text);
             }
             Outcome::Inserted
         }
     }
 }
 
-fn paste(text: &str, platform: &dyn Platform) {
+fn paste(text: &str, platform: &dyn Platform, keep: bool) {
+    if keep {
+        platform.clipboard_write_text(text);
+        platform.post_paste();
+        return;
+    }
     let snapshot = platform.clipboard_snapshot();
-    platform.clipboard_write_text(text);
+    platform.clipboard_write_passing(text);
     platform.post_paste();
     std::thread::sleep(PASTE_RESTORE_DELAY);
     platform.clipboard_restore(snapshot);
@@ -94,10 +116,10 @@ mod tests {
     fn paste_writes_posts_and_restores() {
         let p = FakePlatform::new();
         *p.clipboard.lock().unwrap() = Some("before".into());
-        assert_eq!(run(&Plan::Paste, "你好", &p), Outcome::Inserted);
+        assert_eq!(run(&Plan::Paste, "你好", &p, false), Outcome::Inserted);
         assert_eq!(
             p.calls(),
-            vec!["snapshot", "write:你好", "paste", "restore"]
+            vec!["snapshot", "passing:你好", "paste", "restore"]
         );
         assert_eq!(p.clipboard.lock().unwrap().as_deref(), Some("before"));
     }
@@ -105,7 +127,7 @@ mod tests {
     #[test]
     fn type_uses_unicode_typing_only() {
         let p = FakePlatform::new();
-        assert_eq!(run(&Plan::Type, "hi", &p), Outcome::Inserted);
+        assert_eq!(run(&Plan::Type, "hi", &p, false), Outcome::Inserted);
         assert_eq!(p.calls(), vec!["type:hi"]);
     }
 
@@ -113,13 +135,13 @@ mod tests {
     fn ax_falls_back_to_paste_on_error() {
         let p = FakePlatform::new();
         *p.ax_insert_failure.lock().unwrap() = Some(PlatformError::Ax(-25204));
-        assert_eq!(run(&Plan::Ax { pid: 1 }, "x", &p), Outcome::Inserted);
+        assert_eq!(run(&Plan::Ax { pid: 1 }, "x", &p, false), Outcome::Inserted);
         assert_eq!(
             p.calls(),
-            vec!["ax:x", "snapshot", "write:x", "paste", "restore"]
+            vec!["ax:x", "snapshot", "passing:x", "paste", "restore"]
         );
         let ok = FakePlatform::new();
-        run(&Plan::Ax { pid: 1 }, "x", &ok);
+        run(&Plan::Ax { pid: 1 }, "x", &ok, false);
         assert_eq!(ok.calls(), vec!["ax:x"]);
     }
 
@@ -127,9 +149,45 @@ mod tests {
     fn show_touches_nothing() {
         let p = FakePlatform::new();
         assert_eq!(
-            run(&Plan::Show(ShowReason::SecureInput), "x", &p),
+            run(&Plan::Show(ShowReason::SecureInput), "x", &p, false),
             Outcome::Shown(ShowReason::SecureInput)
         );
         assert!(p.calls().is_empty());
+    }
+    #[test]
+    fn copy_writes_the_clipboard_and_nothing_else() {
+        let p = FakePlatform::new();
+        assert_eq!(run(&Plan::Copy, "x", &p, false), Outcome::Copied);
+        assert_eq!(p.calls(), vec!["write:x"]);
+    }
+
+    #[test]
+    fn kept_text_is_on_the_clipboard_after_every_plan() {
+        let paste = FakePlatform::new();
+        *paste.clipboard.lock().unwrap() = Some("before".into());
+        assert_eq!(run(&Plan::Paste, "x", &paste, true), Outcome::Inserted);
+        assert_eq!(paste.calls(), vec!["write:x", "paste"]);
+        assert_eq!(paste.clipboard.lock().unwrap().as_deref(), Some("x"));
+
+        let typed = FakePlatform::new();
+        run(&Plan::Type, "x", &typed, true);
+        assert_eq!(typed.calls(), vec!["type:x", "write:x"]);
+
+        let ax = FakePlatform::new();
+        run(&Plan::Ax { pid: 1 }, "x", &ax, true);
+        assert_eq!(ax.calls(), vec!["ax:x", "write:x"]);
+
+        let ax_failed = FakePlatform::new();
+        *ax_failed.ax_insert_failure.lock().unwrap() = Some(PlatformError::Ax(-25204));
+        run(&Plan::Ax { pid: 1 }, "x", &ax_failed, true);
+        assert_eq!(ax_failed.calls(), vec!["ax:x", "write:x", "paste"]);
+
+        let shown = FakePlatform::new();
+        run(&Plan::Show(ShowReason::AppChanged), "x", &shown, true);
+        assert_eq!(shown.calls(), vec!["write:x"]);
+
+        let empty = FakePlatform::new();
+        run(&Plan::Show(ShowReason::EmptyText), " ", &empty, true);
+        assert!(empty.calls().is_empty());
     }
 }

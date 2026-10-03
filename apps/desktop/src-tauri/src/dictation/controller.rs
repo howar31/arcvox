@@ -680,12 +680,17 @@ impl Controller {
             secure_input: self.deps.platform.secure_input_active(),
             method,
         });
-        let outcome = insert::run(&plan, &text, self.deps.platform.as_ref());
-        // Only a real insertion, or a copyable show the user can act on,
-        // is worth recording as the final text; an empty result has
-        // nothing usable to record.
+        let outcome = insert::run(
+            &plan,
+            &text,
+            self.deps.platform.as_ref(),
+            self.settings.insertion.keep_on_clipboard,
+        );
+        // Only a real insertion, a copy, or a copyable show the user can
+        // act on, is worth recording as the final text; an empty result
+        // has nothing usable to record.
         let should_record = match &outcome {
-            Outcome::Inserted => true,
+            Outcome::Inserted | Outcome::Copied => true,
             Outcome::Shown(reason) => {
                 let msg = match reason {
                     ShowReason::SecureInput => Msg::WidgetSecureInput,
@@ -714,17 +719,20 @@ impl Controller {
                 });
             }
         }
-        // The widget says that the text went in, unless a notice follows
+        // The widget says where the text went, unless a notice follows
         // that says more.
-        if matches!(outcome, Outcome::Inserted) && notice.is_none() {
-            self.deps.ui.inserted();
+        if notice.is_none() {
+            match outcome {
+                Outcome::Inserted => self.deps.ui.inserted(),
+                Outcome::Copied => self.deps.ui.copied(),
+                Outcome::Shown(_) => {}
+            }
         }
         self.go_idle();
-        // Shown only for a real insertion: `Outcome::Shown` already used
-        // the widget's one message slot for a copyable or empty-result
-        // message above, and showing the notice on top of that would
-        // silently replace it.
-        if matches!(outcome, Outcome::Inserted) {
+        // Not shown after `Outcome::Shown`: it already used the widget's
+        // one message slot for a copyable or empty-result message above,
+        // and showing the notice on top of that would silently replace it.
+        if matches!(outcome, Outcome::Inserted | Outcome::Copied) {
             if let Some(n) = notice {
                 self.deps.ui.message(n);
             }
@@ -1220,6 +1228,26 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_copy_method_puts_the_text_on_the_clipboard_only() {
+        let mut settings = fast_settings();
+        settings.insertion.default = InsertMethod::Copy;
+        let r = rig(settings).await;
+        mock_ok(&r, "软件 原文", "软件 整理後").await;
+        // A copy goes ahead where an insertion would be held back.
+        *r.platform.secure_input.lock().unwrap() = true;
+        hold_and_speak(&r, 1.0).await;
+        wait_for(
+            || r.ui.log.lock().unwrap().iter().any(|l| l == "copied"),
+            "copied",
+        )
+        .await;
+        assert_eq!(r.platform.calls(), vec!["write:軟體 整理後"]);
+        wait_state(&r, UiState::Idle, "idle").await;
+        assert!(r.ui.messages.lock().unwrap().is_empty());
+        assert!(!r.ui.log.lock().unwrap().iter().any(|l| l == "inserted"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn push_to_talk_inserts_refined_text_and_records_final() {
         let r = rig(fast_settings()).await;
         mock_ok(&r, "软件 原文", "软件 整理後").await;
@@ -1234,7 +1262,7 @@ mod tests {
         .await;
         assert_eq!(
             r.platform.calls(),
-            vec!["snapshot", "write:軟體 整理後", "paste", "restore"]
+            vec!["snapshot", "passing:軟體 整理後", "paste", "restore"]
         );
         wait_state(&r, UiState::Idle, "idle").await;
         let states = r.ui.states.lock().unwrap().clone();

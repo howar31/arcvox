@@ -105,6 +105,8 @@ pub trait Ui: Send + Sync {
     fn refined(&self, text: String);
     /// The text was put into the application and nothing is left to report.
     fn inserted(&self);
+    /// The text was put on the clipboard in place of an insertion.
+    fn copied(&self);
     /// The stored dictations changed: a dictation ended or its final text was recorded.
     fn history_changed(&self) {}
 }
@@ -166,6 +168,9 @@ pub mod fake {
         }
         fn inserted(&self) {
             self.log.lock().unwrap().push("inserted".into());
+        }
+        fn copied(&self) {
+            self.log.lock().unwrap().push("copied".into());
         }
         fn transcript(&self, text: String) {
             self.log.lock().unwrap().push(format!("transcript:{text}"));

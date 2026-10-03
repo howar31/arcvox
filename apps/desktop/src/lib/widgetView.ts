@@ -20,13 +20,15 @@ const NOTICES: Record<string, string> = {
 };
 /** The label of a widget that stays on screen while no dictation goes on. */
 export const READY = "widget.ready";
-const INSERTED = "widget.inserted";
+/** Where the text of the last dictation went, while nothing happened since. */
+export type Done = "inserted" | "copied" | null;
+const DONE_LABELS: Record<NonNullable<Done>, string> = { inserted: "widget.inserted", copied: "widget.copied" };
 const FAILED = "widget.failed";
 const NOT_INSERTED = "widget.not_inserted";
 const REWRITE_FAILED = "widget.rewrite_failed";
 
 /** Every label the widget can show; its long side holds the longest of them. */
-export const LABEL_KEYS: string[] = [...Object.values(STATE_LABELS), ...Object.values(NOTICES), READY, INSERTED, FAILED, NOT_INSERTED, REWRITE_FAILED];
+export const LABEL_KEYS: string[] = [...Object.values(STATE_LABELS), ...Object.values(NOTICES), READY, ...Object.values(DONE_LABELS), FAILED, NOT_INSERTED, REWRITE_FAILED];
 
 /** The text exists but is not in the application, or is not what the processing should have made of it. */
 function needsAttention(message: MessagePayload): boolean {
@@ -35,10 +37,10 @@ function needsAttention(message: MessagePayload): boolean {
 
 /**
  * The key of the widget's label, or null when it shows the ring alone.
- * `inserted`: the text was put into the application and nothing happened since.
+ * `done`: the text was put into the application or on the clipboard and nothing happened since.
  */
-export function labelKey(state: WidgetState, message: MessagePayload | null, inserted = false): string | null {
-  if (!message) return STATE_LABELS[state] ?? (inserted && state === "idle" ? INSERTED : null);
+export function labelKey(state: WidgetState, message: MessagePayload | null, done: Done = null): string | null {
+  if (!message) return STATE_LABELS[state] ?? (done && state === "idle" ? DONE_LABELS[done] : null);
   if (message.key in NOTICES) return NOTICES[message.key];
   if (message.key === "widget.degraded") return REWRITE_FAILED;
   return needsAttention(message) ? NOT_INSERTED : FAILED;
@@ -65,7 +67,7 @@ export interface RingView {
 /** The ring of a widget at rest. */
 export const RING_AT_REST: RingView = { tone: "quiet", motion: "none", glyph: null };
 
-export function ringView(state: WidgetState, message: MessagePayload | null, inserted: boolean): RingView {
+export function ringView(state: WidgetState, message: MessagePayload | null, done: Done): RingView {
   if (message) {
     if (message.key in NOTICES) return { tone: "quiet", motion: "settle", glyph: null };
     if (needsAttention(message)) return { tone: "warn", motion: "twice", glyph: "bang" };
@@ -75,7 +77,7 @@ export function ringView(state: WidgetState, message: MessagePayload | null, ins
   if (state === "processing") return { tone: "accent", motion: "spin", glyph: null };
   if (state === "inserting") return { tone: "accent", motion: "close", glyph: null };
   if (state === "placing" || state === "moving") return { tone: "quiet", motion: "drag", glyph: null };
-  if (inserted) return { tone: "ok", motion: "once", glyph: "check" };
+  if (done) return { tone: "ok", motion: "once", glyph: "check" };
   return { tone: "quiet", motion: "none", glyph: null };
 }
 

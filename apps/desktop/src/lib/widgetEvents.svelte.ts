@@ -1,6 +1,7 @@
-import { onWidgetEnter, onWidgetInserted, onWidgetLeave, onWidgetLevel, onWidgetMessage, onWidgetRefined, onWidgetState, onWidgetTranscript, uiLanguage, widgetIdle, widgetScale, type MessagePayload, type WidgetIdle, type WidgetState } from "./api";
+import { onWidgetCopied, onWidgetEnter, onWidgetInserted, onWidgetLeave, onWidgetLevel, onWidgetMessage, onWidgetRefined, onWidgetState, onWidgetTranscript, uiLanguage, widgetIdle, widgetScale, type MessagePayload, type WidgetIdle, type WidgetState } from "./api";
 import { currentLanguage, setLanguage, type Lang } from "./i18n";
 import { messageDelay } from "./rewriteTiming";
+import type { Done } from "./widgetView";
 
 /** How long the hint stays when a hands-free dictation begins. */
 const HINT_MS = 4000;
@@ -16,7 +17,7 @@ export class WidgetFeed {
   /** The final text, once the processing is over. */
   refined = $state<string | null>(null);
   /** True from the moment the text was put into the application until something else happens. */
-  inserted = $state(false);
+  done = $state<Done>(null);
   /** When the final text arrived. */
   private refinedAt = 0;
   /** The loudest input level since it was last taken, and whether one arrived at all. */
@@ -62,7 +63,7 @@ export class WidgetFeed {
     // A message that waits for the change of the text to be seen.
     let waiting: ReturnType<typeof setTimeout> | undefined;
     const still = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const show = (p: MessagePayload) => { this.message = p; this.transcript = ""; this.refined = null; this.inserted = false; };
+    const show = (p: MessagePayload) => { this.message = p; this.transcript = ""; this.refined = null; this.done = null; };
     const unsubs = [
       onWidgetState((p) => {
         this.setLanguage(p.language);
@@ -74,7 +75,7 @@ export class WidgetFeed {
           hintTimer = setTimeout(() => { this.hint = false; }, HINT_MS);
         } else if (p.state !== "locked") this.hint = false;
         this.state = p.state;
-        if (p.state !== "idle") this.inserted = false;
+        if (p.state !== "idle") this.done = null;
         // A new dictation drops a message that was still waiting.
         if (p.state === "recording" || p.state === "locked" || p.state === "processing") clearTimeout(waiting);
         if (p.state !== "idle" && p.state !== "placing" && p.state !== "moving") this.message = null;
@@ -92,7 +93,8 @@ export class WidgetFeed {
         if (wait > 0) waiting = setTimeout(() => show(p), wait);
         else show(p);
       }),
-      onWidgetInserted(() => { this.inserted = true; }),
+      onWidgetInserted(() => { this.done = "inserted"; }),
+      onWidgetCopied(() => { this.done = "copied"; }),
       onWidgetEnter(() => { this.open = true; }),
       onWidgetLeave(() => { this.open = false; }),
       onWidgetTranscript((p) => { this.transcript = p.text; this.refined = null; }),

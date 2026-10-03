@@ -114,7 +114,7 @@
       mic: micLine(client.value?.microphone ?? "builtin", mics),
       asr: engineLine(providers, draft.asr_provider, installed),
       llm: engineLine(providers, draft.llm_provider, installed),
-      out: outputLine(draft),
+      out: outputLine(draft, client.value?.insertion.default),
     };
   });
 
@@ -364,7 +364,7 @@
         <Switch bind:checked={() => appliesDictionary(draft!), (v) => (draft = withDictionary(snapshot(), v))} label={t("flow.dictionary")} />
       </Row>
       <Row label={t("flow.insert_row")} help={t("flow.insert_help")}>
-        <button type="button" class="btn quiet" onclick={() => guard.request(() => go("general"))}>{t("flow.to_general")}</button>
+        <button type="button" class="btn quiet" onclick={() => guard.request(() => go("advanced"))}>{t("flow.to_advanced")}</button>
       </Row>
     </Group>
   {/if}
