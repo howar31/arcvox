@@ -104,6 +104,10 @@ impl Platform for MacPlatform {
         pasteboard::write_text(text)
     }
 
+    fn clipboard_write_passing(&self, text: &str) {
+        pasteboard::write_passing(text)
+    }
+
     fn clipboard_restore(&self, snapshot: ClipboardSnapshot) {
         pasteboard::restore(snapshot)
     }

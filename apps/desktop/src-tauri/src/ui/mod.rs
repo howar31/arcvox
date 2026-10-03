@@ -621,6 +621,10 @@ impl Ui for TauriUi {
         self.emit("widget-inserted", ());
     }
 
+    fn copied(&self) {
+        self.emit("widget-copied", ());
+    }
+
     fn transcript(&self, text: String) {
         *self.transcript.lock().unwrap() = Some(text.clone());
         let language = self.language();

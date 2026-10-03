@@ -45,14 +45,14 @@ export interface Redo {
   applied: boolean; profile_id: string; raw_text: string; final_text: string; degraded: boolean; asr_ms: number; llm_ms: number | null;
   dict_fixes: number; snippets: number; llm_changed: boolean; asr_label: string; llm_label: string | null;
 }
-export type InsertMethod = "paste" | "type" | "ax";
+export type InsertMethod = "paste" | "type" | "ax" | "copy";
 export interface ClientSettings {
   schema_version: number;
   /** `shortcuts`: the key combinations and mouse buttons that start a recording, each a list of key names. */
   hotkey: { hold_threshold_ms: number; double_tap_window_ms: number; shortcuts: string[][] };
   microphone: string;
   context: { app_name: boolean; window_title: boolean; url: boolean; selected_text: boolean; clipboard: boolean };
-  insertion: { per_app: Record<string, InsertMethod> };
+  insertion: { default: InsertMethod; keep_on_clipboard: boolean; per_app: Record<string, InsertMethod> };
   max_utterance_secs: number;
   auto_stop: { enabled: boolean; silence_secs: number };
   show_transcript: boolean;
@@ -253,5 +253,6 @@ export type PanelEdge = "top" | "bottom" | "left" | "right";
 /** The panel's window is on screen at its place; the payload is the edge that faces the widget. */
 export function onPanelPlaced(cb: (edge: PanelEdge) => void): Promise<UnlistenFn> { return listen<PanelEdge>("panel-placed", (e) => cb(e.payload)); }
 export function onWidgetInserted(cb: () => void): Promise<UnlistenFn> { return listen("widget-inserted", () => cb()); }
+export function onWidgetCopied(cb: () => void): Promise<UnlistenFn> { return listen("widget-copied", () => cb()); }
 export function onWidgetRefined(cb: (p: TranscriptPayload) => void): Promise<UnlistenFn> { return listen<TranscriptPayload>("widget-refined", (e) => cb(e.payload)); }
 export function onWidgetTranscript(cb: (p: TranscriptPayload) => void): Promise<UnlistenFn> { return listen<TranscriptPayload>("widget-transcript", (e) => cb(e.payload)); }

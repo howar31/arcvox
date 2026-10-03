@@ -12,6 +12,8 @@ pub enum Plan {
     Ax {
         pid: i32,
     },
+    /// Put the text on the clipboard and leave the application alone.
+    Copy,
     /// Do not insert; show the text with a Copy button and say why.
     Show(ShowReason),
 }
@@ -35,6 +37,10 @@ pub fn plan(s: &Situation<'_>) -> Plan {
     if s.text.trim().is_empty() {
         return Plan::Show(ShowReason::EmptyText);
     }
+    // A copy needs no place to put the text, so nothing below can stop it.
+    if s.method == InsertMethod::Copy {
+        return Plan::Copy;
+    }
     if s.secure_input {
         return Plan::Show(ShowReason::SecureInput);
     }
@@ -51,6 +57,7 @@ pub fn plan(s: &Situation<'_>) -> Plan {
         InsertMethod::Paste => Plan::Paste,
         InsertMethod::Type => Plan::Type,
         InsertMethod::Ax => Plan::Ax { pid: s.target.pid },
+        InsertMethod::Copy => Plan::Copy,
     }
 }
 
@@ -149,6 +156,28 @@ mod tests {
         assert_eq!(
             plan(&sit("x", &t, Some(&f), false, InsertMethod::Ax)),
             Plan::Ax { pid: 7 }
+        );
+    }
+
+    #[test]
+    fn a_copy_needs_no_place_for_the_text() {
+        let t = target();
+        let f = front(7, "com.apple.Terminal");
+        let other = front(9, "com.google.Chrome");
+        for (front, secure) in [
+            (Some(&f), false),
+            (Some(&f), true),
+            (Some(&other), false),
+            (None, false),
+        ] {
+            assert_eq!(
+                plan(&sit("x", &t, front, secure, InsertMethod::Copy)),
+                Plan::Copy
+            );
+        }
+        assert_eq!(
+            plan(&sit(" ", &t, Some(&f), false, InsertMethod::Copy)),
+            Plan::Show(ShowReason::EmptyText)
         );
     }
 }

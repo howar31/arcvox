@@ -274,7 +274,7 @@
       micLine(client.value?.microphone ?? "builtin", mics).name,
       engineLine(providers, p.asr_provider, installed).name,
       engineLine(providers, p.llm_provider, installed).name,
-      outputLine(p).name,
+      outputLine(p, client.value?.insertion.default).name,
     ].join(t("home.flow_sep"));
   });
 

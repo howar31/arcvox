@@ -101,6 +101,11 @@ pub trait Platform: Send + Sync {
     fn secure_input_active(&self) -> bool;
     fn clipboard_snapshot(&self) -> ClipboardSnapshot;
     fn clipboard_write_text(&self, text: &str);
+    /// Writes text that is on the clipboard only to be pasted and is taken
+    /// off again; marked so that clipboard histories can leave it out.
+    fn clipboard_write_passing(&self, text: &str) {
+        self.clipboard_write_text(text)
+    }
     fn clipboard_restore(&self, snapshot: ClipboardSnapshot);
     fn post_paste(&self);
     fn type_unicode(&self, text: &str);
@@ -183,6 +188,10 @@ pub mod fake {
         }
         fn clipboard_write_text(&self, text: &str) {
             self.record(format!("write:{text}"));
+            *self.clipboard.lock().unwrap() = Some(text.to_string());
+        }
+        fn clipboard_write_passing(&self, text: &str) {
+            self.record(format!("passing:{text}"));
             *self.clipboard.lock().unwrap() = Some(text.to_string());
         }
         fn clipboard_restore(&self, snapshot: ClipboardSnapshot) {

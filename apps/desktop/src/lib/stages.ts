@@ -1,4 +1,4 @@
-import type { ManifestView, Profile, ProviderConfig } from "./api";
+import type { InsertMethod, ManifestView, Profile, ProviderConfig } from "./api";
 import { scriptChoice } from "./flowEdit";
 import { t } from "./i18n";
 import { modelDescription } from "./labels";
@@ -35,11 +35,11 @@ export function engineLine(providers: ProviderConfig[], id: string | null, insta
   return { name: p.label, known: true, ...engineKind(p, installed) };
 }
 
-/** The output stage. */
-export function outputLine(profile: Profile): StageLine {
+/** The output stage; `method` is the default insertion method. */
+export function outputLine(profile: Profile, method: InsertMethod = "paste"): StageLine {
   const script = scriptChoice(profile);
   const meta = script === "tw" ? t("home.output_opencc") : script === "none" ? t("home.output_plain") : t("home.output_opencc_other", { config: script.other });
-  return { name: t("home.output_paste"), meta, known: true, missing: false };
+  return { name: t("home.output_" + method), meta, known: true, missing: false };
 }
 
 /** One sentence about what an engine is. */

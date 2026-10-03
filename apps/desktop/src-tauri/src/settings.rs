@@ -152,16 +152,23 @@ pub struct ContextOptIns {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct InsertionSettings {
-    /// Bundle id -> method. Apps not listed use `Paste`.
+    /// The method of every app that is not in `per_app`.
+    pub default: InsertMethod,
+    /// The final text stays on the clipboard, whatever the method.
+    pub keep_on_clipboard: bool,
+    /// Bundle id -> method.
     pub per_app: BTreeMap<String, InsertMethod>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InsertMethod {
+    #[default]
     Paste,
     Type,
     Ax,
+    /// Nothing is put into the application; the text goes to the clipboard.
+    Copy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -279,7 +286,7 @@ impl ClientSettings {
     pub fn method_for(&self, bundle_id: Option<&str>) -> InsertMethod {
         bundle_id
             .and_then(|id| self.insertion.per_app.get(id).copied())
-            .unwrap_or(InsertMethod::Paste)
+            .unwrap_or(self.insertion.default)
     }
 }
 
@@ -365,5 +372,18 @@ mod tests {
             with_method.method_for(Some("com.example")),
             InsertMethod::Ax
         );
+        assert_eq!(json["insertion"]["default"], "paste");
+        assert_eq!(json["insertion"]["keep_on_clipboard"], false);
+    }
+
+    #[test]
+    fn apps_not_listed_use_the_default_method() {
+        let s: ClientSettings = serde_json::from_value(serde_json::json!({
+            "insertion": {"default": "copy", "per_app": {"com.example": "type"}}
+        }))
+        .unwrap();
+        assert_eq!(s.method_for(Some("com.example")), InsertMethod::Type);
+        assert_eq!(s.method_for(Some("com.other")), InsertMethod::Copy);
+        assert_eq!(s.method_for(None), InsertMethod::Copy);
     }
 }
