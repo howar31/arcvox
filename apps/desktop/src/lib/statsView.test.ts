@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { durationParts, fillDays, heatLevel, localDay, percent, periodStart, speed, streaks, topWithOthers } from "./statsView";
+import { durationParts, fillDays, heatLevel, heatWeeks, localDay, monthLabels, percent, periodStart, speed, streaks, topWithOthers } from "./statsView";
 
 describe("statsView", () => {
   const now = new Date(2026, 9, 1, 14, 30);
@@ -40,5 +40,21 @@ describe("statsView", () => {
   it("splits a duration into hours, minutes and seconds", () => {
     expect(durationParts(0)).toEqual({ hours: 0, minutes: 0, seconds: 0 });
     expect(durationParts(2 * 3600_000 + 6 * 60_000 + 7_400)).toEqual({ hours: 2, minutes: 6, seconds: 7 });
+  });
+
+  it("shows as many heatmap weeks as fit, between 20 and 52", () => {
+    expect(heatWeeks(0)).toBe(20);
+    expect(heatWeeks(356)).toBe(20); // 20 columns of 14 plus 19 gaps of 4
+    expect(heatWeeks(373)).toBe(20);
+    expect(heatWeeks(374)).toBe(21);
+    expect(heatWeeks(600)).toBe(33);
+    expect(heatWeeks(5000)).toBe(52);
+  });
+
+  it("names a month on the column that holds its first day", () => {
+    const from = localDay(new Date(2026, 8, 20));
+    const name = (d: Date) => `${d.getMonth() + 1}月`;
+    expect(monthLabels(from, 3, name)).toEqual(["", "10月", ""]);
+    expect(monthLabels(localDay(new Date(2026, 9, 1)), 1, name)).toEqual(["10月"]);
   });
 });

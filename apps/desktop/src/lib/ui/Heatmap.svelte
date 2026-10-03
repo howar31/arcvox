@@ -1,13 +1,27 @@
 <script lang="ts">
-  /** One square per day, seven to a column, oldest first; `titles` name each day for pointers and screen readers. */
-  let { levels, titles }: { levels: (0 | 1 | 2 | 3 | 4)[]; titles: string[] } = $props();
+  /**
+   * One square per day, seven to a column, oldest first; `titles` name each day for pointers and
+   * screen readers. `months` gives one label per column (the month's name where it begins, "" elsewhere).
+   */
+  let { levels, titles, months = [] }: { levels: (0 | 1 | 2 | 3 | 4)[]; titles: string[]; months?: string[] } = $props();
 </script>
 
-<div class="heat" role="img" aria-label={titles.filter((_, i) => levels[i] > 0).join("; ")}>
-  {#each levels as level, i (i)}<i class="l{level}" title={titles[i]}></i>{/each}
+<div class="heatmap">
+  {#if months.some((m) => m)}
+    <div class="months" aria-hidden="true">
+      {#each months as month, i (i)}<span>{month}</span>{/each}
+    </div>
+  {/if}
+  <div class="heat" role="img" aria-label={titles.filter((_, i) => levels[i] > 0).join("; ")}>
+    {#each levels as level, i (i)}<i class="l{level}" title={titles[i]}></i>{/each}
+  </div>
 </div>
 
 <style>
+  .heatmap { display: inline-grid; gap: 6px; }
+  .months { display: grid; grid-auto-flow: column; grid-auto-columns: 14px; gap: 4px; height: 14px; font-size: 11px; line-height: 14px; color: var(--ink-3); }
+  /* A label may run past its 14 px column; the next month is at least four columns away. */
+  .months span { white-space: nowrap; overflow: visible; }
   .heat { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 14px); grid-auto-columns: 14px; gap: 4px; }
   i { border-radius: 3px; background: var(--sunken); }
   .l1 { background: color-mix(in srgb, var(--accent) 25%, var(--sunken)); }

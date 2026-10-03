@@ -390,7 +390,7 @@
   "home.tile.saved": "節省時間（估計）",
   "home.tile.saved_detail": "以每分鐘打 {n} 字估算",
   "home.days.title": "使用天數",
-  "home.days.range": "最近 20 週",
+  "home.days.range": "最近 {n} 週",
   "home.days.sub": "每一格是一天，顏色越深當天輸出的字數越多。",
   "home.days.n": "{n} 天",
   "home.days.current": "目前連續使用",
