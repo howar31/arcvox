@@ -18,7 +18,7 @@ pub const WINDOW: &str = "widget";
 /// recognised text, buttons.
 pub const PANEL: &str = "panel";
 /// Bounds for the size the panel reports for its content.
-const PANEL_MAX: Size = Size { w: 520.0, h: 800.0 };
+const PANEL_MAX: Size = Size { w: 760.0, h: 900.0 };
 /// kCGPopUpMenuWindowLevel from CGWindowLevel.h.
 #[cfg(target_os = "macos")]
 const LEVEL_POPUP_MENU: i64 = 101;
@@ -70,6 +70,8 @@ pub(super) struct Display {
     /// The name the position is saved under.
     pub(super) key: String,
     pub(super) rect: Rect,
+    /// The camera housing at the top of the display, when it has one.
+    pub(super) housing: Option<Rect>,
 }
 
 // All geometry below is in global points with the origin at the top left of
@@ -78,6 +80,10 @@ pub(super) struct Display {
 // scale, so each value is divided by the scale it was reported in.
 
 pub(super) fn displays<R: Runtime>(app: &AppHandle<R>) -> Vec<Display> {
+    #[cfg(target_os = "macos")]
+    let housings = objc2::MainThreadMarker::new()
+        .map(crate::platform::macos::screens::housings)
+        .unwrap_or_default();
     let displays = app
         .available_monitors()
         .unwrap_or_default()
@@ -86,6 +92,21 @@ pub(super) fn displays<R: Runtime>(app: &AppHandle<R>) -> Vec<Display> {
             let scale = m.scale_factor();
             let origin = m.position().to_logical::<f64>(scale);
             let size = m.size().to_logical::<f64>(scale);
+            // The housing of the display whose top left corner this is.
+            #[cfg(target_os = "macos")]
+            let housing = housings
+                .iter()
+                .find(|h| {
+                    (h.display.0 - origin.x).abs() < 1.0 && (h.display.1 - origin.y).abs() < 1.0
+                })
+                .map(|h| Rect {
+                    x: origin.x + h.left,
+                    y: origin.y,
+                    w: h.width,
+                    h: h.height,
+                });
+            #[cfg(not(target_os = "macos"))]
+            let housing = None;
             Display {
                 key: m.name().cloned().unwrap_or_default(),
                 rect: Rect {
@@ -94,6 +115,7 @@ pub(super) fn displays<R: Runtime>(app: &AppHandle<R>) -> Vec<Display> {
                     w: size.width,
                     h: size.height,
                 },
+                housing,
             }
         })
         .collect();
@@ -282,6 +304,8 @@ pub struct Layout {
     full: Option<Size>,
     /// The display the user keeps the widget on, when one is chosen.
     fixed: Option<String>,
+    /// The widget is turned over: its ring is at the bottom.
+    flipped: bool,
 }
 
 impl Layout {
@@ -298,7 +322,14 @@ impl Layout {
             folded: false,
             full: None,
             fixed: None,
+            flipped: false,
         }
+    }
+
+    /// Tells the widget which way up it is at `frame` on `display`.
+    fn turn<R: Runtime>(&mut self, app: &AppHandle<R>, display: Rect, frame: Rect) {
+        self.flipped = placement::flipped(display, frame);
+        let _ = app.emit_to(WINDOW, "widget-flip", self.flipped);
     }
 
     /// The user chose the display the widget stays on, or none: then it
@@ -322,6 +353,12 @@ impl Layout {
         }
         let short = self.short();
         Rect {
+            // The ring is at the bottom of a widget that is turned over.
+            y: if self.flipped {
+                frame.bottom() - short
+            } else {
+                frame.y
+            },
             w: short,
             h: short,
             ..frame
@@ -471,8 +508,12 @@ impl Layout {
             .copied()
             .unwrap_or_else(|| placement::default_anchor(display.rect, self.short()));
         let size = placement::size_for(anchor.dock, self.long, self.short());
-        let frame = placement::frame(display.rect, anchor, size);
+        let frame = placement::clear_of(
+            display.housing,
+            placement::frame(display.rect, anchor, size),
+        );
         self.full = Some(size);
+        self.turn(app, display.rect, frame);
         apply_frame(&window, self.shown(frame), &displays);
         self.place_panel(app, &displays, frame);
     }
@@ -488,6 +529,11 @@ impl Layout {
         // A folded widget is dragged as the whole widget it stands for.
         let frame = match self.full {
             Some(size) if self.folded => Rect {
+                y: if self.flipped {
+                    frame.bottom() - size.h
+                } else {
+                    frame.y
+                },
                 w: size.w,
                 h: size.h,
                 ..frame
@@ -516,14 +562,33 @@ impl Layout {
             ..drag.frame
         };
         let displays = displays(app);
+        let rects: Vec<Rect> = displays.iter().map(|d| d.rect).collect();
+        // Near a center line of the display it is over, the widget is held
+        // on it. It is shown where and in the shape a drop would leave it:
+        // vertical at a side edge, horizontal away from it.
+        let (moved, preview) = match placement::display_at(&rects, moved.center()) {
+            Some(i) => {
+                let moved = placement::snapped(rects[i], moved);
+                let anchor = placement::anchor_after_drag(rects[i], moved, self.long.wide);
+                let size = placement::size_for(anchor.dock, self.long, self.short());
+                let preview = placement::clear_of(
+                    displays[i].housing,
+                    placement::frame(rects[i], anchor, size),
+                );
+                if primary_button_down() {
+                    self.turn(app, rects[i], preview);
+                }
+                (moved, preview)
+            }
+            None => (moved, moved),
+        };
         if primary_button_down() {
-            apply_frame(&window, self.shown(moved), &displays);
-            self.place_panel(app, &displays, moved);
+            apply_frame(&window, self.shown(preview), &displays);
+            self.place_panel(app, &displays, preview);
             return true;
         }
         self.drag = None;
         if dx.hypot(dy) >= DRAG_THRESHOLD {
-            let rects: Vec<Rect> = displays.iter().map(|d| d.rect).collect();
             if let Some(display) =
                 placement::display_at(&rects, moved.center()).and_then(|i| displays.get(i))
             {
@@ -553,6 +618,7 @@ mod tests {
                 w: 100.0,
                 h: 100.0,
             },
+            housing: None,
         }
     }
 

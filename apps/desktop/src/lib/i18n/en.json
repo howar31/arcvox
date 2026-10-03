@@ -634,5 +634,13 @@
   "general.widget_display": "Display",
   "general.widget_display_help": "When the chosen display is not connected, the widget shows on the display with the pointer.",
   "general.widget_display_pointer": "The one with the pointer",
-  "general.widget_display_missing": "{name} (not connected)"
+  "general.widget_display_missing": "{name} (not connected)",
+  "panel.placing": "Drag the widget to where you want it",
+  "panel.placing_center": "Near the middle of the display it is held on the center line.",
+  "panel.placing_side": "At the left or right edge it turns vertical.",
+  "panel.placing_bottom": "A vertical widget at the bottom of the display turns over, its ring at the bottom.",
+  "panel.placing_panel": "This panel is where the text of a dictation shows.",
+  "general.widget_size_x_small": "Smallest",
+  "general.widget_size_x_large": "Largest",
+  "tray.widget_place": "Position the widget"
 }

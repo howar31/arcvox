@@ -2,7 +2,7 @@
   import { onMount, untrack } from "svelte";
   import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
-  import { clearRecordings, errorMessage, formatBytes, historyStorage, openRecordingsDir, recordingsDir, resetStats, setRecordingsDir, type RecordingsDir, listDisplays, listMicrophones, openPrivacyPane, permissions, requestAccessibility, updateGeneral, widgetPlacing, widgetResetPosition, type ClientSettings, type DisplayName, type General, type HistoryStorage, type InsertMethod } from "../../lib/api";
+  import { clearRecordings, errorMessage, formatBytes, historyStorage, openRecordingsDir, recordingsDir, resetStats, setRecordingsDir, type RecordingsDir, listDisplays, listMicrophones, onWidgetPlacing, widgetIsPlacing, openPrivacyPane, permissions, requestAccessibility, updateGeneral, widgetPlacing, widgetResetPosition, type ClientSettings, type DisplayName, type General, type HistoryStorage, type InsertMethod } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { t } from "../../lib/i18n";
   import { client, config } from "../../lib/store.svelte";
@@ -13,6 +13,7 @@
   import Group from "../../lib/ui/Group.svelte";
   import Row from "../../lib/ui/Row.svelte";
   import Ring from "../../lib/ui/Ring.svelte";
+  import Segmented from "../../lib/ui/Segmented.svelte";
   import Switch from "../../lib/ui/Switch.svelte";
   import NumberField from "../../lib/ui/NumberField.svelte";
   import ShortcutField from "../../lib/ui/ShortcutField.svelte";
@@ -131,11 +132,16 @@
     try { await resetStats(); toast.ok(t("general.stats_reset_done")); } catch (e) { toast.error(errorMessage(e)); }
   }
 
+  const sizes = $derived((["x_small", "small", "medium", "large", "x_large"] as const).map((value) => ({ value, label: t(`general.widget_size_${value}`) })));
+
   // The connected displays, for the choice of the one the widget stays on.
   let displays = $state<DisplayName[]>([]);
 
   onMount(() => {
     listDisplays().then((d) => { displays = d; }).catch(() => {});
+    // The same switch is in the menus.
+    const placed = onWidgetPlacing((on) => { placing = on; });
+    widgetIsPlacing().then((on) => { placing = on; }).catch(() => {});
     reset();
     loadStorage();
     loadFolder();
@@ -146,6 +152,7 @@
     window.addEventListener("focus", onFocus);
     return () => {
       window.removeEventListener("focus", onFocus);
+      placed.then((off) => off());
       if (placing) widgetPlacing(false).catch(() => {});
     };
   });
@@ -274,11 +281,7 @@
     </Row>
     {#if draft}
       <Row label={t("general.widget_size")}>
-        <select bind:value={draft.widget_size} aria-label={t("general.widget_size")}>
-          <option value="small">{t("general.widget_size_small")}</option>
-          <option value="medium">{t("general.widget_size_medium")}</option>
-          <option value="large">{t("general.widget_size_large")}</option>
-        </select>
+        <Segmented options={sizes} bind:value={draft.widget_size} label={t("general.widget_size")} />
       </Row>
       <Row label={t("general.widget_display")} help={t("general.widget_display_help")}>
         <select value={draft.widget_display ?? ""} onchange={(e) => { draft!.widget_display = e.currentTarget.value || null; }} aria-label={t("general.widget_display")}>

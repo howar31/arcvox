@@ -40,6 +40,9 @@ const HIDE_AFTER_COPYABLE: Duration = Duration::from_millis(15_000);
 const DRAG_TICK: Duration = Duration::from_millis(8);
 /// The widget state shown while the user is asked to position the widget.
 const PLACING: &str = "placing";
+/// The look of a widget at rest while it is dragged: as when it is
+/// positioned from the settings window, without the panel that explains it.
+const MOVING: &str = "moving";
 /// The settings window, which names the state in its sidebar.
 const SETTINGS: &str = "settings";
 /// How long the windows stay after the widget was told to leave: the
@@ -109,6 +112,8 @@ pub struct TauriUi {
     /// True while the settings window keeps the widget visible so the user
     /// can position it.
     placing: AtomicBool,
+    /// The widget is kept visible by a drag, not by the settings window.
+    moving: AtomicBool,
     /// The message on the widget stays until dismissed or replaced.
     sticky: AtomicBool,
     /// The recognised text the panel shows for the dictation in progress.
@@ -148,6 +153,7 @@ impl TauriUi {
             dragging: Arc::new(AtomicBool::new(false)),
             hide_waiting: Arc::new(AtomicBool::new(false)),
             placing: AtomicBool::new(false),
+            moving: AtomicBool::new(false),
             sticky: AtomicBool::new(false),
             transcript: Mutex::new(None),
             linger: Mutex::new(None),
@@ -224,11 +230,12 @@ impl TauriUi {
         let language = self.language();
         let state = *self.state.lock().unwrap();
         let idle = self.idle();
+        let placing = self.is_placing();
         let _ = self.app.run_on_main_thread(move || {
             let Some(window) = app.get_webview_window(widget::WINDOW) else {
                 return;
             };
-            match tray::menu(&app, language, state, idle) {
+            match tray::menu(&app, language, state, idle, placing) {
                 Ok((menu, _)) => {
                     if let Err(e) = menu.popup(window.as_ref().window()) {
                         tracing::warn!(error = %e, "widget menu not shown");
@@ -239,11 +246,25 @@ impl TauriUi {
         });
     }
 
+    /// Whether the widget is kept on screen to be positioned.
+    pub fn is_placing(&self) -> bool {
+        self.placing.load(Ordering::SeqCst) && !self.moving.load(Ordering::SeqCst)
+    }
+
+    /// The name of the state while the widget is kept visible to be moved.
+    fn placing_name(&self) -> &'static str {
+        if self.moving.load(Ordering::SeqCst) {
+            MOVING
+        } else {
+            PLACING
+        }
+    }
+
     fn emit_current_state(&self) {
         let state = *self.state.lock().unwrap();
         let placing = self.placing.load(Ordering::SeqCst);
         self.emit_state(if placing && !is_session(state) {
-            PLACING
+            self.placing_name()
         } else {
             Self::state_name(state)
         });
@@ -363,6 +384,15 @@ impl TauriUi {
         if self.dragging.swap(true, Ordering::SeqCst) {
             return;
         }
+        // A widget at rest is dragged as the whole widget, with the look it
+        // has while it is being positioned, so its place can be judged.
+        let opened = !self.visible.load(Ordering::SeqCst)
+            && self.idle() != WidgetIdle::Hidden
+            && !self.placing.load(Ordering::SeqCst);
+        if opened {
+            self.moving.store(true, Ordering::SeqCst);
+            self.set_placing(true);
+        }
         std::thread::spawn(move || {
             // Runs one step on the main thread; true while the drag goes on.
             let step = |begin: bool| {
@@ -392,6 +422,10 @@ impl TauriUi {
             if self.hide_waiting.swap(false, Ordering::SeqCst) {
                 self.hide_after(HIDE_AFTER_IDLE);
             }
+            if opened {
+                self.set_placing(false);
+                self.moving.store(false, Ordering::SeqCst);
+            }
         });
     }
 
@@ -401,13 +435,18 @@ impl TauriUi {
         if self.placing.swap(on, Ordering::SeqCst) == on {
             return;
         }
+        if !self.moving.load(Ordering::SeqCst) {
+            // The menus and the settings window show that it is on.
+            self.tray.set_placing(on);
+            let _ = self.app.emit_to(SETTINGS, "widget-placing", on);
+        }
         let state = *self.state.lock().unwrap();
         if is_session(state) {
             // A dictation is on screen; it goes on as usual.
             return;
         }
         if on {
-            self.emit_state(PLACING);
+            self.emit_state(self.placing_name());
             self.show();
         } else {
             self.emit_state(Self::state_name(state));
@@ -518,7 +557,7 @@ impl Ui for TauriUi {
         *self.state.lock().unwrap() = state;
         let placing = self.placing.load(Ordering::SeqCst);
         self.emit_state(if placing && !is_session(state) {
-            PLACING
+            self.placing_name()
         } else {
             Self::state_name(state)
         });

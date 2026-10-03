@@ -634,5 +634,13 @@
   "general.widget_display": "顯示的螢幕",
   "general.widget_display_help": "選定的螢幕沒有連接時，改用游標所在的螢幕。",
   "general.widget_display_pointer": "游標所在的螢幕",
-  "general.widget_display_missing": "{name}（未連接）"
+  "general.widget_display_missing": "{name}（未連接）",
+  "panel.placing": "把浮動視窗拖曳到想要的位置",
+  "panel.placing_center": "靠近螢幕中線時，會吸附在正中間。",
+  "panel.placing_side": "拖到螢幕左右邊緣時，會變成直式。",
+  "panel.placing_bottom": "直式放到螢幕最下方時，圓環會轉到下方。",
+  "panel.placing_panel": "這個面板的位置，就是聽寫時顯示文字的位置。",
+  "general.widget_size_x_small": "特小",
+  "general.widget_size_x_large": "特大",
+  "tray.widget_place": "調整浮動視窗位置"
 }

@@ -84,10 +84,12 @@ pub struct AutoStop {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WidgetSize {
+    XSmall,
     Small,
     #[default]
     Medium,
     Large,
+    XLarge,
 }
 
 /// What the floating widget shows while no dictation goes on.
@@ -116,12 +118,14 @@ impl WidgetIdle {
 }
 
 impl WidgetSize {
-    /// The factor on the small size's measures.
+    /// The factor on the widget's base measures, a short side of 48.
     pub fn scale(self) -> f64 {
         match self {
-            WidgetSize::Small => 1.0,
+            WidgetSize::XSmall => 0.75,
+            WidgetSize::Small => 11.0 / 12.0,
             WidgetSize::Medium => 7.0 / 6.0,
-            WidgetSize::Large => 4.0 / 3.0,
+            WidgetSize::Large => 1.5,
+            WidgetSize::XLarge => 23.0 / 12.0,
         }
     }
 }

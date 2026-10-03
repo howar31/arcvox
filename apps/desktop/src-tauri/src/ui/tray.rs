@@ -25,6 +25,7 @@ pub const ID_HISTORY: &str = "history";
 pub const ID_STATISTICS: &str = "statistics";
 pub const ID_SETTINGS: &str = "settings";
 pub const ID_QUIT: &str = "quit";
+pub const ID_PLACE: &str = "widget-place";
 
 /// The id of the item that chooses what the widget shows while idle.
 fn idle_id(idle: WidgetIdle) -> String {
@@ -63,6 +64,7 @@ pub struct Tray<R: Runtime> {
     last_state: Mutex<UiState>,
     language: Mutex<Language>,
     idle: Mutex<WidgetIdle>,
+    placing: Mutex<bool>,
 }
 
 /// The menu of the menu-bar icon; the widget opens the same one. What its
@@ -72,6 +74,7 @@ pub(super) fn menu<R: Runtime>(
     language: Language,
     state: UiState,
     idle: WidgetIdle,
+    placing: bool,
 ) -> tauri::Result<(Menu<R>, MenuItem<R>)> {
     // The first line names the app and the running version, so the version
     // can be read without opening the settings window.
@@ -119,7 +122,16 @@ pub(super) fn menu<R: Runtime>(
         None::<&str>,
     )?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
-    // What the widget shows while no dictation goes on: the choice in use is ticked.
+    // The widget: kept on screen to be dragged into place (ticked while it is),
+    // and what it shows while no dictation goes on (the choice in use is ticked).
+    menu.append(&CheckMenuItem::with_id(
+        app,
+        ID_PLACE,
+        text(language, Msg::TrayWidgetPlace),
+        true,
+        placing,
+        None::<&str>,
+    )?)?;
     let choices = Submenu::with_id(
         app,
         "widget-idle",
@@ -166,7 +178,7 @@ pub(super) fn menu<R: Runtime>(
 
 impl Tray<tauri::Wry> {
     pub fn build(app: &AppHandle<tauri::Wry>, language: Language) -> tauri::Result<Self> {
-        let (first, status) = menu(app, language, UiState::Idle, WidgetIdle::default())?;
+        let (first, status) = menu(app, language, UiState::Idle, WidgetIdle::default(), false)?;
         let icon = TrayIconBuilder::with_id("arcvox")
             .icon(ICON_IDLE)
             .icon_as_template(true)
@@ -182,6 +194,7 @@ impl Tray<tauri::Wry> {
             last_state: Mutex::new(UiState::Idle),
             language: Mutex::new(language),
             idle: Mutex::new(WidgetIdle::default()),
+            placing: Mutex::new(false),
         })
     }
 }
@@ -192,7 +205,8 @@ impl<R: Runtime> Tray<R> {
         let language = *self.language.lock().unwrap();
         let state = *self.last_state.lock().unwrap();
         let idle = *self.idle.lock().unwrap();
-        let Ok((next, status)) = menu(&self.app, language, state, idle) else {
+        let placing = *self.placing.lock().unwrap();
+        let Ok((next, status)) = menu(&self.app, language, state, idle, placing) else {
             return;
         };
         let _ = self.icon.set_menu(Some(next));
@@ -221,6 +235,12 @@ impl<R: Runtime> Tray<R> {
     /// the state it last displayed.
     pub fn set_language(&self, language: Language) {
         *self.language.lock().unwrap() = language;
+        self.rebuild();
+    }
+
+    /// Ticks the item that keeps the widget on screen to be positioned.
+    pub fn set_placing(&self, placing: bool) {
+        *self.placing.lock().unwrap() = placing;
         self.rebuild();
     }
 

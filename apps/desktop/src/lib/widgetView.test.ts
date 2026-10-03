@@ -121,6 +121,20 @@ describe("settings window line", () => {
   });
 
   it("has nothing to say when no dictation goes on", () => {
-    for (const state of ["idle", "placing", "no_accessibility", "engine_error"] as const) expect(dictationLabelKey(state)).toBeNull();
+    for (const state of ["idle", "placing", "moving", "no_accessibility", "engine_error"] as const) expect(dictationLabelKey(state)).toBeNull();
+  });
+});
+
+describe("positioning", () => {
+  it("explains itself in the panel when it is shown from the settings window", () => {
+    const view = panelView("placing", null, "", null, false);
+    expect(view?.title).toBe(t("panel.placing"));
+    expect(view?.body?.split("\n")).toHaveLength(4);
+  });
+
+  it("looks the same without a panel while a widget at rest is dragged", () => {
+    expect(labelKey("moving", null)).toBe(labelKey("placing", null));
+    expect(ringView("moving", null, false)).toEqual(ringView("placing", null, false));
+    expect(panelView("moving", null, "", null, false)).toBeNull();
   });
 });
