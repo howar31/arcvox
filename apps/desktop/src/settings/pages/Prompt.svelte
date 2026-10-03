@@ -44,7 +44,6 @@
       const next = text;
       await setPrompt(next);
       saved = next;
-      toast.ok(t("common.saved"));
     } catch (e) {
       toast.error(errorMessage(e));
     } finally {

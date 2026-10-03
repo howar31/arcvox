@@ -128,7 +128,6 @@
         items = toItems(structuredClone(next.dictionary));
       }
       synced = JSON.stringify(next.dictionary);
-      toast.ok(t("common.saved"));
     } catch (e) {
       toast.error(errorMessage(e));
     } finally {

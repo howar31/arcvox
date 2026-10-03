@@ -177,7 +177,6 @@
       // The shell reads the language once at start, so a change needs a
       // reload for every page to render in it.
       if (languageChanged) { location.reload(); return; }
-      toast.ok(t("common.saved"));
     } catch (e) {
       toast.error(errorMessage(e));
     } finally {
