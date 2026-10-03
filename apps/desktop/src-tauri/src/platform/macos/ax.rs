@@ -136,6 +136,27 @@ impl AxElement {
     }
 }
 
+/// Calls `notify` on every change of the Accessibility trust the system
+/// announces (it posts a distributed notification when the list in System
+/// Settings changes). The observer lives as long as the process.
+pub fn watch_trust(notify: Box<dyn Fn() + Send + Sync>) {
+    use std::ptr::NonNull;
+
+    use block2::RcBlock;
+    use objc2_foundation::{NSDistributedNotificationCenter, NSNotification, NSString};
+
+    let name = NSString::from_str("com.apple.accessibility.api");
+    let block = RcBlock::new(move |_: NonNull<NSNotification>| notify());
+    let center = NSDistributedNotificationCenter::defaultCenter();
+    // SAFETY: the name is a live string for the call, the block is owned by
+    // the observer the centre keeps, and both are kept for the life of the
+    // process because the observer is never removed.
+    let observer = unsafe {
+        center.addObserverForName_object_queue_usingBlock(Some(&name), None, None, &block)
+    };
+    std::mem::forget(observer);
+}
+
 pub fn is_trusted(prompt: bool) -> bool {
     // SAFETY: `kAXTrustedCheckOptionPrompt` is a process-lifetime CFString
     // constant exported by the framework; the get rule borrows it without

@@ -233,6 +233,9 @@ pub struct TapState {
     capture_seen: Mutex<Instant>,
     port: AtomicPtr<c_void>,
     running: AtomicBool,
+    /// Switched off on purpose (the trust went away); a disable reported
+    /// by the system is then left alone instead of being undone.
+    suspended: AtomicBool,
 }
 
 impl TapState {
@@ -245,11 +248,39 @@ impl TapState {
             capture_seen: Mutex::new(Instant::now()),
             port: AtomicPtr::new(std::ptr::null_mut()),
             running: AtomicBool::new(false),
+            suspended: AtomicBool::new(false),
         })
     }
 
     pub fn running(&self) -> bool {
         self.running.load(Ordering::SeqCst)
+    }
+
+    /// Stops the tap from seeing events. Without the Accessibility trust the
+    /// system still routes every keyboard event through the tap but no
+    /// longer accepts what the tap hands back, so each event waits for the
+    /// tap's timeout: the keyboard stands still for everyone.
+    pub fn suspend(&self) {
+        self.suspended.store(true, Ordering::SeqCst);
+        self.set_enabled(false);
+        self.modifiers.lock().unwrap().clear();
+        let out = self.matcher.lock().unwrap().reset();
+        self.dispatch(out, Instant::now());
+    }
+
+    /// Lets a suspended tap see events again.
+    pub fn resume(&self) {
+        self.suspended.store(false, Ordering::SeqCst);
+        self.set_enabled(true);
+    }
+
+    fn set_enabled(&self, on: bool) {
+        let port = self.port.load(Ordering::SeqCst);
+        if !port.is_null() {
+            // SAFETY: `port` is the tap's mach port, kept alive by the tap
+            // thread for the life of the process.
+            unsafe { CGEventTapEnable(port, on) };
+        }
     }
 
     pub fn set_shortcuts(&self, shortcuts: Vec<crate::shortcut::Shortcut>) {
@@ -321,11 +352,9 @@ impl TapState {
         match kind {
             CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput => {
                 // The system switched the tap off; events were missed.
-                let port = self.port.load(Ordering::SeqCst);
-                if !port.is_null() {
-                    // SAFETY: `port` is the tap's mach port, kept alive by
-                    // the tap thread for the life of the process.
-                    unsafe { CGEventTapEnable(port, true) };
+                tracing::warn!(?kind, "event tap disabled by the system");
+                if !self.suspended.load(Ordering::SeqCst) {
+                    self.set_enabled(true);
                 }
                 self.modifiers.lock().unwrap().clear();
                 let out = self.matcher.lock().unwrap().reset();
@@ -391,6 +420,21 @@ impl TapState {
     }
 }
 
+/// Whether the process may tap the keyboard right now. The system answers
+/// this from the current Accessibility list, while `AXIsProcessTrusted`
+/// keeps saying yes once it said yes during the life of the process, even
+/// after the permission was taken away again.
+pub fn can_tap_keyboard() -> bool {
+    let tap = CGEventTap::new(
+        CGEventTapLocation::Session,
+        CGEventTapPlacement::HeadInsertEventTap,
+        CGEventTapOptions::ListenOnly,
+        vec![CGEventType::KeyDown],
+        |_proxy, _kind, _event| CallbackResult::Keep,
+    );
+    tap.is_ok()
+}
+
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
     fn CGEventTapEnable(tap: *mut c_void, enable: bool);
@@ -402,6 +446,7 @@ extern "C" {
 pub fn install(state: &Arc<TapState>, tx: Sender<ModifierEvent>) -> bool {
     *state.tx.lock().unwrap() = Some(tx);
     if state.running() {
+        state.resume();
         return true;
     }
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();

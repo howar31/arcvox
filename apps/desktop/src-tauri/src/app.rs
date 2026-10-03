@@ -12,11 +12,13 @@ use crate::audio::AudioSource;
 use crate::commands::bench::BenchState;
 use crate::dictation::ui::{Ui, UiState};
 use crate::dictation::{self, ControllerHandle, Deps};
+use crate::hotkey::KEY_ESCAPE;
 use crate::i18n::{self, Language};
-use crate::platform::{CaptureEvent, Platform};
+use crate::platform::{CaptureEvent, ModifierEvent, Platform};
 use crate::providers::{build_factories, BUNDLED_MANIFEST};
 use crate::secrets::KeychainStore;
 use crate::settings::ClientSettings;
+use crate::trust;
 use crate::ui::window_state::{WindowState, SETTINGS_WINDOW};
 use crate::ui::TauriUi;
 use crate::vad::EarshotVad;
@@ -405,7 +407,7 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         ui.set_state(UiState::Idle);
     }
 
-    start_monitor_when_trusted(app, platform, controller, ui, engine.is_some());
+    follow_trust(app, platform, controller, ui, engine.is_some());
     Ok(())
 }
 
@@ -420,43 +422,77 @@ fn manifest_url(override_url: Option<&str>) -> url::Url {
         .unwrap_or_else(|| url::Url::parse(DEFAULT_MANIFEST_URL).expect("default manifest URL"))
 }
 
-/// Installs the fn key monitor once Accessibility is granted, polling
-/// every 5 s until then. The install itself runs on the main thread.
+/// Keeps the shortcut monitor in step with the Accessibility trust for the
+/// life of the process: installed while the trust is there, stopped the
+/// moment it goes (a running tap without the trust stalls the keyboard of
+/// the whole system), installed again when it comes back. The trust is read
+/// again on every announcement by the system and at least once a second.
 /// `engine_ready` gates the state transitions this function makes: when the
 /// engine never opened, `EngineError` must stay on screen instead of being
 /// overwritten with `NoAccessibility`/`Idle`, even though the monitor is
 /// still installed once Accessibility is granted.
-fn start_monitor_when_trusted(
+fn follow_trust(
     app: tauri::AppHandle<Wry>,
     platform: Arc<dyn Platform>,
     controller: ControllerHandle,
     ui: Arc<TauriUi>,
     engine_ready: bool,
 ) {
-    if platform.accessibility_trusted(false) {
+    let trusted = platform.accessibility_trusted(false);
+    if trusted {
         install_monitor(&platform, &controller);
-        return;
+    } else {
+        if let Some(state) = trust::state_for(false, engine_ready) {
+            ui.set_state(state);
+        }
+        crate::ui::tray::open_settings(&app, Some("general"));
     }
-    if engine_ready {
-        ui.set_state(UiState::NoAccessibility);
-    }
-    crate::ui::tray::open_settings(&app, Some("general"));
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(5));
-        if platform.accessibility_trusted(false) {
-            let platform = platform.clone();
-            let controller = controller.clone();
-            let ui = ui.clone();
-            let _ = app.run_on_main_thread(move || {
-                install_monitor(&platform, &controller);
-                if engine_ready {
-                    ui.set_state(UiState::Idle);
+
+    let (wake_tx, wake_rx) = std::sync::mpsc::channel::<()>();
+    platform.watch_accessibility(Box::new(move || {
+        let _ = wake_tx.send(());
+    }));
+    std::thread::spawn(move || {
+        let mut trust = trust::Trust::new(trusted);
+        loop {
+            // Woken by the system's announcement, else once a second.
+            let _ = wake_rx.recv_timeout(TRUST_POLL);
+            let Some(action) = trust.observe(platform.accessibility_trusted(false)) else {
+                continue;
+            };
+            match action {
+                trust::Action::Suspend => {
+                    tracing::warn!("accessibility trust taken away; shortcuts stopped");
+                    platform.stop_modifier_monitor();
+                    // A dictation in progress has lost the key that ends it.
+                    let _ = controller.modifier_sender().send(ModifierEvent::KeyDown {
+                        key_code: KEY_ESCAPE,
+                        at: std::time::Instant::now(),
+                    });
+                    if let Some(state) = trust::state_for(false, engine_ready) {
+                        ui.set_state(state);
+                    }
+                    crate::ui::tray::open_settings(&app, Some("general"));
                 }
-            });
-            break;
+                trust::Action::Install => {
+                    tracing::info!("accessibility trust granted; shortcuts started");
+                    let platform = platform.clone();
+                    let controller = controller.clone();
+                    let ui = ui.clone();
+                    let _ = app.run_on_main_thread(move || {
+                        install_monitor(&platform, &controller);
+                        if let Some(state) = trust::state_for(true, engine_ready) {
+                            ui.set_state(state);
+                        }
+                    });
+                }
+            }
         }
     });
 }
+
+/// How long the trust goes unchecked when the system announces nothing.
+const TRUST_POLL: Duration = Duration::from_secs(1);
 
 fn install_monitor(platform: &Arc<dyn Platform>, controller: &ControllerHandle) {
     if let Err(e) = platform.start_modifier_monitor(controller.modifier_sender()) {

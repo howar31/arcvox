@@ -38,7 +38,7 @@ impl MacPlatform {
 
 impl Platform for MacPlatform {
     fn start_modifier_monitor(&self, tx: Sender<ModifierEvent>) -> Result<(), PlatformError> {
-        if !ax::is_trusted(false) {
+        if !event_tap::can_tap_keyboard() {
             return Err(PlatformError::NotTrusted);
         }
         if event_tap::install(&self.tap, tx.clone()) {
@@ -53,6 +53,14 @@ impl Platform for MacPlatform {
                 "event monitor could not be installed".into(),
             ))
         }
+    }
+
+    fn stop_modifier_monitor(&self) {
+        self.tap.suspend();
+    }
+
+    fn watch_accessibility(&self, notify: Box<dyn Fn() + Send + Sync>) {
+        ax::watch_trust(notify);
     }
 
     fn set_shortcuts(&self, shortcuts: Vec<Shortcut>) {
@@ -72,7 +80,7 @@ impl Platform for MacPlatform {
     }
 
     fn frontmost_app(&self) -> Option<FrontmostApp> {
-        frontmost::frontmost_app(ax::is_trusted(false))
+        frontmost::frontmost_app(event_tap::can_tap_keyboard())
     }
 
     fn selected_text(&self, pid: i32) -> Option<String> {
@@ -112,6 +120,10 @@ impl Platform for MacPlatform {
     }
 
     fn accessibility_trusted(&self, prompt: bool) -> bool {
-        ax::is_trusted(prompt)
+        if prompt {
+            // Shows the system's request; its answer is not relied on.
+            ax::is_trusted(true);
+        }
+        event_tap::can_tap_keyboard()
     }
 }
