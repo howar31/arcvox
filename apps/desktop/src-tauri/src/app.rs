@@ -55,6 +55,8 @@ pub fn tray_action(app: &tauri::AppHandle<Wry>, id: &str) {
     };
     match id {
         tray::ID_SETTINGS => tray::open_settings(app, Some("general")),
+        tray::ID_HISTORY => tray::open_settings(app, Some("history")),
+        tray::ID_STATISTICS => tray::open_settings(app, Some("home")),
         tray::ID_QUIT => app.exit(0),
         tray::ID_FIX => match state.ui.tray().state() {
             UiState::NoAccessibility => {

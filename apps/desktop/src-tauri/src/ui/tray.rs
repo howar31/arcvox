@@ -18,6 +18,8 @@ const ICON_PROBLEM: Image<'static> = tauri::include_image!("./icons/tray-problem
 pub const ID_STATUS: &str = "status";
 pub const ID_FIX: &str = "fix";
 pub const ID_COPY_LAST: &str = "copy-last";
+pub const ID_HISTORY: &str = "history";
+pub const ID_STATISTICS: &str = "statistics";
 pub const ID_SETTINGS: &str = "settings";
 pub const ID_QUIT: &str = "quit";
 /// The action that resolves what the status line reports, if it reports a problem.
@@ -63,6 +65,7 @@ fn menu<R: Runtime>(
         )?)?;
     }
     menu.append(&PredefinedMenuItem::separator(app)?)?;
+    // The results of dictation: the latest one, or all of them.
     menu.append(&MenuItem::with_id(
         app,
         ID_COPY_LAST,
@@ -70,7 +73,22 @@ fn menu<R: Runtime>(
         true,
         None::<&str>,
     )?)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        ID_HISTORY,
+        text(language, Msg::TrayHistory),
+        true,
+        None::<&str>,
+    )?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
+    // The windows.
+    menu.append(&MenuItem::with_id(
+        app,
+        ID_STATISTICS,
+        text(language, Msg::TrayStatistics),
+        true,
+        None::<&str>,
+    )?)?;
     menu.append(&MenuItem::with_id(
         app,
         ID_SETTINGS,
