@@ -40,6 +40,12 @@ pub fn widget_scale(state: State<'_, AppState>) -> f64 {
     state.ui.scale()
 }
 
+/// What the app is doing now, by the name the state events carry.
+#[tauri::command]
+pub fn dictation_state(state: State<'_, AppState>) -> &'static str {
+    state.ui.state_label()
+}
+
 /// The widget measured the length its labels need in each shape.
 #[tauri::command]
 pub fn widget_measure(state: State<'_, AppState>, wide: f64, tall: f64) {

@@ -41,6 +41,16 @@ export function labelKey(state: WidgetState, message: MessagePayload | null, ins
   return needsAttention(message) ? NOT_INSERTED : FAILED;
 }
 
+/**
+ * The key of the line the settings window shows while a dictation goes on, or null when none does.
+ * The same labels as the widget's, except that hands-free dictation has room for a full phrase.
+ */
+export function dictationLabelKey(state: WidgetState): string | null {
+  if (state === "placing") return null;
+  if (state === "locked") return "shell.hands_free";
+  return STATE_LABELS[state] ?? null;
+}
+
 export interface RingView {
   /** The colour: the kind of outcome. Listening and working share one, red is for a failure only. */
   tone: "accent" | "ok" | "quiet" | "warn" | "fail";

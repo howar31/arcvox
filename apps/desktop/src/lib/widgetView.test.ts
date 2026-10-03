@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { MessagePayload } from "./api";
 import { keysOf, setLanguage, t } from "./i18n";
-import { LABEL_KEYS, labelKey, panelView, ringView } from "./widgetView";
+import { LABEL_KEYS, dictationLabelKey, labelKey, panelView, ringView } from "./widgetView";
 
 const message = (over: Partial<MessagePayload>): MessagePayload => ({ kind: "error", key: "widget.asr_failed", detail: null, copyable: null, code: null, retry: false, language: "zh-TW", ...over });
 
@@ -109,5 +109,18 @@ describe("panel", () => {
   it("shows the reason of a failed rewrite", () => {
     const degraded = panelView("idle", message({ key: "widget.degraded", detail: "Ollama: timed out" }), "", null, false);
     expect(degraded).toEqual({ title: t("widget.degraded"), detail: "Ollama: timed out", actions: [], close: false });
+  });
+});
+
+describe("settings window line", () => {
+  it("names a dictation with the widget's labels", () => {
+    expect(dictationLabelKey("recording")).toBe(labelKey("recording", null));
+    expect(dictationLabelKey("processing")).toBe(labelKey("processing", null));
+    expect(dictationLabelKey("inserting")).toBe(labelKey("inserting", null));
+    expect(dictationLabelKey("locked")).toBe("shell.hands_free");
+  });
+
+  it("has nothing to say when no dictation goes on", () => {
+    for (const state of ["idle", "placing", "no_accessibility", "engine_error"] as const) expect(dictationLabelKey(state)).toBeNull();
   });
 });

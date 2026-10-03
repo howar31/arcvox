@@ -154,6 +154,8 @@
   "nav.group.dictation": "Dictation",
   "nav.group.settings": "Settings",
   "shell.ready": "Ready, hold {key} to speak",
+  "shell.hands_free": "Hands-free dictation",
+  "shell.ready_more": "Also: {keys}",
   "shell.needs_access": "Accessibility permission needed",
   "shell.engine_error": "Engine failed to start",
   "shell.quit_again": "Press ⌘Q again to quit Kongwe",
