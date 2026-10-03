@@ -18,6 +18,7 @@
 </div>
 
 <style>
+  /* The newest week is the last column; a wider card adds older weeks before it, up to a year. */
   .heatmap { display: inline-grid; gap: 6px; }
   .months { display: grid; grid-auto-flow: column; grid-auto-columns: 14px; gap: 4px; height: 14px; font-size: 11px; line-height: 14px; color: var(--ink-3); }
   /* A label may run past its 14 px column; the next month is at least four columns away. */

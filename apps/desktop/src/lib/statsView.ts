@@ -42,9 +42,9 @@ export function percent(part: number, whole: number): number {
   return whole > 0 ? Math.round((part / whole) * 100) : 0;
 }
 
-/** One number of characters per day from `from` to `to` inclusive, 0 where a day is missing. */
-export function fillDays(rows: StatsDay[], from: number, to: number): number[] {
-  const byDay = new Map(rows.map((r) => [r.day, r.chars]));
+/** One figure per day from `from` to `to` inclusive (characters unless another field is named), 0 where a day is missing. */
+export function fillDays(rows: StatsDay[], from: number, to: number, field: "chars" | "count" | "audio_ms" = "chars"): number[] {
+  const byDay = new Map(rows.map((r) => [r.day, r[field] ?? 0]));
   const out: number[] = [];
   for (let d = from; d <= to; d++) out.push(byDay.get(d) ?? 0);
   return out;
@@ -53,8 +53,8 @@ export function fillDays(rows: StatsDay[], from: number, to: number): number[] {
 /** Heatmap columns: 14 px squares with a 4 px gap. */
 export const HEAT_CELL = 14;
 export const HEAT_GAP = 4;
-/** Fewest and most weeks the heatmap shows: 20 at the narrowest window, up to a year when the card is wide. */
-export const HEAT_WEEKS_MIN = 20;
+/** Fewest and most weeks the heatmap shows: ten in a one-column card, up to a year when the card is wide. */
+export const HEAT_WEEKS_MIN = 10;
 export const HEAT_WEEKS_MAX = 52;
 
 /** How many weeks of squares fit in `width` pixels, within the limits; 0 or less (not yet measured) gives the minimum. */
@@ -78,6 +78,12 @@ export function monthLabels(from: number, weeks: number, name: (d: Date) => stri
     out.push(label);
   }
   return out;
+}
+
+/** The change from `before` to `now` as a whole percentage; null when there is nothing to compare with. */
+export function change(now: number, before: number): number | null {
+  if (before <= 0) return null;
+  return Math.round(((now - before) / before) * 100);
 }
 
 /** Heat level 0 to 4 of a day's characters against the largest day; any use is at least 1. */

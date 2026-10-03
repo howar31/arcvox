@@ -72,6 +72,7 @@ pub struct DayRow {
     pub day: i64,
     pub count: u64,
     pub chars: u64,
+    pub audio_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -260,7 +261,7 @@ const LOCAL_SECS: &str = "(((hour + ?2) % 86400 + 86400) % 86400)";
 
 fn day_rows(conn: &Connection, from: i64, tz: i64) -> rusqlite::Result<Vec<DayRow>> {
     let sql = format!(
-        "SELECT (hour + ?2 - {LOCAL_SECS}) / 86400 AS day, SUM(count), SUM(chars)
+        "SELECT (hour + ?2 - {LOCAL_SECS}) / 86400 AS day, SUM(count), SUM(chars), SUM(audio_ms)
          FROM stats_hourly WHERE hour >= ?1 GROUP BY day ORDER BY day"
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -269,6 +270,7 @@ fn day_rows(conn: &Connection, from: i64, tz: i64) -> rusqlite::Result<Vec<DayRo
             day: r.get(0)?,
             count: r.get::<_, i64>(1)? as u64,
             chars: r.get::<_, i64>(2)? as u64,
+            audio_ms: r.get::<_, i64>(3)? as u64,
         })
     })?;
     rows.collect()
@@ -549,12 +551,14 @@ mod tests {
                 DayRow {
                     day: 1,
                     count: 2,
-                    chars: 8
+                    chars: 8,
+                    audio_ms: 8000
                 },
                 DayRow {
                     day: 2,
                     count: 1,
-                    chars: 4
+                    chars: 4,
+                    audio_ms: 4000
                 }
             ]
         );
@@ -598,7 +602,8 @@ mod tests {
             vec![DayRow {
                 day: -1,
                 count: 1,
-                chars: 1
+                chars: 1,
+                audio_ms: 0
             }]
         );
         assert_eq!(st.hours[19], 1);
