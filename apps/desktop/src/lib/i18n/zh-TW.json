@@ -6,6 +6,8 @@
   "tray.status.engine_error": "引擎無法啟動",
   "tray.settings": "設定...",
   "tray.copy_last": "複製上一次的結果",
+  "tray.history": "歷史紀錄...",
+  "tray.statistics": "統計...",
   "tray.fix_accessibility": "開啟系統設定...",
   "tray.fix_engine": "引擎與模型...",
   "tray.quit": "結束 Arcvox",

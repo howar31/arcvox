@@ -6,6 +6,8 @@
   "tray.status.engine_error": "Engine failed to start",
   "tray.settings": "Settings...",
   "tray.copy_last": "Copy the last result",
+  "tray.history": "History...",
+  "tray.statistics": "Statistics...",
   "tray.fix_accessibility": "Open System Settings...",
   "tray.fix_engine": "Engines and models...",
   "tray.quit": "Quit Arcvox",
