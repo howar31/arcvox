@@ -159,6 +159,9 @@ export interface LevelPayload { rms: number }
 /** `code` is the kind of failure of a failed dictation; `retry` says it was kept for a retry from the history. */
 export interface MessagePayload { kind: "info" | "error"; key: string; detail: string | null; copyable: string | null; code: string | null; retry: boolean; language: "zh-TW" | "en" }
 export function onWidgetState(cb: (p: StatePayload) => void): Promise<UnlistenFn> { return listen<StatePayload>("widget-state", (e) => cb(e.payload)); }
+/** What the app is doing now, and each change of it, for the settings window. */
+export const dictationState = () => invoke<WidgetState>("dictation_state");
+export function onDictationState(cb: (state: WidgetState) => void): Promise<UnlistenFn> { return listen<WidgetState>("dictation-state", (e) => cb(e.payload)); }
 export function onWidgetLevel(cb: (p: LevelPayload) => void): Promise<UnlistenFn> { return listen<LevelPayload>("widget-level", (e) => cb(e.payload)); }
 export function onWidgetMessage(cb: (p: MessagePayload) => void): Promise<UnlistenFn> { return listen<MessagePayload>("widget-message", (e) => cb(e.payload)); }
 

@@ -102,6 +102,7 @@ pub fn run() {
             crate::commands::system::widget_reset_position,
             crate::commands::system::widget_measure,
             crate::commands::system::widget_scale,
+            crate::commands::system::dictation_state,
             crate::commands::system::panel_fit,
             crate::commands::system::system_open_settings_window,
             crate::commands::system::system_list_microphones,

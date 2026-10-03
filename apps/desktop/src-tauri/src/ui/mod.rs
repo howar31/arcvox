@@ -38,6 +38,8 @@ const HIDE_AFTER_COPYABLE: Duration = Duration::from_millis(15_000);
 const DRAG_TICK: Duration = Duration::from_millis(8);
 /// The widget state shown while the user is asked to position the widget.
 const PLACING: &str = "placing";
+/// The settings window, which names the state in its sidebar.
+const SETTINGS: &str = "settings";
 /// How long the windows stay after the widget was told to leave: the
 /// length of the leaving motion in the page, and a little more.
 const LEAVE: Duration = Duration::from_millis(240);
@@ -360,6 +362,12 @@ impl TauriUi {
                 scale: self.scale(),
             },
         );
+        let _ = self.app.emit_to(SETTINGS, "dictation-state", state);
+    }
+
+    /// The name of the state the settings window shows when it opens.
+    pub fn state_label(&self) -> &'static str {
+        Self::state_name(*self.state.lock().unwrap())
     }
 
     fn state_name(state: UiState) -> &'static str {

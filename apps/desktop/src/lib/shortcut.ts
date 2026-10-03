@@ -32,6 +32,11 @@ export function firstShortcut(shortcuts: string[][] | undefined): string {
   return shortcutLabel(shortcuts?.[0] ?? ["Fn"]);
 }
 
+/** The shortcuts after the first one, as a list in words; empty when there is only one. */
+export function otherShortcuts(shortcuts: string[][] | undefined): string {
+  return (shortcuts ?? []).slice(1).map(shortcutLabel).join(", ");
+}
+
 /** The shortcuts of a new installation: the fn key alone. */
 export function defaultShortcuts(): string[][] {
   return [["Fn"]];

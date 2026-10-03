@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import { permissions, uiLanguage } from "../lib/api";
+  import { dictationState, onDictationState, permissions, uiLanguage, type WidgetState } from "../lib/api";
   import { setLanguage, t, type Lang } from "../lib/i18n";
-  import { firstShortcut } from "../lib/shortcut";
+  import { firstShortcut, otherShortcuts } from "../lib/shortcut";
+  import { dictationLabelKey } from "../lib/widgetView";
   import { client, config } from "../lib/store.svelte";
   import { go, NAV, navPage, parseRoute, routeHash, SETTINGS_PAGES, shouldIntercept, type SettingsPage } from "../lib/route";
   import { guard } from "../lib/guard.svelte";
@@ -28,6 +29,10 @@
   let accessibility = $state<boolean | null>(null);
   let main: HTMLElement | undefined = $state();
   // Shown after a first press of the quit shortcut, for as long as a second press quits.
+  // What the app is doing, as the widget shows it.
+  let dictation = $state<WidgetState>("idle");
+  const active = $derived(dictationLabelKey(dictation));
+  const others = $derived(otherShortcuts(client.value?.hotkey.shortcuts));
   let quitHint = $state(false);
   let quitTimer: ReturnType<typeof setTimeout> | undefined;
   const current = $derived(navPage(route.page));
@@ -59,6 +64,8 @@
       clearTimeout(quitTimer);
       quitTimer = setTimeout(() => { quitHint = false; }, e.payload);
     });
+    const stateChanged = onDictationState((s) => { dictation = s; });
+    dictationState().then((s) => { dictation = s; }).catch(() => {});
     (async () => {
       setLanguage((await uiLanguage()) as Lang);
       langReady = true;
@@ -70,6 +77,7 @@
       window.removeEventListener("hashchange", onHash);
       window.removeEventListener("focus", onFocus);
       quitArmed.then((off) => off());
+      stateChanged.then((off) => off());
       clearTimeout(quitTimer);
     };
   });
@@ -101,8 +109,10 @@
         {:else if accessibility === false}
           <Ring tone="live" />
           <button type="button" class="state-link" onclick={() => guard.request(() => go("general"))}>{t("shell.needs_access")}</button>
+        {:else if active}
+          <Ring tone="accent" /><span>{t(active)}</span>
         {:else if accessibility}
-          <Ring tone="ok" /><span>{t("shell.ready", { key: firstShortcut(client.value?.hotkey.shortcuts) })}</span>
+          <Ring tone="ok" /><span title={others ? t("shell.ready_more", { keys: others }) : undefined}>{t("shell.ready", { key: firstShortcut(client.value?.hotkey.shortcuts) })}</span>
         {/if}
       </div>
     </aside>

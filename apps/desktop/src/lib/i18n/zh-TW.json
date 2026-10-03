@@ -154,6 +154,8 @@
   "nav.group.dictation": "聽寫",
   "nav.group.settings": "設定",
   "shell.ready": "待命中，按住 {key} 說話",
+  "shell.hands_free": "連續聽寫中",
+  "shell.ready_more": "也可以用 {keys}",
   "shell.needs_access": "需要輔助使用權限",
   "shell.engine_error": "引擎無法啟動",
   "shell.quit_again": "再按一次 ⌘Q 結束 Arcvox",
