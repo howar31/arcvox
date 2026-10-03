@@ -390,7 +390,7 @@
   "home.tile.saved": "Time saved (estimate)",
   "home.tile.saved_detail": "Against typing {n} characters a minute",
   "home.days.title": "Days used",
-  "home.days.range": "Last 20 weeks",
+  "home.days.range": "Last {n} weeks",
   "home.days.sub": "One square per day; darker means more characters that day.",
   "home.days.n": "{n} days",
   "home.days.current": "Current streak",

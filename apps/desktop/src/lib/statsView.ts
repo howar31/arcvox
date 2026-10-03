@@ -50,6 +50,36 @@ export function fillDays(rows: StatsDay[], from: number, to: number): number[] {
   return out;
 }
 
+/** Heatmap columns: 14 px squares with a 4 px gap. */
+export const HEAT_CELL = 14;
+export const HEAT_GAP = 4;
+/** Fewest and most weeks the heatmap shows: 20 at the narrowest window, up to a year when the card is wide. */
+export const HEAT_WEEKS_MIN = 20;
+export const HEAT_WEEKS_MAX = 52;
+
+/** How many weeks of squares fit in `width` pixels, within the limits; 0 or less (not yet measured) gives the minimum. */
+export function heatWeeks(width: number): number {
+  const fit = Math.floor((width + HEAT_GAP) / (HEAT_CELL + HEAT_GAP));
+  return Math.max(HEAT_WEEKS_MIN, Math.min(HEAT_WEEKS_MAX, fit));
+}
+
+/** One label per heatmap column: the month's name on the column that holds its first day, "" elsewhere. */
+export function monthLabels(from: number, weeks: number, name: (d: Date) => string): string[] {
+  const out: string[] = [];
+  for (let c = 0; c < weeks; c++) {
+    let label = "";
+    for (let i = 0; i < 7; i++) {
+      const d = dayDate(from + c * 7 + i);
+      if (d.getDate() === 1) {
+        label = name(d);
+        break;
+      }
+    }
+    out.push(label);
+  }
+  return out;
+}
+
 /** Heat level 0 to 4 of a day's characters against the largest day; any use is at least 1. */
 export function heatLevel(chars: number, max: number): 0 | 1 | 2 | 3 | 4 {
   if (chars <= 0 || max <= 0) return 0;

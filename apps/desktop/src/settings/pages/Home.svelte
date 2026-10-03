@@ -11,7 +11,7 @@
   import { go } from "../../lib/route";
   import { engineLine, micLine, outputLine } from "../../lib/stages";
   import {
-    dayDate, durationParts, fillDays, groupSums, heatLevel, localDay, percent, periodStart, speed, streaks, topWithOthers, type Period,
+    dayDate, durationParts, fillDays, groupSums, heatLevel, heatWeeks, localDay, monthLabels, percent, periodStart, speed, streaks, topWithOthers, type Period,
   } from "../../lib/statsView";
   import { firstShortcut } from "../../lib/shortcut";
   import { client, config } from "../../lib/store.svelte";
@@ -27,8 +27,9 @@
 
   const PERIODS: Period[] = ["today", "week", "month", "all"];
   const PERIOD_KEY = "kongwe.stats.period";
-  /** Days the heatmap covers. */
-  const HEAT_DAYS = 140;
+  /** Width available to the heatmap; it shows as many weeks as fit. */
+  let heatWidth = $state(0);
+  const weeks = $derived(heatWeeks(heatWidth));
 
   function storedPeriod(): Period {
     try {
@@ -97,12 +98,13 @@
   // Days used: always over all time.
   const heat = $derived.by(() => {
     const rows = stats?.active_days ?? [];
-    const from = today - HEAT_DAYS + 1;
+    const from = today - weeks * 7 + 1;
     const chars = fillDays(rows, from, today);
     const max = Math.max(0, ...chars);
     return {
       levels: chars.map((c) => heatLevel(c, max)),
       titles: chars.map((c, i) => t("home.days.cell", { date: dateOf(from + i), n: num(c) })),
+      months: monthLabels(from, weeks, (d) => d.toLocaleDateString(uiLocale(), { month: "short" })),
     };
   });
   const runs = $derived(streaks((stats?.active_days ?? []).map((d) => d.day), today));
@@ -200,10 +202,10 @@
 
   <div class="cards">
     <section class="card wide">
-      <h2>{t("home.days.title")}<em>{t("home.days.range")}</em></h2>
+      <h2>{t("home.days.title")}<em>{t("home.days.range", { n: String(weeks) })}</em></h2>
       <p class="sub">{t("home.days.sub")}</p>
       <div class="heatwrap">
-        <Heatmap levels={heat.levels} titles={heat.titles} />
+        <div class="heatroom" bind:clientWidth={heatWidth}><Heatmap levels={heat.levels} titles={heat.titles} months={heat.months} /></div>
         <div class="facts">
           <div><b class="num">{t("home.days.n", { n: String(runs.current) })}</b><span>{t("home.days.current")}</span></div>
           <div><b class="num">{t("home.days.n", { n: String(runs.longest) })}</b><span>{t("home.days.longest")}</span></div>
@@ -322,6 +324,8 @@
   .sub { margin: 0 0 18px; color: var(--ink-2); font-size: var(--text-sm); }
   .none { margin: 0; color: var(--ink-3); font-size: var(--text-control); }
   .heatwrap { display: flex; gap: 36px; align-items: flex-start; }
+  /* Takes the width the facts leave; the heatmap fills it with whole weeks. */
+  .heatroom { flex: 1; min-width: 0; }
   .facts { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
   .facts b { display: block; font: 700 23px/1.15 var(--font-round); }
   .facts span { color: var(--ink-2); font-size: var(--text-sm); }
