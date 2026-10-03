@@ -179,7 +179,7 @@ pub fn system_app_names(bundle_ids: Vec<String>) -> HashMap<String, Option<Strin
 #[tauri::command]
 pub fn system_info(app: AppHandle<Wry>, state: State<'_, AppState>) -> SystemInfo {
     SystemInfo {
-        version: app.package_info().version.to_string(),
+        version: crate::identity::version(app.package_info()),
         config_dir: state.dirs.config_dir.display().to_string(),
         data_dir: state.dirs.data_dir.display().to_string(),
         cache_dir: state.dirs.cache_dir.display().to_string(),

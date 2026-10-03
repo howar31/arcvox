@@ -55,7 +55,7 @@ fn pasteboard_round_trip_keeps_text() {
 #[test]
 #[ignore]
 fn keychain_round_trip() {
-    let s = KeychainStore::new();
+    let s = KeychainStore::new("Arcvox Test");
     let key = "arcvox-test-key";
     s.delete(key).unwrap();
     assert_eq!(s.get(key).unwrap(), None);

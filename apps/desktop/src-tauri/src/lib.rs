@@ -7,6 +7,7 @@ pub mod context;
 pub mod dictation;
 pub mod hotkey;
 pub mod i18n;
+pub mod identity;
 pub mod insert;
 pub mod logging;
 pub mod platform;

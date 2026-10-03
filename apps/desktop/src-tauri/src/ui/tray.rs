@@ -9,12 +9,14 @@ use tauri::{AppHandle, Manager, Runtime};
 
 use crate::dictation::ui::UiState;
 use crate::i18n::{text, Language, Msg};
+use crate::identity;
 
 const ICON_IDLE: Image<'static> = tauri::include_image!("./icons/tray-idle.png");
 const ICON_RECORDING: Image<'static> = tauri::include_image!("./icons/tray-recording.png");
 const ICON_PROCESSING: Image<'static> = tauri::include_image!("./icons/tray-processing.png");
 const ICON_PROBLEM: Image<'static> = tauri::include_image!("./icons/tray-problem.png");
 
+pub const ID_APP: &str = "app";
 pub const ID_STATUS: &str = "status";
 pub const ID_FIX: &str = "fix";
 pub const ID_COPY_LAST: &str = "copy-last";
@@ -47,6 +49,15 @@ fn menu<R: Runtime>(
     language: Language,
     state: UiState,
 ) -> tauri::Result<(Menu<R>, MenuItem<R>)> {
+    // The first line names the app and the running version, so the version
+    // can be read without opening the settings window.
+    let header = MenuItem::with_id(
+        app,
+        ID_APP,
+        identity::name_and_version(app.package_info()),
+        false,
+        None::<&str>,
+    )?;
     let status = MenuItem::with_id(
         app,
         ID_STATUS,
@@ -54,7 +65,10 @@ fn menu<R: Runtime>(
         false,
         None::<&str>,
     )?;
-    let menu = Menu::with_items(app, &[&status])?;
+    let menu = Menu::with_items(
+        app,
+        &[&header, &PredefinedMenuItem::separator(app)?, &status],
+    )?;
     if let Some(msg) = fix_msg(state) {
         menu.append(&MenuItem::with_id(
             app,
@@ -115,7 +129,7 @@ impl Tray<tauri::Wry> {
             .icon_as_template(true)
             .menu(&first)
             .show_menu_on_left_click(true)
-            .tooltip("Arcvox")
+            .tooltip(identity::name(app.package_info()))
             .on_menu_event(|app, event| crate::app::tray_action(app, event.id().as_ref()))
             .build(app)?;
         Ok(Self {

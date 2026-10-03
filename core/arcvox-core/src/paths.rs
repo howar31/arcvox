@@ -1,10 +1,11 @@
 //! Per-user data directories. Data never lives under the install directory.
 //!
-//! macOS: config + history + recordings in `~/Library/Application Support/Arcvox`,
-//!        models in `~/Library/Caches/Arcvox`.
-//! Windows: config in `%APPDATA%\Arcvox` (roaming),
-//!          history + recordings + models in `%LOCALAPPDATA%\Arcvox`.
-//! Linux: XDG config / data / cache dirs under `arcvox`.
+//! The folders carry the app's name (a build under another name has its own):
+//! macOS: config + history + recordings in `~/Library/Application Support/<name>`,
+//!        models in `~/Library/Caches/<name>`.
+//! Windows: config in `%APPDATA%\<name>` (roaming),
+//!          history + recordings + models in `%LOCALAPPDATA%\<name>`.
+//! Linux: XDG config / data / cache dirs under the lower-case name.
 
 use std::path::{Path, PathBuf};
 
@@ -18,26 +19,33 @@ pub struct DataDir {
     pub cache_dir: PathBuf,
 }
 
-const APP_DIR_NAME: &str = if cfg!(target_os = "linux") {
-    "arcvox"
-} else {
-    "Arcvox"
-};
+/// The folder name for an app name: as given on macOS and Windows, lower
+/// case with hyphens on Linux ("Arcvox Dev" gives "arcvox-dev").
+fn dir_name(app_name: &str) -> String {
+    if cfg!(target_os = "linux") {
+        app_name.to_lowercase().replace(' ', "-")
+    } else {
+        app_name.to_string()
+    }
+}
 
 impl DataDir {
-    /// Platform default locations. `None` when the OS gives no home directory.
-    pub fn resolve() -> Option<Self> {
+    /// Platform default locations for the app of this name, so a build under
+    /// another name (a development copy) keeps its own data. `None` when the
+    /// OS gives no home directory.
+    pub fn resolve(app_name: &str) -> Option<Self> {
+        let name = dir_name(app_name);
         if cfg!(target_os = "windows") {
-            let config = dirs::config_dir()?.join(APP_DIR_NAME);
-            let local = dirs::data_local_dir()?.join(APP_DIR_NAME);
+            let config = dirs::config_dir()?.join(&name);
+            let local = dirs::data_local_dir()?.join(&name);
             Some(Self {
                 config_dir: config,
                 data_dir: local.clone(),
                 cache_dir: local,
             })
         } else if cfg!(target_os = "macos") {
-            let support = dirs::data_dir()?.join(APP_DIR_NAME);
-            let cache = dirs::cache_dir()?.join(APP_DIR_NAME);
+            let support = dirs::data_dir()?.join(&name);
+            let cache = dirs::cache_dir()?.join(&name);
             Some(Self {
                 config_dir: support.clone(),
                 data_dir: support,
@@ -45,9 +53,9 @@ impl DataDir {
             })
         } else {
             Some(Self {
-                config_dir: dirs::config_dir()?.join(APP_DIR_NAME),
-                data_dir: dirs::data_dir()?.join(APP_DIR_NAME),
-                cache_dir: dirs::cache_dir()?.join(APP_DIR_NAME),
+                config_dir: dirs::config_dir()?.join(&name),
+                data_dir: dirs::data_dir()?.join(&name),
+                cache_dir: dirs::cache_dir()?.join(&name),
             })
         }
     }
@@ -145,10 +153,19 @@ mod tests {
 
     #[test]
     fn resolve_is_per_user_and_named() {
-        let d = DataDir::resolve().expect("home dir exists on the test machine");
+        let d = DataDir::resolve("Arcvox").expect("home dir exists on the test machine");
         for p in [&d.config_dir, &d.data_dir, &d.cache_dir] {
-            assert!(p.ends_with(APP_DIR_NAME), "{p:?}");
+            assert!(p.ends_with(dir_name("Arcvox")), "{p:?}");
             assert!(p.is_absolute());
         }
+    }
+
+    #[test]
+    fn another_app_name_gives_other_folders() {
+        let a = DataDir::resolve("Arcvox").unwrap();
+        let b = DataDir::resolve("Arcvox Dev").unwrap();
+        assert_ne!(a.data_dir, b.data_dir);
+        assert_ne!(a.cache_dir, b.cache_dir);
+        assert_ne!(a.config_dir, b.config_dir);
     }
 }
