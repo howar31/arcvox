@@ -1,27 +1,32 @@
 use kongwe_core::SecretStore;
-use tauri::State;
+use tauri::{AppHandle, Wry};
 
 use super::CmdResult;
-use crate::app::AppState;
+use crate::identity;
 use crate::secrets::KeychainStore;
 
+/// The store of this build: its keys live under the app's own name.
+fn store(app: &AppHandle<Wry>) -> KeychainStore {
+    KeychainStore::new(identity::name(app.package_info()))
+}
+
 #[tauri::command]
-pub fn secrets_set(_state: State<'_, AppState>, key_ref: String, value: String) -> CmdResult<()> {
+pub fn secrets_set(app: AppHandle<Wry>, key_ref: String, value: String) -> CmdResult<()> {
     if value.trim().is_empty() {
-        KeychainStore::new().delete(&key_ref)?;
+        store(&app).delete(&key_ref)?;
     } else {
-        KeychainStore::new().set(&key_ref, value.trim())?;
+        store(&app).set(&key_ref, value.trim())?;
     }
     Ok(())
 }
 
 #[tauri::command]
-pub fn secrets_has(_state: State<'_, AppState>, key_ref: String) -> CmdResult<bool> {
-    Ok(KeychainStore::new().get(&key_ref)?.is_some())
+pub fn secrets_has(app: AppHandle<Wry>, key_ref: String) -> CmdResult<bool> {
+    Ok(store(&app).get(&key_ref)?.is_some())
 }
 
 #[tauri::command]
-pub fn secrets_delete(_state: State<'_, AppState>, key_ref: String) -> CmdResult<()> {
-    KeychainStore::new().delete(&key_ref)?;
+pub fn secrets_delete(app: AppHandle<Wry>, key_ref: String) -> CmdResult<()> {
+    store(&app).delete(&key_ref)?;
     Ok(())
 }

@@ -244,8 +244,13 @@ fn end_process(app: &tauri::AppHandle<Wry>) {
 }
 
 fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
-    let dirs = DataDir::resolve().ok_or("no home directory")?;
+    let app_name = crate::identity::name(app.package_info());
+    let dirs = DataDir::resolve(&app_name).ok_or("no home directory")?;
     dirs.ensure()?;
+    // The settings window carries the name of this build.
+    if let Some(w) = app.get_webview_window(SETTINGS_WINDOW) {
+        let _ = w.set_title(&app_name);
+    }
     let log_guard = crate::logging::init(&dirs.data_dir);
     if let Some(g) = log_guard {
         app.manage(g);
@@ -288,7 +293,7 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         &dirs.config_dir,
     )?);
 
-    let secrets = Arc::new(KeychainStore::new());
+    let secrets = Arc::new(KeychainStore::new(app_name.clone()));
     // A stalled connection fails the read instead of hanging a download or its Cancel.
     let client = reqwest::Client::builder()
         .read_timeout(Duration::from_secs(30))
