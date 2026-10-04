@@ -108,6 +108,51 @@ impl ConfigStore {
         Ok(next)
     }
 
+    /// Copies `config.json` and the base prompt aside, each as
+    /// `<name>.bak-<seconds>`. Returns each file with its copy.
+    pub fn backup_copies(&self) -> Result<Vec<(PathBuf, PathBuf)>, StoreError> {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let mut copies = Vec::new();
+        for path in [self.dirs.config_path(), self.dirs.base_prompt_path()] {
+            if !path.exists() {
+                continue;
+            }
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let mut copy = path.with_file_name(format!("{name}.bak-{ts}"));
+            let mut n = 1;
+            while copy.exists() {
+                n += 1;
+                copy = path.with_file_name(format!("{name}.bak-{ts}-{n}"));
+            }
+            std::fs::copy(&path, &copy).map_err(|e| io_err(&copy, e))?;
+            copies.push((path, copy));
+        }
+        Ok(copies)
+    }
+
+    /// Puts files back from the copies `backup_copies` made and publishes
+    /// the config they hold.
+    pub fn restore_copies(&self, copies: &[(PathBuf, PathBuf)]) -> Result<(), StoreError> {
+        let _guard = self
+            .write_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for (path, copy) in copies {
+            let bytes = std::fs::read(copy).map_err(|e| io_err(copy, e))?;
+            write_atomic(path, &bytes)?;
+        }
+        let config = load_existing(&self.dirs.config_path())?;
+        self.tx.send_replace(Arc::new(config));
+        Ok(())
+    }
+
     pub fn base_prompt(&self) -> Result<String, StoreError> {
         let path = self.dirs.base_prompt_path();
         match std::fs::read_to_string(&path) {

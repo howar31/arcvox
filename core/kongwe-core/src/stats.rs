@@ -100,6 +100,7 @@ pub struct Stats {
 
 /// What one dictation adds to its hour.
 pub(crate) struct Sample<'a> {
+    pub device_id: &'a str,
     pub ts: i64,
     pub app_name: &'a str,
     pub profile_id: &'a str,
@@ -113,6 +114,32 @@ pub(crate) struct Sample<'a> {
     pub snippets: u32,
 }
 
+/// The counter columns of a bucket, in table order.
+pub(crate) const COUNTERS: [&str; 22] = [
+    "count",
+    "chars",
+    "audio_ms",
+    "timed_count",
+    "timed_chars",
+    "speed_chars",
+    "speed_audio_ms",
+    "asr_ms",
+    "llm_ms",
+    "llm_count",
+    "changed",
+    "degraded",
+    "unrewritten",
+    "dict_fixes",
+    "snippets",
+    "han",
+    "latin",
+    "kana",
+    "max_chars",
+    "max_audio_ms",
+    "max_total_ms",
+    "max_cpm",
+];
+
 pub(crate) fn add(conn: &Connection, s: &Sample<'_>) -> rusqlite::Result<()> {
     let chars = count_chars(s.text);
     let sc = scripts(s.text);
@@ -124,9 +151,10 @@ pub(crate) fn add(conn: &Connection, s: &Sample<'_>) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO stats_hourly (hour, app_name, profile_id, count, chars, audio_ms, timed_count, timed_chars,
             speed_chars, speed_audio_ms, asr_ms, llm_ms, llm_count, changed, degraded, unrewritten, dict_fixes, snippets,
-            han, latin, kana, max_chars, max_audio_ms, max_total_ms, max_cpm)
-         VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?4, ?5, ?21, ?22)
-         ON CONFLICT (hour, app_name, profile_id) DO UPDATE SET
+            han, latin, kana, max_chars, max_audio_ms, max_total_ms, max_cpm, device_id, updated)
+         VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?4, ?5, ?21, ?22, ?23, ?24)
+         ON CONFLICT (device_id, hour, app_name, profile_id) DO UPDATE SET
+            updated = excluded.updated,
             count = count + 1, chars = chars + excluded.chars, audio_ms = audio_ms + excluded.audio_ms,
             timed_count = timed_count + excluded.timed_count, timed_chars = timed_chars + excluded.timed_chars,
             speed_chars = speed_chars + excluded.speed_chars, speed_audio_ms = speed_audio_ms + excluded.speed_audio_ms,
@@ -160,6 +188,8 @@ pub(crate) fn add(conn: &Connection, s: &Sample<'_>) -> rusqlite::Result<()> {
             sc.kana as i64,
             total_ms as i64,
             cpm as i64,
+            s.device_id,
+            crate::history::now_ms(),
         ],
     )?;
     Ok(())
@@ -170,6 +200,7 @@ pub(crate) fn add(conn: &Connection, s: &Sample<'_>) -> rusqlite::Result<()> {
 pub(crate) fn backfill(
     conn: &Connection,
     recordings_dir: &Path,
+    device_id: &str,
 ) -> Result<(), crate::history::HistoryError> {
     let done = conn
         .prepare("SELECT 1 FROM stats_meta WHERE key = 'backfilled'")?
@@ -179,7 +210,10 @@ pub(crate) fn backfill(
     }
     let tx = conn.unchecked_transaction()?;
     // An earlier attempt may have failed after dictations were counted; start from nothing.
-    tx.execute("DELETE FROM stats_hourly", [])?;
+    tx.execute(
+        "DELETE FROM stats_hourly WHERE device_id = ?1",
+        params![device_id],
+    )?;
     struct Row {
         id: i64,
         ts: i64,
@@ -233,6 +267,7 @@ pub(crate) fn backfill(
         add(
             &tx,
             &Sample {
+                device_id,
                 ts: row.ts,
                 app_name: row.app_name.as_deref().unwrap_or(""),
                 profile_id: &row.profile_id,
@@ -513,9 +548,9 @@ mod tests {
             [],
         )
         .unwrap();
-        crate::history::upgrade(&conn, dir.path()).unwrap();
-        crate::history::upgrade(&conn, dir.path()).unwrap();
-        let s = HistoryStore::from_connection(conn);
+        crate::history::upgrade(&conn, dir.path(), &crate::history::TEST_REF).unwrap();
+        crate::history::upgrade(&conn, dir.path(), &crate::history::TEST_REF).unwrap();
+        let s = HistoryStore::from_connection(conn, crate::history::TEST_DEVICE);
         let t = s.stats(0, 0).unwrap().totals;
         assert_eq!(
             (t.count, t.timed_count, t.audio_ms, t.changed),
@@ -625,7 +660,40 @@ mod tests {
         {
             let conn = s.connection();
             conn.execute("DELETE FROM stats_meta", []).unwrap();
-            backfill(&conn, Path::new("")).unwrap();
+            backfill(&conn, Path::new(""), crate::history::TEST_DEVICE).unwrap();
+        }
+        let t = s.stats(0, 0).unwrap().totals;
+        assert_eq!((t.count, t.chars), (2, 7));
+    }
+
+    #[test]
+    fn the_same_hour_of_two_devices_stays_two_cells() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        s.insert(utt(3600, "abc", None, None)).unwrap();
+        {
+            let conn = s.connection();
+            add(
+                &conn,
+                &Sample {
+                    device_id: "other",
+                    ts: 3600,
+                    app_name: "Notes",
+                    profile_id: "default",
+                    text: "abcd",
+                    audio_ms: None,
+                    asr_ms: 0,
+                    llm_ms: None,
+                    changed: false,
+                    degraded: false,
+                    dict_fixes: 0,
+                    snippets: 0,
+                },
+            )
+            .unwrap();
+            let cells: i64 = conn
+                .query_row("SELECT COUNT(*) FROM stats_hourly", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(cells, 2);
         }
         let t = s.stats(0, 0).unwrap().totals;
         assert_eq!((t.count, t.chars), (2, 7));

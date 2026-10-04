@@ -249,6 +249,7 @@ mod tests {
                 secrets: std::sync::Arc::new(kongwe_core::MemorySecretStore::default()),
                 factories: vec![std::sync::Arc::new(CountingFactory(llm.clone()))],
                 first_run: kongwe_core::FirstRunDefaults::default(),
+                identity: kongwe_core::DeviceOptions::default(),
             },
         )
         .await

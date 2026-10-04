@@ -4,11 +4,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use kongwe_core::models::{ModelStore, DEFAULT_MANIFEST_URL};
-use kongwe_core::{DataDir, Engine, EngineOptions, FirstRunDefaults};
+use kongwe_core::{DataDir, DeviceOptions, Engine, EngineOptions, FirstRunDefaults};
 use tauri::{Emitter, Manager, Wry};
 
 use crate::audio::capture::CpalSource;
 use crate::audio::AudioSource;
+use crate::backup_auto::{BackupAuto, BackupStatus, LastWrite};
 use crate::commands::bench::BenchState;
 use crate::dictation::ui::{Ui, UiState};
 use crate::dictation::{self, ControllerHandle, Deps};
@@ -35,6 +36,10 @@ pub struct AppState {
     pub engine_error: Mutex<Option<String>>,
     pub bench: BenchState,
     pub window_state: WindowState,
+    /// Keeps the backup folder up to date.
+    pub backup: BackupAuto,
+    /// The app's version, as written into settings files and backups.
+    pub version: String,
 }
 
 /// The keys held while a new shortcut is recorded, sent to the settings window.
@@ -183,6 +188,19 @@ pub fn run() {
             crate::commands::bench::bench_history_candidates,
             crate::commands::bench::bench_start,
             crate::commands::bench::bench_cancel,
+            crate::commands::backup::settings_export,
+            crate::commands::backup::settings_inspect,
+            crate::commands::backup::settings_import,
+            crate::commands::backup::backup_sizes,
+            crate::commands::backup::backup_export,
+            crate::commands::backup::backup_inspect,
+            crate::commands::backup::backup_import,
+            crate::commands::backup::backup_status,
+            crate::commands::backup::backup_run_now,
+            crate::commands::backup::backup_folder_open,
+            crate::commands::backup::devices_list,
+            crate::commands::backup::device_rename,
+            crate::commands::backup::device_remove,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -241,6 +259,96 @@ pub fn run() {
         });
 }
 
+/// What this machine is, for the identity the history rows carry.
+fn device_options(version: &str) -> DeviceOptions {
+    #[cfg(target_os = "macos")]
+    let (hardware_id, name) = (
+        crate::platform::macos::hardware::hardware_id(),
+        crate::platform::macos::hardware::computer_name(),
+    );
+    #[cfg(not(target_os = "macos"))]
+    let (hardware_id, name) = (None, None);
+    let default = DeviceOptions::default();
+    DeviceOptions {
+        hardware_id,
+        name: name.unwrap_or(default.name),
+        platform: default.platform,
+        app_version: version.to_string(),
+    }
+}
+
+/// The worker that writes this device's history, statistics, recordings and
+/// settings to the folder chosen on the backup page.
+fn backup_auto(
+    app: &tauri::AppHandle<Wry>,
+    engine: Option<Engine>,
+    dirs: &DataDir,
+    version: &str,
+    runtime: tokio::runtime::Handle,
+) -> BackupAuto {
+    let config_dir = dirs.config_dir.clone();
+    let version = version.to_string();
+    let busy_engine = engine.clone();
+    let app = app.clone();
+    let state_dir = dirs.config_dir.clone();
+    let chosen = ClientSettings::load(&state_dir).backup.folder;
+    let last = LastWrite::load(&state_dir).and_then(|l| l.status_for(chosen.as_deref()));
+    let auto = BackupAuto::spawn(
+        Box::new(move |manual| {
+            let client = ClientSettings::load(&config_dir);
+            let Some(folder) = client.backup.folder.clone() else {
+                return if manual {
+                    Err("no folder is chosen".to_string())
+                } else {
+                    Ok(None)
+                };
+            };
+            if !manual && !client.backup.auto {
+                return Ok(None);
+            }
+            let engine = engine.clone().ok_or("engine unavailable")?;
+            let sections = crate::commands::backup::snapshot_sections(client.backup.categories);
+            let snapshot = if sections.is_empty() {
+                None
+            } else {
+                let file = crate::commands::backup::build_settings_file(
+                    &engine, &client, &sections, &version,
+                )
+                .map_err(|e| e.message)?;
+                Some(file.to_bytes())
+            };
+            runtime
+                .block_on(engine.backup_write_folder(
+                    &folder,
+                    client.backup.categories.into(),
+                    snapshot,
+                ))
+                .map(Some)
+                .map_err(|e| e.to_string())
+        }),
+        Box::new(move || busy_engine.as_ref().is_some_and(Engine::busy)),
+        Box::new(move |status| {
+            if let BackupStatus::Ok { at, report } = status {
+                if let Some(folder) = ClientSettings::load(&state_dir).backup.folder {
+                    let last = LastWrite {
+                        folder,
+                        at: *at,
+                        report: report.clone(),
+                    };
+                    if let Err(e) = last.save(&state_dir) {
+                        tracing::warn!(error = %e, "the last backup was not noted");
+                    }
+                }
+            }
+            let _ = app.emit_to(SETTINGS_WINDOW, "backup-status", status.clone());
+        }),
+    );
+    if let Some(status) = last {
+        auto.restore(status);
+    }
+    auto
+}
+
 /// Ends the process at once when the app exits. A normal exit runs the
 /// inference runtime's static destructors, and those abort while a model
 /// still holds GPU resources; a model that is loading or in use cannot be
@@ -249,6 +357,8 @@ fn end_process(app: &tauri::AppHandle<Wry>) {
     if let Some(state) = app.try_state::<AppState>() {
         state.bench.abort_run();
         state.bench.discard_recording();
+        // A change that still waits for its write to the backup folder.
+        state.backup.flush();
     }
     #[cfg(unix)]
     {
@@ -323,6 +433,7 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         BUNDLED_MANIFEST,
         Some(manifest_url(settings.manifest_url.as_deref())),
     ));
+    let version = app.package_info().version.to_string();
     let config_exists = dirs.config_path().exists();
     let (engine, engine_error, runtime) = tauri::async_runtime::block_on(async {
         let runtime = tokio::runtime::Handle::current();
@@ -347,6 +458,7 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
                 secrets,
                 factories: build_factories(models.clone()),
                 first_run,
+                identity: device_options(&version),
             },
         )
         .await
@@ -356,6 +468,7 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    let backup = backup_auto(&app, engine.clone(), &dirs, &version, runtime.clone());
     let controller = dictation::spawn(
         Deps {
             platform: platform.clone(),
@@ -381,6 +494,8 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         engine_error: Mutex::new(engine_error.clone()),
         bench: BenchState::default(),
         window_state,
+        backup: backup.clone(),
+        version,
     });
 
     // A quit request from outside the app's own menus (the Dock menu, a
@@ -419,6 +534,7 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
             while rx.changed().await.is_ok() {
+                backup.touch();
                 let cfg = rx.borrow().clone();
                 let _ = tauri::Emitter::emit_to(&app, "settings", "config-changed", (*cfg).clone());
             }

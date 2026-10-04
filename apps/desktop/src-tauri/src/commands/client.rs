@@ -11,9 +11,9 @@ pub fn client_get(state: State<'_, AppState>) -> ClientSettings {
     ClientSettings::load(&state.dirs.config_dir)
 }
 
-#[tauri::command]
-pub fn client_update(
-    state: State<'_, AppState>,
+/// Stores the settings and makes every part of the app follow them.
+pub(crate) fn apply_client(
+    state: &AppState,
     mut settings: ClientSettings,
 ) -> CmdResult<ClientSettings> {
     settings.hotkey.shortcuts = sanitized(&settings.hotkey.shortcuts);
@@ -28,7 +28,16 @@ pub fn client_update(
     state.ui.set_scale(settings.widget_size.scale());
     state.ui.set_display(settings.widget_display.clone());
     state.ui.set_idle(settings.widget_idle);
+    state.backup.touch();
     Ok(settings)
+}
+
+#[tauri::command]
+pub fn client_update(
+    state: State<'_, AppState>,
+    settings: ClientSettings,
+) -> CmdResult<ClientSettings> {
+    apply_client(&state, settings)
 }
 
 /// Why these keys cannot be added to `existing` as a recording shortcut;

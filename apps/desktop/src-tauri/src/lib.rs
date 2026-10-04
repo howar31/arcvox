@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod audio;
+pub mod backup_auto;
 pub mod commands;
 pub mod context;
 pub mod dictation;

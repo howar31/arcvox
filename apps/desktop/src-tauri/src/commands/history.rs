@@ -132,6 +132,7 @@ pub async fn history_reprocess(
     profile_id: Option<String>,
 ) -> CmdResult<RedoOutcome> {
     let e = engine(&state)?;
+    state.backup.touch();
     reprocess(&e, id, profile_id).await
 }
 
@@ -139,6 +140,7 @@ pub async fn history_reprocess(
 #[tauri::command]
 pub fn history_apply_redo(state: State<'_, AppState>, id: i64, redo: RedoDto) -> CmdResult<()> {
     let e = engine(&state)?;
+    state.backup.touch();
     if !e.history().apply_redo(HistoryId(id), &redo.redo())? {
         return Err(CmdError {
             message: "the history row no longer exists".into(),

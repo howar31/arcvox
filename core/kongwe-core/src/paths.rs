@@ -89,6 +89,10 @@ impl DataDir {
     pub fn history_path(&self) -> PathBuf {
         self.data_dir.join("history.sqlite")
     }
+    /// The identity of this installation.
+    pub fn device_path(&self) -> PathBuf {
+        self.data_dir.join(crate::device::FILE_NAME)
+    }
     /// Where recordings are kept unless the user chose another folder:
     /// next to the history, since they are the user's data.
     pub fn recordings_dir(&self) -> PathBuf {
@@ -124,6 +128,7 @@ mod tests {
             PathBuf::from("/tmp/kw/data/history.sqlite")
         );
         assert_eq!(d.recordings_dir(), PathBuf::from("/tmp/kw/data/recordings"));
+        assert_eq!(d.device_path(), PathBuf::from("/tmp/kw/data/device.json"));
         assert_eq!(
             d.legacy_recordings_dir(),
             PathBuf::from("/tmp/kw/cache/recordings")

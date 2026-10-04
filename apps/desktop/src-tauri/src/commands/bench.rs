@@ -551,6 +551,7 @@ mod tests {
                 secrets: Arc::new(MemorySecretStore::default()),
                 factories: vec![Arc::new(Factory(llm.clone(), asr_unloads.clone()))],
                 first_run: FirstRunDefaults::default(),
+                identity: kongwe_core::DeviceOptions::default(),
             },
         )
         .await

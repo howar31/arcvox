@@ -4,6 +4,7 @@ pub mod apple;
 pub mod ax;
 pub mod event_tap;
 pub mod frontmost;
+pub mod hardware;
 pub mod modifier_monitor;
 pub mod pasteboard;
 pub mod post_keys;

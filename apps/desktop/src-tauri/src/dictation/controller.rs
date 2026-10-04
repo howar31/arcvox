@@ -985,6 +985,7 @@ mod tests {
                 secrets: Arc::new(MemorySecretStore::default()),
                 factories,
                 first_run: Default::default(),
+                identity: kongwe_core::DeviceOptions::default(),
             },
         )
         .await

@@ -49,6 +49,84 @@ pub struct ClientSettings {
     /// `None` is the built-in arrangement. The page validates it.
     #[serde(default)]
     pub stats_layout: Option<Vec<StatsCard>>,
+    /// The backup folder and what is kept up to date in it.
+    pub backup: BackupSettings,
+}
+
+/// The folder the app writes this device's history, statistics and
+/// recordings to, for the user's own backup or sync.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BackupSettings {
+    pub folder: Option<PathBuf>,
+    pub categories: BackupCategories,
+    /// Writes to the folder by itself a few minutes after a change.
+    pub auto: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BackupCategories {
+    pub history: bool,
+    pub stats: bool,
+    pub recordings: bool,
+    /// A copy of this device's settings, as a settings file.
+    pub settings: bool,
+    /// This device's content (profiles, engines, dictionary, base prompt)
+    /// in that same file.
+    pub content: bool,
+}
+
+impl Default for BackupCategories {
+    fn default() -> Self {
+        Self {
+            history: true,
+            stats: true,
+            recordings: false,
+            settings: true,
+            content: true,
+        }
+    }
+}
+
+impl From<BackupCategories> for kongwe_core::backup::Categories {
+    fn from(c: BackupCategories) -> Self {
+        Self {
+            history: c.history,
+            stats: c.stats,
+            recordings: c.recordings,
+            // One file holds the settings and the content.
+            settings: c.settings || c.content,
+        }
+    }
+}
+
+/// The sections of a settings file this client fills and applies. `general`
+/// is shared with the core: this client's part is its `client` member.
+pub const CLIENT_SECTIONS: [&str; 4] = ["recording", "insertion", "general", "appearance"];
+
+#[derive(Serialize, Deserialize)]
+struct RecordingSection {
+    hotkey: HotkeySettings,
+    max_utterance_secs: u32,
+    auto_stop: AutoStop,
+}
+
+#[derive(Serialize, Deserialize)]
+struct GeneralSection {
+    context: ContextOptIns,
+    ui_language: UiLanguage,
+    #[serde(default)]
+    manifest_url: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct AppearanceSection {
+    widget_size: WidgetSize,
+    widget_idle: WidgetIdle,
+    show_transcript: bool,
+    #[serde(default)]
+    stats_layout: Option<Vec<StatsCard>>,
 }
 
 /// One card of the statistics page on its grid of three columns.
@@ -203,6 +281,7 @@ impl Default for ClientSettings {
             ui_language: UiLanguage::System,
             manifest_url: None,
             stats_layout: None,
+            backup: BackupSettings::default(),
         }
     }
 }
@@ -273,6 +352,152 @@ impl ClientSettings {
         std::fs::write(&tmp, bytes).map_err(io)?;
         std::fs::rename(&tmp, &path).map_err(io)?;
         Ok(())
+    }
+
+    /// This client's part of the named sections, for a settings file. The
+    /// microphone, the widget's display and the backup folder name things
+    /// of this machine and are never part of it.
+    pub fn export_sections(&self, names: &[String]) -> BTreeMap<String, serde_json::Value> {
+        let has = |name: &str| names.iter().any(|n| n == name);
+        let value = |v: serde_json::Result<serde_json::Value>| v.expect("settings serialize");
+        let mut out = BTreeMap::new();
+        if has("recording") {
+            let section = RecordingSection {
+                hotkey: self.hotkey.clone(),
+                max_utterance_secs: self.max_utterance_secs,
+                auto_stop: self.auto_stop.clone(),
+            };
+            out.insert(
+                "recording".to_string(),
+                value(serde_json::to_value(section)),
+            );
+        }
+        if has("insertion") {
+            out.insert(
+                "insertion".to_string(),
+                value(serde_json::to_value(&self.insertion)),
+            );
+        }
+        if has("general") {
+            let section = GeneralSection {
+                context: self.context.clone(),
+                ui_language: self.ui_language,
+                manifest_url: self.manifest_url.clone(),
+            };
+            out.insert(
+                "general".to_string(),
+                serde_json::json!({ "client": value(serde_json::to_value(section)) }),
+            );
+        }
+        if has("appearance") {
+            let section = AppearanceSection {
+                widget_size: self.widget_size,
+                widget_idle: self.widget_idle,
+                show_transcript: self.show_transcript,
+                stats_layout: self.stats_layout.clone(),
+            };
+            out.insert(
+                "appearance".to_string(),
+                value(serde_json::to_value(section)),
+            );
+        }
+        out
+    }
+
+    /// This client's part of a section of `file`, when the section is named
+    /// and the file has it.
+    fn client_part<'a>(
+        file: &'a kongwe_core::settings_file::SettingsFile,
+        names: &[String],
+        section: &str,
+    ) -> Option<&'a serde_json::Value> {
+        let value = names
+            .iter()
+            .any(|n| n == section)
+            .then(|| file.sections.get(section))
+            .flatten()?;
+        if section == "general" {
+            value.get("client")
+        } else {
+            Some(value)
+        }
+    }
+
+    /// The sections of `names` that `with_sections` takes from `file`.
+    pub fn applied_sections(
+        file: &kongwe_core::settings_file::SettingsFile,
+        names: &[String],
+    ) -> Vec<String> {
+        CLIENT_SECTIONS
+            .iter()
+            .filter(|s| Self::client_part(file, names, s).is_some())
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    /// A copy with the named sections taken from `file`. A section the file
+    /// lacks is left as it is; one that cannot be read is an error and
+    /// nothing is taken.
+    pub fn with_sections(
+        &self,
+        file: &kongwe_core::settings_file::SettingsFile,
+        names: &[String],
+    ) -> Result<ClientSettings, String> {
+        fn read<T: serde::de::DeserializeOwned>(
+            section: &str,
+            value: &serde_json::Value,
+        ) -> Result<T, String> {
+            serde_json::from_value(value.clone())
+                .map_err(|e| format!("the section `{section}` cannot be read: {e}"))
+        }
+        let mut next = self.clone();
+        if let Some(v) = Self::client_part(file, names, "recording") {
+            let section: RecordingSection = read("recording", v)?;
+            next.hotkey = section.hotkey;
+            next.max_utterance_secs = section.max_utterance_secs;
+            next.auto_stop = section.auto_stop;
+        }
+        if let Some(v) = Self::client_part(file, names, "insertion") {
+            next.insertion = read("insertion", v)?;
+        }
+        if let Some(v) = Self::client_part(file, names, "general") {
+            let section: GeneralSection = read("general", v)?;
+            next.context = section.context;
+            next.ui_language = section.ui_language;
+            next.manifest_url = section.manifest_url;
+        }
+        if let Some(v) = Self::client_part(file, names, "appearance") {
+            let section: AppearanceSection = read("appearance", v)?;
+            next.widget_size = section.widget_size;
+            next.widget_idle = section.widget_idle;
+            next.show_transcript = section.show_transcript;
+            next.stats_layout = section.stats_layout;
+        }
+        Ok(next)
+    }
+
+    /// Copies the settings file aside as `client.json.bak-<seconds>` and
+    /// returns the copy; `None` when there is no file yet.
+    pub fn copy_aside(config_dir: &Path) -> Result<Option<PathBuf>, SettingsError> {
+        let path = Self::path(config_dir);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let mut copy = config_dir.join(format!("{FILE_NAME}.bak-{ts}"));
+        let mut n = 1;
+        while copy.exists() {
+            n += 1;
+            copy = config_dir.join(format!("{FILE_NAME}.bak-{ts}-{n}"));
+        }
+        std::fs::copy(&path, &copy).map_err(|source| SettingsError::Io {
+            path: copy.clone(),
+            source,
+        })?;
+        Ok(Some(copy))
     }
 
     pub fn microphone_choice(&self) -> MicrophoneChoice {
@@ -385,5 +610,168 @@ mod tests {
         assert_eq!(s.method_for(Some("com.example")), InsertMethod::Type);
         assert_eq!(s.method_for(Some("com.other")), InsertMethod::Copy);
         assert_eq!(s.method_for(None), InsertMethod::Copy);
+    }
+
+    use kongwe_core::settings_file::SettingsFile;
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn changed() -> ClientSettings {
+        let mut s = ClientSettings::default();
+        s.hotkey.hold_threshold_ms = 400;
+        s.max_utterance_secs = 120;
+        s.auto_stop.enabled = true;
+        s.insertion.default = InsertMethod::Type;
+        s.insertion.keep_on_clipboard = true;
+        s.insertion
+            .per_app
+            .insert("com.apple.Terminal".into(), InsertMethod::Ax);
+        s.context.clipboard = true;
+        s.ui_language = UiLanguage::En;
+        s.widget_size = WidgetSize::Large;
+        s.widget_idle = WidgetIdle::Ring;
+        s.show_transcript = false;
+        s.microphone = "Studio Mic 9".into();
+        s.widget_display = Some("Monitor Nine".into());
+        s.backup.folder = Some("/Volumes/Nine/backup".into());
+        s.backup.auto = true;
+        s
+    }
+
+    fn file_with(s: &ClientSettings, sections: &[&str]) -> SettingsFile {
+        let mut file = SettingsFile::new("0.1.0", "macos", "Anna");
+        file.sections = s.export_sections(&names(sections));
+        file
+    }
+
+    #[test]
+    fn the_file_is_copied_aside_before_an_import() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(ClientSettings::copy_aside(dir.path()).unwrap(), None);
+        let saved = changed();
+        saved.save(dir.path()).unwrap();
+        let copy = ClientSettings::copy_aside(dir.path()).unwrap().unwrap();
+        assert!(copy
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("client.json.bak-"));
+        ClientSettings::default().save(dir.path()).unwrap();
+        let kept: ClientSettings = serde_json::from_slice(&std::fs::read(&copy).unwrap()).unwrap();
+        assert_eq!(kept, saved);
+        // A second copy in the same second does not replace the first.
+        let second = ClientSettings::copy_aside(dir.path()).unwrap().unwrap();
+        assert_ne!(second, copy);
+    }
+
+    #[test]
+    fn backup_defaults() {
+        let b = ClientSettings::default().backup;
+        assert_eq!(b.folder, None);
+        assert!(!b.auto);
+        assert!(b.categories.history && b.categories.stats);
+        assert!(b.categories.settings && b.categories.content);
+        assert!(!b.categories.recordings);
+        let core: kongwe_core::backup::Categories = b.categories.into();
+        assert!(core.settings);
+        let records_only = BackupCategories {
+            settings: false,
+            content: false,
+            ..b.categories
+        };
+        assert!(!kongwe_core::backup::Categories::from(records_only).settings);
+        let content_only = BackupCategories {
+            settings: false,
+            ..b.categories
+        };
+        assert!(kongwe_core::backup::Categories::from(content_only).settings);
+    }
+
+    #[test]
+    fn an_older_file_without_backup_loads() {
+        let mut v = serde_json::to_value(ClientSettings::default()).unwrap();
+        v.as_object_mut().unwrap().remove("backup");
+        let s: ClientSettings = serde_json::from_value(v).unwrap();
+        assert_eq!(s.backup, BackupSettings::default());
+    }
+
+    #[test]
+    fn client_sections_round_trip() {
+        let source = changed();
+        let file = file_with(&source, &CLIENT_SECTIONS);
+        let got = ClientSettings::default()
+            .with_sections(&file, &names(&CLIENT_SECTIONS))
+            .unwrap();
+        assert_eq!(got.hotkey, source.hotkey);
+        assert_eq!(got.max_utterance_secs, 120);
+        assert_eq!(got.auto_stop, source.auto_stop);
+        assert_eq!(got.insertion, source.insertion);
+        assert_eq!(got.context, source.context);
+        assert_eq!(got.ui_language, UiLanguage::En);
+        assert_eq!(
+            (got.widget_size, got.widget_idle, got.show_transcript),
+            (WidgetSize::Large, WidgetIdle::Ring, false)
+        );
+    }
+
+    #[test]
+    fn the_microphone_the_display_and_the_backup_folder_never_travel() {
+        let file = file_with(&changed(), &CLIENT_SECTIONS);
+        let text = String::from_utf8(file.to_bytes()).unwrap();
+        for private in ["Studio Mic 9", "Monitor Nine", "/Volumes/Nine"] {
+            assert!(!text.contains(private), "{private}");
+        }
+        let mut here = ClientSettings {
+            microphone: "Desk Mic".into(),
+            widget_display: Some("Left".into()),
+            ..ClientSettings::default()
+        };
+        here.backup.folder = Some("/here".into());
+        let got = here.with_sections(&file, &names(&CLIENT_SECTIONS)).unwrap();
+        assert_eq!(got.microphone, "Desk Mic");
+        assert_eq!(got.widget_display.as_deref(), Some("Left"));
+        assert_eq!(got.backup, here.backup);
+    }
+
+    #[test]
+    fn only_the_sections_named_and_present_are_taken() {
+        let source = changed();
+        let file = file_with(&source, &["insertion", "appearance"]);
+        let got = ClientSettings::default()
+            .with_sections(&file, &names(&["insertion", "recording"]))
+            .unwrap();
+        assert_eq!(got.insertion, source.insertion);
+        assert_eq!(got.widget_size, WidgetSize::default());
+        assert_eq!(got.hotkey, HotkeySettings::default());
+        assert_eq!(
+            ClientSettings::applied_sections(&file, &names(&["insertion", "recording"])),
+            names(&["insertion"])
+        );
+    }
+
+    #[test]
+    fn the_general_section_keeps_the_part_of_the_core() {
+        let file = file_with(&changed(), &["general"]);
+        assert!(file.sections["general"].get("client").is_some());
+        let mut core_only = SettingsFile::new("0.1.0", "macos", "Anna");
+        core_only
+            .sections
+            .insert("general".into(), serde_json::json!({ "core": {} }));
+        let got = ClientSettings::default()
+            .with_sections(&core_only, &names(&["general"]))
+            .unwrap();
+        assert_eq!(got, ClientSettings::default());
+        assert!(ClientSettings::applied_sections(&core_only, &names(&["general"])).is_empty());
+    }
+
+    #[test]
+    fn a_section_of_the_wrong_shape_is_an_error() {
+        let mut file = SettingsFile::new("0.1.0", "macos", "Anna");
+        file.sections
+            .insert("recording".into(), serde_json::json!(5));
+        let got = ClientSettings::default().with_sections(&file, &names(&["recording"]));
+        assert!(got.unwrap_err().contains("recording"));
     }
 }

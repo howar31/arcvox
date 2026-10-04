@@ -1,8 +1,10 @@
 //! Kongwe dictation core.
 
 pub mod audio;
+pub mod backup;
 pub mod bench;
 pub mod config;
+pub mod device;
 pub mod dictionary;
 pub mod engine;
 pub mod history;
@@ -15,14 +17,16 @@ pub mod protocol;
 pub mod providers;
 pub mod secrets;
 pub mod session;
+pub mod settings_file;
 pub mod stats;
 pub mod steps;
 pub mod types;
 
 pub use config::FirstRunDefaults;
+pub use device::Device;
 pub use engine::{
-    Engine, EngineError, EngineOptions, ReprocessError, Reprocessed, SessionRequest,
-    MIN_UTTERANCE_SECS,
+    BackupSource, DeviceOptions, Engine, EngineError, EngineOptions, ReprocessError, Reprocessed,
+    SessionRequest, MIN_UTTERANCE_SECS,
 };
 pub use paths::DataDir;
 pub use protocol::{Event, PROTOCOL_VERSION};
