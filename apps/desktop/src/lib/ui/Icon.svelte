@@ -33,6 +33,7 @@
     download: '<path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10"/>',
     folder: '<path d="M2 4.5a1 1 0 0 1 1-1h3.2l1.5 1.5H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/>',
     warning: '<path d="M8 2.5 14 13H2z"/><path d="M8 6.5v3M8 11.3v.1"/>',
+    undo: '<path d="M3 8a5 5 0 1 0 1.5-3.55"/><path d="M3 2.5v2.5h2.5"/>',
     refresh: '<path d="M13 8a5 5 0 1 1-1.5-3.55"/><path d="M13 2.5v2.5h-2.5"/>',
   } as const;
   export type IconName = keyof typeof PATHS;

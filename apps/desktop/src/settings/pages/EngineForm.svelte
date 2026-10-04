@@ -72,6 +72,10 @@
     (["embedded", "native", "http"] as const).map((k) => ({ value: k as ProviderKind, label: t("engines.kind." + k) })),
   );
 
+  const runtimes = $derived(
+    (["whisper", "llama"] as const).map((r) => ({ value: r as Runtime, label: t("engines.runtime." + r) })),
+  );
+
   onMount(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
@@ -256,10 +260,8 @@
         <summary><span class="chev"><Icon name="chevron-right" size={14} /></span>{t("engines.advanced")}</summary>
         <div class="fields adv">
           {#if editing.kind === "embedded"}
-            <label for="f-runtime-{uid}">{t("engines.runtime")}</label>
-            <select id="f-runtime-{uid}" value={editing.runtime} onchange={(e) => setRuntime(e.currentTarget.value as Runtime)}>
-              {#each ["whisper", "llama"] as r (r)}<option value={r}>{t("engines.runtime." + r)}</option>{/each}
-            </select>
+            <span class="lbl">{t("engines.runtime")}</span>
+            <div><Segmented options={runtimes} bind:value={() => editing.runtime ?? "whisper", (r) => setRuntime(r)} label={t("engines.runtime")} /></div>
           {/if}
           <span class="lbl">{t("engines.capabilities")}</span>
           <div class="caps">
@@ -306,7 +308,7 @@
   .chev { display: flex; transition: transform .15s; }
   details[open] .chev { transform: rotate(90deg); }
   .adv { margin-top: 10px; align-items: start; }
-  .adv > .lbl, .adv > label { line-height: var(--control); }
+  .adv > .lbl { line-height: var(--control); }
   .caps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; }
   .caps label { display: flex; align-items: center; gap: 8px; line-height: 30px; }
   .probe { margin: 0; font-size: var(--text-sm); color: var(--ink-2); overflow-wrap: anywhere; }

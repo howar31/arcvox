@@ -34,6 +34,6 @@
   .actions { display: flex; align-items: center; gap: 8px; flex: none; }
   .crumb { display: flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: var(--text-sm); margin-bottom: 6px; min-width: 0; }
   .crumb button { border: 0; background: none; padding: 0; color: var(--accent); cursor: default; }
-  .crumb button:hover { text-decoration: underline; }
+  .crumb button:hover { color: var(--ink); }
   .here { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>

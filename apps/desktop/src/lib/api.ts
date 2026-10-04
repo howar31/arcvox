@@ -90,6 +90,7 @@ export const setDefaultProfile = (id: string) => invoke<Config>("profiles_set_de
 export const setDictionary = (entries: DictionaryEntry[]) => invoke<Config>("dictionary_set", { entries });
 export const getPrompt = () => invoke<string>("prompt_get");
 export const setPrompt = (text: string) => invoke<void>("prompt_set", { text });
+export const defaultPrompt = () => invoke<string>("prompt_default");
 export const restorePrompt = () => invoke<string>("prompt_restore");
 /** Recent rows; `query` keeps rows whose text contains it, `withAudio` rows with a recording. */
 export const listHistory = (limit = 200, query = "", withAudio = false) => invoke<Utterance[]>("history_list", { limit, query, withAudio });
@@ -130,6 +131,9 @@ export const setSecret = (keyRef: string, value: string) => invoke<void>("secret
 export const hasSecret = (keyRef: string) => invoke<boolean>("secrets_has", { keyRef });
 export const deleteSecret = (keyRef: string) => invoke<void>("secrets_delete", { keyRef });
 export const getClient = () => invoke<ClientSettings>("client_get");
+/** The settings of a new installation. */
+export interface Defaults { client: ClientSettings; general: General }
+export const getDefaults = () => invoke<Defaults>("settings_defaults");
 export const updateClient = (settings: ClientSettings) => invoke<ClientSettings>("client_update", { settings });
 export const listMicrophones = () => invoke<string[]>("system_list_microphones");
 /** A connected display: the key the setting stores, and the name the system shows for it. */

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { errorMessage, getPrompt, restorePrompt, setPrompt } from "../../lib/api";
+  import { defaultPrompt, errorMessage, getPrompt, restorePrompt, setPrompt } from "../../lib/api";
   import { guard } from "../../lib/guard.svelte";
   import { t } from "../../lib/i18n";
   import Modal from "../../lib/ui/Modal.svelte";
@@ -15,8 +15,13 @@
   // False after a failed load: an editor that did not receive the stored text must not overwrite it.
   let loaded = $state(false);
   let confirmRestore = $state(false);
+  // The text of a new installation; null while it is not known.
+  let standard = $state<string | null>(null);
+  // Restoring is offered while the stored text may differ from it.
+  const restorable = $derived(!loaded || standard === null || saved !== standard);
 
   onMount(async () => {
+    defaultPrompt().then((d) => { standard = d; }).catch(() => {});
     try {
       const current = await getPrompt();
       saved = current;
@@ -71,7 +76,7 @@
 {#if saved !== null}
   <PageHead title={t("nav.prompt")} description={t("prompt.note")}>
     {#snippet actions()}
-      <button type="button" class="btn" disabled={saving} onclick={() => (confirmRestore = true)}>{t("prompt.restore")}</button>
+      {#if restorable}<button type="button" class="btn" disabled={saving} onclick={() => (confirmRestore = true)}>{t("prompt.restore")}</button>{/if}
     {/snippet}
   </PageHead>
 
