@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State, Wry};
 
 use super::CmdResult;
 use crate::app::AppState;
+use crate::settings::{WidgetFade, WidgetIdle, WidgetSize};
+use crate::ui::preview::{Look, Sample, Scene};
 
 #[tauri::command]
 pub fn ui_language(state: State<'_, AppState>) -> String {
@@ -32,6 +34,45 @@ pub fn widget_drag_start(state: State<'_, AppState>) {
 #[tauri::command]
 pub fn widget_placing(state: State<'_, AppState>, on: bool) {
     state.ui.set_placing(on);
+}
+
+/// A state of the widget and the settings to show it with, sent by the
+/// settings window while it keeps the widget on screen.
+#[derive(Deserialize)]
+pub struct WidgetPreview {
+    scene: Scene,
+    size: WidgetSize,
+    idle: WidgetIdle,
+    fade: WidgetFade,
+    /// Sample texts in the interface language; none when the recognised
+    /// text is not shown while processing.
+    raw: Option<String>,
+    refined: Option<String>,
+    detail: Option<String>,
+    /// Begin the scene again even when it is the one shown.
+    play: bool,
+    /// Show a resting widget faint without waiting.
+    faint: bool,
+}
+
+/// Shows the widget in a chosen state with settings that are not saved.
+#[tauri::command]
+pub fn widget_preview(state: State<'_, AppState>, preview: WidgetPreview) {
+    state.ui.preview(
+        preview.scene,
+        Look {
+            scale: preview.size.scale(),
+            idle: preview.idle,
+            fade: preview.fade,
+        },
+        Sample {
+            raw: preview.raw,
+            refined: preview.refined,
+            detail: preview.detail,
+        },
+        preview.play,
+        preview.faint,
+    );
 }
 
 /// The factor of the widget size the user chose.

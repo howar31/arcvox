@@ -3,6 +3,7 @@
 
 pub mod app_menu;
 pub mod placement;
+pub mod preview;
 pub mod tray;
 pub mod widget;
 pub mod window_state;
@@ -20,6 +21,7 @@ use crate::dictation::ui::{MessageKind, Ui, UiMessage, UiState};
 use crate::i18n::Language;
 use crate::settings::{WidgetFade, WidgetIdle};
 use app_menu::AppMenu;
+use preview::{Look, Sample, Scene};
 use tray::Tray;
 
 const HIDE_AFTER_IDLE: Duration = Duration::from_millis(1200);
@@ -48,6 +50,8 @@ const SETTINGS: &str = "settings";
 /// How long the windows stay after the widget was told to leave: the
 /// length of the leaving motion in the page, and a little more.
 const LEAVE: Duration = Duration::from_millis(240);
+/// How often the listening scene of the preview sends an input level.
+const PREVIEW_LEVEL_TICK: Duration = Duration::from_millis(50);
 
 #[derive(Serialize, Clone)]
 struct StatePayload {
@@ -59,6 +63,9 @@ struct StatePayload {
     idle: &'static str,
     /// Whether and how a resting widget turns faint.
     fade: WidgetFade,
+    /// A resting widget is faint without waiting: its transparency is
+    /// being chosen.
+    faint: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -126,6 +133,14 @@ pub struct TauriUi {
     linger: Mutex<Option<Duration>>,
     /// When the panel began to turn the recognised text into the final one.
     rewrite_at: Mutex<Option<Instant>>,
+    /// The saved look, while the settings window tries out another one.
+    saved: Mutex<preview::Saved>,
+    /// What the widget shows while it is kept visible.
+    scene: Mutex<Scene>,
+    /// Bumped whenever a scene begins or the preview ends; what a scene
+    /// keeps running stops when it changed.
+    preview_run: Arc<AtomicU64>,
+    faint: AtomicBool,
 }
 
 impl TauriUi {
@@ -162,6 +177,10 @@ impl TauriUi {
             transcript: Mutex::new(None),
             linger: Mutex::new(None),
             rewrite_at: Mutex::new(None),
+            saved: Mutex::new(preview::Saved::default()),
+            scene: Mutex::new(Scene::Place),
+            preview_run: Arc::new(AtomicU64::new(0)),
+            faint: AtomicBool::new(false),
         })
     }
 
@@ -187,6 +206,11 @@ impl TauriUi {
     }
 
     pub fn set_scale(&self, scale: f64) {
+        self.saved.lock().unwrap().edit(|look| look.scale = scale);
+        self.apply_scale(scale);
+    }
+
+    fn apply_scale(&self, scale: f64) {
         *self.scale.lock().unwrap() = scale;
         let app = self.app.clone();
         let layout = self.layout.clone();
@@ -208,13 +232,16 @@ impl TauriUi {
     }
 
     pub fn set_fade(&self, fade: WidgetFade) {
-        *self.fade.lock().unwrap() = fade.bounded();
+        let fade = fade.bounded();
+        self.saved.lock().unwrap().edit(|look| look.fade = fade);
+        *self.fade.lock().unwrap() = fade;
         self.emit_current_state();
     }
 
     /// The user chose what the widget shows while no dictation goes on. A
     /// widget that shows a dictation or a message takes it when it leaves.
     pub fn set_idle(&self, idle: WidgetIdle) {
+        self.saved.lock().unwrap().edit(|look| look.idle = idle);
         *self.idle.lock().unwrap() = idle;
         self.tray.set_idle(idle);
         let _ = self.app.emit_to(SETTINGS, "widget-idle", idle.name());
@@ -265,23 +292,9 @@ impl TauriUi {
         self.placing.load(Ordering::SeqCst) && !self.moving.load(Ordering::SeqCst)
     }
 
-    /// The name of the state while the widget is kept visible to be moved.
-    fn placing_name(&self) -> &'static str {
-        if self.moving.load(Ordering::SeqCst) {
-            MOVING
-        } else {
-            PLACING
-        }
-    }
-
     fn emit_current_state(&self) {
         let state = *self.state.lock().unwrap();
-        let placing = self.placing.load(Ordering::SeqCst);
-        self.emit_state(if placing && !is_session(state) {
-            self.placing_name()
-        } else {
-            Self::state_name(state)
-        });
+        self.emit_state(state);
     }
 
     fn language(&self) -> Language {
@@ -406,6 +419,10 @@ impl TauriUi {
         if opened {
             self.moving.store(true, Ordering::SeqCst);
             self.set_placing(true);
+        } else if self.is_placing() && *self.scene.lock().unwrap() == Scene::Idle {
+            // A previewed widget at rest is dragged as the whole widget too.
+            self.preview_place();
+            self.play(Scene::Place, Sample::default());
         }
         std::thread::spawn(move || {
             // Runs one step on the main thread; true while the drag goes on.
@@ -454,16 +471,30 @@ impl TauriUi {
             self.tray.set_placing(on);
             let _ = self.app.emit_to(SETTINGS, "widget-placing", on);
         }
+        if !on {
+            // What was tried out is over: the saved look is back.
+            self.preview_run.fetch_add(1, Ordering::SeqCst);
+            *self.scene.lock().unwrap() = Scene::Place;
+            self.faint.store(false, Ordering::SeqCst);
+            let saved = self.saved.lock().unwrap().take();
+            if let Some(look) = saved {
+                *self.fade.lock().unwrap() = look.fade;
+                *self.idle.lock().unwrap() = look.idle;
+                if look.scale != self.scale() {
+                    self.apply_scale(look.scale);
+                }
+            }
+        }
         let state = *self.state.lock().unwrap();
         if is_session(state) {
             // A dictation is on screen; it goes on as usual.
             return;
         }
+        self.emit("widget-reset", ());
+        self.emit_state(state);
         if on {
-            self.emit_state(self.placing_name());
             self.show();
         } else {
-            self.emit_state(Self::state_name(state));
             self.dismiss();
         }
     }
@@ -477,18 +508,126 @@ impl TauriUi {
             .run_on_main_thread(move || layout.lock().unwrap().reset(&app));
     }
 
-    fn emit_state(&self, state: &'static str) {
+    /// Tells the windows what the widget shows in this state. While it is
+    /// kept visible and no dictation goes on, the widget shows the scene
+    /// chosen for it, and the settings window is told only that it is kept.
+    fn emit_state(&self, state: UiState) {
+        let kept = self.placing.load(Ordering::SeqCst) && !is_session(state);
+        let moving = self.moving.load(Ordering::SeqCst);
+        let (shown, told) = match (kept, moving) {
+            (false, _) => (Self::state_name(state), Self::state_name(state)),
+            (true, true) => (MOVING, MOVING),
+            (true, false) => (self.scene.lock().unwrap().state(), PLACING),
+        };
         self.emit(
             "widget-state",
             StatePayload {
-                state,
+                state: shown,
                 language: self.language().tag(),
                 scale: self.scale(),
                 idle: self.idle().name(),
                 fade: self.fade(),
+                faint: self.faint.load(Ordering::SeqCst),
             },
         );
-        let _ = self.app.emit_to(SETTINGS, "dictation-state", state);
+        let _ = self.app.emit_to(SETTINGS, "dictation-state", told);
+    }
+
+    /// Shows a state of the widget with a look that is not saved, while the
+    /// widget is kept visible and no dictation goes on. `play` begins the
+    /// scene again even when it is the one already shown; `faint` shows a
+    /// resting widget faint at once.
+    pub fn preview(&self, scene: Scene, look: Look, sample: Sample, play: bool, faint: bool) {
+        if !self.is_placing() || is_session(*self.state.lock().unwrap()) {
+            return;
+        }
+        self.saved.lock().unwrap().keep(Look {
+            scale: self.scale(),
+            idle: self.idle(),
+            fade: self.fade(),
+        });
+        *self.fade.lock().unwrap() = look.fade.bounded();
+        let idle_changed =
+            std::mem::replace(&mut *self.idle.lock().unwrap(), look.idle) != look.idle;
+        self.faint.store(faint, Ordering::SeqCst);
+        let scene_changed = std::mem::replace(&mut *self.scene.lock().unwrap(), scene) != scene;
+        if look.scale != self.scale() {
+            self.apply_scale(look.scale);
+        }
+        if play || scene_changed {
+            self.play(scene, sample);
+        } else {
+            self.emit_current_state();
+            if scene == Scene::Idle && idle_changed {
+                self.dismiss();
+            }
+        }
+    }
+
+    /// Begins a scene: the widget and its panel get what a dictation in
+    /// that state would send them.
+    fn play(&self, scene: Scene, sample: Sample) {
+        let run = self.preview_run.fetch_add(1, Ordering::SeqCst) + 1;
+        *self.scene.lock().unwrap() = scene;
+        self.emit("widget-reset", ());
+        self.emit_current_state();
+        if scene == Scene::Idle {
+            // The widget leaves and rests as it does after a dictation.
+            self.dismiss();
+            return;
+        }
+        self.show();
+        let language = self.language().tag();
+        match scene {
+            Scene::Place | Scene::Idle => {}
+            Scene::Listening => {
+                let app = self.app.clone();
+                let current = self.preview_run.clone();
+                std::thread::spawn(move || {
+                    let began = Instant::now();
+                    while current.load(Ordering::SeqCst) == run {
+                        let rms = preview::level(began.elapsed().as_secs_f32());
+                        let _ = app.emit_to(widget::WINDOW, "widget-level", LevelPayload { rms });
+                        std::thread::sleep(PREVIEW_LEVEL_TICK);
+                    }
+                });
+            }
+            Scene::Processing | Scene::Done => {
+                if let Some(text) = sample.raw {
+                    self.emit("widget-transcript", TranscriptPayload { text, language });
+                    if let (Scene::Done, Some(text)) = (scene, sample.refined) {
+                        self.emit("widget-refined", TranscriptPayload { text, language });
+                    }
+                }
+                if scene == Scene::Done {
+                    self.emit("widget-inserted", ());
+                }
+            }
+            Scene::Failed => self.emit(
+                "widget-message",
+                MessagePayload {
+                    kind: "error",
+                    key: crate::i18n::Msg::WidgetAsrFailed.key(),
+                    detail: None,
+                    copyable: sample.detail,
+                    code: Some(arcvox_core::types::ErrorCode::ProviderUnreachable.name()),
+                    retry: false,
+                    language,
+                },
+            ),
+        }
+    }
+
+    /// The widget goes back to being shown for dragging, and the settings
+    /// window is told so.
+    fn preview_place(&self) {
+        if std::mem::replace(&mut *self.scene.lock().unwrap(), Scene::Place) == Scene::Place {
+            return;
+        }
+        self.preview_run.fetch_add(1, Ordering::SeqCst);
+        let _ = self
+            .app
+            .emit_to(SETTINGS, "widget-preview-scene", Scene::Place.name());
     }
 
     /// The name of the state the settings window shows when it opens.
@@ -571,11 +710,11 @@ impl Ui for TauriUi {
         self.tray.set_state(state, self.language());
         *self.state.lock().unwrap() = state;
         let placing = self.placing.load(Ordering::SeqCst);
-        self.emit_state(if placing && !is_session(state) {
-            self.placing_name()
-        } else {
-            Self::state_name(state)
-        });
+        if placing && matches!(state, UiState::Recording | UiState::Locked) {
+            // A real dictation takes the place of a previewed state.
+            self.preview_place();
+        }
+        self.emit_state(state);
         match state {
             UiState::Recording | UiState::Locked | UiState::Processing | UiState::Inserting => {
                 if matches!(state, UiState::Recording | UiState::Locked) {

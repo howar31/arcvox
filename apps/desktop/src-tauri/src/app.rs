@@ -116,6 +116,7 @@ pub fn run() {
             crate::commands::system::widget_dismiss,
             crate::commands::system::widget_drag_start,
             crate::commands::system::widget_placing,
+            crate::commands::system::widget_preview,
             crate::commands::system::widget_reset_position,
             crate::commands::system::widget_measure,
             crate::commands::system::widget_scale,
