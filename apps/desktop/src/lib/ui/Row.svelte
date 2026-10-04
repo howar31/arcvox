@@ -1,14 +1,18 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
   import Icon from "./Icon.svelte";
+  import ResetButton from "./ResetButton.svelte";
+  import type { Reset } from "../reset";
 
-  let { label, help, leading, children, onclick }: {
+  let { label, help, leading, children, onclick, reset }: {
     label?: string;
     help?: string;
     leading?: Snippet;
     children?: Snippet;
     /** Makes the whole row a button that ends in a chevron. */
     onclick?: () => void;
+    /** Set while the row's value differs from its default. */
+    reset?: Reset;
   } = $props();
 </script>
 
@@ -20,6 +24,7 @@
       {#if help}<small>{help}</small>{/if}
     </span>
   {/if}
+  <ResetButton {reset} />
   {#if children}{@render children()}{/if}
 {/snippet}
 

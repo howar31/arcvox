@@ -1,3 +1,5 @@
+use kongwe_core::config::General;
+use serde::Serialize;
 use tauri::State;
 
 use super::CmdResult;
@@ -9,6 +11,22 @@ use crate::shortcut::{refusal, sanitized, Key, Refusal, Shortcut};
 #[tauri::command]
 pub fn client_get(state: State<'_, AppState>) -> ClientSettings {
     ClientSettings::load(&state.dirs.config_dir)
+}
+
+/// The settings of a new installation, for the way back to them that the
+/// settings pages offer.
+#[derive(Serialize)]
+pub struct Defaults {
+    client: ClientSettings,
+    general: General,
+}
+
+#[tauri::command]
+pub fn settings_defaults() -> Defaults {
+    Defaults {
+        client: ClientSettings::default(),
+        general: General::default(),
+    }
 }
 
 /// Stores the settings and makes every part of the app follow them.

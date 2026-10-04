@@ -5,7 +5,7 @@
   import { setLanguage, t, type Lang } from "../lib/i18n";
   import { firstShortcut, otherShortcuts } from "../lib/shortcut";
   import { dictationLabelKey } from "../lib/widgetView";
-  import { client, config } from "../lib/store.svelte";
+  import { client, config, defaults } from "../lib/store.svelte";
   import { go, NAV, navPage, parseRoute, routeHash, SETTINGS_PAGES, shouldIntercept, type SettingsPage } from "../lib/route";
   import { guard } from "../lib/guard.svelte";
   import Icon from "../lib/ui/Icon.svelte";
@@ -70,7 +70,7 @@
     (async () => {
       setLanguage((await uiLanguage()) as Lang);
       langReady = true;
-      await Promise.all([config.load(), client.load(), checkPermissions()]);
+      await Promise.all([config.load(), client.load(), defaults.load(), checkPermissions()]);
       await config.watch();
       await client.watch();
       ready = true;
@@ -169,7 +169,7 @@
   .nav.on :global(.icon) { opacity: 1; }
   .state { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 12px; font-size: var(--text-sm); color: var(--ink-2); line-height: 1.35; }
   .state-link { border: 0; background: none; padding: 0; color: var(--ink-2); text-align: left; cursor: default; }
-  .state-link:hover { text-decoration: underline; }
+  .state-link:hover { color: var(--ink); }
   /* Positioned: absolutely placed descendants (visually hidden labels) stay inside the scroll area. */
   .main { position: relative; overflow-x: hidden; overflow-y: auto; min-width: 0; }
   /* Centered once the window is wider than the content; pages can lay themselves out by this width. */

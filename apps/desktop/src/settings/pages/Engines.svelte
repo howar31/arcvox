@@ -290,6 +290,6 @@
   .foot { margin-top: 8px; }
   .foot .help { margin-top: 4px; }
   .link { border: 0; background: none; padding: 0; margin-left: 6px; color: var(--accent); font-size: var(--text-sm); cursor: default; }
-  .link:hover { text-decoration: underline; }
+  .link:hover { color: var(--ink); }
   .link:disabled { opacity: .5; }
 </style>

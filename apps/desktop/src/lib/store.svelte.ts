@@ -1,4 +1,4 @@
-import { getClient, getConfig, onConfigChanged, onWidgetIdle, updateClient, type ClientSettings, type Config } from "./api";
+import { getClient, getConfig, getDefaults, onConfigChanged, onWidgetIdle, updateClient, type ClientSettings, type Config, type Defaults } from "./api";
 
 class ConfigStore {
   value = $state<Config | null>(null);
@@ -21,5 +21,12 @@ class ClientStore {
   }
 }
 
+/** The settings of a new installation; null until loaded, and then no setting offers a reset. */
+class DefaultsStore {
+  value = $state<Defaults | null>(null);
+  async load() { try { this.value = await getDefaults(); } catch { this.value = null; } }
+}
+
 export const config = new ConfigStore();
 export const client = new ClientStore();
+export const defaults = new DefaultsStore();
