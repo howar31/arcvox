@@ -65,6 +65,8 @@ export interface ClientSettings {
   manifest_url: string | null;
   /** The statistics page's cards: position and size on its grid; null is the built-in arrangement. */
   stats_layout: StatsCard[] | null;
+  /** The folder data is backed up to, what goes there, and whether that happens by itself. */
+  backup: { folder: string | null; categories: BackupCategories; auto: boolean };
 }
 export interface StatsCard { id: string; row: number; col: number; w: number; h: number; hidden: boolean }
 export interface Permissions { accessibility: boolean }
@@ -256,3 +258,41 @@ export function onWidgetInserted(cb: () => void): Promise<UnlistenFn> { return l
 export function onWidgetCopied(cb: () => void): Promise<UnlistenFn> { return listen("widget-copied", () => cb()); }
 export function onWidgetRefined(cb: (p: TranscriptPayload) => void): Promise<UnlistenFn> { return listen<TranscriptPayload>("widget-refined", (e) => cb(e.payload)); }
 export function onWidgetTranscript(cb: (p: TranscriptPayload) => void): Promise<UnlistenFn> { return listen<TranscriptPayload>("widget-transcript", (e) => cb(e.payload)); }
+
+// Settings files, backups of the history, and devices.
+/** What is backed up to the folder: this device's settings, its content, and its records by kind. */
+export interface BackupCategories { settings: boolean; content: boolean; history: boolean; stats: boolean; recordings: boolean }
+export interface SettingsInfo { file_name: string; app_version: string; platform: string; device_name: string; exported_at: number; sections: string[]; unknown: string[] }
+export type SettingsNote =
+  | { kind: "needs_key"; engine: string }
+  | { kind: "engine_replaced"; profile: string; role: string }
+  | { kind: "engine_unavailable"; engine: string }
+  | { kind: "unknown_section"; name: string }
+  | { kind: "apps_not_installed"; names: string[] };
+export interface SettingsResult { applied: string[]; notes: SettingsNote[] }
+export interface BackupSizes { rows: number; recordings: number; recording_bytes: number }
+export interface WriteReport { rows: number; cells: number; recordings: number; recording_bytes: number; settings: boolean }
+export interface BackupDevice {
+  id: string; name: string; platform: string; rows: number; first_month: string | null; last_month: string | null;
+  recordings: number; recording_bytes: number; has_stats: boolean; has_settings: boolean; this: boolean;
+}
+export interface BackupInfo { version: number; devices: BackupDevice[] }
+export interface ImportReport { devices: number; added: number; updated: number; skipped: number; cells: number; recordings: number; missing_recordings: number; bad_lines: number; expiring: number }
+export interface DeviceRow { id: string; name: string; platform: string; rows: number; last_ts: number | null; this: boolean }
+export type BackupStatus = { state: "never" } | { state: "ok"; at: number; report: WriteReport } | { state: "failed"; at: number; reason: string; last_ok: number | null } | { state: "running" };
+export const exportSettings = (path: string, sections: string[]) => invoke<void>("settings_export", { path, sections });
+export const inspectSettings = (path: string) => invoke<SettingsInfo>("settings_inspect", { path });
+export const importSettings = (path: string, sections: string[]) => invoke<SettingsResult>("settings_import", { path, sections });
+export const backupSizes = () => invoke<BackupSizes>("backup_sizes");
+export const exportBackup = (path: string, categories: BackupCategories) => invoke<WriteReport>("backup_export", { path, categories });
+export const inspectBackup = (path: string, folder: boolean) => invoke<BackupInfo>("backup_inspect", { path, folder });
+export const importBackup = (path: string, folder: boolean, devices: string[], categories: BackupCategories) => invoke<ImportReport>("backup_import", { path, folder, devices, categories });
+export const backupStatus = () => invoke<BackupStatus>("backup_status");
+/** Writes the backup folder now; the result arrives through `onBackupStatus`. */
+export const backupRunNow = () => invoke<void>("backup_run_now");
+export const openBackupFolder = () => invoke<void>("backup_folder_open");
+export const listDevices = () => invoke<DeviceRow[]>("devices_list");
+export const renameDevice = (id: string, name: string) => invoke<void>("device_rename", { id, name });
+/** Removes another device's history and statistics from this one; returns how many rows went. */
+export const removeDevice = (id: string) => invoke<number>("device_remove", { id });
+export function onBackupStatus(cb: (s: BackupStatus) => void): Promise<UnlistenFn> { return listen<BackupStatus>("backup-status", (e) => cb(e.payload)); }

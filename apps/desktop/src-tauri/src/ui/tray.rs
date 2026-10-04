@@ -284,6 +284,7 @@ const SETTINGS_PAGES: &[&str] = &[
     "general",
     "recording",
     "data",
+    "backup",
     "advanced",
     "providers",
     "profiles",

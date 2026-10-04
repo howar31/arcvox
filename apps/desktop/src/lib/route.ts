@@ -1,4 +1,4 @@
-export type Page = "home" | "history" | "flow" | "dictionary" | "prompt" | "engines" | "speed" | "general" | "recording" | "data" | "advanced" | "about";
+export type Page = "home" | "history" | "flow" | "dictionary" | "prompt" | "engines" | "speed" | "general" | "recording" | "data" | "backup" | "advanced" | "about";
 
 /** The pages of settings: one set of settings shown in parts. */
 export const SETTINGS_PAGES = ["general", "recording", "data", "advanced"] as const;
@@ -8,7 +8,7 @@ export type SettingsPage = (typeof SETTINGS_PAGES)[number];
 export const NAV: { group: string | null; pages: Page[] }[] = [
   { group: null, pages: ["home", "history"] },
   { group: "nav.group.dictation", pages: ["flow", "engines", "prompt", "dictionary"] },
-  { group: "nav.group.settings", pages: [...SETTINGS_PAGES] },
+  { group: "nav.group.settings", pages: ["general", "recording", "data", "backup", "advanced"] },
   { group: null, pages: ["about"] },
 ];
 

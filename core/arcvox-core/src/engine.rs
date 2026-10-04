@@ -8,8 +8,10 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 use crate::audio::encode_wav_pcm16;
+use crate::backup::{self, BackupError, BackupInfo, Categories, ImportReport, Scope, WriteReport};
 use crate::config::{ConfigStore, FirstRunDefaults, ProviderConfig, ProviderKind, StoreError};
-use crate::history::{HistoryError, HistoryStore, MoveReport, NewUtterance};
+use crate::device::Device;
+use crate::history::{DeviceRef, DeviceRow, HistoryError, HistoryStore, MoveReport, NewUtterance};
 use crate::paths::DataDir;
 use crate::pipeline::Pipeline;
 use crate::profile::resolve;
@@ -42,6 +44,19 @@ pub enum EngineError {
     Busy,
     #[error("the folder cannot be used: {0}")]
     Folder(String),
+    #[error(transparent)]
+    Backup(#[from] BackupError),
+    #[error(transparent)]
+    Settings(#[from] crate::settings_file::SettingsFileError),
+}
+
+/// Where a backup is read from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BackupSource {
+    /// One archive file.
+    File(PathBuf),
+    /// The tree itself.
+    Folder(PathBuf),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -90,6 +105,8 @@ pub struct Engine {
 
 struct Inner {
     dirs: DataDir,
+    device: Mutex<Device>,
+    app_version: String,
     config: ConfigStore,
     history: Arc<HistoryStore>,
     registry: ProviderRegistry,
@@ -119,6 +136,31 @@ pub struct EngineOptions {
     pub secrets: Arc<dyn SecretStore>,
     pub factories: Vec<Arc<dyn ProviderFactory>>,
     pub first_run: FirstRunDefaults,
+    pub identity: DeviceOptions,
+}
+
+/// What the client knows about the machine the engine runs on.
+#[derive(Debug, Clone)]
+pub struct DeviceOptions {
+    /// The machine's own id, when the platform gives one. It tells a data
+    /// directory that was copied to another machine from the original.
+    pub hardware_id: Option<String>,
+    /// The name a new installation starts with.
+    pub name: String,
+    pub platform: String,
+    /// The client's version, written into backups.
+    pub app_version: String,
+}
+
+impl Default for DeviceOptions {
+    fn default() -> Self {
+        Self {
+            hardware_id: None,
+            name: "This device".into(),
+            platform: std::env::consts::OS.into(),
+            app_version: env!("CARGO_PKG_VERSION").into(),
+        }
+    }
 }
 
 impl Engine {
@@ -129,6 +171,7 @@ impl Engine {
                 secrets,
                 factories: Vec::new(),
                 first_run: FirstRunDefaults::default(),
+                identity: DeviceOptions::default(),
             },
         )
         .await
@@ -144,11 +187,32 @@ impl Engine {
             .recordings_dir
             .clone()
             .unwrap_or_else(|| dirs.recordings_dir());
+        // One identity per database: a data directory that lost its database
+        // starts another one, so its rows never share ids with the old ones.
+        let identity = if path.exists() {
+            Device::load_or_create
+        } else {
+            Device::renew
+        };
+        let device = identity(
+            &dirs.data_dir,
+            opts.identity.hardware_id.as_deref(),
+            &opts.identity.name,
+        )?;
         let history_recordings = recordings.clone();
+        let opened = device.clone();
+        let platform = opts.identity.platform.clone();
         let history = Arc::new(
-            tokio::task::spawn_blocking(move || HistoryStore::open(&path, &history_recordings))
-                .await
-                .expect("join")?,
+            tokio::task::spawn_blocking(move || {
+                let device = DeviceRef {
+                    id: &opened.id,
+                    name: &opened.name,
+                    platform: &platform,
+                };
+                HistoryStore::open(&path, &history_recordings, &device)
+            })
+            .await
+            .expect("join")?,
         );
 
         // Earlier builds kept recordings in the cache directory. They are the
@@ -194,6 +258,8 @@ impl Engine {
         let engine = Engine {
             inner: Arc::new(Inner {
                 dirs,
+                device: Mutex::new(device),
+                app_version: opts.identity.app_version,
                 config,
                 history,
                 registry,
@@ -272,12 +338,199 @@ impl Engine {
         &self.inner.config
     }
 
+    pub(crate) fn secrets(&self) -> &Arc<dyn SecretStore> {
+        &self.inner.secrets
+    }
+
     pub fn history(&self) -> Arc<HistoryStore> {
         self.inner.history.clone()
     }
 
     pub fn dirs(&self) -> &DataDir {
         &self.inner.dirs
+    }
+
+    /// The identity of this installation.
+    pub fn device(&self) -> Device {
+        self.inner.device.lock().unwrap().clone()
+    }
+
+    /// The devices whose rows are in the history: this one first.
+    pub fn devices(&self) -> Result<Vec<DeviceRow>, EngineError> {
+        Ok(self.inner.history.devices()?)
+    }
+
+    /// Gives a device another name. The name of this one is also what its
+    /// backups carry.
+    pub async fn rename_device(&self, id: &str, name: &str) -> Result<(), EngineError> {
+        let name = if id == self.inner.history.device_id() {
+            let renamed = Device::rename(&self.inner.dirs.data_dir, name)?;
+            let name = renamed.name.clone();
+            *self.inner.device.lock().unwrap() = renamed;
+            name
+        } else {
+            let name: String = name.trim().chars().take(crate::device::NAME_MAX).collect();
+            if name.is_empty() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "the name is empty",
+                )
+                .into());
+            }
+            name
+        };
+        self.inner.history.set_device_name(id, &name)?;
+        Ok(())
+    }
+
+    /// Removes another device's history rows, recordings and statistics.
+    pub async fn remove_device(&self, id: &str) -> Result<usize, EngineError> {
+        let history = self.inner.history.clone();
+        let recordings = self.inner.recordings_dir();
+        let id = id.to_string();
+        Ok(
+            tokio::task::spawn_blocking(move || history.remove_device(&id, &recordings))
+                .await
+                .expect("join")?,
+        )
+    }
+
+    /// Whether a dictation is being processed.
+    pub fn busy(&self) -> bool {
+        !self.inner.in_flight.lock().unwrap().is_empty()
+    }
+
+    /// Brings the backup folder at `dir` up to date with this device's rows.
+    /// What is in the folder already is never removed.
+    pub async fn backup_write_folder(
+        &self,
+        dir: &Path,
+        cats: Categories,
+        settings: Option<Vec<u8>>,
+    ) -> Result<WriteReport, EngineError> {
+        // A folder that is gone (a volume that is not mounted, a folder that
+        // was removed) is reported, not made again somewhere else.
+        if !dir.is_dir() {
+            return Err(BackupError::Io {
+                path: dir.to_path_buf(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "the folder does not exist",
+                ),
+            }
+            .into());
+        }
+        self.write_backup(dir.to_path_buf(), cats, Scope::ThisDevice, settings)
+            .await
+    }
+
+    /// Writes one archive file with the rows of every device here.
+    pub async fn backup_export_file(
+        &self,
+        file: &Path,
+        cats: Categories,
+        settings: Option<Vec<u8>>,
+    ) -> Result<WriteReport, EngineError> {
+        let staging = tempfile::tempdir_in(&self.inner.dirs.cache_dir)?;
+        let tree = staging.path().join("tree");
+        let report = self
+            .write_backup(tree.clone(), cats, Scope::AllDevices, settings)
+            .await?;
+        let file = file.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            let packed = backup::archive::pack(&tree, &file);
+            drop(staging);
+            packed
+        })
+        .await
+        .expect("join")?;
+        Ok(report)
+    }
+
+    async fn write_backup(
+        &self,
+        root: PathBuf,
+        cats: Categories,
+        scope: Scope,
+        settings: Option<Vec<u8>>,
+    ) -> Result<WriteReport, EngineError> {
+        let inner = self.inner.clone();
+        Ok(tokio::task::spawn_blocking(move || {
+            let recordings = inner.recordings_dir();
+            let in_use = |p: &Path| inner.in_flight.lock().unwrap().contains(p);
+            backup::write_tree(
+                &inner.history,
+                &root,
+                cats,
+                scope,
+                &recordings,
+                &inner.app_version,
+                settings.as_deref(),
+                &in_use,
+            )
+        })
+        .await
+        .expect("join")?)
+    }
+
+    /// The tree of a source: the folder itself, or the archive unpacked
+    /// into a directory that lives as long as the returned guard.
+    fn open_source(
+        cache: &Path,
+        src: &BackupSource,
+    ) -> Result<(PathBuf, Option<tempfile::TempDir>), BackupError> {
+        match src {
+            BackupSource::Folder(dir) => Ok((dir.clone(), None)),
+            BackupSource::File(file) => {
+                let staging = tempfile::tempdir_in(cache).map_err(|e| BackupError::Io {
+                    path: cache.to_path_buf(),
+                    source: e,
+                })?;
+                backup::archive::unpack(file, staging.path())?;
+                Ok((staging.path().to_path_buf(), Some(staging)))
+            }
+        }
+    }
+
+    /// What a backup holds.
+    pub async fn backup_inspect(&self, src: &BackupSource) -> Result<BackupInfo, EngineError> {
+        let inner = self.inner.clone();
+        let src = src.clone();
+        Ok(tokio::task::spawn_blocking(move || {
+            let (root, _staging) = Self::open_source(&inner.dirs.cache_dir, &src)?;
+            backup::inspect(&root, inner.history.device_id())
+        })
+        .await
+        .expect("join")?)
+    }
+
+    /// Merges the named devices of a backup into the history. Refused while
+    /// a dictation is being processed.
+    pub async fn backup_import(
+        &self,
+        src: &BackupSource,
+        devices: Vec<String>,
+        cats: Categories,
+    ) -> Result<ImportReport, EngineError> {
+        if self.busy() {
+            return Err(EngineError::Busy);
+        }
+        let inner = self.inner.clone();
+        let src = src.clone();
+        Ok(tokio::task::spawn_blocking(move || {
+            let (root, _staging) = Self::open_source(&inner.dirs.cache_dir, &src)?;
+            let retention = inner.config.current().general.history_retention_days;
+            backup::import_tree(
+                &inner.history,
+                &root,
+                &devices,
+                cats,
+                &inner.recordings_dir(),
+                retention,
+            )
+        })
+        .await
+        .expect("join")?)
     }
 
     /// The folder recordings are kept in: the one the user chose, or the
@@ -323,6 +576,11 @@ impl Engine {
             .config
             .update(|c| c.general.recordings_dir = setting)?;
         Ok(report)
+    }
+
+    /// Whether this build can make engines of this kind.
+    pub(crate) fn has_factory(&self, kind: ProviderKind) -> bool {
+        self.inner.registry.factory_for(kind).is_some()
     }
 
     pub async fn probe_provider(&self, cfg: &ProviderConfig) -> ProbeResult {
@@ -1085,6 +1343,7 @@ async fn run_session(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::backup::DeviceMeta;
     use crate::secrets::MemorySecretStore;
     use crate::types::StepName;
     use serde_json::json;
@@ -1136,6 +1395,7 @@ pub(crate) mod tests {
                 secrets: Arc::new(MemorySecretStore::default()),
                 factories: vec![Arc::new(crate::providers::registry::tests::FakeFactory)],
                 first_run: FirstRunDefaults::default(),
+                identity: DeviceOptions::default(),
             },
         )
         .await
@@ -1203,6 +1463,7 @@ pub(crate) mod tests {
                 secrets: Arc::new(MemorySecretStore::default()),
                 factories: vec![Arc::new(F(fake.clone()))],
                 first_run: FirstRunDefaults::default(),
+                identity: DeviceOptions::default(),
             },
         )
         .await
@@ -2115,5 +2376,214 @@ pub(crate) mod tests {
         let new = dirs.recordings_dir().join("a.wav");
         assert_eq!(rows[0].audio_path.as_deref(), Some(new.as_path()));
         assert!(new.is_file() && !old.exists() && !legacy.exists());
+    }
+
+    #[tokio::test]
+    async fn renaming_this_device_is_kept_across_a_reopen() {
+        let tmp = tempfile::tempdir().unwrap();
+        let open = || {
+            Engine::open(
+                DataDir::custom(tmp.path()),
+                Arc::new(MemorySecretStore::default()),
+            )
+        };
+        let e = open().await.unwrap();
+        let id = e.device().id;
+        e.rename_device(&id, "Desk").await.unwrap();
+        assert_eq!(e.device().name, "Desk");
+        assert_eq!(e.devices().unwrap()[0].name, "Desk");
+        drop(e);
+        let e = open().await.unwrap();
+        assert_eq!(
+            (e.device().id, e.device().name),
+            (id.clone(), "Desk".to_string())
+        );
+        assert_eq!(e.devices().unwrap()[0].name, "Desk");
+        assert!(e.remove_device(&id).await.is_err());
+        assert!(e.rename_device(&id, "  ").await.is_err());
+    }
+
+    fn row(ts: i64, text: &str) -> NewUtterance {
+        NewUtterance {
+            ts,
+            profile_id: ProfileId("default".into()),
+            app_name: Some("Notes".into()),
+            raw_text: text.into(),
+            refined_text: text.into(),
+            final_text: text.into(),
+            degraded: false,
+            audio_path: None,
+            asr_ms: 10,
+            llm_ms: None,
+            audio_ms: None,
+            dict_fixes: 0,
+            snippets: 0,
+            llm_changed: false,
+        }
+    }
+
+    fn text_backup() -> Categories {
+        Categories {
+            history: true,
+            stats: true,
+            recordings: false,
+            settings: true,
+        }
+    }
+
+    async fn plain_engine(root: &Path) -> Engine {
+        Engine::open(
+            DataDir::custom(root),
+            Arc::new(MemorySecretStore::default()),
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_new_database_gets_a_new_device_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let e = plain_engine(tmp.path()).await;
+        let first = e.device();
+        let db = e.dirs().history_path();
+        drop(e);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", db.display()));
+        }
+        let e = plain_engine(tmp.path()).await;
+        assert_ne!(e.device().id, first.id);
+        assert_eq!(e.device().name, first.name);
+        drop(e);
+        // The database is there now: the identity stays.
+        let again = plain_engine(tmp.path()).await;
+        assert_eq!(again.devices().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_backup_file_round_trips_through_another_engine() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = plain_engine(&tmp.path().join("a")).await;
+        a.history().insert(row(1_790_812_800, "one")).unwrap();
+        a.history().insert(row(1_790_812_900, "two")).unwrap();
+        let file = tmp.path().join("out.arcvox");
+        let wrote = a
+            .backup_export_file(&file, text_backup(), Some(b"{}".to_vec()))
+            .await
+            .unwrap();
+        assert_eq!(wrote.rows, 2);
+        assert!(file.is_file());
+
+        let b = plain_engine(&tmp.path().join("b")).await;
+        b.history().insert(row(1_790_813_000, "mine")).unwrap();
+        let source = BackupSource::File(file);
+        let info = b.backup_inspect(&source).await.unwrap();
+        assert_eq!(info.devices.len(), 1);
+        assert_eq!(
+            (
+                info.devices[0].rows,
+                info.devices[0].this,
+                info.devices[0].has_settings
+            ),
+            (2, false, true)
+        );
+        let report = b
+            .backup_import(&source, vec![a.device().id], text_backup())
+            .await
+            .unwrap();
+        assert_eq!((report.devices, report.added), (1, 2));
+        assert_eq!(b.devices().unwrap().len(), 2);
+        assert_eq!(b.history().list(10, None, false).unwrap().len(), 3);
+        // Nothing of the staging is left in the cache directories.
+        for e in [&a, &b] {
+            let left: Vec<_> = std::fs::read_dir(&e.dirs().cache_dir)
+                .unwrap()
+                .flatten()
+                .map(|d| d.file_name().to_string_lossy().to_string())
+                .filter(|n| n.starts_with(".tmp"))
+                .collect();
+            assert!(left.is_empty(), "{left:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_folder_write_only_has_this_device() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = plain_engine(&tmp.path().join("a")).await;
+        a.history().insert(row(1_790_812_800, "one")).unwrap();
+        let folder = tmp.path().join("sync");
+        std::fs::create_dir_all(&folder).unwrap();
+        a.backup_write_folder(&folder, text_backup(), None)
+            .await
+            .unwrap();
+
+        let b = plain_engine(&tmp.path().join("b")).await;
+        b.history().insert(row(1_790_812_800, "other")).unwrap();
+        b.backup_import(
+            &BackupSource::Folder(folder.clone()),
+            vec![a.device().id],
+            text_backup(),
+        )
+        .await
+        .unwrap();
+        b.backup_write_folder(&folder, text_backup(), None)
+            .await
+            .unwrap();
+        let info = b
+            .backup_inspect(&BackupSource::Folder(folder.clone()))
+            .await
+            .unwrap();
+        assert_eq!(info.devices.len(), 2);
+        assert!(info.devices.iter().all(|d| d.rows == 1));
+        // The other device's directory was written by that device alone.
+        let a_dir = folder.join("devices").join(a.device().id);
+        let written: DeviceMeta =
+            serde_json::from_slice(&std::fs::read(a_dir.join("device.json")).unwrap()).unwrap();
+        assert_eq!(written.name, a.device().name);
+    }
+
+    #[tokio::test]
+    async fn a_backup_folder_that_is_gone_is_not_made_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = plain_engine(&tmp.path().join("a")).await;
+        a.history().insert(row(1_790_812_800, "one")).unwrap();
+        let folder = tmp.path().join("unmounted").join("sync");
+        let got = a.backup_write_folder(&folder, text_backup(), None).await;
+        assert!(matches!(
+            got,
+            Err(EngineError::Backup(BackupError::Io { .. }))
+        ));
+        assert!(!tmp.path().join("unmounted").exists());
+    }
+
+    #[tokio::test]
+    async fn import_is_refused_while_a_dictation_is_in_flight() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = plain_engine(&tmp.path().join("a")).await;
+        a.history().insert(row(1_790_812_800, "one")).unwrap();
+        let folder = tmp.path().join("sync");
+        std::fs::create_dir_all(&folder).unwrap();
+        a.backup_write_folder(&folder, text_backup(), None)
+            .await
+            .unwrap();
+        let b = plain_engine(&tmp.path().join("b")).await;
+        b.inner
+            .in_flight
+            .lock()
+            .unwrap()
+            .insert(PathBuf::from("/r/x.wav"));
+        assert!(b.busy());
+        let got = b
+            .backup_import(
+                &BackupSource::Folder(folder),
+                vec![a.device().id],
+                text_backup(),
+            )
+            .await;
+        assert!(
+            matches!(got, Err(EngineError::Busy)),
+            "{:?}",
+            got.map(|_| ())
+        );
+        assert_eq!(b.devices().unwrap().len(), 1);
     }
 }

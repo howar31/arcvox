@@ -37,7 +37,7 @@ test("an argument round-trips through the hash", () => {
 test("the navigation lists every page once", () => {
   const pages = NAV.flatMap((g) => g.pages);
   expect(new Set(pages).size).toBe(pages.length);
-  expect(NAV.map((g) => g.pages)).toEqual([["home", "history"], ["flow", "engines", "prompt", "dictionary"], ["general", "recording", "data", "advanced"], ["about"]]);
+  expect(NAV.map((g) => g.pages)).toEqual([["home", "history"], ["flow", "engines", "prompt", "dictionary"], ["general", "recording", "data", "backup", "advanced"], ["about"]]);
   expect(NAV.map((g) => g.group)).toEqual([null, "nav.group.dictation", "nav.group.settings", null]);
 });
 
@@ -55,4 +55,11 @@ test("a hash change from outside is held only when the page has unsaved changes 
   expect(shouldIntercept(true, detail, { page: "flow", arg: "code" })).toBe(true);
   expect(shouldIntercept(true, detail, { page: "flow", arg: null })).toBe(true);
   expect(shouldIntercept(true, detail, { page: "flow", arg: "mail" })).toBe(false);
+});
+
+test("the backup page is a settings entry of its own, after data", () => {
+  const settings = NAV.find((g) => g.group === "nav.group.settings")!.pages;
+  expect(settings).toEqual(["general", "recording", "data", "backup", "advanced"]);
+  expect(parseRoute("#backup")).toEqual({ page: "backup", arg: null });
+  expect(navPage("backup")).toBe("backup");
 });

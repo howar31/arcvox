@@ -21,6 +21,7 @@
   import History from "./pages/History.svelte";
   import Speed from "./pages/Speed.svelte";
   import About from "./pages/About.svelte";
+  import Backup from "./pages/Backup.svelte";
 
   let route = $state(parseRoute(location.hash));
   // Nothing translated is rendered before the UI language is known.
@@ -126,6 +127,7 @@
         {#if route.page === "home"}<Home />
         {:else if section}{#key section}<General {section} />{/key}
         {:else if route.page === "about"}<About />
+        {:else if route.page === "backup"}<Backup />
         {:else if route.page === "engines"}<Engines arg={route.arg} />
         {:else if route.page === "flow"}<Flow arg={route.arg} />
         {:else if route.page === "prompt"}<Prompt />

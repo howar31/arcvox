@@ -23,6 +23,7 @@ opencc-fmmseg = "0.8"
 sha2 = "0.10"
 futures-util = "0.3"
 tracing = "0.1"
+zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

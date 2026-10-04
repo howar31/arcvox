@@ -585,6 +585,10 @@ impl Ui for TauriUi {
     }
 
     fn history_changed(&self) {
+        // The backup folder follows the history.
+        if let Some(state) = self.app.try_state::<crate::app::AppState>() {
+            state.backup.touch();
+        }
         let _ = self
             .app
             .emit_to(window_state::SETTINGS_WINDOW, "history-changed", ());

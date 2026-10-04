@@ -6,6 +6,7 @@ use std::sync::Mutex;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::backup::format::{DeviceMeta, HistoryLine, StatsLine};
 use crate::stats::{self, Stats};
 use crate::types::{ErrorCode, HistoryId, ProfileId};
 
@@ -15,6 +16,8 @@ pub enum HistoryError {
     Sqlite(#[from] rusqlite::Error),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    #[error("the rows of this device are not removed as a device")]
+    OwnDevice,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -101,6 +104,28 @@ pub struct MoveReport {
     pub left: usize,
 }
 
+/// What bringing a device's rows of a backup in did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Merged {
+    pub added: usize,
+    pub updated: usize,
+    pub skipped: usize,
+    pub expiring: usize,
+}
+
+/// A device whose rows are in this store.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct DeviceRow {
+    pub id: String,
+    pub name: String,
+    pub platform: String,
+    pub rows: u64,
+    /// When its newest row was spoken.
+    pub last_ts: Option<i64>,
+    /// The device this store belongs to.
+    pub this: bool,
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct PruneReport {
     pub rows_deleted: usize,
@@ -114,6 +139,7 @@ pub struct PruneReport {
 /// passing absolute, already-resolved paths.
 pub struct HistoryStore {
     conn: Mutex<Connection>,
+    device_id: String,
 }
 
 pub(crate) const SCHEMA: &str = "
@@ -135,6 +161,7 @@ CREATE INDEX IF NOT EXISTS utterances_ts ON utterances(ts);
 
 const STATS_SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS stats_hourly (
+    device_id TEXT NOT NULL, updated INTEGER NOT NULL DEFAULT 0,
     hour INTEGER NOT NULL, app_name TEXT NOT NULL, profile_id TEXT NOT NULL,
     count INTEGER NOT NULL DEFAULT 0, chars INTEGER NOT NULL DEFAULT 0, audio_ms INTEGER NOT NULL DEFAULT 0,
     timed_count INTEGER NOT NULL DEFAULT 0, timed_chars INTEGER NOT NULL DEFAULT 0,
@@ -145,18 +172,62 @@ CREATE TABLE IF NOT EXISTS stats_hourly (
     han INTEGER NOT NULL DEFAULT 0, latin INTEGER NOT NULL DEFAULT 0, kana INTEGER NOT NULL DEFAULT 0,
     max_chars INTEGER NOT NULL DEFAULT 0, max_audio_ms INTEGER NOT NULL DEFAULT 0,
     max_total_ms INTEGER NOT NULL DEFAULT 0, max_cpm INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (hour, app_name, profile_id)
+    PRIMARY KEY (device_id, hour, app_name, profile_id)
 );
 CREATE TABLE IF NOT EXISTS stats_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ";
 
-fn has_column(conn: &Connection, column: &str) -> rusqlite::Result<bool> {
-    let mut stmt = conn.prepare("SELECT 1 FROM pragma_table_info('utterances') WHERE name = ?1")?;
-    stmt.exists(params![column])
+const DEVICES_SCHEMA: &str = "
+CREATE UNIQUE INDEX IF NOT EXISTS utterances_origin ON utterances(device_id, origin_id);
+CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, platform TEXT NOT NULL DEFAULT '');
+";
+
+/// The device id of a store opened in memory.
+pub const TEST_DEVICE: &str = "test-device";
+
+/// The installation a store belongs to: its rows and statistics carry `id`.
+#[derive(Debug, Clone, Copy)]
+pub struct DeviceRef<'a> {
+    pub id: &'a str,
+    pub name: &'a str,
+    pub platform: &'a str,
+}
+
+fn has_column(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare("SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2")?;
+    stmt.exists(params![table, column])
+}
+
+/// Statistics of a build that kept one set of buckets: they become this
+/// device's.
+fn give_stats_to_device(conn: &Connection, device: &str) -> rusqlite::Result<()> {
+    let has_table = conn
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'stats_hourly'")?
+        .exists([])?;
+    if !has_table || has_column(conn, "stats_hourly", "device_id")? {
+        return Ok(());
+    }
+    let columns = stats::COUNTERS.join(", ");
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch("ALTER TABLE stats_hourly RENAME TO stats_hourly_old")?;
+    tx.execute_batch(STATS_SCHEMA)?;
+    tx.execute(
+        &format!(
+            "INSERT INTO stats_hourly (device_id, updated, hour, app_name, profile_id, {columns})
+             SELECT ?1, hour * 1000, hour, app_name, profile_id, {columns} FROM stats_hourly_old"
+        ),
+        params![device],
+    )?;
+    tx.execute_batch("DROP TABLE stats_hourly_old")?;
+    tx.commit()
 }
 
 /// Brings a database from an earlier build up to date; safe to run at every open.
-pub(crate) fn upgrade(conn: &Connection, recordings_dir: &Path) -> Result<(), HistoryError> {
+pub(crate) fn upgrade(
+    conn: &Connection,
+    recordings_dir: &Path,
+    device: &DeviceRef<'_>,
+) -> Result<(), HistoryError> {
     for (name, ddl) in [
         (
             "audio_ms",
@@ -175,14 +246,38 @@ pub(crate) fn upgrade(conn: &Connection, recordings_dir: &Path) -> Result<(), Hi
             "error_code",
             "ALTER TABLE utterances ADD COLUMN error_code TEXT",
         ),
+        (
+            "device_id",
+            "ALTER TABLE utterances ADD COLUMN device_id TEXT",
+        ),
+        (
+            "origin_id",
+            "ALTER TABLE utterances ADD COLUMN origin_id INTEGER",
+        ),
+        (
+            "updated",
+            "ALTER TABLE utterances ADD COLUMN updated INTEGER NOT NULL DEFAULT 0",
+        ),
     ] {
-        if !has_column(conn, name)? {
+        if !has_column(conn, "utterances", name)? {
             conn.execute_batch(ddl)?;
         }
     }
+    // Rows written before rows carried a device belong to this one.
+    conn.execute(
+        "UPDATE utterances SET device_id = ?1, origin_id = id, updated = ts * 1000 WHERE device_id IS NULL",
+        params![device.id],
+    )?;
+    conn.execute_batch(DEVICES_SCHEMA)?;
+    conn.execute(
+        "INSERT INTO devices (id, name, platform) VALUES (?1, ?2, ?3)
+         ON CONFLICT (id) DO UPDATE SET name = excluded.name, platform = excluded.platform",
+        params![device.id, device.name, device.platform],
+    )?;
+    give_stats_to_device(conn, device.id)?;
     conn.execute_batch(STATS_SCHEMA)?;
     // A failed backfill leaves the history usable; it runs again at the next open.
-    if let Err(e) = stats::backfill(conn, recordings_dir) {
+    if let Err(e) = stats::backfill(conn, recordings_dir, device.id) {
         tracing::warn!(error = %e, "statistics backfill failed");
     }
     Ok(())
@@ -209,10 +304,21 @@ fn escape_like(s: &str) -> String {
     out
 }
 
-fn insert_row(conn: &Connection, u: &NewUtterance) -> rusqlite::Result<i64> {
+/// Marks the row just inserted as this device's own: its id here is its id
+/// everywhere.
+fn own_last_row(conn: &Connection) -> rusqlite::Result<i64> {
+    let id = conn.last_insert_rowid();
     conn.execute(
-        "INSERT INTO utterances (ts, profile_id, app_name, raw_text, refined_text, final_text, degraded, audio_path, asr_ms, llm_ms, audio_ms, dict_fixes, snippets)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        "UPDATE utterances SET origin_id = id WHERE id = ?1",
+        params![id],
+    )?;
+    Ok(id)
+}
+
+fn insert_row(conn: &Connection, u: &NewUtterance, device: &str) -> rusqlite::Result<i64> {
+    conn.execute(
+        "INSERT INTO utterances (ts, profile_id, app_name, raw_text, refined_text, final_text, degraded, audio_path, asr_ms, llm_ms, audio_ms, dict_fixes, snippets, device_id, updated)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
             u.ts,
             u.profile_id.0,
@@ -227,9 +333,11 @@ fn insert_row(conn: &Connection, u: &NewUtterance) -> rusqlite::Result<i64> {
             u.audio_ms.map(|v| v as i64),
             u.dict_fixes as i64,
             u.snippets as i64,
+            device,
+            now_ms(),
         ],
     )?;
-    Ok(conn.last_insert_rowid())
+    own_last_row(conn)
 }
 
 pub fn now_unix() -> i64 {
@@ -239,31 +347,58 @@ pub fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
+/// Milliseconds since the epoch: when a row or a statistics bucket last changed.
+pub fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 impl HistoryStore {
     /// `recordings_dir` is where the engine keeps recordings; the first open
     /// after an upgrade reads the audio length of the files there.
-    pub fn open(path: &Path, recordings_dir: &Path) -> Result<Self, HistoryError> {
+    pub fn open(
+        path: &Path,
+        recordings_dir: &Path,
+        device: &DeviceRef<'_>,
+    ) -> Result<Self, HistoryError> {
         let conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
         conn.execute_batch(SCHEMA)?;
-        Self::upgraded(conn, recordings_dir)
+        Self::upgraded(conn, recordings_dir, device)
     }
 
     pub fn open_in_memory() -> Result<Self, HistoryError> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(SCHEMA)?;
-        Self::upgraded(conn, Path::new(""))
+        let device = DeviceRef {
+            id: TEST_DEVICE,
+            name: "Test",
+            platform: "",
+        };
+        Self::upgraded(conn, Path::new(""), &device)
     }
 
-    fn upgraded(conn: Connection, recordings_dir: &Path) -> Result<Self, HistoryError> {
-        upgrade(&conn, recordings_dir)?;
-        Ok(Self::from_connection(conn))
+    fn upgraded(
+        conn: Connection,
+        recordings_dir: &Path,
+        device: &DeviceRef<'_>,
+    ) -> Result<Self, HistoryError> {
+        upgrade(&conn, recordings_dir, device)?;
+        Ok(Self::from_connection(conn, device.id))
     }
 
-    pub(crate) fn from_connection(conn: Connection) -> Self {
+    pub(crate) fn from_connection(conn: Connection, device_id: &str) -> Self {
         Self {
             conn: Mutex::new(conn),
+            device_id: device_id.to_string(),
         }
+    }
+
+    /// The device whose rows this store writes.
+    pub fn device_id(&self) -> &str {
+        &self.device_id
     }
 
     /// Writes the row and adds it to its statistics bucket in one transaction.
@@ -299,10 +434,11 @@ impl HistoryStore {
         if let Some(old) = replaces {
             tx.execute("DELETE FROM utterances WHERE id = ?1", params![old.0])?;
         }
-        let id = insert_row(&tx, &u)?;
+        let id = insert_row(&tx, &u, &self.device_id)?;
         let added = stats::add(
             &tx,
             &stats::Sample {
+                device_id: &self.device_id,
                 ts: u.ts,
                 app_name: u.app_name.as_deref().unwrap_or(""),
                 profile_id: &u.profile_id.0,
@@ -333,7 +469,7 @@ impl HistoryStore {
                 if let Some(old) = replaces {
                     conn.execute("DELETE FROM utterances WHERE id = ?1", params![old.0])?;
                 }
-                Ok(Some(HistoryId(insert_row(&conn, &u)?)))
+                Ok(Some(HistoryId(insert_row(&conn, &u, &self.device_id)?)))
             }
         }
     }
@@ -343,8 +479,8 @@ impl HistoryStore {
     pub fn insert_failed(&self, u: FailedUtterance) -> Result<HistoryId, HistoryError> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO utterances (ts, profile_id, app_name, raw_text, refined_text, final_text, audio_path, audio_ms, error, error_code)
-             VALUES (?1, ?2, ?3, '', '', '', ?4, ?5, ?6, ?7)",
+            "INSERT INTO utterances (ts, profile_id, app_name, raw_text, refined_text, final_text, audio_path, audio_ms, error, error_code, device_id, updated)
+             VALUES (?1, ?2, ?3, '', '', '', ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 u.ts,
                 u.profile_id.0,
@@ -353,9 +489,11 @@ impl HistoryStore {
                 u.audio_ms.map(|v| v as i64),
                 u.error,
                 u.code.name(),
+                self.device_id,
+                now_ms(),
             ],
         )?;
-        Ok(HistoryId(conn.last_insert_rowid()))
+        Ok(HistoryId(own_last_row(&conn)?))
     }
 
     /// Replaces why a failed row failed, after another attempt failed too.
@@ -367,8 +505,8 @@ impl HistoryStore {
         error: &str,
     ) -> Result<(), HistoryError> {
         self.conn.lock().unwrap().execute(
-            "UPDATE utterances SET error = ?1, error_code = ?2 WHERE id = ?3 AND error IS NOT NULL",
-            params![error, code.name(), id.0],
+            "UPDATE utterances SET error = ?1, error_code = ?2, updated = ?4 WHERE id = ?3 AND error IS NOT NULL",
+            params![error, code.name(), id.0, now_ms()],
         )?;
         Ok(())
     }
@@ -376,8 +514,8 @@ impl HistoryStore {
     /// The length of a failed row's recording, after the file was replaced.
     pub fn set_audio_ms(&self, id: HistoryId, audio_ms: Option<u64>) -> Result<(), HistoryError> {
         self.conn.lock().unwrap().execute(
-            "UPDATE utterances SET audio_ms = ?1 WHERE id = ?2",
-            params![audio_ms.map(|v| v as i64), id.0],
+            "UPDATE utterances SET audio_ms = ?1, updated = ?3 WHERE id = ?2",
+            params![audio_ms.map(|v| v as i64), id.0, now_ms()],
         )?;
         Ok(())
     }
@@ -428,10 +566,11 @@ impl HistoryStore {
             }
             report.moved += 1;
             conn.execute(
-                "UPDATE utterances SET audio_path = ?1 WHERE audio_path = ?2",
+                "UPDATE utterances SET audio_path = ?1, updated = ?3 WHERE audio_path = ?2",
                 params![
                     new.to_string_lossy().to_string(),
-                    old.to_string_lossy().to_string()
+                    old.to_string_lossy().to_string(),
+                    now_ms()
                 ],
             )?;
         }
@@ -457,7 +596,7 @@ impl HistoryStore {
         };
         tx.execute(
             "UPDATE utterances SET profile_id = ?1, raw_text = ?2, refined_text = ?3, final_text = ?3, degraded = ?4,
-                asr_ms = ?5, llm_ms = ?6, dict_fixes = ?7, snippets = ?8, error = NULL, error_code = NULL WHERE id = ?9",
+                asr_ms = ?5, llm_ms = ?6, dict_fixes = ?7, snippets = ?8, error = NULL, error_code = NULL, updated = ?10 WHERE id = ?9",
             params![
                 r.profile_id.0,
                 r.raw_text,
@@ -468,12 +607,14 @@ impl HistoryStore {
                 r.dict_fixes as i64,
                 r.snippets as i64,
                 id.0,
+                now_ms(),
             ],
         )?;
         if was_failed {
             let counted = stats::add(
                 &tx,
                 &stats::Sample {
+                    device_id: &self.device_id,
                     ts,
                     app_name: app_name.as_deref().unwrap_or(""),
                     profile_id: &r.profile_id.0,
@@ -497,8 +638,8 @@ impl HistoryStore {
 
     pub fn set_final(&self, id: HistoryId, text: &str) -> Result<(), HistoryError> {
         self.conn.lock().unwrap().execute(
-            "UPDATE utterances SET final_text = ?1 WHERE id = ?2",
-            params![text, id.0],
+            "UPDATE utterances SET final_text = ?1, updated = ?3 WHERE id = ?2",
+            params![text, id.0, now_ms()],
         )?;
         Ok(())
     }
@@ -520,6 +661,292 @@ impl HistoryStore {
         remove_recording(&conn, id.0, recordings_dir)?;
         conn.execute("DELETE FROM utterances WHERE id = ?1", params![id.0])?;
         Ok(())
+    }
+
+    /// A device's rows for a backup, each with the place of its recording
+    /// here. A row that only holds the recording of a dictation still being
+    /// processed is left out.
+    pub(crate) fn export_rows(
+        &self,
+        device: &str,
+    ) -> Result<Vec<(HistoryLine, Option<PathBuf>)>, HistoryError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT origin_id, ts, updated, profile_id, app_name, raw_text, refined_text, final_text, degraded,
+                    asr_ms, llm_ms, audio_ms, dict_fixes, snippets, error, error_code, audio_path
+             FROM utterances
+             WHERE device_id = ?1 AND origin_id IS NOT NULL AND (error_code IS NULL OR error_code != ?2)
+             ORDER BY origin_id",
+        )?;
+        let rows = stmt.query_map(params![device, ErrorCode::Interrupted.name()], |r| {
+            let line = HistoryLine {
+                origin_id: r.get(0)?,
+                ts: r.get(1)?,
+                updated: r.get(2)?,
+                profile_id: r.get(3)?,
+                app_name: r.get(4)?,
+                raw_text: r.get(5)?,
+                refined_text: r.get(6)?,
+                final_text: r.get(7)?,
+                degraded: r.get::<_, i64>(8)? != 0,
+                asr_ms: r.get::<_, i64>(9)? as u64,
+                llm_ms: r.get::<_, Option<i64>>(10)?.map(|v| v as u64),
+                audio_ms: r.get::<_, Option<i64>>(11)?.map(|v| v as u64),
+                dict_fixes: r.get::<_, i64>(12)? as u32,
+                snippets: r.get::<_, i64>(13)? as u32,
+                error: r.get(14)?,
+                error_code: r.get(15)?,
+                audio: None,
+            };
+            Ok((line, r.get::<_, Option<String>>(16)?.map(PathBuf::from)))
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// A device's statistics buckets for a backup.
+    pub(crate) fn export_cells(&self, device: &str) -> Result<Vec<StatsLine>, HistoryError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT hour, app_name, profile_id, updated, {} FROM stats_hourly
+             WHERE device_id = ?1 ORDER BY hour, app_name, profile_id",
+            stats::COUNTERS.join(", ")
+        ))?;
+        let rows = stmt.query_map(params![device], |r| {
+            let mut counters = std::collections::BTreeMap::new();
+            for (i, name) in stats::COUNTERS.iter().enumerate() {
+                counters.insert((*name).to_string(), r.get::<_, i64>(4 + i)?.into());
+            }
+            Ok(StatsLine {
+                hour: r.get(0)?,
+                app_name: r.get(1)?,
+                profile_id: r.get(2)?,
+                updated: r.get(3)?,
+                counters,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// The rows of a device that have a recording, by the id they have on
+    /// that device.
+    pub(crate) fn origins_with_audio(
+        &self,
+        device: &str,
+    ) -> Result<std::collections::HashSet<i64>, HistoryError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT origin_id FROM utterances WHERE device_id = ?1 AND audio_path IS NOT NULL AND origin_id IS NOT NULL",
+        )?;
+        let ids = stmt.query_map(params![device], |r| r.get(0))?;
+        Ok(ids.collect::<Result<_, _>>()?)
+    }
+
+    /// Makes a device of a backup known here. A device already known keeps
+    /// the name it has.
+    pub(crate) fn register_device(&self, meta: &DeviceMeta) -> Result<(), HistoryError> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO devices (id, name, platform) VALUES (?1, ?2, ?3) ON CONFLICT (id) DO NOTHING",
+            params![meta.id, meta.name, meta.platform],
+        )?;
+        Ok(())
+    }
+
+    /// Brings a device's rows of a backup in, in one step: a row that is not
+    /// here is added, one that is older here is replaced, the rest stays. A
+    /// row gets the recording given with its line when it has none. Rows
+    /// added with a time before `cutoff` are counted as expiring.
+    pub(crate) fn merge_rows(
+        &self,
+        device: &str,
+        lines: &[(HistoryLine, Option<PathBuf>)],
+        cutoff: i64,
+    ) -> Result<Merged, HistoryError> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let mut merged = Merged::default();
+        for (l, audio) in lines {
+            let audio = audio.as_ref().map(|p| p.to_string_lossy().to_string());
+            let existing: Option<(i64, i64, bool)> = tx
+                .query_row(
+                    "SELECT id, updated, audio_path IS NOT NULL FROM utterances WHERE device_id = ?1 AND origin_id = ?2",
+                    params![device, l.origin_id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .optional()?;
+            match existing {
+                None => {
+                    tx.execute(
+                        "INSERT INTO utterances (ts, profile_id, app_name, raw_text, refined_text, final_text, degraded, audio_path,
+                            asr_ms, llm_ms, audio_ms, dict_fixes, snippets, error, error_code, device_id, origin_id, updated)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                        params![
+                            l.ts,
+                            l.profile_id,
+                            l.app_name,
+                            l.raw_text,
+                            l.refined_text,
+                            l.final_text,
+                            l.degraded as i64,
+                            audio,
+                            l.asr_ms as i64,
+                            l.llm_ms.map(|v| v as i64),
+                            l.audio_ms.map(|v| v as i64),
+                            l.dict_fixes as i64,
+                            l.snippets as i64,
+                            l.error,
+                            l.error_code,
+                            device,
+                            l.origin_id,
+                            l.updated,
+                        ],
+                    )?;
+                    merged.added += 1;
+                    if l.ts < cutoff {
+                        merged.expiring += 1;
+                    }
+                }
+                Some((id, updated, has_audio)) => {
+                    if updated < l.updated {
+                        tx.execute(
+                            "UPDATE utterances SET ts = ?1, profile_id = ?2, app_name = ?3, raw_text = ?4, refined_text = ?5,
+                                final_text = ?6, degraded = ?7, asr_ms = ?8, llm_ms = ?9, audio_ms = ?10, dict_fixes = ?11,
+                                snippets = ?12, error = ?13, error_code = ?14, updated = ?15 WHERE id = ?16",
+                            params![
+                                l.ts,
+                                l.profile_id,
+                                l.app_name,
+                                l.raw_text,
+                                l.refined_text,
+                                l.final_text,
+                                l.degraded as i64,
+                                l.asr_ms as i64,
+                                l.llm_ms.map(|v| v as i64),
+                                l.audio_ms.map(|v| v as i64),
+                                l.dict_fixes as i64,
+                                l.snippets as i64,
+                                l.error,
+                                l.error_code,
+                                l.updated,
+                                id,
+                            ],
+                        )?;
+                        merged.updated += 1;
+                    } else {
+                        merged.skipped += 1;
+                    }
+                    if let (false, Some(path)) = (has_audio, &audio) {
+                        tx.execute(
+                            "UPDATE utterances SET audio_path = ?1 WHERE id = ?2",
+                            params![path, id],
+                        )?;
+                    }
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(merged)
+    }
+
+    /// Brings a device's statistics buckets of a backup in: a bucket that is
+    /// not here is added, one that is older here is replaced. Returns how
+    /// many changed.
+    pub(crate) fn merge_cells(
+        &self,
+        device: &str,
+        cells: &[StatsLine],
+    ) -> Result<usize, HistoryError> {
+        let columns = stats::COUNTERS.join(", ");
+        let slots: Vec<String> = (0..stats::COUNTERS.len())
+            .map(|i| format!("?{}", i + 6))
+            .collect();
+        let sets: Vec<String> = stats::COUNTERS
+            .iter()
+            .map(|c| format!("{c} = excluded.{c}"))
+            .collect();
+        let sql = format!(
+            "INSERT INTO stats_hourly (device_id, hour, app_name, profile_id, updated, {columns})
+             VALUES (?1, ?2, ?3, ?4, ?5, {})
+             ON CONFLICT (device_id, hour, app_name, profile_id) DO UPDATE SET updated = excluded.updated, {}
+             WHERE excluded.updated > stats_hourly.updated",
+            slots.join(", "),
+            sets.join(", ")
+        );
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let mut changed = 0;
+        {
+            let mut stmt = tx.prepare(&sql)?;
+            for c in cells {
+                let mut values: Vec<rusqlite::types::Value> = vec![
+                    device.to_string().into(),
+                    c.hour.into(),
+                    c.app_name.clone().into(),
+                    c.profile_id.clone().into(),
+                    c.updated.into(),
+                ];
+                values.extend(stats::COUNTERS.iter().map(|name| c.counter(name).into()));
+                changed += stmt.execute(rusqlite::params_from_iter(values))?;
+            }
+        }
+        tx.commit()?;
+        Ok(changed)
+    }
+
+    /// The devices with rows here: this one first, the others by name.
+    pub fn devices(&self) -> Result<Vec<DeviceRow>, HistoryError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT d.id, d.name, d.platform, COUNT(u.id), MAX(u.ts)
+             FROM devices d LEFT JOIN utterances u ON u.device_id = d.id
+             GROUP BY d.id ORDER BY d.id != ?1, d.name COLLATE NOCASE, d.id",
+        )?;
+        let rows = stmt.query_map(params![self.device_id], |r| {
+            let id: String = r.get(0)?;
+            Ok(DeviceRow {
+                this: id == self.device_id,
+                id,
+                name: r.get(1)?,
+                platform: r.get(2)?,
+                rows: r.get::<_, i64>(3)? as u64,
+                last_ts: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn set_device_name(&self, id: &str, name: &str) -> Result<(), HistoryError> {
+        self.conn.lock().unwrap().execute(
+            "UPDATE devices SET name = ?1 WHERE id = ?2",
+            params![name, id],
+        )?;
+        Ok(())
+    }
+
+    /// Removes another device's rows, their recordings inside
+    /// `recordings_dir`, and its statistics. Returns how many rows went.
+    pub fn remove_device(&self, id: &str, recordings_dir: &Path) -> Result<usize, HistoryError> {
+        if id == self.device_id {
+            return Err(HistoryError::OwnDevice);
+        }
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let paths: Vec<String> = {
+            let mut stmt = tx.prepare(
+                "SELECT audio_path FROM utterances WHERE device_id = ?1 AND audio_path IS NOT NULL",
+            )?;
+            let found = stmt.query_map(params![id], |r| r.get(0))?;
+            found.collect::<Result<_, _>>()?
+        };
+        let rows = tx.execute("DELETE FROM utterances WHERE device_id = ?1", params![id])?;
+        tx.execute("DELETE FROM stats_hourly WHERE device_id = ?1", params![id])?;
+        tx.execute("DELETE FROM devices WHERE id = ?1", params![id])?;
+        tx.commit()?;
+        for path in paths.iter().map(PathBuf::from) {
+            if inside(&path, recordings_dir) {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+        Ok(rows)
     }
 
     #[cfg(test)]
@@ -711,8 +1138,8 @@ impl HistoryStore {
             // exists, leaves the row pointing at the still-present file.
             if !p.exists() {
                 conn.execute(
-                    "UPDATE utterances SET audio_path = NULL WHERE id = ?1",
-                    params![id],
+                    "UPDATE utterances SET audio_path = NULL, updated = ?2 WHERE id = ?1",
+                    params![id, now_ms()],
                 )?;
             }
         }
@@ -852,8 +1279,8 @@ fn remove_recording(
     let removed = path.is_file() && std::fs::remove_file(&path).is_ok();
     if !path.exists() {
         conn.execute(
-            "UPDATE utterances SET audio_path = NULL WHERE id = ?1",
-            params![id],
+            "UPDATE utterances SET audio_path = NULL, updated = ?2 WHERE id = ?1",
+            params![id, now_ms()],
         )?;
     }
     Ok(removed)
@@ -904,6 +1331,13 @@ pub(crate) mod tests_support {
         }
     }
 }
+
+#[cfg(test)]
+pub(crate) const TEST_REF: DeviceRef<'static> = DeviceRef {
+    id: TEST_DEVICE,
+    name: "Test",
+    platform: "",
+};
 
 #[cfg(test)]
 mod tests {
@@ -1232,7 +1666,7 @@ mod tests {
     fn open_on_disk_creates_file() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("history.sqlite");
-        let s = HistoryStore::open(&path, tmp.path()).unwrap();
+        let s = HistoryStore::open(&path, tmp.path(), &TEST_REF).unwrap();
         s.insert(new(1, None)).unwrap();
         assert!(path.exists());
     }
@@ -1246,12 +1680,276 @@ mod tests {
             [],
         )
         .unwrap();
-        upgrade(&conn, Path::new("/nonexistent")).unwrap();
-        upgrade(&conn, Path::new("/nonexistent")).unwrap();
-        let s = HistoryStore::from_connection(conn);
+        upgrade(&conn, Path::new("/nonexistent"), &TEST_REF).unwrap();
+        upgrade(&conn, Path::new("/nonexistent"), &TEST_REF).unwrap();
+        let s = HistoryStore::from_connection(conn, TEST_DEVICE);
         let got = s.list(10, None, false).unwrap();
         assert_eq!(got[0].audio_ms, None);
         assert_eq!(s.stats(0, 0).unwrap().totals.count, 1);
+    }
+
+    const OLD_STATS: &str = "
+CREATE TABLE stats_hourly (
+    hour INTEGER NOT NULL, app_name TEXT NOT NULL, profile_id TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0, chars INTEGER NOT NULL DEFAULT 0, audio_ms INTEGER NOT NULL DEFAULT 0,
+    timed_count INTEGER NOT NULL DEFAULT 0, timed_chars INTEGER NOT NULL DEFAULT 0,
+    speed_chars INTEGER NOT NULL DEFAULT 0, speed_audio_ms INTEGER NOT NULL DEFAULT 0,
+    asr_ms INTEGER NOT NULL DEFAULT 0, llm_ms INTEGER NOT NULL DEFAULT 0, llm_count INTEGER NOT NULL DEFAULT 0,
+    changed INTEGER NOT NULL DEFAULT 0, degraded INTEGER NOT NULL DEFAULT 0, unrewritten INTEGER NOT NULL DEFAULT 0,
+    dict_fixes INTEGER NOT NULL DEFAULT 0, snippets INTEGER NOT NULL DEFAULT 0,
+    han INTEGER NOT NULL DEFAULT 0, latin INTEGER NOT NULL DEFAULT 0, kana INTEGER NOT NULL DEFAULT 0,
+    max_chars INTEGER NOT NULL DEFAULT 0, max_audio_ms INTEGER NOT NULL DEFAULT 0,
+    max_total_ms INTEGER NOT NULL DEFAULT 0, max_cpm INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (hour, app_name, profile_id)
+);
+CREATE TABLE stats_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+INSERT INTO stats_meta (key, value) VALUES ('backfilled', '1');
+";
+
+    #[test]
+    fn rows_of_an_earlier_build_go_to_this_device() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        for col in [
+            "audio_ms INTEGER",
+            "dict_fixes INTEGER NOT NULL DEFAULT 0",
+            "snippets INTEGER NOT NULL DEFAULT 0",
+            "error TEXT",
+            "error_code TEXT",
+        ] {
+            conn.execute_batch(&format!("ALTER TABLE utterances ADD COLUMN {col}"))
+                .unwrap();
+        }
+        conn.execute_batch(OLD_STATS).unwrap();
+        conn.execute_batch(
+            "INSERT INTO utterances (ts, profile_id, raw_text, refined_text, final_text) VALUES (7200, 'default', 'a', 'a', 'a');
+             INSERT INTO utterances (ts, profile_id, raw_text, refined_text, final_text) VALUES (9000, 'mail', 'b', 'b', 'b');
+             INSERT INTO stats_hourly (hour, app_name, profile_id, count, chars, max_cpm) VALUES (7200, 'Notes', 'default', 3, 30, 99);
+             INSERT INTO stats_hourly (hour, app_name, profile_id, count, chars) VALUES (10800, '', 'mail', 2, 8);",
+        )
+        .unwrap();
+        let device = DeviceRef {
+            id: "dev-a",
+            name: "A",
+            platform: "macos",
+        };
+        upgrade(&conn, Path::new(""), &device).unwrap();
+        upgrade(&conn, Path::new(""), &device).unwrap();
+
+        let rows: Vec<(i64, String, i64, i64, i64)> = conn
+            .prepare("SELECT id, device_id, origin_id, updated, ts FROM utterances ORDER BY id")
+            .unwrap()
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        for (id, dev, origin, updated, ts) in rows {
+            assert_eq!(dev, "dev-a");
+            assert_eq!(origin, id);
+            assert_eq!(updated, ts * 1000);
+        }
+        let cells: Vec<(String, i64, i64, i64, i64)> = conn
+            .prepare(
+                "SELECT device_id, hour, count, chars, max_cpm FROM stats_hourly ORDER BY hour",
+            )
+            .unwrap()
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            cells,
+            vec![
+                ("dev-a".to_string(), 7200, 3, 30, 99),
+                ("dev-a".to_string(), 10800, 2, 8, 0)
+            ]
+        );
+        let named: (String, String) = conn
+            .query_row(
+                "SELECT name, platform FROM devices WHERE id = 'dev-a'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(named, ("A".to_string(), "macos".to_string()));
+        let s = HistoryStore::from_connection(conn, "dev-a");
+        assert_eq!(s.stats(0, 0).unwrap().totals.count, 5);
+        assert_eq!(s.device_id(), "dev-a");
+    }
+
+    fn meta(s: &HistoryStore, id: HistoryId) -> (String, i64, i64) {
+        s.connection()
+            .query_row(
+                "SELECT device_id, origin_id, updated FROM utterances WHERE id = ?1",
+                params![id.0],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn a_new_row_carries_the_device_and_its_own_id() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let id = s.insert(new(100, None)).unwrap();
+        let (device, origin, updated) = meta(&s, id);
+        assert_eq!(device, TEST_DEVICE);
+        assert_eq!(origin, id.0);
+        assert!(updated > 0);
+        let failed = s
+            .insert_failed(FailedUtterance {
+                ts: 5,
+                profile_id: ProfileId("default".into()),
+                app_name: None,
+                audio_path: PathBuf::from("/r/a.wav"),
+                audio_ms: None,
+                code: ErrorCode::ProviderError,
+                error: "x".into(),
+            })
+            .unwrap();
+        let (device, origin, updated) = meta(&s, failed);
+        assert_eq!((device.as_str(), origin), (TEST_DEVICE, failed.0));
+        assert!(updated > 0);
+    }
+
+    #[test]
+    fn changing_a_row_moves_its_updated_time() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let id = s.insert(new(100, None)).unwrap();
+        let failed = s
+            .insert_failed(FailedUtterance {
+                ts: 5,
+                profile_id: ProfileId("default".into()),
+                app_name: None,
+                audio_path: PathBuf::from("/r/a.wav"),
+                audio_ms: None,
+                code: ErrorCode::ProviderError,
+                error: "x".into(),
+            })
+            .unwrap();
+        let reset = |id: HistoryId| {
+            s.connection()
+                .execute(
+                    "UPDATE utterances SET updated = 1 WHERE id = ?1",
+                    params![id.0],
+                )
+                .unwrap();
+        };
+        reset(id);
+        s.set_final(id, "edited").unwrap();
+        assert!(meta(&s, id).2 > 1);
+
+        reset(failed);
+        s.set_error(failed, ErrorCode::ProviderTimeout, "again")
+            .unwrap();
+        assert!(meta(&s, failed).2 > 1);
+
+        reset(failed);
+        s.set_audio_ms(failed, Some(900)).unwrap();
+        assert!(meta(&s, failed).2 > 1);
+
+        reset(failed);
+        let redo = Redo {
+            profile_id: ProfileId("default".into()),
+            raw_text: "r".into(),
+            final_text: "f".into(),
+            degraded: false,
+            asr_ms: 1,
+            llm_ms: None,
+            dict_fixes: 0,
+            snippets: 0,
+            llm_changed: false,
+        };
+        assert!(s.apply_redo(failed, &redo).unwrap());
+        assert!(meta(&s, failed).2 > 1);
+    }
+
+    fn foreign_row(s: &HistoryStore, device: &str, origin: i64, ts: i64, audio: Option<&Path>) {
+        s.connection()
+            .execute(
+                "INSERT INTO utterances (ts, profile_id, raw_text, refined_text, final_text, audio_path, device_id, origin_id, updated)
+                 VALUES (?1, 'default', 'r', 'f', 'f', ?2, ?3, ?4, ?5)",
+                params![ts, audio.map(|p| p.to_string_lossy().to_string()), device, origin, ts * 1000],
+            )
+            .unwrap();
+    }
+
+    fn foreign_device(s: &HistoryStore, id: &str, name: &str) {
+        s.connection()
+            .execute(
+                "INSERT INTO devices (id, name, platform) VALUES (?1, ?2, 'macos')",
+                params![id, name],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn devices_lists_this_one_first_with_counts() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        s.insert(new(100, None)).unwrap();
+        s.insert(new(300, None)).unwrap();
+        foreign_device(&s, "aaa", "Anna");
+        foreign_row(&s, "aaa", 1, 900, None);
+        foreign_device(&s, "bbb", "Empty");
+        let got = s.devices().unwrap();
+        let brief: Vec<_> = got
+            .iter()
+            .map(|d| (d.id.as_str(), d.name.as_str(), d.rows, d.last_ts, d.this))
+            .collect();
+        assert_eq!(
+            brief,
+            vec![
+                (TEST_DEVICE, "Test", 2, Some(300), true),
+                ("aaa", "Anna", 1, Some(900), false),
+                ("bbb", "Empty", 0, None, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_device_gets_another_name() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        foreign_device(&s, "aaa", "Anna");
+        s.set_device_name("aaa", "Office").unwrap();
+        assert_eq!(s.devices().unwrap()[1].name, "Office");
+    }
+
+    #[test]
+    fn removing_a_device_takes_its_rows_cells_and_recordings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wav = tmp.path().join("aaa-1.wav");
+        std::fs::write(&wav, b"x").unwrap();
+        let s = HistoryStore::open_in_memory().unwrap();
+        s.insert(new(100, None)).unwrap();
+        foreign_device(&s, "aaa", "Anna");
+        foreign_row(&s, "aaa", 1, 900, Some(&wav));
+        foreign_row(&s, "aaa", 2, 950, None);
+        s.connection()
+            .execute(
+                "INSERT INTO stats_hourly (device_id, hour, app_name, profile_id, count) VALUES ('aaa', 0, '', 'default', 4)",
+                [],
+            )
+            .unwrap();
+        assert_eq!(s.stats(0, 0).unwrap().totals.count, 5);
+
+        assert_eq!(s.remove_device("aaa", tmp.path()).unwrap(), 2);
+        assert!(!wav.exists());
+        assert_eq!(s.devices().unwrap().len(), 1);
+        assert_eq!(s.list(10, None, false).unwrap().len(), 1);
+        assert_eq!(s.stats(0, 0).unwrap().totals.count, 1);
+    }
+
+    #[test]
+    fn this_device_cannot_be_removed() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        s.insert(new(100, None)).unwrap();
+        assert!(s.remove_device(TEST_DEVICE, Path::new("")).is_err());
+        assert_eq!(s.list(10, None, false).unwrap().len(), 1);
+        assert_eq!(s.devices().unwrap().len(), 1);
     }
 
     #[test]

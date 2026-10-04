@@ -249,6 +249,7 @@ mod tests {
                 secrets: std::sync::Arc::new(arcvox_core::MemorySecretStore::default()),
                 factories: vec![std::sync::Arc::new(CountingFactory(llm.clone()))],
                 first_run: arcvox_core::FirstRunDefaults::default(),
+                identity: arcvox_core::DeviceOptions::default(),
             },
         )
         .await
