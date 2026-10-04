@@ -64,6 +64,11 @@ export interface RingView {
   glyph: "check" | "bang" | "cross" | null;
 }
 
+/** How opaque a faint widget is, for a transparency in percent. */
+export function faintOpacity(transparency: number): number {
+  return (100 - Math.min(90, Math.max(10, transparency))) / 100;
+}
+
 /** The ring of a widget at rest. */
 export const RING_AT_REST: RingView = { tone: "quiet", motion: "none", glyph: null };
 

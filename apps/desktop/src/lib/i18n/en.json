@@ -805,5 +805,9 @@
   "backup.wrote_cells": "{n} hourly buckets of statistics",
   "backup.wrote_recs": "{n} recordings",
   "backup.wrote_settings": "settings",
-  "backup.wrote_content": "content"
+  "backup.wrote_content": "content",
+  "general.widget_fade": "Turn faint while idle",
+  "general.widget_fade_help": "After resting a while the widget turns faint. It comes back when a dictation begins or the pointer is over it.",
+  "general.widget_fade_after": "Turns faint after",
+  "general.widget_fade_transparency": "Transparency when faint"
 }

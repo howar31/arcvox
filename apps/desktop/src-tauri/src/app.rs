@@ -120,6 +120,7 @@ pub fn run() {
             crate::commands::system::widget_measure,
             crate::commands::system::widget_scale,
             crate::commands::system::widget_idle,
+            crate::commands::system::widget_fade,
             crate::commands::system::widget_is_placing,
             crate::commands::system::widget_menu,
             crate::commands::system::dictation_state,
@@ -421,6 +422,7 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
     )?);
     ui.set_display(settings.widget_display.clone());
     ui.set_idle(settings.widget_idle);
+    ui.set_fade(settings.widget_fade);
 
     let secrets = Arc::new(KeychainStore::new(app_name.clone()));
     // A stalled connection fails the read instead of hanging a download or its Cancel.

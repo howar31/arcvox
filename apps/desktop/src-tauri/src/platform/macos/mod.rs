@@ -5,6 +5,7 @@ pub mod ax;
 pub mod event_tap;
 pub mod frontmost;
 pub mod hardware;
+pub mod hover;
 pub mod modifier_monitor;
 pub mod pasteboard;
 pub mod post_keys;

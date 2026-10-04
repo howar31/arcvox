@@ -7,7 +7,8 @@
   import Icon from "../lib/ui/Icon.svelte";
   import Rewrite from "./Rewrite.svelte";
 
-  const feed = new WidgetFeed();
+  // The panel's unit is 14/11 of the widget's.
+  const feed = new WidgetFeed(14 / 11);
   let box = $state<HTMLElement>();
   /** The final text laid out on its own, to know the room it needs. */
   let ghost = $state<HTMLElement>();

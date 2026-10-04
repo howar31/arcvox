@@ -3,7 +3,7 @@
   import { onWidgetFlip, widgetDragStart, widgetMeasure, widgetMenu } from "../lib/api";
   import { t } from "../lib/i18n";
   import { LevelHistory, TICK, eased, mapped } from "../lib/level";
-  import { LABEL_KEYS, READY, RING_AT_REST, labelKey, ringView } from "../lib/widgetView";
+  import { LABEL_KEYS, READY, RING_AT_REST, faintOpacity, labelKey, ringView } from "../lib/widgetView";
   import { WidgetFeed } from "../lib/widgetEvents.svelte";
 
   const feed = new WidgetFeed();
@@ -125,6 +125,17 @@
     return key ? t(key) : "";
   });
 
+  // A widget that rests turns faint after a while; the pointer over it brings it back, and so does a dictation.
+  let faint = $state(false);
+  const fades = $derived(resting && feed.fade.enabled && !feed.over);
+  const fadeAfter = $derived(feed.fade.after_secs * 1000);
+  $effect(() => {
+    faint = false;
+    if (!fades) return;
+    const timer = setTimeout(() => { faint = true; }, fadeAfter);
+    return () => clearTimeout(timer);
+  });
+
   // The widget can be dragged; the app moves the window.
   function onpointerdown(e: PointerEvent) {
     if (e.button !== 0) return;
@@ -141,7 +152,7 @@
 <svelte:window {oncontextmenu} />
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="pill" class:listening class:open={feed.open || (resting && feed.idle === "label")} class:rest={resting && feed.idle === "ring"} class:flipped {onpointerdown}>
+<div class="pill" class:listening class:open={feed.open || (resting && feed.idle === "label")} class:rest={resting && feed.idle === "ring"} class:flipped class:faint style:--faint={faintOpacity(feed.fade.transparency)} {onpointerdown}>
   <canvas class="wave" bind:this={canvas} aria-hidden="true"></canvas>
   <!-- A new ring when its colour or its motion changes, so the motion plays from its start. -->
   {#key ring.tone + ring.motion}
@@ -167,14 +178,16 @@
 
 <style>
   /* The ring keeps its place whatever the label: it sits in the round end, the same distance from three sides. */
-  .pill, .measure { display: flex; align-items: center; gap: calc(14 * var(--u)); padding: 0 calc(22 * var(--u)) 0 calc(14 * var(--u)); }
-  .pill, .measure, .probe { font-size: calc(13 * var(--u)); line-height: 1.35; white-space: nowrap; }
+  .pill, .measure { display: flex; align-items: center; gap: calc(10 * var(--u)); padding: 0 calc(18 * var(--u)) 0 calc(14 * var(--u)); }
+  .pill, .measure, .probe { font-size: calc(17 * var(--u)); line-height: 1.2; white-space: nowrap; }
   .pill { position: relative; width: 100vw; height: 100vh; border-radius: calc(24 * var(--u)); overflow: hidden; background: var(--pill-bg); color: var(--pill-ink); box-shadow: inset 0 0 0 1px var(--pill-line); user-select: none; -webkit-user-select: none; cursor: default; }
   /* Appearing: the round end with the ring first, then the widget opens towards its label, which comes last. Leaving is the same backwards, and shorter. */
   .pill { opacity: 0; clip-path: inset(0 calc(100% - 48 * var(--u)) 0 0 round calc(24 * var(--u))); transition: clip-path 140ms cubic-bezier(.4, 0, 1, 1), opacity 60ms linear 140ms; }
   .pill.open { opacity: 1; clip-path: inset(0 0 0 0 round calc(24 * var(--u))); transition: opacity 80ms linear, clip-path 200ms cubic-bezier(.2, .8, .2, 1) 80ms; }
   /* At rest only the round end shows; it stays when the widget closes and is where it opens from. */
-  .pill.rest { opacity: 1; transition: clip-path 140ms cubic-bezier(.4, 0, 1, 1); }
+  .pill.rest { opacity: 1; transition: clip-path 140ms cubic-bezier(.4, 0, 1, 1), opacity 150ms linear; }
+  /* Resting for a while: faint, until the pointer is over it or a dictation begins. */
+  .pill.rest.faint, .pill.open.faint { opacity: var(--faint); transition: opacity 600ms ease; }
   .label { opacity: 0; transition: opacity 60ms linear; }
   .pill.open .label { opacity: 1; transition: opacity 120ms linear 160ms; }
   .measure, .probe { position: fixed; left: 0; top: 0; width: max-content; visibility: hidden; pointer-events: none; }
@@ -203,10 +216,10 @@
   .probe.down { writing-mode: vertical-rl; letter-spacing: .12em; }
   /* Vertical: the ring on top, the label written downwards. */
   @media (orientation: portrait) {
-    .pill { flex-direction: column; padding: calc(14 * var(--u)) 0 calc(22 * var(--u)); }
+    .pill { flex-direction: column; padding: calc(14 * var(--u)) 0 calc(18 * var(--u)); }
     .pill:not(.open) { clip-path: inset(0 0 calc(100% - 48 * var(--u)) 0 round calc(24 * var(--u))); }
     /* Turned over: the ring at the bottom, and the widget opens upwards from it. */
-    .pill.flipped { flex-direction: column-reverse; padding: calc(22 * var(--u)) 0 calc(14 * var(--u)); }
+    .pill.flipped { flex-direction: column-reverse; padding: calc(18 * var(--u)) 0 calc(14 * var(--u)); }
     .pill.flipped:not(.open) { clip-path: inset(calc(100% - 48 * var(--u)) 0 0 0 round calc(24 * var(--u))); }
     .ring.shake { animation-name: shake-down; }
     .label { writing-mode: vertical-rl; letter-spacing: .12em; }
@@ -226,6 +239,6 @@
     path { stroke-dashoffset: 0; }
     circle { opacity: 1; }
     .listening .track:first-child { opacity: .5; transform: scale(1.5); }
-    .pill, .pill.open, .label, .pill.open .label { transition: none; }
+    .pill, .pill.open, .pill.rest.faint, .pill.open.faint, .label, .pill.open .label { transition: none; }
   }
 </style>

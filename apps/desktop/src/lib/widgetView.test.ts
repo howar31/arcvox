@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { MessagePayload } from "./api";
 import { keysOf, setLanguage, t } from "./i18n";
-import { LABEL_KEYS, dictationLabelKey, labelKey, panelView, ringView } from "./widgetView";
+import { LABEL_KEYS, dictationLabelKey, faintOpacity, labelKey, panelView, ringView } from "./widgetView";
 
 const message = (over: Partial<MessagePayload>): MessagePayload => ({ kind: "error", key: "widget.asr_failed", detail: null, copyable: null, code: null, retry: false, language: "zh-TW", ...over });
 
@@ -139,5 +139,13 @@ describe("positioning", () => {
     expect(labelKey("moving", null)).toBe(labelKey("placing", null));
     expect(ringView("moving", null, null)).toEqual(ringView("placing", null, null));
     expect(panelView("moving", null, "", null, false)).toBeNull();
+  });
+
+  it("turns a transparency into how opaque the faint widget is", () => {
+    expect(faintOpacity(70)).toBeCloseTo(0.3);
+    expect(faintOpacity(10)).toBeCloseTo(0.9);
+    // Outside what the settings offer: never invisible, never unchanged.
+    expect(faintOpacity(100)).toBeCloseTo(0.1);
+    expect(faintOpacity(0)).toBeCloseTo(0.9);
   });
 });

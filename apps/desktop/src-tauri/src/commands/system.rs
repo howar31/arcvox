@@ -52,6 +52,12 @@ pub fn widget_idle(state: State<'_, AppState>) -> &'static str {
     state.ui.idle().name()
 }
 
+/// Whether and how a resting widget turns faint.
+#[tauri::command]
+pub fn widget_fade(state: State<'_, AppState>) -> crate::settings::WidgetFade {
+    state.ui.fade()
+}
+
 /// Opens the menu of the menu-bar icon at the pointer, over the widget.
 #[tauri::command]
 pub fn widget_menu(state: State<'_, AppState>) {
