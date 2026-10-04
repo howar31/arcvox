@@ -609,8 +609,10 @@ impl Layout {
         }
         self.drag = None;
         if dx.hypot(dy) >= DRAG_THRESHOLD {
-            if let Some(display) =
-                placement::display_at(&rects, moved.center()).and_then(|i| displays.get(i))
+            let keys: Vec<&str> = displays.iter().map(|d| d.key.as_str()).collect();
+            if let Some(display) = placement::display_at(&rects, moved.center())
+                .and_then(|i| displays.get(i))
+                .filter(|d| placement::keeps_drop(self.fixed.as_deref(), &keys, &d.key))
             {
                 self.positions.positions.insert(
                     display.key.clone(),

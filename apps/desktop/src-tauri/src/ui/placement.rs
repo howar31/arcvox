@@ -346,6 +346,17 @@ pub fn anchor_after_drag(display: Rect, dropped: Rect, wide: f64) -> Anchor {
 }
 
 /// The display that contains the point, else the nearest one.
+/// Whether a drop on the display `dropped` is kept as that display's
+/// position. Not when the widget stays on another display that is
+/// connected: it goes back there, and the place it was let go at was not
+/// chosen.
+pub fn keeps_drop(fixed: Option<&str>, connected: &[&str], dropped: &str) -> bool {
+    match fixed {
+        Some(fixed) => fixed == dropped || !connected.contains(&fixed),
+        None => true,
+    }
+}
+
 pub fn display_at(displays: &[Rect], point: (f64, f64)) -> Option<usize> {
     displays.iter().position(|d| d.contains(point)).or_else(|| {
         displays
@@ -393,6 +404,16 @@ impl WidgetPositions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_drop_on_another_display_than_the_chosen_one_is_not_kept() {
+        let connected = ["A", "B"];
+        assert!(keeps_drop(None, &connected, "B"));
+        assert!(keeps_drop(Some("A"), &connected, "A"));
+        assert!(!keeps_drop(Some("A"), &connected, "B"));
+        // The chosen display is not connected: the widget stays where it is dropped.
+        assert!(keeps_drop(Some("C"), &connected, "B"));
+    }
 
     const MAIN: Rect = Rect {
         x: 0.0,
