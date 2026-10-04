@@ -28,6 +28,7 @@ pub(crate) fn apply_client(
     state.ui.set_scale(settings.widget_size.scale());
     state.ui.set_display(settings.widget_display.clone());
     state.ui.set_idle(settings.widget_idle);
+    state.ui.set_fade(settings.widget_fade);
     state.backup.touch();
     Ok(settings)
 }

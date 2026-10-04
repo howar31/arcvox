@@ -38,6 +38,8 @@ pub struct ClientSettings {
     pub widget_size: WidgetSize,
     /// What the floating widget shows while no dictation goes on.
     pub widget_idle: WidgetIdle,
+    /// Whether and how the widget turns faint after resting a while.
+    pub widget_fade: WidgetFade,
     /// The display the floating widget stays on, by the name its position
     /// is saved under; `None` shows it on the display under the pointer.
     pub widget_display: Option<String>,
@@ -124,6 +126,8 @@ struct GeneralSection {
 struct AppearanceSection {
     widget_size: WidgetSize,
     widget_idle: WidgetIdle,
+    #[serde(default)]
+    widget_fade: WidgetFade,
     show_transcript: bool,
     #[serde(default)]
     stats_layout: Option<Vec<StatsCard>>,
@@ -183,6 +187,39 @@ pub enum WidgetIdle {
     Label,
 }
 
+/// A widget that rests on the screen turns faint after a while, and comes
+/// back when a dictation begins or the pointer is over it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WidgetFade {
+    pub enabled: bool,
+    /// How long the widget rests before it turns faint.
+    pub after_secs: u32,
+    /// How transparent the faint widget is, in percent.
+    pub transparency: u32,
+}
+
+impl Default for WidgetFade {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            after_secs: 2,
+            transparency: 70,
+        }
+    }
+}
+
+impl WidgetFade {
+    /// The values kept inside what the settings page offers.
+    pub fn bounded(self) -> Self {
+        Self {
+            enabled: self.enabled,
+            after_secs: self.after_secs.clamp(1, 60),
+            transparency: self.transparency.clamp(10, 90),
+        }
+    }
+}
+
 impl WidgetIdle {
     pub const ALL: [WidgetIdle; 3] = [WidgetIdle::Hidden, WidgetIdle::Ring, WidgetIdle::Label];
 
@@ -199,11 +236,11 @@ impl WidgetSize {
     /// The factor on the widget's base measures, a short side of 48.
     pub fn scale(self) -> f64 {
         match self {
-            WidgetSize::XSmall => 0.75,
-            WidgetSize::Small => 11.0 / 12.0,
-            WidgetSize::Medium => 7.0 / 6.0,
-            WidgetSize::Large => 1.5,
-            WidgetSize::XLarge => 23.0 / 12.0,
+            WidgetSize::XSmall => 7.0 / 12.0,
+            WidgetSize::Small => 0.75,
+            WidgetSize::Medium => 11.0 / 12.0,
+            WidgetSize::Large => 7.0 / 6.0,
+            WidgetSize::XLarge => 1.5,
         }
     }
 }
@@ -277,6 +314,7 @@ impl Default for ClientSettings {
             show_transcript: true,
             widget_size: WidgetSize::default(),
             widget_idle: WidgetIdle::default(),
+            widget_fade: WidgetFade::default(),
             widget_display: None,
             ui_language: UiLanguage::System,
             manifest_url: None,
@@ -393,6 +431,7 @@ impl ClientSettings {
             let section = AppearanceSection {
                 widget_size: self.widget_size,
                 widget_idle: self.widget_idle,
+                widget_fade: self.widget_fade,
                 show_transcript: self.show_transcript,
                 stats_layout: self.stats_layout.clone(),
             };
@@ -470,6 +509,7 @@ impl ClientSettings {
             let section: AppearanceSection = read("appearance", v)?;
             next.widget_size = section.widget_size;
             next.widget_idle = section.widget_idle;
+            next.widget_fade = section.widget_fade;
             next.show_transcript = section.show_transcript;
             next.stats_layout = section.stats_layout;
         }
@@ -518,6 +558,30 @@ impl ClientSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_file_without_the_fade_gets_the_default_and_values_are_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("client.json"), br#"{"schema_version":1}"#).unwrap();
+        let got = ClientSettings::load(dir.path());
+        assert_eq!(
+            got.widget_fade,
+            WidgetFade {
+                enabled: true,
+                after_secs: 2,
+                transparency: 70
+            }
+        );
+        let wild = WidgetFade {
+            enabled: true,
+            after_secs: 0,
+            transparency: 100,
+        };
+        assert_eq!(
+            (wild.bounded().after_secs, wild.bounded().transparency),
+            (1, 90)
+        );
+    }
 
     #[test]
     fn defaults_match_the_design() {

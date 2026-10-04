@@ -1,4 +1,4 @@
-import { onWidgetCopied, onWidgetEnter, onWidgetInserted, onWidgetLeave, onWidgetLevel, onWidgetMessage, onWidgetRefined, onWidgetState, onWidgetTranscript, uiLanguage, widgetIdle, widgetScale, type MessagePayload, type WidgetIdle, type WidgetState } from "./api";
+import { onWidgetCopied, onWidgetEnter, onWidgetHover, onWidgetInserted, onWidgetLeave, onWidgetLevel, onWidgetMessage, onWidgetRefined, onWidgetState, onWidgetTranscript, uiLanguage, widgetFade, widgetIdle, widgetScale, type MessagePayload, type WidgetFade, type WidgetIdle, type WidgetState } from "./api";
 import { currentLanguage, setLanguage, type Lang } from "./i18n";
 import { messageDelay } from "./rewriteTiming";
 import type { Done } from "./widgetView";
@@ -33,8 +33,16 @@ export class WidgetFeed {
   scale = $state(1);
   /** What the widget shows while it is not open. */
   idle = $state<WidgetIdle>("hidden");
+  /** Whether and how the widget turns faint while it rests. */
+  fade = $state<WidgetFade>({ enabled: false, after_secs: 2, transparency: 70 });
+  /** The pointer is over the resting widget. */
+  over = $state(false);
 
-  private setScale(scale: number | undefined) {
+  /** `factor` is how much larger this window's unit is than the widget's: the panel's text stays readable beside a small widget. */
+  constructor(private factor = 1) {}
+
+  private setScale(chosen: number | undefined) {
+    const scale = (chosen ?? 0) * this.factor;
     if (!scale || scale === this.scale) return;
     document.body.style.setProperty("--u", scale + "px");
     this.scale = scale;
@@ -59,6 +67,7 @@ export class WidgetFeed {
     uiLanguage().then((l) => this.setLanguage(l as Lang)).catch(() => {});
     widgetScale().then((s) => this.setScale(s)).catch(() => {});
     widgetIdle().then((i) => { this.idle = i; }).catch(() => {});
+    widgetFade().then((f) => { this.fade = f; }).catch(() => {});
     let hintTimer: ReturnType<typeof setTimeout> | undefined;
     // A message that waits for the change of the text to be seen.
     let waiting: ReturnType<typeof setTimeout> | undefined;
@@ -69,6 +78,7 @@ export class WidgetFeed {
         this.setLanguage(p.language);
         this.setScale(p.scale);
         if (p.idle) this.idle = p.idle;
+        if (p.fade) this.fade = p.fade;
         if (p.state === "locked" && this.state !== "locked") {
           this.hint = true;
           clearTimeout(hintTimer);
@@ -96,6 +106,7 @@ export class WidgetFeed {
       onWidgetInserted(() => { this.done = "inserted"; }),
       onWidgetCopied(() => { this.done = "copied"; }),
       onWidgetEnter(() => { this.open = true; }),
+      onWidgetHover((over) => { this.over = over; }),
       onWidgetLeave(() => { this.open = false; }),
       onWidgetTranscript((p) => { this.transcript = p.text; this.refined = null; }),
       onWidgetRefined((p) => {

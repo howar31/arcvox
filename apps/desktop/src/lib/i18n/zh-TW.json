@@ -805,5 +805,9 @@
   "backup.wrote_cells": "統計 {n} 個時段",
   "backup.wrote_recs": "錄音 {n} 個",
   "backup.wrote_settings": "設定",
-  "backup.wrote_content": "內容"
+  "backup.wrote_content": "內容",
+  "general.widget_fade": "待命時變淡",
+  "general.widget_fade_help": "待命一段時間後浮動視窗變淡；開始聽寫或滑鼠移上去時恢復。",
+  "general.widget_fade_after": "多久後變淡",
+  "general.widget_fade_transparency": "變淡後的透明度"
 }

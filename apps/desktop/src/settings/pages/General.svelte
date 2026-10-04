@@ -299,6 +299,25 @@
           <option value="label">{t("general.widget_idle_label")}</option>
         </select>
       </Row>
+      {#if draft.widget_idle !== "hidden"}
+        <Row label={t("general.widget_fade")} help={t("general.widget_fade_help")}>
+          <Switch bind:checked={draft.widget_fade.enabled} label={t("general.widget_fade")} />
+        </Row>
+        {#if draft.widget_fade.enabled}
+          <Row label={t("general.widget_fade_after")}>
+            <span class="range">
+              <input type="range" min="1" max="60" step="1" bind:value={draft.widget_fade.after_secs} aria-label={t("general.widget_fade_after")} />
+              <output>{draft.widget_fade.after_secs} {t("common.seconds")}</output>
+            </span>
+          </Row>
+          <Row label={t("general.widget_fade_transparency")}>
+            <span class="range">
+              <input type="range" min="10" max="90" step="5" bind:value={draft.widget_fade.transparency} aria-label={t("general.widget_fade_transparency")} />
+              <output>{draft.widget_fade.transparency}%</output>
+            </span>
+          </Row>
+        {/if}
+      {/if}
       <Row label={t("general.show_transcript")} help={t("general.show_transcript_help")}>
         <Switch bind:checked={draft.show_transcript} label={t("general.show_transcript")} />
       </Row>
@@ -475,6 +494,9 @@
 
 <style>
   .value { color: var(--ink-2); }
+  .range { display: flex; align-items: center; gap: 12px; flex: none; }
+  .range input { width: 200px; accent-color: var(--accent); }
+  .range output { min-width: 52px; text-align: right; color: var(--ink-2); font-variant-numeric: tabular-nums; }
   /* The shortcut row: its label on top, the shortcuts below over the full width. */
   .shortcuts { padding: var(--row-y) var(--row-x) 6px; border-bottom: 1px solid var(--line); }
   .shortcuts-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

@@ -18,7 +18,7 @@ use tauri::{AppHandle, Emitter, Manager, Wry};
 
 use crate::dictation::ui::{MessageKind, Ui, UiMessage, UiState};
 use crate::i18n::Language;
-use crate::settings::WidgetIdle;
+use crate::settings::{WidgetFade, WidgetIdle};
 use app_menu::AppMenu;
 use tray::Tray;
 
@@ -57,6 +57,8 @@ struct StatePayload {
     scale: f64,
     /// What the widget shows while no dictation goes on.
     idle: &'static str,
+    /// Whether and how a resting widget turns faint.
+    fade: WidgetFade,
 }
 
 #[derive(Serialize, Clone)]
@@ -91,6 +93,7 @@ pub struct TauriUi {
     scale: Mutex<f64>,
     /// What the widget shows while no dictation goes on.
     idle: Arc<Mutex<WidgetIdle>>,
+    fade: Mutex<WidgetFade>,
     state: Mutex<UiState>,
     /// Bumped on every show; a scheduled hide fires only if unchanged.
     generation: Arc<AtomicU64>,
@@ -141,6 +144,7 @@ impl TauriUi {
             language: Mutex::new(language),
             scale: Mutex::new(scale),
             idle: Arc::new(Mutex::new(WidgetIdle::Hidden)),
+            fade: Mutex::new(WidgetFade::default()),
             state: Mutex::new(UiState::Idle),
             generation: Arc::new(AtomicU64::new(0)),
             hide_deadline: Arc::new(Mutex::new(None)),
@@ -196,6 +200,16 @@ impl TauriUi {
     /// What the widget shows while no dictation goes on.
     pub fn idle(&self) -> WidgetIdle {
         *self.idle.lock().unwrap()
+    }
+
+    /// Whether and how a resting widget turns faint.
+    pub fn fade(&self) -> WidgetFade {
+        *self.fade.lock().unwrap()
+    }
+
+    pub fn set_fade(&self, fade: WidgetFade) {
+        *self.fade.lock().unwrap() = fade.bounded();
+        self.emit_current_state();
     }
 
     /// The user chose what the widget shows while no dictation goes on. A
@@ -471,6 +485,7 @@ impl TauriUi {
                 language: self.language().tag(),
                 scale: self.scale(),
                 idle: self.idle().name(),
+                fade: self.fade(),
             },
         );
         let _ = self.app.emit_to(SETTINGS, "dictation-state", state);

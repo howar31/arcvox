@@ -58,7 +58,27 @@ pub fn convert_to_panel<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                 | NSWindowCollectionBehavior::Stationary,
         );
     }
+    watch_pointer(app);
     Ok(())
+}
+
+/// Tells the widget when the pointer comes over it and when it leaves: a
+/// widget that turned faint at rest comes back under the pointer.
+#[cfg(target_os = "macos")]
+fn watch_pointer<R: Runtime>(app: &AppHandle<R>) {
+    let Some(ptr) = app
+        .get_webview_window(WINDOW)
+        .and_then(|w| w.ns_window().ok())
+    else {
+        return;
+    };
+    let target = app.clone();
+    let report = Box::new(move |over: bool| {
+        let _ = target.emit_to(WINDOW, "widget-hover", over);
+    });
+    if !crate::platform::macos::hover::watch(ptr, report) {
+        tracing::warn!("the pointer over the widget is not watched");
+    }
 }
 
 #[cfg(not(target_os = "macos"))]

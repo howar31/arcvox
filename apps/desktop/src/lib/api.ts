@@ -59,6 +59,8 @@ export interface ClientSettings {
   widget_size: "x_small" | "small" | "medium" | "large" | "x_large";
   /** What the floating widget shows while no dictation goes on. */
   widget_idle: WidgetIdle;
+  /** Whether and how a resting widget turns faint. */
+  widget_fade: WidgetFade;
   /** The display the widget stays on; null shows it on the display under the pointer. */
   widget_display: string | null;
   ui_language: "system" | "zh-tw" | "en";
@@ -68,6 +70,8 @@ export interface ClientSettings {
   /** The folder data is backed up to, what goes there, and whether that happens by itself. */
   backup: { folder: string | null; categories: BackupCategories; auto: boolean };
 }
+/** A resting widget turns faint after `after_secs`, to `transparency` percent. */
+export interface WidgetFade { enabled: boolean; after_secs: number; transparency: number }
 export interface StatsCard { id: string; row: number; col: number; w: number; h: number; hidden: boolean }
 export interface Permissions { accessibility: boolean }
 export interface RunningApp { bundle_id: string; name: string }
@@ -145,6 +149,7 @@ export const widgetDragStart = () => invoke<void>("widget_drag_start");
 /** The factor of the widget size the user chose. */
 export const widgetScale = () => invoke<number>("widget_scale");
 export const widgetIdle = () => invoke<WidgetIdle>("widget_idle");
+export const widgetFade = () => invoke<WidgetFade>("widget_fade");
 /** Opens the menu of the menu-bar icon at the pointer. */
 export const widgetMenu = () => invoke<void>("widget_menu");
 export const widgetMeasure = (wide: number, tall: number) => invoke<void>("widget_measure", { wide, tall });
@@ -169,13 +174,15 @@ export function onConfigChanged(cb: (c: Config) => void): Promise<UnlistenFn> {
 export type WidgetState = "idle" | "recording" | "locked" | "processing" | "inserting" | "placing" | "moving" | "no_accessibility" | "engine_error";
 /** What the widget shows while no dictation goes on: nothing, the ring alone, or the whole widget with a label. */
 export type WidgetIdle = "hidden" | "ring" | "label";
-export interface StatePayload { state: WidgetState; language: "zh-TW" | "en"; scale?: number; idle?: WidgetIdle }
+export interface StatePayload { state: WidgetState; language: "zh-TW" | "en"; scale?: number; idle?: WidgetIdle; fade?: WidgetFade }
 export interface LevelPayload { rms: number }
 /** `code` is the kind of failure of a failed dictation; `retry` says it was kept for a retry from the history. */
 export interface MessagePayload { kind: "info" | "error"; key: string; detail: string | null; copyable: string | null; code: string | null; retry: boolean; language: "zh-TW" | "en" }
 export function onWidgetState(cb: (p: StatePayload) => void): Promise<UnlistenFn> { return listen<StatePayload>("widget-state", (e) => cb(e.payload)); }
 /** The widget is kept on screen to be positioned, or no longer: switched in the settings window or in a menu. */
 export function onWidgetPlacing(cb: (on: boolean) => void): Promise<UnlistenFn> { return listen<boolean>("widget-placing", (e) => cb(e.payload)); }
+/** The pointer came over a resting widget (true) or left it. */
+export function onWidgetHover(cb: (over: boolean) => void): Promise<UnlistenFn> { return listen<boolean>("widget-hover", (e) => cb(e.payload)); }
 /** What the widget shows while idle was chosen, in the settings window or in a menu. */
 export function onWidgetIdle(cb: (idle: WidgetIdle) => void): Promise<UnlistenFn> { return listen<WidgetIdle>("widget-idle", (e) => cb(e.payload)); }
 /** What the app is doing now, and each change of it, for the settings window. */
