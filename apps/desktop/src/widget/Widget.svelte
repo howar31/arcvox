@@ -152,7 +152,7 @@
 <svelte:window {oncontextmenu} />
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="pill" class:listening class:open={feed.open || (resting && feed.idle === "label")} class:rest={resting && feed.idle === "ring"} class:flipped class:faint style:--faint={faintOpacity(feed.fade.transparency)} {onpointerdown}>
+<div class="pill" class:listening class:open={feed.open || (resting && feed.idle === "label")} class:rest={resting && feed.idle === "ring"} class:flipped class:faint={faint || (fades && feed.faintNow)} style:--faint={faintOpacity(feed.fade.transparency)} {onpointerdown}>
   <canvas class="wave" bind:this={canvas} aria-hidden="true"></canvas>
   <!-- A new ring when its colour or its motion changes, so the motion plays from its start. -->
   {#key ring.tone + ring.motion}

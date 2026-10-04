@@ -2,7 +2,7 @@
   import { onMount, untrack } from "svelte";
   import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
-  import { clearRecordings, errorMessage, formatBytes, historyStorage, openRecordingsDir, recordingsDir, resetStats, setRecordingsDir, type RecordingsDir, listDisplays, listMicrophones, onWidgetPlacing, widgetIsPlacing, openPrivacyPane, permissions, requestAccessibility, updateGeneral, widgetPlacing, widgetResetPosition, type ClientSettings, type DisplayName, type General, type HistoryStorage, type InsertMethod } from "../../lib/api";
+  import { clearRecordings, errorMessage, formatBytes, historyStorage, openRecordingsDir, recordingsDir, resetStats, setRecordingsDir, type RecordingsDir, listDisplays, listMicrophones, onWidgetPlacing, onWidgetPreviewScene, widgetIsPlacing, widgetPreview, openPrivacyPane, permissions, requestAccessibility, updateGeneral, widgetPlacing, widgetResetPosition, type ClientSettings, type DisplayName, type General, type HistoryStorage, type InsertMethod } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { t } from "../../lib/i18n";
   import { client, config } from "../../lib/store.svelte";
@@ -22,6 +22,7 @@
   import Icon from "../../lib/ui/Icon.svelte";
   import Modal from "../../lib/ui/Modal.svelte";
   import AddPerApp from "./AddPerApp.svelte";
+  import { DEMO, SCENES, lookOf, previewRequest, sceneFor, type Look, type Scene } from "../../lib/widgetPreview";
 
   import type { SettingsPage } from "../../lib/route";
 
@@ -42,6 +43,12 @@
   let newApp = $state("");
   // True while the widget is kept on screen so it can be dragged into place.
   let placing = $state(false);
+  // What the previewed widget shows, and whether a slider of the faint widget is being dragged.
+  let scene = $state<Scene>("place");
+  let sliding = $state(false);
+  // What the app was last asked to show; null while nothing is previewed.
+  let shown: { scene: Scene; look: Look } | null = null;
+  let demo: ReturnType<typeof setTimeout> | undefined;
 
   const clientDirty = $derived(draft !== null && JSON.stringify(draft) !== baseClient);
   const generalDirty = $derived(general !== null && JSON.stringify(general) !== baseGeneral);
@@ -70,6 +77,42 @@
       baseClient = JSON.stringify({ ...JSON.parse(baseClient), widget_idle: idle });
     });
   });
+
+  // While the widget is previewed it shows the draft: every change of it, and the chosen state.
+  $effect(() => {
+    if (!placing || !draft) { shown = null; return; }
+    const look = lookOf(draft);
+    const now = scene, faint = sliding;
+    const sample = { raw: t("general.preview_raw"), refined: t("general.preview_refined"), detail: t("general.preview_detail") };
+    untrack(() => {
+      // A changed setting is shown in the state it applies to.
+      const fitting = shown && !demo ? sceneFor(shown.look, look) : null;
+      if (fitting && fitting !== now) {
+        shown = { scene: shown!.scene, look };
+        scene = fitting;
+        return;
+      }
+      const play = !shown || shown.scene !== now || shown.look.show_transcript !== look.show_transcript;
+      shown = { scene: now, look };
+      widgetPreview(previewRequest(now, look, sample, play, faint)).catch(() => {});
+    });
+  });
+
+  function stopDemo() {
+    clearTimeout(demo);
+    demo = undefined;
+  }
+  /** Plays one dictation through: listening, processing, done, and back to rest. */
+  function playDemo() {
+    stopDemo();
+    let i = 0;
+    const next = () => {
+      const [to, ms] = DEMO[i++];
+      scene = to;
+      demo = ms ? setTimeout(next, ms) : undefined;
+    };
+    next();
+  }
 
   function reset() {
     newApp = "";
@@ -132,6 +175,8 @@
     try { await resetStats(); toast.ok(t("general.stats_reset_done")); } catch (e) { toast.error(errorMessage(e)); }
   }
 
+  const scenes = $derived(SCENES.map((value) => ({ value, label: t(`general.preview_scene_${value}`) })));
+  const idles = $derived((["hidden", "ring", "label"] as const).map((value) => ({ value, label: t(`general.widget_idle_${value}`) })));
   const sizes = $derived((["x_small", "small", "medium", "large", "x_large"] as const).map((value) => ({ value, label: t(`general.widget_size_${value}`) })));
 
   // The connected displays, for the choice of the one the widget stays on.
@@ -140,7 +185,9 @@
   onMount(() => {
     listDisplays().then((d) => { displays = d; }).catch(() => {});
     // The same switch is in the menus.
-    const placed = onWidgetPlacing((on) => { placing = on; });
+    const placed = onWidgetPlacing((on) => { stopDemo(); scene = "place"; placing = on; });
+    // A real dictation or a drag took the place of the state that was shown.
+    const scened = onWidgetPreviewScene((to) => { stopDemo(); scene = to; });
     widgetIsPlacing().then((on) => { placing = on; }).catch(() => {});
     reset();
     loadStorage();
@@ -153,6 +200,8 @@
     return () => {
       window.removeEventListener("focus", onFocus);
       placed.then((off) => off());
+      scened.then((off) => off());
+      stopDemo();
       if (placing) widgetPlacing(false).catch(() => {});
     };
   });
@@ -224,6 +273,8 @@
   }
 
   async function setPlacing(on: boolean) {
+    stopDemo();
+    scene = "place";
     try { await widgetPlacing(on); placing = on; } catch (e) { toast.error(errorMessage(e)); }
   }
 
@@ -279,6 +330,14 @@
       <button type="button" class="btn" aria-pressed={placing} onclick={() => setPlacing(!placing)}>{t(placing ? "general.widget_done" : "general.widget_show")}</button>
       <button type="button" class="btn quiet" onclick={resetWidget}>{t("general.widget_reset")}</button>
     </Row>
+    {#if placing && draft}
+      <Row label={t("general.preview_scene")} help={scene === "idle" && draft.widget_idle === "hidden" ? t("general.preview_idle_hidden") : undefined}>
+        <span class="scenes">
+          <Segmented options={scenes} bind:value={() => scene, (to) => { stopDemo(); scene = to; }} label={t("general.preview_scene")} />
+          <button type="button" class="btn" onclick={playDemo}>{t("general.preview_play")}</button>
+        </span>
+      </Row>
+    {/if}
     {#if draft}
       <Row label={t("general.widget_size")}>
         <Segmented options={sizes} bind:value={draft.widget_size} label={t("general.widget_size")} />
@@ -293,11 +352,7 @@
         </select>
       </Row>
       <Row label={t("general.widget_idle")} help={t("general.widget_idle_help")}>
-        <select bind:value={draft.widget_idle} aria-label={t("general.widget_idle")}>
-          <option value="hidden">{t("general.widget_idle_hidden")}</option>
-          <option value="ring">{t("general.widget_idle_ring")}</option>
-          <option value="label">{t("general.widget_idle_label")}</option>
-        </select>
+        <Segmented options={idles} bind:value={draft.widget_idle} label={t("general.widget_idle")} />
       </Row>
       {#if draft.widget_idle !== "hidden"}
         <Row label={t("general.widget_fade")} help={t("general.widget_fade_help")}>
@@ -306,13 +361,13 @@
         {#if draft.widget_fade.enabled}
           <Row label={t("general.widget_fade_after")}>
             <span class="range">
-              <input type="range" min="1" max="60" step="1" bind:value={draft.widget_fade.after_secs} aria-label={t("general.widget_fade_after")} />
+              <input type="range" min="1" max="60" step="1" bind:value={draft.widget_fade.after_secs} oninput={() => { sliding = true; }} onchange={() => { sliding = false; }} aria-label={t("general.widget_fade_after")} />
               <output>{draft.widget_fade.after_secs} {t("common.seconds")}</output>
             </span>
           </Row>
           <Row label={t("general.widget_fade_transparency")}>
             <span class="range">
-              <input type="range" min="10" max="90" step="5" bind:value={draft.widget_fade.transparency} aria-label={t("general.widget_fade_transparency")} />
+              <input type="range" min="10" max="90" step="5" bind:value={draft.widget_fade.transparency} oninput={() => { sliding = true; }} onchange={() => { sliding = false; }} aria-label={t("general.widget_fade_transparency")} />
               <output>{draft.widget_fade.transparency}%</output>
             </span>
           </Row>
@@ -495,6 +550,7 @@
 <style>
   .value { color: var(--ink-2); }
   .range { display: flex; align-items: center; gap: 12px; flex: none; }
+  .scenes { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
   .range input { width: 200px; accent-color: var(--accent); }
   .range output { min-width: 52px; text-align: right; color: var(--ink-2); font-variant-numeric: tabular-nums; }
   /* The shortcut row: its label on top, the shortcuts below over the full width. */

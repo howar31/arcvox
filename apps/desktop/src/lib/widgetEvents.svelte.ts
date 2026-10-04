@@ -1,4 +1,4 @@
-import { onWidgetCopied, onWidgetEnter, onWidgetHover, onWidgetInserted, onWidgetLeave, onWidgetLevel, onWidgetMessage, onWidgetRefined, onWidgetState, onWidgetTranscript, uiLanguage, widgetFade, widgetIdle, widgetScale, type MessagePayload, type WidgetFade, type WidgetIdle, type WidgetState } from "./api";
+import { onWidgetCopied, onWidgetEnter, onWidgetHover, onWidgetInserted, onWidgetLeave, onWidgetLevel, onWidgetMessage, onWidgetRefined, onWidgetReset, onWidgetState, onWidgetTranscript, uiLanguage, widgetFade, widgetIdle, widgetScale, type MessagePayload, type WidgetFade, type WidgetIdle, type WidgetState } from "./api";
 import { currentLanguage, setLanguage, type Lang } from "./i18n";
 import { messageDelay } from "./rewriteTiming";
 import type { Done } from "./widgetView";
@@ -35,6 +35,8 @@ export class WidgetFeed {
   idle = $state<WidgetIdle>("hidden");
   /** Whether and how the widget turns faint while it rests. */
   fade = $state<WidgetFade>({ enabled: false, after_secs: 2, transparency: 70 });
+  /** The resting widget is faint without waiting: its transparency is being chosen. */
+  faintNow = $state(false);
   /** The pointer is over the resting widget. */
   over = $state(false);
 
@@ -79,6 +81,7 @@ export class WidgetFeed {
         this.setScale(p.scale);
         if (p.idle) this.idle = p.idle;
         if (p.fade) this.fade = p.fade;
+        this.faintNow = !!p.faint;
         if (p.state === "locked" && this.state !== "locked") {
           this.hint = true;
           clearTimeout(hintTimer);
@@ -103,6 +106,7 @@ export class WidgetFeed {
         if (wait > 0) waiting = setTimeout(() => show(p), wait);
         else show(p);
       }),
+      onWidgetReset(() => { clearTimeout(waiting); this.message = null; this.transcript = ""; this.refined = null; this.done = null; }),
       onWidgetInserted(() => { this.done = "inserted"; }),
       onWidgetCopied(() => { this.done = "copied"; }),
       onWidgetEnter(() => { this.open = true; }),

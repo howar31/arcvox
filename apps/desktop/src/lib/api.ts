@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { PreviewRequest, Scene } from "./widgetPreview";
 
 // Types match the JSON shapes produced by the core crate's serde derives.
 export type Runtime = "whisper" | "llama";
@@ -164,6 +165,12 @@ export interface CapturePayload { keys: string[]; done: boolean; cancelled: bool
 export function onShortcutCapture(cb: (p: CapturePayload) => void): Promise<UnlistenFn> { return listen<CapturePayload>("shortcut-capture", (e) => cb(e.payload)); }
 export const widgetPlacing = (on: boolean) => invoke<void>("widget_placing", { on });
 export const widgetIsPlacing = () => invoke<boolean>("widget_is_placing");
+/** Shows the widget in a chosen state with settings that are not saved, while it is kept on screen. */
+export const widgetPreview = (preview: PreviewRequest) => invoke<void>("widget_preview", { preview });
+/** The app changed the state the previewed widget shows: a real dictation began, or the widget is dragged. */
+export function onWidgetPreviewScene(cb: (scene: Scene) => void): Promise<UnlistenFn> { return listen<Scene>("widget-preview-scene", (e) => cb(e.payload)); }
+/** Nothing of an earlier dictation or preview is shown any more. */
+export function onWidgetReset(cb: () => void): Promise<UnlistenFn> { return listen("widget-reset", () => cb()); }
 export const widgetResetPosition = () => invoke<void>("widget_reset_position");
 export const openSettingsWindow = (page?: string) => invoke<void>("system_open_settings_window", { page: page ?? null });
 
@@ -174,7 +181,8 @@ export function onConfigChanged(cb: (c: Config) => void): Promise<UnlistenFn> {
 export type WidgetState = "idle" | "recording" | "locked" | "processing" | "inserting" | "placing" | "moving" | "no_accessibility" | "engine_error";
 /** What the widget shows while no dictation goes on: nothing, the ring alone, or the whole widget with a label. */
 export type WidgetIdle = "hidden" | "ring" | "label";
-export interface StatePayload { state: WidgetState; language: "zh-TW" | "en"; scale?: number; idle?: WidgetIdle; fade?: WidgetFade }
+/** `faint`: a resting widget is shown faint without waiting, while its transparency is being chosen. */
+export interface StatePayload { state: WidgetState; language: "zh-TW" | "en"; scale?: number; idle?: WidgetIdle; fade?: WidgetFade; faint?: boolean }
 export interface LevelPayload { rms: number }
 /** `code` is the kind of failure of a failed dictation; `retry` says it was kept for a retry from the history. */
 export interface MessagePayload { kind: "info" | "error"; key: string; detail: string | null; copyable: string | null; code: string | null; retry: boolean; language: "zh-TW" | "en" }
