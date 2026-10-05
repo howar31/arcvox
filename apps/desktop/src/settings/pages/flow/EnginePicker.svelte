@@ -23,7 +23,7 @@
   {#if stale}
     <div class="pick stale" role="radio" aria-checked="true" aria-disabled="true" tabindex="-1">
       <span class="dot on"></span>
-      <span class="text"><span class="name">{stale.name}<Tag tone="warn">{t("home.not_found")}</Tag></span><small>{stale.help}</small></span>
+      <span class="text"><span class="name">{stale.name}<Tag tone="live">{t("home.not_found")}</Tag></span><small>{stale.help}</small></span>
     </div>
   {/if}
   {#each engines as p (p.id)}
@@ -53,8 +53,8 @@
   .dot { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--line-strong); flex: none; display: grid; place-items: center; }
   .dot.on { border-color: var(--accent); }
   .dot.on::after { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
-  .stale .dot.on { border-color: var(--warn); }
-  .stale .dot.on::after { background: var(--warn); }
+  .stale .dot.on { border-color: var(--live); }
+  .stale .dot.on::after { background: var(--live); }
   .text { flex: 1; min-width: 0; }
   .name { display: flex; align-items: center; gap: 8px; font-weight: 600; overflow-wrap: anywhere; }
   small { display: block; margin-top: 2px; color: var(--ink-2); font-size: var(--text-sm); overflow-wrap: anywhere; }

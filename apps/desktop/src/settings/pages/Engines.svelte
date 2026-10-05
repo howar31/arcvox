@@ -177,7 +177,7 @@
           {#if recommended(p)}<Tag tone="accent">{t("engines.recommended")}</Tag>{/if}
           {#if !hasRole(p)}<Tag tone="warn">{t("engines.no_role")}</Tag>{/if}
           {#if meta.kind === "local" && !meta.ready && p.model_id}<Tag tone="warn">{t("engines.not_downloaded")}</Tag>
-          {:else if meta.kind === "local" && !meta.ready && p.model_path}<Tag tone="warn">{t("engines.file_missing")}</Tag>{/if}
+          {:else if meta.kind === "local" && !meta.ready && p.model_path}<Tag tone="live">{t("engines.file_missing")}</Tag>{/if}
         </div>
         <small>{describe(p)}</small>
         <small>{usersLine(p)}</small>

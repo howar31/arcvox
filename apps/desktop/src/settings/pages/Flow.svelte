@@ -278,7 +278,7 @@
       <button type="button" class="stage" class:on={stage === s.id} role="tab" aria-selected={stage === s.id} onclick={() => (stage = s.id)}>
         <span class="role"><b>{i + 1}</b>{t(s.key)}</span>
         <span class="what" class:unknown={!line.known} title={line.name}>{line.name}</span>
-        <span class="meta" class:warn={line.missing || !line.known}>{line.meta}</span>
+        <span class="meta" class:warn={line.missing && line.known} class:unknown={!line.known}>{line.meta}</span>
       </button>
     {/each}
   </div>
@@ -446,9 +446,10 @@
   .role b { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--line); font-size: var(--text-xs); font-weight: 600; }
   .stage.on .role b { background: var(--accent); color: var(--accent-ink); }
   .what { margin-top: 12px; font: 600 var(--text-lg)/1.3 var(--font-round); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .what.unknown { color: var(--warn); }
+  .what.unknown { color: var(--live); }
   .meta { margin-top: 3px; color: var(--ink-2); font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .meta.warn { color: var(--warn); }
+  .meta.unknown { color: var(--live); }
 
   .bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: var(--gap-group) 4px 12px; min-height: 20px; }
   .missing { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 4px 0; color: var(--warn); font-size: var(--text-sm); }
