@@ -407,10 +407,13 @@ impl Engine {
         dir: &Path,
         cats: Categories,
         settings: Option<Vec<u8>>,
+        recreate: bool,
     ) -> Result<WriteReport, EngineError> {
         // A folder that is gone (a volume that is not mounted, a folder that
-        // was removed) is reported, not made again somewhere else.
-        if !dir.is_dir() {
+        // was removed) is reported, not made again somewhere else, unless
+        // the caller asks for it.
+        let gone = !dir.is_dir();
+        if gone && !recreate {
             return Err(BackupError::Io {
                 path: dir.to_path_buf(),
                 source: std::io::Error::new(
@@ -420,8 +423,11 @@ impl Engine {
             }
             .into());
         }
-        self.write_backup(dir.to_path_buf(), cats, Scope::ThisDevice, settings)
-            .await
+        let mut report = self
+            .write_backup(dir.to_path_buf(), cats, Scope::ThisDevice, settings)
+            .await?;
+        report.recreated = gone;
+        Ok(report)
     }
 
     /// Writes one archive file with the rows of every device here.
@@ -2512,7 +2518,7 @@ pub(crate) mod tests {
         a.history().insert(row(1_790_812_800, "one")).unwrap();
         let folder = tmp.path().join("sync");
         std::fs::create_dir_all(&folder).unwrap();
-        a.backup_write_folder(&folder, text_backup(), None)
+        a.backup_write_folder(&folder, text_backup(), None, false)
             .await
             .unwrap();
 
@@ -2525,7 +2531,7 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        b.backup_write_folder(&folder, text_backup(), None)
+        b.backup_write_folder(&folder, text_backup(), None, false)
             .await
             .unwrap();
         let info = b
@@ -2547,12 +2553,35 @@ pub(crate) mod tests {
         let a = plain_engine(&tmp.path().join("a")).await;
         a.history().insert(row(1_790_812_800, "one")).unwrap();
         let folder = tmp.path().join("unmounted").join("sync");
-        let got = a.backup_write_folder(&folder, text_backup(), None).await;
+        let got = a
+            .backup_write_folder(&folder, text_backup(), None, false)
+            .await;
         assert!(matches!(
             got,
             Err(EngineError::Backup(BackupError::Io { .. }))
         ));
         assert!(!tmp.path().join("unmounted").exists());
+    }
+
+    #[tokio::test]
+    async fn a_backup_folder_that_is_gone_is_made_again_when_asked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = plain_engine(&tmp.path().join("a")).await;
+        a.history().insert(row(1_790_812_800, "one")).unwrap();
+        let folder = tmp.path().join("sync");
+        let first = a
+            .backup_write_folder(&folder, text_backup(), None, true)
+            .await
+            .unwrap();
+        assert!(first.recreated);
+        assert_eq!(first.rows, 1);
+        assert!(folder.join("devices").is_dir());
+        // The folder is there now: the next write is an ordinary one.
+        let second = a
+            .backup_write_folder(&folder, text_backup(), None, true)
+            .await
+            .unwrap();
+        assert!(!second.recreated);
     }
 
     #[tokio::test]
@@ -2562,7 +2591,7 @@ pub(crate) mod tests {
         a.history().insert(row(1_790_812_800, "one")).unwrap();
         let folder = tmp.path().join("sync");
         std::fs::create_dir_all(&folder).unwrap();
-        a.backup_write_folder(&folder, text_backup(), None)
+        a.backup_write_folder(&folder, text_backup(), None, false)
             .await
             .unwrap();
         let b = plain_engine(&tmp.path().join("b")).await;

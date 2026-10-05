@@ -64,6 +64,8 @@ pub struct BackupSettings {
     pub categories: BackupCategories,
     /// Writes to the folder by itself a few minutes after a change.
     pub auto: bool,
+    /// Makes the folder again when a write finds it gone.
+    pub recreate: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -735,6 +737,7 @@ mod tests {
         let b = ClientSettings::default().backup;
         assert_eq!(b.folder, None);
         assert!(!b.auto);
+        assert!(!b.recreate);
         assert!(b.categories.history && b.categories.stats);
         assert!(b.categories.settings && b.categories.content);
         assert!(!b.categories.recordings);

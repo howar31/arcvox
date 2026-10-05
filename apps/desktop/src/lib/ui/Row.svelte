@@ -4,8 +4,10 @@
   import ResetButton from "./ResetButton.svelte";
   import type { Reset } from "../reset";
 
-  let { label, help, leading, children, onclick, reset }: {
+  let { label, tag, help, leading, children, onclick, reset }: {
     label?: string;
+    /** A tag beside the label, where every page puts the tag of a name. */
+    tag?: Snippet;
     help?: string;
     leading?: Snippet;
     children?: Snippet;
@@ -20,7 +22,7 @@
   {#if leading}{@render leading()}{/if}
   {#if label || help}
     <span class="label">
-      {#if label}<span class="text">{label}</span>{/if}
+      {#if label}<span class="text" class:tagged={tag}>{label}{#if tag}{@render tag()}{/if}</span>{/if}
       {#if help}<small>{help}</small>{/if}
     </span>
   {/if}
@@ -42,6 +44,7 @@
   .item + :global(.item) { border-top: 1px solid var(--line); }
   .label { display: block; flex: 1; min-width: 0; }
   .text { display: block; font-weight: 600; }
+  .text.tagged { display: flex; align-items: center; gap: 8px; }
   .label small { display: block; color: var(--ink-2); font-size: var(--text-sm); margin-top: 2px; overflow-wrap: anywhere; }
   .link { border: 0; border-radius: 0; background: none; text-align: left; cursor: default; }
   .link:hover { background: var(--sunken); }

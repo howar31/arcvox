@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
-  import { backupRunNow, backupStatus, errorMessage, listDevices, onBackupStatus, onHistoryChanged, openBackupFolder, removeDevice, renameDevice, type BackupStatus, type ClientSettings, type DeviceRow } from "../../lib/api";
-  import { DONE_MS, holdLeft, itemsSummary, statusView } from "../../lib/backupView";
+  import { backupFolderCreate, backupFolderState, backupRunNow, backupStatus, errorMessage, listDevices, onBackupFolder, onBackupStatus, onHistoryChanged, openBackupFolder, openPrivacyPane, removeDevice, renameDevice, type BackupStatus, type ClientSettings, type DeviceRow, type FolderState } from "../../lib/api";
+  import { DONE_MS, FOLDER_LOOK_MS, holdLeft, itemsSummary, statusView } from "../../lib/backupView";
   import { formatDateTime } from "../../lib/format";
   import { t } from "../../lib/i18n";
   import { isImeKey } from "../../lib/ime";
@@ -24,6 +24,8 @@
   let status = $state<BackupStatus>({ state: "never" });
   // The status before the write that is running: its second line stays, so the row keeps its height.
   let before = $state<BackupStatus>({ state: "never" });
+  // What the folder is right now, apart from what the last write said.
+  let folder = $state<FolderState>("usable");
   let devices = $state<DeviceRow[]>([]);
   let renaming = $state<string | null>(null);
   let name = $state("");
@@ -37,7 +39,7 @@
 
   const backup = $derived(client.value?.backup ?? null);
   const kinds = $derived(backup?.categories ?? { settings: false, content: false, history: false, stats: false, recordings: false });
-  const view = $derived(statusView(status, formatDateTime, kinds));
+  const view = $derived(statusView(status, formatDateTime, kinds, folder));
   const detail = $derived(status.state === "running" ? statusView(before, formatDateTime, kinds).detail : view.detail);
   // The date in file names: the local day as numbers.
   const today = new Date().toLocaleDateString("sv");
@@ -66,12 +68,21 @@
 
   const loadDevices = () => listDevices().then((d) => { devices = d; }).catch((e) => toast.error(errorMessage(e)));
 
+  /** Looks at the folder. With `probe` a small file is written to it, which is what tells whether it takes one. */
+  const look = (probe: boolean) => backupFolderState(probe).then((f) => { folder = f; }).catch(() => {});
+  // Coming back to the window, for instance from System Settings, is a moment to try a write again.
+  const onFocus = () => look(true);
+
   onMount(() => {
     loadDevices();
     backupStatus().then(take).catch(() => {});
+    look(true);
     const offStatus = onBackupStatus(take);
+    const offFolder = onBackupFolder((f) => { folder = f; });
     const offHistory = onHistoryChanged(loadDevices);
-    return () => { clearTimeout(held); clearTimeout(freshTimer); offStatus.then((off) => off()); offHistory.then((off) => off()); };
+    const looking = setInterval(() => look(false), FOLDER_LOOK_MS);
+    window.addEventListener("focus", onFocus);
+    return () => { clearTimeout(held); clearTimeout(freshTimer); clearInterval(looking); window.removeEventListener("focus", onFocus); offStatus.then((off) => off()); offFolder.then((off) => off()); offHistory.then((off) => off()); };
   });
 
   /** The backup settings take effect at once; this page has no save bar. */
@@ -82,8 +93,17 @@
 
   async function chooseFolder() {
     const picked = await openDialog({ directory: true, multiple: false, defaultPath: backup?.folder ?? undefined });
-    if (typeof picked === "string") await saveBackup({ folder: picked });
+    if (typeof picked === "string") { await saveBackup({ folder: picked }); await look(true); }
   }
+
+  async function createFolder() {
+    try {
+      folder = await backupFolderCreate();
+      if (folder !== "usable") toast.error(t("backup.create_failed"));
+    } catch (e) { toast.error(errorMessage(e)); }
+  }
+
+  const openSystem = () => openPrivacyPane("files").catch((e) => toast.error(errorMessage(e)));
 
   async function openFolder() {
     try { await openBackupFolder(); } catch (e) { toast.error(errorMessage(e)); }
@@ -149,11 +169,18 @@
   </Row>
 </Group>
 
+{#snippet folderTag()}<Tag tone="live">{t(folder === "missing" ? "backup.folder_tag_missing" : "backup.folder_tag_not_writable")}</Tag>{/snippet}
+
 {#if backup}
   <Group title={t("backup.folder")} help={t("backup.folder_note")}>
-    <Row label={t("backup.folder_path")} help={backup.folder ?? t("backup.folder_none")}>
+    <Row label={t("backup.folder_path")} tag={backup.folder && folder !== "usable" ? folderTag : undefined} help={backup.folder ?? t("backup.folder_none")}>
       <span class="buttons">
-        <button type="button" class="btn quiet" disabled={!backup.folder} onclick={openFolder}>{t("backup.folder_open")}</button>
+        {#if backup.folder && view.fix === "create"}
+          <button type="button" class="btn primary" onclick={createFolder}>{t("backup.create_again")}</button>
+        {:else}
+          <button type="button" class="btn quiet" disabled={!backup.folder} onclick={openFolder}>{t("backup.folder_open")}</button>
+        {/if}
+        {#if backup.folder && view.fix === "system"}<button type="button" class="btn" onclick={openSystem}>{t("backup.open_system_settings")}</button>{/if}
         <button type="button" class="btn" onclick={chooseFolder}>{t("backup.folder_choose")}</button>
       </span>
     </Row>
@@ -162,6 +189,9 @@
     </Row>
     <Row label={t("backup.auto")} help={t("backup.auto_help")}>
       <Switch checked={backup.auto} disabled={!backup.folder} label={t("backup.auto")} onchange={(on) => saveBackup({ auto: on })} />
+    </Row>
+    <Row label={t("backup.recreate")} help={t("backup.recreate_help")}>
+      <Switch checked={backup.recreate} disabled={!backup.folder || !backup.auto} label={t("backup.recreate")} onchange={(on) => saveBackup({ recreate: on }).then(() => { if (on && folder === "missing") updateNow(); })} />
     </Row>
     {#if backup.folder}
       <Row>
@@ -180,7 +210,7 @@
           <span class="title" class:bad={view.tone === "bad"}>{view.title}</span>
           {#if detail}<small class:fresh>{detail}</small>{/if}
         </span>
-        <button type="button" class="btn" disabled={status.state === "running"} onclick={updateNow}>{t("backup.now")}</button>
+        <button type="button" class="btn" disabled={status.state === "running" || !view.run} onclick={updateNow}>{t("backup.now")}</button>
       </Row>
     {/if}
     <Row label={t("backup.import_folder")} help={t("backup.import_folder_help")}>

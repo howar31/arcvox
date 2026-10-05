@@ -21,6 +21,8 @@ pub struct WriteReport {
     pub recording_bytes: u64,
     /// The settings file of this device was written.
     pub settings: bool,
+    /// The folder was not there and was made again for this write.
+    pub recreated: bool,
 }
 
 /// Brings the tree at `root` up to date with the store. `settings` is the

@@ -4,7 +4,7 @@ import { deviceLine, holdLeft, importLines, itemsSummary, KIND_ITEMS, noteLines,
 
 const cats = (settings: boolean, content: boolean, history: boolean, stats: boolean, recordings: boolean) => ({ settings, content, history, stats, recordings });
 const report = { devices: 1, added: 0, updated: 0, skipped: 0, cells: 0, recordings: 0, missing_recordings: 0, bad_lines: 0, expiring: 0 };
-const none = { rows: 0, cells: 0, recordings: 0, recording_bytes: 0, settings: false };
+const none = { rows: 0, cells: 0, recordings: 0, recording_bytes: 0, settings: false, recreated: false };
 const all = cats(true, true, true, true, true);
 const device = { id: "d", name: "Mini", platform: "macos", rows: 532, first_month: "2026-06", last_month: "2026-09", recordings: 118, recording_bytes: 52_000_000, has_stats: true, has_settings: false, this: false };
 
@@ -59,11 +59,42 @@ describe("backupView", () => {
 
   it("shows the state of the backup folder", () => {
     const time = (ts: number) => `T${ts}`;
-    expect(statusView({ state: "never" }, time, all)).toEqual({ tone: "idle", title: "尚未備份", detail: "還沒有備份到這個資料夾。" });
-    expect(statusView({ state: "ok", at: 5, report: none }, time, all)).toEqual({ tone: "ok", title: "已備份", detail: "T5 · 沒有新的變動" });
-    expect(statusView({ state: "running" }, time, all)).toEqual({ tone: "busy", title: "備份中…", detail: "" });
-    expect(statusView({ state: "failed", at: 9, reason: "the folder is gone", last_ok: 5 }, time, all)).toEqual({ tone: "bad", title: "無法備份", detail: "the folder is gone。上次成功：T5" });
+    expect(statusView({ state: "never" }, time, all)).toEqual({ tone: "idle", title: "尚未備份", detail: "還沒有備份到這個資料夾。", fix: null, run: true });
+    expect(statusView({ state: "ok", at: 5, report: none }, time, all)).toEqual({ tone: "ok", title: "已備份", detail: "T5 · 沒有新的變動", fix: null, run: true });
+    expect(statusView({ state: "running" }, time, all)).toEqual({ tone: "busy", title: "備份中…", detail: "", fix: null, run: true });
+    expect(statusView({ state: "failed", at: 9, reason: "the folder is gone", last_ok: 5 }, time, all)).toEqual({ tone: "bad", title: "無法備份", detail: "the folder is gone。上次成功：T5", fix: null, run: true });
     expect(statusView({ state: "failed", at: 9, reason: "the folder is gone", last_ok: null }, time, all).detail).toBe("the folder is gone");
+  });
+
+  it("puts a folder that cannot be used before the last write", () => {
+    const time = (ts: number) => `T${ts}`;
+    const ok = { state: "ok", at: 5, report: none } as const;
+    expect(statusView(ok, time, all, "missing")).toEqual({ tone: "bad", title: "找不到備份資料夾", detail: "資料夾可能已被刪除、移動，或所在的磁碟沒有連接。上次備份：T5", fix: "create", run: false });
+    expect(statusView(ok, time, all, "not_writable")).toEqual({ tone: "bad", title: "無法寫入備份資料夾", detail: "這個資料夾目前不允許寫入。上次備份：T5", fix: null, run: true });
+    expect(statusView(ok, time, all, "blocked")).toEqual({ tone: "bad", title: "無法寫入備份資料夾", detail: "系統的隱私權設定沒有允許存取這個資料夾。上次備份：T5", fix: "system", run: true });
+    // The last write that worked is named, whatever the write after it said.
+    expect(statusView({ state: "failed", at: 9, reason: "the folder does not exist", last_ok: 5 }, time, all, "missing").detail).toBe("資料夾可能已被刪除、移動，或所在的磁碟沒有連接。上次備份：T5");
+    expect(statusView({ state: "failed", at: 9, reason: "x", last_ok: null }, time, all, "missing").detail).toBe("資料夾可能已被刪除、移動，或所在的磁碟沒有連接。");
+    expect(statusView({ state: "never" }, time, all, "missing").detail).toBe("資料夾可能已被刪除、移動，或所在的磁碟沒有連接。");
+    // A write that is running is shown as running.
+    expect(statusView({ state: "running" }, time, all, "missing").title).toBe("備份中…");
+    expect(statusView(ok, time, all, "usable").fix).toBeNull();
+    setLanguage("en");
+    expect(statusView(ok, time, all, "missing").detail).toBe("The folder may have been deleted or moved, or its disk is not connected. Last backup: T5");
+  });
+
+  it("names the folder as the reason of a failed write in the interface language", () => {
+    const time = (ts: number) => `T${ts}`;
+    // The folder can be used again, and the write that failed has not been made up for yet.
+    expect(statusView({ state: "failed", at: 9, reason: "the folder does not exist", last_ok: 5, folder: "missing" }, time, all)).toEqual({ tone: "bad", title: "無法備份", detail: "上次備份時找不到資料夾。上次成功：T5", fix: null, run: true });
+    expect(statusView({ state: "failed", at: 9, reason: "x", last_ok: null, folder: "not_writable" }, time, all).detail).toBe("上次備份時無法寫入資料夾");
+    expect(statusView({ state: "failed", at: 9, reason: "x", last_ok: null, folder: "blocked" }, time, all).detail).toBe("上次備份時系統沒有允許存取資料夾");
+    expect(statusView({ state: "failed", at: 9, reason: "disk full", last_ok: null, folder: null }, time, all).detail).toBe("disk full");
+  });
+
+  it("says when a write made the folder again", () => {
+    const time = (ts: number) => `T${ts}`;
+    expect(statusView({ state: "ok", at: 5, report: { ...none, rows: 3, recreated: true } }, time, all).detail).toBe("T5 · 資料夾已重新建立 · 已寫入：歷史紀錄 3 筆");
   });
 
   it("says what a write to the folder changed", () => {

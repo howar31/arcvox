@@ -3,13 +3,14 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use arcvox_core::backup::{folder_state, FolderState};
 use arcvox_core::models::{ModelStore, DEFAULT_MANIFEST_URL};
 use arcvox_core::{DataDir, DeviceOptions, Engine, EngineOptions, FirstRunDefaults};
 use tauri::{Emitter, Manager, Wry};
 
 use crate::audio::capture::CpalSource;
 use crate::audio::AudioSource;
-use crate::backup_auto::{BackupAuto, BackupStatus, LastWrite};
+use crate::backup_auto::{BackupAuto, BackupStatus, Failure, LastWrite};
 use crate::commands::bench::BenchState;
 use crate::dictation::ui::{Ui, UiState};
 use crate::dictation::{self, ControllerHandle, Deps};
@@ -70,6 +71,7 @@ pub fn tray_action(app: &tauri::AppHandle<Wry>, id: &str) {
             }
             _ => tray::open_settings(app, Some("engines")),
         },
+        tray::ID_FIX_BACKUP => tray::open_settings(app, Some("backup")),
         tray::ID_COPY_LAST => {
             let engine = state.engine.lock().unwrap().clone();
             // Rows of failed dictations have no text.
@@ -201,6 +203,8 @@ pub fn run() {
             crate::commands::backup::backup_import,
             crate::commands::backup::backup_status,
             crate::commands::backup::backup_run_now,
+            crate::commands::backup::backup_folder_state,
+            crate::commands::backup::backup_folder_create,
             crate::commands::backup::backup_folder_open,
             crate::commands::backup::devices_list,
             crate::commands::backup::device_rename,
@@ -302,7 +306,7 @@ fn backup_auto(
             let client = ClientSettings::load(&config_dir);
             let Some(folder) = client.backup.folder.clone() else {
                 return if manual {
-                    Err("no folder is chosen".to_string())
+                    Err(Failure::other("no folder is chosen"))
                 } else {
                     Ok(None)
                 };
@@ -310,7 +314,15 @@ fn backup_auto(
             if !manual && !client.backup.auto {
                 return Ok(None);
             }
-            let engine = engine.clone().ok_or("engine unavailable")?;
+            // A folder that is gone is made again only when the user chose that.
+            let recreate = client.backup.recreate;
+            let found = folder_state(&folder, true);
+            if !(found.usable() || (found == FolderState::Missing && recreate)) {
+                return Err(Failure::folder(found));
+            }
+            let engine = engine
+                .clone()
+                .ok_or_else(|| Failure::other("engine unavailable"))?;
             let sections = crate::commands::backup::snapshot_sections(client.backup.categories);
             let snapshot = if sections.is_empty() {
                 None
@@ -318,7 +330,7 @@ fn backup_auto(
                 let file = crate::commands::backup::build_settings_file(
                     &engine, &client, &sections, &version,
                 )
-                .map_err(|e| e.message)?;
+                .map_err(|e| Failure::other(e.message))?;
                 Some(file.to_bytes())
             };
             runtime
@@ -326,9 +338,10 @@ fn backup_auto(
                     &folder,
                     client.backup.categories.into(),
                     snapshot,
+                    recreate,
                 ))
                 .map(Some)
-                .map_err(|e| e.to_string())
+                .map_err(|e| Failure::other(e.to_string()))
         }),
         Box::new(move || busy_engine.as_ref().is_some_and(Engine::busy)),
         Box::new(move |status| {
@@ -474,6 +487,19 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let backup = backup_auto(&app, engine.clone(), &dirs, &version, runtime.clone());
+    {
+        let (ui, app) = (ui.clone(), app.clone());
+        backup.on_folder(Box::new(move |state| {
+            ui.set_backup_folder(state);
+            let _ = app.emit_to(SETTINGS_WINDOW, "backup-folder", state);
+        }));
+        // A folder that went away while the app was not running.
+        let chosen = ClientSettings::load(&dirs.config_dir).backup;
+        if let Some(folder) = chosen.folder {
+            let remake = chosen.auto && chosen.recreate;
+            backup.saw_with(folder_state(&folder, false), false, remake);
+        }
+    }
     let controller = dictation::spawn(
         Deps {
             platform: platform.clone(),

@@ -188,6 +188,20 @@ impl TauriUi {
         &self.tray
     }
 
+    /// What the backup folder was found to be: a folder that cannot be
+    /// used is a problem the menu-bar icon reports.
+    pub fn set_backup_folder(&self, state: arcvox_core::backup::FolderState) {
+        use arcvox_core::backup::FolderState;
+        let notices = match state {
+            FolderState::Usable => vec![],
+            FolderState::Missing => vec![tray::Notice::BackupFolderMissing],
+            FolderState::NotWritable | FolderState::Blocked => {
+                vec![tray::Notice::BackupFolderNotWritable]
+            }
+        };
+        self.tray.set_notices(notices);
+    }
+
     pub fn menu(&self) -> &AppMenu<Wry> {
         &self.menu
     }
@@ -272,11 +286,12 @@ impl TauriUi {
         let state = *self.state.lock().unwrap();
         let idle = self.idle();
         let placing = self.is_placing();
+        let notices = self.tray.notices();
         let _ = self.app.run_on_main_thread(move || {
             let Some(window) = app.get_webview_window(widget::WINDOW) else {
                 return;
             };
-            match tray::menu(&app, language, state, idle, placing) {
+            match tray::menu(&app, language, state, idle, placing, &notices) {
                 Ok((menu, _)) => {
                     if let Err(e) = menu.popup(window.as_ref().window()) {
                         tracing::warn!(error = %e, "widget menu not shown");

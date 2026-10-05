@@ -20,6 +20,7 @@ const ICON_PROBLEM: Image<'static> = tauri::include_image!("./icons/tray-problem
 pub const ID_APP: &str = "app";
 pub const ID_STATUS: &str = "status";
 pub const ID_FIX: &str = "fix";
+pub const ID_FIX_BACKUP: &str = "fix-backup";
 pub const ID_COPY_LAST: &str = "copy-last";
 pub const ID_HISTORY: &str = "history";
 pub const ID_STATISTICS: &str = "statistics";
@@ -54,6 +55,33 @@ fn fix_msg(state: UiState) -> Option<Msg> {
     }
 }
 
+/// A problem that does not stop dictation. Each one puts the badge on the
+/// icon and gets a line in the menu with an item that leads to its fix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Notice {
+    BackupFolderMissing,
+    BackupFolderNotWritable,
+}
+
+impl Notice {
+    /// What is wrong, as a line of the menu.
+    fn line(self) -> Msg {
+        match self {
+            Notice::BackupFolderMissing => Msg::TrayBackupFolderMissing,
+            Notice::BackupFolderNotWritable => Msg::TrayBackupFolderNotWritable,
+        }
+    }
+
+    /// The item under the line: its id and its label.
+    fn fix(self) -> (&'static str, Msg) {
+        match self {
+            Notice::BackupFolderMissing | Notice::BackupFolderNotWritable => {
+                (ID_FIX_BACKUP, Msg::TrayFixBackup)
+            }
+        }
+    }
+}
+
 pub struct Tray<R: Runtime> {
     app: AppHandle<R>,
     icon: TrayIcon<R>,
@@ -65,6 +93,7 @@ pub struct Tray<R: Runtime> {
     language: Mutex<Language>,
     idle: Mutex<WidgetIdle>,
     placing: Mutex<bool>,
+    notices: Mutex<Vec<Notice>>,
 }
 
 /// The menu of the menu-bar icon; the widget opens the same one. What its
@@ -75,6 +104,7 @@ pub(super) fn menu<R: Runtime>(
     state: UiState,
     idle: WidgetIdle,
     placing: bool,
+    notices: &[Notice],
 ) -> tauri::Result<(Menu<R>, MenuItem<R>)> {
     // The first line names the app and the running version, so the version
     // can be read without opening the settings window.
@@ -101,6 +131,23 @@ pub(super) fn menu<R: Runtime>(
             app,
             ID_FIX,
             text(language, msg),
+            true,
+            None::<&str>,
+        )?)?;
+    }
+    for notice in notices {
+        let (id, label) = notice.fix();
+        menu.append(&PredefinedMenuItem::separator(app)?)?;
+        menu.append(&MenuItem::new(
+            app,
+            text(language, notice.line()),
+            false,
+            None::<&str>,
+        )?)?;
+        menu.append(&MenuItem::with_id(
+            app,
+            id,
+            text(language, label),
             true,
             None::<&str>,
         )?)?;
@@ -178,7 +225,14 @@ pub(super) fn menu<R: Runtime>(
 
 impl Tray<tauri::Wry> {
     pub fn build(app: &AppHandle<tauri::Wry>, language: Language) -> tauri::Result<Self> {
-        let (first, status) = menu(app, language, UiState::Idle, WidgetIdle::default(), false)?;
+        let (first, status) = menu(
+            app,
+            language,
+            UiState::Idle,
+            WidgetIdle::default(),
+            false,
+            &[],
+        )?;
         let icon = TrayIconBuilder::with_id("arcvox")
             .icon(ICON_IDLE)
             .icon_as_template(true)
@@ -195,6 +249,7 @@ impl Tray<tauri::Wry> {
             language: Mutex::new(language),
             idle: Mutex::new(WidgetIdle::default()),
             placing: Mutex::new(false),
+            notices: Mutex::new(Vec::new()),
         })
     }
 }
@@ -206,7 +261,8 @@ impl<R: Runtime> Tray<R> {
         let state = *self.last_state.lock().unwrap();
         let idle = *self.idle.lock().unwrap();
         let placing = *self.placing.lock().unwrap();
-        let Ok((next, status)) = menu(&self.app, language, state, idle, placing) else {
+        let notices = self.notices();
+        let Ok((next, status)) = menu(&self.app, language, state, idle, placing, &notices) else {
             return;
         };
         let _ = self.icon.set_menu(Some(next));
@@ -215,10 +271,7 @@ impl<R: Runtime> Tray<R> {
 
     pub fn set_state(&self, state: UiState, language: Language) {
         let before = std::mem::replace(&mut *self.last_state.lock().unwrap(), state);
-        let _ = self.icon.set_icon(Some(status_icon(state)));
-        // Replacing the image resets the template flag on macOS; restore it so
-        // the icon follows the menu bar's light or dark appearance.
-        let _ = self.icon.set_icon_as_template(true);
+        self.show_icon(state);
         if fix_msg(before) != fix_msg(state) {
             // The line under the status appears or goes away.
             self.rebuild();
@@ -250,14 +303,39 @@ impl<R: Runtime> Tray<R> {
         self.rebuild();
     }
 
+    /// The problems that do not stop dictation, as they are now.
+    pub fn set_notices(&self, notices: Vec<Notice>) {
+        let before = std::mem::replace(&mut *self.notices.lock().unwrap(), notices.clone());
+        if before == notices {
+            return;
+        }
+        self.show_icon(self.state());
+        self.rebuild();
+    }
+
+    pub fn notices(&self) -> Vec<Notice> {
+        self.notices.lock().unwrap().clone()
+    }
+
+    fn show_icon(&self, state: UiState) {
+        let noticed = !self.notices.lock().unwrap().is_empty();
+        let _ = self.icon.set_icon(Some(status_icon(state, noticed)));
+        // Replacing the image resets the template flag on macOS; restore it so
+        // the icon follows the menu bar's light or dark appearance.
+        let _ = self.icon.set_icon_as_template(true);
+    }
+
     /// The state the status line shows.
     pub fn state(&self) -> UiState {
         *self.last_state.lock().unwrap()
     }
 }
 
-fn status_icon(state: UiState) -> Image<'static> {
+/// `noticed`: something needs attention although dictation works. It shows
+/// while nothing is being recorded or processed.
+fn status_icon(state: UiState, noticed: bool) -> Image<'static> {
     match state {
+        UiState::Idle | UiState::Inserting if noticed => ICON_PROBLEM,
         UiState::Idle | UiState::Inserting => ICON_IDLE,
         UiState::Recording | UiState::Locked => ICON_RECORDING,
         UiState::Processing => ICON_PROCESSING,
@@ -325,16 +403,44 @@ mod tests {
     #[test]
     fn a_problem_shows_in_the_icon_itself() {
         assert_ne!(
-            status_icon(UiState::NoAccessibility).rgba(),
-            status_icon(UiState::Idle).rgba()
+            status_icon(UiState::NoAccessibility, false).rgba(),
+            status_icon(UiState::Idle, false).rgba()
         );
         assert_eq!(
-            status_icon(UiState::EngineError).rgba(),
-            status_icon(UiState::NoAccessibility).rgba()
+            status_icon(UiState::EngineError, false).rgba(),
+            status_icon(UiState::NoAccessibility, false).rgba()
         );
         assert_eq!(
-            status_icon(UiState::Inserting).rgba(),
-            status_icon(UiState::Idle).rgba()
+            status_icon(UiState::Inserting, false).rgba(),
+            status_icon(UiState::Idle, false).rgba()
+        );
+    }
+
+    #[test]
+    fn a_problem_that_leaves_dictation_working_shows_while_idle() {
+        let problem = status_icon(UiState::NoAccessibility, false);
+        assert_eq!(status_icon(UiState::Idle, true).rgba(), problem.rgba());
+        assert_eq!(status_icon(UiState::Inserting, true).rgba(), problem.rgba());
+        // A dictation in progress keeps its own icon.
+        for state in [UiState::Recording, UiState::Locked, UiState::Processing] {
+            assert_eq!(
+                status_icon(state, true).rgba(),
+                status_icon(state, false).rgba()
+            );
+        }
+    }
+
+    #[test]
+    fn every_notice_has_a_line_and_an_item_that_leads_to_its_fix() {
+        for notice in [Notice::BackupFolderMissing, Notice::BackupFolderNotWritable] {
+            assert_eq!(notice.fix(), (ID_FIX_BACKUP, Msg::TrayFixBackup));
+            for language in [Language::ZhTw, Language::En] {
+                assert!(!text(language, notice.line()).is_empty());
+            }
+        }
+        assert_ne!(
+            Notice::BackupFolderMissing.line(),
+            Notice::BackupFolderNotWritable.line()
         );
     }
 

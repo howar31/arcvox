@@ -7,7 +7,7 @@ use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use arcvox_core::backup::WriteReport;
+use arcvox_core::backup::{FolderState, WriteReport};
 use serde::{Deserialize, Serialize};
 
 /// How long after the last change the folder is written.
@@ -32,6 +32,8 @@ pub enum BackupStatus {
         reason: String,
         /// The last write that worked.
         last_ok: Option<i64>,
+        /// What the folder was found to be, when that is why.
+        folder: Option<FolderState>,
     },
     Running,
 }
@@ -100,15 +102,60 @@ impl Schedule {
     }
 }
 
+/// Why a write did not happen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Failure {
+    pub reason: String,
+    /// What was found when the folder itself is the cause.
+    pub folder: Option<FolderState>,
+}
+
+impl Failure {
+    pub fn other(reason: impl Into<String>) -> Self {
+        Failure {
+            reason: reason.into(),
+            folder: None,
+        }
+    }
+
+    pub fn folder(state: FolderState) -> Self {
+        let reason = match state {
+            FolderState::Missing => "the folder does not exist",
+            FolderState::Blocked => "the system does not let the app into the folder",
+            _ => "the folder cannot be written",
+        };
+        Failure {
+            reason: reason.to_string(),
+            folder: Some(state),
+        }
+    }
+}
+
+/// What the folder is taken to be after a look at it. A look that did not
+/// try to write cannot clear a refusal a write ran into.
+pub fn merged(current: FolderState, seen: FolderState, probed: bool) -> FolderState {
+    let refused = matches!(current, FolderState::NotWritable | FolderState::Blocked);
+    if !probed && seen == FolderState::Usable && refused {
+        current
+    } else {
+        seen
+    }
+}
+
 /// Writes the folder. The argument is true for a write the user asked for.
 /// `Ok(None)` means there was nothing to do (no folder, or switched off).
-pub type Run = Box<dyn Fn(bool) -> Result<Option<WriteReport>, String> + Send + Sync>;
+pub type Run = Box<dyn Fn(bool) -> Result<Option<WriteReport>, Failure> + Send + Sync>;
+/// Told when the folder's state changes.
+pub type Look = Box<dyn Fn(FolderState) + Send + Sync>;
 pub type Busy = Box<dyn Fn() -> bool + Send + Sync>;
 pub type Notify = Box<dyn Fn(&BackupStatus) + Send + Sync>;
 
 enum Msg {
     Touch,
     RunNow,
+    /// The folder can be used again: what was waiting is written, as an
+    /// automatic write.
+    Retry,
 }
 
 struct Shared {
@@ -116,6 +163,9 @@ struct Shared {
     busy: Busy,
     notify: Notify,
     status: Mutex<BackupStatus>,
+    /// What the folder was last found to be.
+    folder: Mutex<FolderState>,
+    look: Mutex<Option<Look>>,
     /// A change is waiting for its write.
     pending: AtomicBool,
     /// One write at a time.
@@ -134,6 +184,16 @@ impl Shared {
         (self.notify)(&status);
     }
 
+    /// Notes what the folder was found to be; tells the listener on a change.
+    fn saw(&self, state: FolderState) {
+        let before = std::mem::replace(&mut *held(&self.folder), state);
+        if before != state {
+            if let Some(look) = held(&self.look).as_ref() {
+                look(state);
+            }
+        }
+    }
+
     /// Writes once the write before it has ended. With `only_pending`, only
     /// when a change still waits for its write.
     fn write(&self, manual: bool, only_pending: bool) {
@@ -145,13 +205,22 @@ impl Shared {
         self.set(BackupStatus::Running);
         let at = arcvox_core::history::now_unix();
         let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (self.run)(manual)))
-            .unwrap_or_else(|_| Err("the write stopped unexpectedly".to_string()));
+            .unwrap_or_else(|_| Err(Failure::other("the write stopped unexpectedly")));
+        match &ran {
+            Ok(Some(_)) => self.saw(FolderState::Usable),
+            Err(Failure {
+                folder: Some(state),
+                ..
+            }) => self.saw(*state),
+            _ => {}
+        }
         let next = match ran {
             Ok(Some(report)) => BackupStatus::Ok { at, report },
             Ok(None) => before,
-            Err(reason) => BackupStatus::Failed {
+            Err(Failure { reason, folder }) => BackupStatus::Failed {
                 at,
                 reason,
+                folder,
                 last_ok: match before {
                     BackupStatus::Ok { at, .. } => Some(at),
                     BackupStatus::Failed { last_ok, .. } => last_ok,
@@ -176,6 +245,8 @@ impl BackupAuto {
             busy,
             notify,
             status: Mutex::new(BackupStatus::Never),
+            folder: Mutex::new(FolderState::Usable),
+            look: Mutex::new(None),
             pending: AtomicBool::new(false),
             writing: Mutex::new(()),
         });
@@ -186,10 +257,12 @@ impl BackupAuto {
             .spawn(move || {
                 let mut schedule = Schedule::default();
                 let mut asked = false;
+                let mut again = false;
                 loop {
                     match rx.recv_timeout(TICK) {
                         Ok(Msg::Touch) => schedule.touch(Instant::now()),
                         Ok(Msg::RunNow) => asked = true,
+                        Ok(Msg::Retry) => again = true,
                         Err(RecvTimeoutError::Timeout) => {}
                         Err(RecvTimeoutError::Disconnected) => return,
                     }
@@ -203,6 +276,10 @@ impl BackupAuto {
                         asked = false;
                         schedule = Schedule::default();
                         worker.write(true, false);
+                    } else if again && !busy {
+                        again = false;
+                        schedule = Schedule::default();
+                        worker.write(false, false);
                     } else if schedule.take_due(Instant::now(), busy) {
                         worker.write(false, false);
                     }
@@ -259,6 +336,49 @@ impl BackupAuto {
 
     pub fn status(&self) -> BackupStatus {
         held(&self.shared.status).clone()
+    }
+
+    /// Who is told when the folder's state changes.
+    pub fn on_folder(&self, look: Look) {
+        *held(&self.shared.look) = Some(look);
+    }
+
+    /// What the folder was last found to be.
+    pub fn folder(&self) -> FolderState {
+        *held(&self.shared.folder)
+    }
+
+    /// Takes a look at the folder made outside a write; `probed` says a
+    /// file was written to find out. Returns what the folder counts as now.
+    pub fn saw(&self, seen: FolderState, probed: bool) -> FolderState {
+        let before = self.folder();
+        let state = merged(before, seen, probed);
+        self.shared.saw(state);
+        if !before.usable() && state.usable() {
+            self.write_soon();
+        }
+        state
+    }
+
+    /// An automatic write as soon as no dictation is being processed,
+    /// without waiting for a change: the folder came back, or it is gone
+    /// and is to be made again.
+    pub fn write_soon(&self) {
+        self.shared.pending.store(true, AtomicOrdering::SeqCst);
+        let _ = self.tx.send(Msg::Retry);
+    }
+
+    /// `saw` for a caller that knows the settings: a folder newly found
+    /// gone is made again at once when `recreate` says so, instead of at
+    /// the next change. Only the moment it is found gone counts, so a folder
+    /// that cannot be made is not tried again with every look.
+    pub fn saw_with(&self, seen: FolderState, probed: bool, recreate: bool) -> FolderState {
+        let before = self.folder();
+        let state = self.saw(seen, probed);
+        if recreate && state == FolderState::Missing && before != FolderState::Missing {
+            self.write_soon();
+        }
+        state
     }
 }
 
@@ -322,7 +442,7 @@ mod tests {
             Box::new(move |manual| {
                 assert!(manual);
                 match c.fetch_add(1, Ordering::SeqCst) {
-                    0 => Err("the folder is gone".to_string()),
+                    0 => Err(Failure::other("the folder is gone")),
                     _ => Ok(Some(WriteReport::default())),
                 }
             }),
@@ -356,7 +476,7 @@ mod tests {
         let auto = BackupAuto::spawn(
             Box::new(move |_| match c.fetch_add(1, Ordering::SeqCst) {
                 0 => Ok(Some(WriteReport::default())),
-                _ => Err("full".to_string()),
+                _ => Err(Failure::other("full")),
             }),
             Box::new(|| false),
             Box::new(|_| {}),
@@ -419,13 +539,139 @@ mod tests {
     }
 
     #[test]
+    fn a_look_without_a_write_does_not_clear_a_refusal() {
+        use FolderState::*;
+        assert_eq!(merged(NotWritable, Usable, false), NotWritable);
+        assert_eq!(merged(Blocked, Usable, false), Blocked);
+        assert_eq!(merged(NotWritable, Usable, true), Usable);
+        assert_eq!(merged(NotWritable, Missing, false), Missing);
+        assert_eq!(merged(Missing, Usable, false), Usable);
+        assert_eq!(merged(Usable, Missing, false), Missing);
+    }
+
+    #[test]
+    fn a_write_the_folder_refuses_says_so_until_one_works() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let auto = BackupAuto::spawn(
+            Box::new(move |_| match c.fetch_add(1, Ordering::SeqCst) {
+                0 => Err(Failure::folder(FolderState::Missing)),
+                _ => Ok(Some(WriteReport::default())),
+            }),
+            Box::new(|| false),
+            Box::new(|_| {}),
+        );
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let s = seen.clone();
+        auto.on_folder(Box::new(move |state| s.lock().unwrap().push(state)));
+        assert_eq!(auto.folder(), FolderState::Usable);
+        auto.run_now();
+        wait_for(&auto, |s| matches!(s, BackupStatus::Failed { .. }));
+        assert_eq!(auto.folder(), FolderState::Missing);
+        auto.run_now();
+        wait_for(&auto, |s| matches!(s, BackupStatus::Ok { .. }));
+        assert_eq!(auto.folder(), FolderState::Usable);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![FolderState::Missing, FolderState::Usable]
+        );
+    }
+
+    #[test]
+    fn a_folder_that_comes_back_is_written_to_as_an_automatic_write() {
+        let manual = Arc::new(Mutex::new(Vec::new()));
+        let m = manual.clone();
+        let auto = BackupAuto::spawn(
+            Box::new(move |by_hand| {
+                m.lock().unwrap().push(by_hand);
+                Ok(Some(WriteReport::default()))
+            }),
+            Box::new(|| false),
+            Box::new(|_| {}),
+        );
+        // Nothing to make up for while the folder was never found unusable.
+        auto.saw(FolderState::Usable, true);
+        auto.saw(FolderState::Missing, false);
+        auto.saw(FolderState::Usable, false);
+        wait_for(&auto, |s| matches!(s, BackupStatus::Ok { .. }));
+        assert_eq!(*manual.lock().unwrap(), vec![false]);
+    }
+
+    #[test]
+    fn a_folder_found_gone_is_written_to_at_once_when_it_is_to_be_made_again() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let auto = BackupAuto::spawn(
+            Box::new(move |by_hand| {
+                assert!(!by_hand);
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok(None)
+            }),
+            Box::new(|| false),
+            Box::new(|_| {}),
+        );
+        let settle = || std::thread::sleep(Duration::from_millis(1500));
+        // Not asked for: nothing is written.
+        auto.saw_with(FolderState::Missing, false, false);
+        settle();
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        // Asked for, but the folder was known to be gone already.
+        auto.saw_with(FolderState::Missing, false, true);
+        settle();
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        // It comes back (one write), then is found gone: one more, and no
+        // further ones while it stays gone.
+        auto.saw(FolderState::Usable, false);
+        settle();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        for _ in 0..3 {
+            auto.saw_with(FolderState::Missing, false, true);
+        }
+        settle();
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_failure_names_the_folder_when_that_is_why() {
+        let auto = BackupAuto::spawn(
+            Box::new(|_| Err(Failure::folder(FolderState::NotWritable))),
+            Box::new(|| false),
+            Box::new(|_| {}),
+        );
+        auto.run_now();
+        let failed = wait_for(&auto, |s| matches!(s, BackupStatus::Failed { .. }));
+        assert!(matches!(
+            failed,
+            BackupStatus::Failed {
+                folder: Some(FolderState::NotWritable),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_look_from_outside_is_told_once_per_change() {
+        let auto = BackupAuto::spawn(Box::new(|_| Ok(None)), Box::new(|| false), Box::new(|_| {}));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let s = seen.clone();
+        auto.on_folder(Box::new(move |state| s.lock().unwrap().push(state)));
+        assert_eq!(auto.saw(FolderState::Missing, false), FolderState::Missing);
+        assert_eq!(auto.saw(FolderState::Missing, false), FolderState::Missing);
+        assert_eq!(auto.saw(FolderState::Usable, false), FolderState::Usable);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![FolderState::Missing, FolderState::Usable]
+        );
+    }
+
+    #[test]
     fn a_restored_status_does_not_replace_a_newer_one() {
         let old = BackupStatus::Ok {
             at: 1,
             report: WriteReport::default(),
         };
         let auto = BackupAuto::spawn(
-            Box::new(|_| Err("full".to_string())),
+            Box::new(|_| Err(Failure::other("full"))),
             Box::new(|| false),
             Box::new(|_| {}),
         );

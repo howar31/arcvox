@@ -1,4 +1,4 @@
-import { formatBytes, type BackupCategories, type BackupDevice, type BackupStatus, type ImportReport, type SettingsNote, type WriteReport } from "./api";
+import { formatBytes, type BackupCategories, type BackupDevice, type BackupStatus, type FolderState, type ImportReport, type SettingsNote, type WriteReport } from "./api";
 import { has, t } from "./i18n";
 import type { Page } from "./route";
 
@@ -46,7 +46,14 @@ export function deviceLine(d: BackupDevice): string {
   return t("backup.ib_line", { platform: platformName(d.platform), parts: parts.join(t("backup.part_sep")) });
 }
 
-export interface StatusView { tone: "idle" | "ok" | "busy" | "bad"; title: string; detail: string }
+/** What the folder row offers for a folder that cannot be used: making it again, or the system's settings. */
+export type FolderFix = "create" | "system";
+const FOLDER_FIX: Record<Exclude<FolderState, "usable">, FolderFix | null> = { missing: "create", not_writable: null, blocked: "system" };
+/** How often the page looks whether the folder is still there, while it is open. */
+export const FOLDER_LOOK_MS = 5000;
+
+/** `fix` belongs to the folder row; `run` says whether a write can be asked for (not while the folder is gone). */
+export interface StatusView { tone: "idle" | "ok" | "busy" | "bad"; title: string; detail: string; fix: FolderFix | null; run: boolean }
 
 /** The state of the backup folder; `time` formats a timestamp in seconds. */
 /** How long "backing up" stays on screen at least, so a write that takes no time is still seen. */
@@ -70,12 +77,22 @@ export function writtenLine(r: WriteReport, c: BackupCategories): string {
   return parts.length ? t("backup.wrote", { parts: parts.join(t("backup.list_sep")) }) : t("backup.wrote_none");
 }
 
-export function statusView(s: BackupStatus, time: (ts: number) => string, c: BackupCategories): StatusView {
+export function statusView(s: BackupStatus, time: (ts: number) => string, c: BackupCategories, folder: FolderState = "usable"): StatusView {
+  if (folder !== "usable" && s.state !== "running") {
+    // The folder as it is now comes before what the last write said.
+    const last = s.state === "ok" ? s.at : s.state === "failed" ? s.last_ok : null;
+    const detail = t(`backup.folder_${folder}_detail`);
+    return { tone: "bad", title: t(`backup.folder_${folder}`), detail: last == null ? detail : t("backup.folder_detail_last", { detail, time: time(last) }), fix: FOLDER_FIX[folder], run: folder !== "missing" };
+  }
   switch (s.state) {
-    case "never": return { tone: "idle", title: t("backup.status_never"), detail: t("backup.status_never_detail") };
-    case "ok": return { tone: "ok", title: t("backup.status_ok"), detail: `${time(s.at)} · ${writtenLine(s.report, c)}` };
-    case "running": return { tone: "busy", title: t("backup.status_running"), detail: "" };
-    case "failed": return { tone: "bad", title: t("backup.status_failed"), detail: s.last_ok == null ? s.reason : t("backup.status_failed_last", { reason: s.reason, time: time(s.last_ok) }) };
+    case "never": return { tone: "idle", title: t("backup.status_never"), detail: t("backup.status_never_detail"), fix: null, run: true };
+    case "ok": return { tone: "ok", title: t("backup.status_ok"), detail: [time(s.at), ...(s.report.recreated ? [t("backup.recreated")] : []), writtenLine(s.report, c)].join(" · "), fix: null, run: true };
+    case "running": return { tone: "busy", title: t("backup.status_running"), detail: "", fix: null, run: true };
+    case "failed": {
+      // A write the folder refused is said in the interface language; other reasons come as the backend gives them.
+      const reason = s.folder && s.folder !== "usable" ? t(`backup.failed_${s.folder}`) : s.reason;
+      return { tone: "bad", title: t("backup.status_failed"), detail: s.last_ok == null ? reason : t("backup.status_failed_last", { reason, time: time(s.last_ok) }), fix: null, run: true };
+    }
   }
 }
 

@@ -190,6 +190,7 @@ pub fn system_open_privacy_pane(pane: String) -> CmdResult<()> {
     let anchor = match pane.as_str() {
         "accessibility" => "Privacy_Accessibility",
         "microphone" => "Privacy_Microphone",
+        "files" => "Privacy_FilesAndFolders",
         _ => "Privacy",
     };
     std::process::Command::new("open")

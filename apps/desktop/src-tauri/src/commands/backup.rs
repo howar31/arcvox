@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use arcvox_core::backup::{BackupInfo, ImportReport, WriteReport};
+use arcvox_core::backup::{folder_state, BackupInfo, FolderState, ImportReport, WriteReport};
 use arcvox_core::history::DeviceRow;
 use arcvox_core::settings_file::{Note, SettingsFile};
 use arcvox_core::{BackupSource, Engine};
@@ -314,6 +314,44 @@ pub fn backup_status(state: State<'_, AppState>) -> BackupStatus {
 #[tauri::command]
 pub fn backup_run_now(state: State<'_, AppState>) {
     state.backup.run_now();
+}
+
+/// What the backup folder is right now; `probe` writes a small file to find
+/// out whether it takes one. A change reaches the menu-bar icon too.
+#[tauri::command]
+pub async fn backup_folder_state(
+    state: State<'_, AppState>,
+    probe: bool,
+) -> CmdResult<FolderState> {
+    let chosen = ClientSettings::load(&state.dirs.config_dir).backup;
+    Ok(match chosen.folder {
+        Some(folder) => state.backup.saw_with(
+            folder_state(&folder, probe),
+            probe,
+            chosen.auto && chosen.recreate,
+        ),
+        None => state.backup.saw(FolderState::Usable, true),
+    })
+}
+
+/// Makes the chosen folder again and writes to it. Answers with what the
+/// folder is afterwards; nothing is written unless it can be used.
+#[tauri::command]
+pub async fn backup_folder_create(state: State<'_, AppState>) -> CmdResult<FolderState> {
+    let folder = ClientSettings::load(&state.dirs.config_dir)
+        .backup
+        .folder
+        .ok_or_else(|| CmdError {
+            message: "no folder is chosen".into(),
+        })?;
+    if let Err(e) = std::fs::create_dir_all(&folder) {
+        tracing::warn!(error = %e, "the backup folder was not made");
+    }
+    let now = state.backup.saw(folder_state(&folder, true), true);
+    if now.usable() {
+        state.backup.run_now();
+    }
+    Ok(now)
 }
 
 /// Opens the backup folder in the file manager.
