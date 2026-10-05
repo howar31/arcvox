@@ -119,6 +119,16 @@
   // With no dictation going on the widget is off the screen, or rests on it: folded to its round end, or whole with a label.
   const resting = $derived(!feed.open && feed.idle !== "hidden");
   const ring = $derived(resting ? RING_AT_REST : ringView(feed.state, feed.message, feed.done));
+  // With nothing going on the ring is the brand mark: a gap, and a dot in it. The gap closes over the dot when something begins, and opens again afterwards.
+  const mark = $derived(ring.motion === "none");
+  let wasMark: boolean | null = null;
+  const turn = $derived.by(() => {
+    // Told once: the next ring, whatever it is, does not repeat it.
+    void ring;
+    const from = wasMark;
+    wasMark = mark;
+    return from === null || from === mark ? null : mark ? "to-mark" : "to-ring";
+  });
   const label = $derived.by(() => {
     void feed.language;
     const key = resting ? (feed.idle === "label" ? READY : null) : labelKey(feed.state, feed.message, feed.done);
@@ -156,11 +166,12 @@
   <canvas class="wave" bind:this={canvas} aria-hidden="true"></canvas>
   <!-- A new ring when its colour or its motion changes, so the motion plays from its start. -->
   {#key ring.tone + ring.motion}
-    <span class="ring {ring.tone} {ring.motion}" aria-hidden="true">
+    <span class="ring {ring.tone} {ring.motion} {turn ?? ""}" class:mark aria-hidden="true">
+      <svg class="shape" viewBox="0 0 20 20"><circle class="arc" cx="10" cy="10" r="8.5" pathLength="360" />{#if mark || turn}<circle class="dot" cx="16.01" cy="3.99" r="1.8" />{/if}</svg>
       {#if ring.motion === "level"}<span class="track" bind:this={inner}></span><span class="track" bind:this={outer}></span>{/if}
       {#if ring.motion === "once" || ring.motion === "twice"}<span class="pulse"></span>{/if}
       {#if ring.glyph}
-        <svg viewBox="0 0 14 14">
+        <svg class="glyph" viewBox="0 0 14 14">
           {#if ring.glyph === "check"}<path pathLength="1" d="M3.6 7.4 L6.1 9.8 L10.5 4.7" />
           {:else if ring.glyph === "bang"}<path pathLength="1" d="M7 3.3 V7.9" /><circle cx="7" cy="10.5" r="1" />
           {:else}<path pathLength="1" d="M4.5 4.5 L9.5 9.5 M9.5 4.5 L4.5 9.5" />{/if}
@@ -195,19 +206,32 @@
   .wave { position: absolute; left: 0; top: 0; width: 100%; height: 100%; color: var(--pill-accent); pointer-events: none; }
   .ring, .label { position: relative; }
   /* The colour is the kind of outcome; red is for a failure only. */
-  .ring { --c: var(--pill-ink-2); flex: none; width: calc(20 * var(--u)); height: calc(20 * var(--u)); border-radius: 50%; border: calc(3 * var(--u)) solid var(--c); color: var(--c); }
+  .ring { --c: var(--pill-ink-2); flex: none; width: calc(20 * var(--u)); height: calc(20 * var(--u)); color: var(--c); }
+  /* Drawn on 20 units: a line of 3 whose length is counted in degrees, beginning below the gap of the mark. */
+  .shape { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+  .arc { fill: none; stroke: currentColor; stroke-width: 3; stroke-dasharray: 360 0; transform-origin: 10px 10px; transform: rotate(-3deg); }
+  .dot { fill: currentColor; transform-origin: 16.01px 3.99px; }
+  .ring.mark .arc { stroke-dasharray: 276 84; stroke-linecap: round; }
   .ring.accent { --c: var(--pill-accent); }
   .ring.ok { --c: var(--pill-ok); }
   .ring.warn { --c: var(--pill-warn); }
   .ring.fail { --c: var(--pill-fail); }
-  .track, .pulse { position: absolute; inset: calc(-3 * var(--u)); border-radius: 50%; border: calc(1.5 * var(--u)) solid var(--c); opacity: 0; pointer-events: none; }
-  svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
-  path { fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 1; stroke-dashoffset: 1; animation: draw 260ms ease-out 120ms forwards; }
-  circle { fill: currentColor; opacity: 0; animation: appear 120ms linear 300ms forwards; }
+  .track, .pulse { position: absolute; inset: 0; border-radius: 50%; border: calc(1.5 * var(--u)) solid var(--c); opacity: 0; pointer-events: none; }
+  .glyph { position: absolute; inset: calc(3 * var(--u)); width: calc(14 * var(--u)); height: calc(14 * var(--u)); overflow: visible; }
+  .glyph path { fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 1; stroke-dashoffset: 1; animation: draw 260ms ease-out 120ms forwards; }
+  .glyph circle { fill: currentColor; opacity: 0; animation: appear 120ms linear 300ms forwards; }
   /* What is going on: a gap going round while it works, closing when the text goes in; a dashed ring can be dragged. */
-  .ring.spin { border-right-color: transparent; animation: spin .9s linear infinite; }
+  .ring.spin { animation: spin .9s linear infinite; }
+  .ring.spin .arc { stroke-dasharray: 270 90; transform: rotate(45deg); }
   .ring.close { animation: close 260ms ease-out; }
-  .ring.drag { border-style: dashed; animation: spin 7s linear infinite; }
+  .ring.drag { animation: spin 7s linear infinite; }
+  .ring.drag .arc { stroke-dasharray: 40.4 31.6; }
+  /* Leaving the mark: the gap closes along the ring and takes the dot in as it passes. Back to it: the gap opens and the dot comes out. */
+  .ring.to-ring:not(.spin):not(.drag) .arc { stroke-linecap: round; animation: take 260ms ease both; }
+  .ring.to-ring .dot { animation: taken 80ms linear 90ms both; }
+  .ring.to-ring.spin .dot, .ring.to-ring.drag .dot { display: none; }
+  .ring.to-mark .arc { animation: part 260ms ease both; }
+  .ring.to-mark .dot { animation: out 260ms ease-out 180ms both; }
   /* How it ended: an outline leaves the ring once when the text went in, twice when it needs attention; the ring settles when nothing came of it and shakes on a failure. */
   .ring.once .pulse { animation: pulse 640ms ease-out 80ms 1; }
   .ring.twice .pulse { animation: pulse 640ms ease-out 80ms 2; }
@@ -230,14 +254,19 @@
   @keyframes settle { from { transform: scale(.72); opacity: .3; } to { transform: scale(1); opacity: 1; } }
   @keyframes shake { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(calc(-3.5 * var(--u))); } 40% { transform: translateX(calc(3.5 * var(--u))); } 60% { transform: translateX(calc(-2.2 * var(--u))); } 80% { transform: translateX(calc(1.4 * var(--u))); } }
   @keyframes shake-down { 0%, 100% { transform: translateY(0); } 20% { transform: translateY(calc(-3.5 * var(--u))); } 40% { transform: translateY(calc(3.5 * var(--u))); } 60% { transform: translateY(calc(-2.2 * var(--u))); } 80% { transform: translateY(calc(1.4 * var(--u))); } }
+  @keyframes take { from { stroke-dasharray: 276 84; } to { stroke-dasharray: 360 0; } }
+  @keyframes taken { to { opacity: 0; } }
+  @keyframes part { from { stroke-dasharray: 360 0; } to { stroke-dasharray: 276 84; } }
+  @keyframes out { from { transform: scale(0); } 70% { transform: scale(1.25); } to { transform: scale(1); } }
   @keyframes draw { to { stroke-dashoffset: 0; } }
   @keyframes appear { to { opacity: 1; } }
   @media (prefers-reduced-motion: reduce) {
     /* Nothing moves: the ring is whole, its mark is drawn, and one still outline says that it listens. */
-    .ring.spin, .ring.close, .ring.drag, .ring.settle, .ring.shake, .ring.once .pulse, .ring.twice .pulse, path, circle { animation: none; }
-    .ring.spin { border-right-color: var(--c); }
-    path { stroke-dashoffset: 0; }
-    circle { opacity: 1; }
+    .ring.spin, .ring.close, .ring.drag, .ring.settle, .ring.shake, .ring.once .pulse, .ring.twice .pulse, .glyph path, .glyph circle, .ring .arc, .ring .dot { animation: none; }
+    .ring.spin .arc { stroke-dasharray: 360 0; }
+    .ring.to-ring .dot { display: none; }
+    .glyph path { stroke-dashoffset: 0; }
+    .glyph circle { opacity: 1; }
     .listening .track:first-child { opacity: .5; transform: scale(1.5); }
     .pill, .pill.open, .pill.rest.faint, .pill.open.faint, .label, .pill.open .label { transition: none; }
   }

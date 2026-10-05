@@ -407,6 +407,8 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(w) = app.get_webview_window(SETTINGS_WINDOW) {
         let _ = w.set_title(&app_name);
     }
+    #[cfg(target_os = "macos")]
+    crate::platform::macos::dock_icon::follow_appearance();
     let log_guard = crate::logging::init(&dirs.data_dir);
     if let Some(g) = log_guard {
         app.manage(g);

@@ -2,6 +2,7 @@
 
 pub mod apple;
 pub mod ax;
+pub mod dock_icon;
 pub mod event_tap;
 pub mod frontmost;
 pub mod hardware;
