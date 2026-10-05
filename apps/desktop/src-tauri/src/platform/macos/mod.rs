@@ -6,6 +6,7 @@ pub mod event_tap;
 pub mod frontmost;
 pub mod hardware;
 pub mod hover;
+pub mod microphone;
 pub mod modifier_monitor;
 pub mod pasteboard;
 pub mod post_keys;
@@ -17,7 +18,7 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use crate::platform::{
-    CaptureSink, ClipboardSnapshot, FrontmostApp, ModifierEvent, Platform, PlatformError,
+    CaptureSink, ClipboardSnapshot, FrontmostApp, MicAccess, ModifierEvent, Platform, PlatformError,
 };
 use crate::shortcut::Shortcut;
 
@@ -132,5 +133,24 @@ impl Platform for MacPlatform {
             ax::is_trusted(true);
         }
         event_tap::can_tap_keyboard()
+    }
+
+    fn keyboard_watch_only(&self) -> bool {
+        !event_tap::can_tap_keyboard() && event_tap::can_listen_keyboard()
+    }
+
+    fn microphone_access(&self) -> MicAccess {
+        microphone::access()
+    }
+
+    fn request_microphone(&self) -> MicAccess {
+        if microphone::access() == MicAccess::NotAsked {
+            let (tx, rx) = std::sync::mpsc::channel();
+            microphone::request(Box::new(move || {
+                let _ = tx.send(());
+            }));
+            let _ = rx.recv();
+        }
+        microphone::access()
     }
 }

@@ -199,7 +199,20 @@ impl TauriUi {
                 vec![tray::Notice::BackupFolderNotWritable]
             }
         };
-        self.tray.set_notices(notices);
+        self.tray.put_notices(tray::Notice::about_backup, notices);
+    }
+
+    /// The system's answer on the microphone: one that rules recording out
+    /// is a problem the menu-bar icon reports.
+    pub fn set_microphone(&self, access: crate::platform::MicAccess) {
+        use crate::platform::MicAccess;
+        let notices = match access {
+            MicAccess::Granted | MicAccess::NotAsked => vec![],
+            MicAccess::Denied => vec![tray::Notice::MicrophoneDenied],
+            MicAccess::Restricted => vec![tray::Notice::MicrophoneRestricted],
+        };
+        self.tray
+            .put_notices(tray::Notice::about_permissions, notices);
     }
 
     pub fn menu(&self) -> &AppMenu<Wry> {

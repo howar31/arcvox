@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick, untrack } from "svelte";
   import {
-    errorMessage, formatBytes, getStats, historyStorage, listMicrophones, modelsInstalled, openPrivacyPane, permissions,
+    errorMessage, formatBytes, getStats, historyStorage, listMicrophones, modelsInstalled,
     type HistoryStorage, type InstalledModel, type Stats, type StatsCard,
   } from "../../lib/api";
   import { uiLocale } from "../../lib/format";
@@ -46,7 +46,6 @@
   let storage = $state<HistoryStorage | null>(null);
   let models = $state<InstalledModel[] | null>(null);
   let mics = $state<string[]>([]);
-  let access = $state<boolean | null>(null);
   let now = $state(new Date());
 
   async function load(of: Period = period) {
@@ -69,14 +68,10 @@
     historyStorage().then((s) => { storage = s; }).catch(() => { storage = null; });
     modelsInstalled().then((m) => { models = m; }).catch(() => { models = null; });
   }
-  async function checkAccess() {
-    try { access = (await permissions()).accessibility; } catch { access = null; }
-  }
 
   onMount(() => {
-    checkAccess();
     listMicrophones().then((m) => { mics = m; }).catch(() => { mics = []; });
-    const onFocus = () => { checkAccess(); load(); };
+    const onFocus = () => { load(); };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   });
@@ -513,14 +508,6 @@
   {/snippet}
 </PageHead>
 
-{#if access === false}
-  <div class="attention" role="alert">
-    <Ring tone="live" />
-    <span class="grow">{t("home.access_needed")}</span>
-    <button type="button" class="btn" onclick={() => openPrivacyPane("accessibility").catch((e) => toast.error(errorMessage(e)))}>{t("general.open_system_settings")}</button>
-  </div>
-{/if}
-
 {#snippet figureList(id: CardId, w: number)}
   {@const rows = figures(id)}
   {#if !rows}
@@ -689,7 +676,6 @@
 {/if}
 
 <style>
-  .attention { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; padding: 14px var(--row-x); border-radius: var(--radius-group); background: color-mix(in srgb, var(--live) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--live) 35%, transparent); }
   .grow { flex: 1; min-width: 0; }
   .hint { margin: 0 4px 18px; color: var(--ink-2); }
 

@@ -76,11 +76,12 @@
     panelFit(r.width, r.height).catch(() => {});
   });
 
-  const LABELS: Record<PanelAction, string> = { copy: "widget.copy", copy_detail: "panel.copy_detail", open_engines: "panel.open_settings", open_history: "panel.open_history" };
+  const LABELS: Record<PanelAction, string> = { copy: "widget.copy", copy_detail: "panel.copy_detail", open_engines: "panel.open_settings", open_history: "panel.open_history", open_permissions: "panel.open_permissions" };
 
   function run(action: PanelAction) {
     if (action === "copy" && kept?.result) widgetCopy(kept.result).catch(() => {});
     else if (action === "copy_detail" && kept?.detail) widgetCopy(kept.detail).catch(() => {});
+    else if (action === "open_permissions") openSettingsWindow("general@permissions").catch(() => {});
     else if (action === "open_engines" || action === "open_history") {
       openSettingsWindow(action === "open_engines" ? "engines" : "history").catch(() => {});
       dismiss();

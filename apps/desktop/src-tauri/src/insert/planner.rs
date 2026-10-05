@@ -23,6 +23,8 @@ pub enum ShowReason {
     SecureInput,
     AppChanged,
     EmptyText,
+    /// The process may not put text into other applications.
+    NotTrusted,
 }
 
 pub struct Situation<'a> {
@@ -30,6 +32,9 @@ pub struct Situation<'a> {
     pub target: &'a InsertTarget,
     pub frontmost: Option<&'a FrontmostApp>,
     pub secure_input: bool,
+    /// Whether the system lets this process post keys and write to other
+    /// applications.
+    pub trusted: bool,
     pub method: InsertMethod,
 }
 
@@ -40,6 +45,10 @@ pub fn plan(s: &Situation<'_>) -> Plan {
     // A copy needs no place to put the text, so nothing below can stop it.
     if s.method == InsertMethod::Copy {
         return Plan::Copy;
+    }
+    // Keys posted without the trust are dropped by the system unreported.
+    if !s.trusted {
+        return Plan::Show(ShowReason::NotTrusted);
     }
     if s.secure_input {
         return Plan::Show(ShowReason::SecureInput);
@@ -92,8 +101,27 @@ mod tests {
             target,
             frontmost: front,
             secure_input: secure,
+            trusted: true,
             method,
         }
+    }
+
+    #[test]
+    fn without_the_trust_the_text_is_shown_unless_it_is_only_copied() {
+        let t = target();
+        let f = front(7, "com.apple.Terminal");
+        for method in [InsertMethod::Paste, InsertMethod::Type, InsertMethod::Ax] {
+            let s = Situation {
+                trusted: false,
+                ..sit("x", &t, Some(&f), false, method)
+            };
+            assert_eq!(plan(&s), Plan::Show(ShowReason::NotTrusted));
+        }
+        let copy = Situation {
+            trusted: false,
+            ..sit("x", &t, Some(&f), false, InsertMethod::Copy)
+        };
+        assert_eq!(plan(&copy), Plan::Copy);
     }
 
     #[test]

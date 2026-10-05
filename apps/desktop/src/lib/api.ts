@@ -74,7 +74,13 @@ export interface ClientSettings {
 /** A resting widget turns faint after `after_secs`, to `transparency` percent. */
 export interface WidgetFade { enabled: boolean; after_secs: number; transparency: number }
 export interface StatsCard { id: string; row: number; col: number; w: number; h: number; hidden: boolean }
-export interface Permissions { accessibility: boolean }
+export type MicAccess = "granted" | "not_asked" | "denied" | "restricted";
+export interface Permissions {
+  accessibility: boolean;
+  /** The system lets the app watch the keyboard but not act on it. */
+  keyboard_watch_only: boolean;
+  microphone: MicAccess;
+}
 export interface RunningApp { bundle_id: string; name: string }
 export interface SystemInfo { version: string; config_dir: string; data_dir: string; cache_dir: string; recordings_dir: string }
 export interface CmdError { message: string }
@@ -141,6 +147,7 @@ export interface DisplayName { key: string; name: string }
 export const listDisplays = () => invoke<DisplayName[]>("system_list_displays");
 export const permissions = () => invoke<Permissions>("system_permissions");
 export const requestAccessibility = () => invoke<boolean>("system_request_accessibility");
+export const requestMicrophone = () => invoke<MicAccess>("system_request_microphone");
 export const openPrivacyPane = (pane: "accessibility" | "microphone" | "files") => invoke<void>("system_open_privacy_pane", { pane });
 export const runningApps = () => invoke<RunningApp[]>("system_running_apps");
 export const appNames = (bundleIds: string[]) => invoke<Record<string, string | null>>("system_app_names", { bundleIds });

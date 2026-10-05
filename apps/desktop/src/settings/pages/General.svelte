@@ -2,7 +2,7 @@
   import { onMount, untrack } from "svelte";
   import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
-  import { clearRecordings, errorMessage, formatBytes, historyStorage, openRecordingsDir, recordingsDir, resetStats, setRecordingsDir, type RecordingsDir, listDisplays, listMicrophones, onWidgetPlacing, onWidgetPreviewScene, widgetIsPlacing, widgetPreview, openPrivacyPane, permissions, requestAccessibility, updateGeneral, widgetPlacing, widgetResetPosition, type ClientSettings, type DisplayName, type General, type HistoryStorage, type InsertMethod } from "../../lib/api";
+  import { clearRecordings, errorMessage, formatBytes, historyStorage, openRecordingsDir, recordingsDir, resetStats, setRecordingsDir, type RecordingsDir, listDisplays, listMicrophones, onWidgetPlacing, onWidgetPreviewScene, widgetIsPlacing, widgetPreview, openPrivacyPane, permissions, requestAccessibility, requestMicrophone, updateGeneral, widgetPlacing, widgetResetPosition, type ClientSettings, type DisplayName, type General, type HistoryStorage, type InsertMethod, type Permissions } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { t } from "../../lib/i18n";
   import { client, config, defaults } from "../../lib/store.svelte";
@@ -14,6 +14,7 @@
   import Group from "../../lib/ui/Group.svelte";
   import Row from "../../lib/ui/Row.svelte";
   import Ring from "../../lib/ui/Ring.svelte";
+  import Tag from "../../lib/ui/Tag.svelte";
   import Segmented from "../../lib/ui/Segmented.svelte";
   import Switch from "../../lib/ui/Switch.svelte";
   import NumberField from "../../lib/ui/NumberField.svelte";
@@ -33,7 +34,9 @@
   let { section }: { section: SettingsPage } = $props();
 
   let mics = $state<string[]>([]);
-  let accessibility = $state<boolean | null>(null);
+  let perms = $state<Permissions | null>(null);
+  const accessibility = $derived(perms ? perms.accessibility : null);
+  const microphone = $derived(perms ? perms.microphone : null);
   let autostart = $state(false);
   // Drafts are edited in place; the base copies are what is saved on disk.
   let draft = $state<ClientSettings | null>(null);
@@ -132,7 +135,7 @@
   }
 
   async function checkAccess() {
-    try { accessibility = (await permissions()).accessibility; } catch { accessibility = null; }
+    try { perms = await permissions(); } catch { perms = null; }
   }
 
   // Recordings on disk, and the two confirmations of this group.
@@ -313,7 +316,11 @@
   }
 
   async function askAccessibility() {
-    try { accessibility = await requestAccessibility(); } catch (e) { toast.error(errorMessage(e)); }
+    try { await requestAccessibility(); await checkAccess(); } catch (e) { toast.error(errorMessage(e)); }
+  }
+
+  async function askMicrophone() {
+    try { await requestMicrophone(); await checkAccess(); } catch (e) { toast.error(errorMessage(e)); }
   }
 
   async function openPane(pane: "accessibility" | "microphone") {
@@ -341,6 +348,10 @@
 
 <PageHead title={t("nav." + section)} />
 
+{#snippet notAllowed()}<Tag tone="live">{t("general.permission_missing")}</Tag>{/snippet}
+{#snippet notAsked()}<Tag tone="warn">{t("general.permission_not_asked")}</Tag>{/snippet}
+{#snippet restricted()}<Tag tone="live">{t("general.permission_restricted")}</Tag>{/snippet}
+
 {#if section === "general"}
   {#if draft}
     <Group title={t("general.app_group")}>
@@ -353,8 +364,14 @@
     </Group>
   {/if}
 
-  <Group title={t("general.permissions")} help={draft?.hotkey.shortcuts.some((s) => s.includes("Fn")) ? t("general.fn_key_note") : undefined}>
-    <Row label={t("general.accessibility")} help={t("general.accessibility_help")}>
+  <Group title={t("general.permissions")} section="permissions" help={draft?.hotkey.shortcuts.some((s) => s.includes("Fn")) ? t("general.fn_key_note") : undefined}>
+    <Row
+      label={t("general.accessibility")}
+      tag={accessibility === false ? notAllowed : undefined}
+      help={accessibility === false
+        ? t("general.accessibility_missing") + (perms?.keyboard_watch_only ? t("general.accessibility_not_input_monitoring") : "")
+        : t("general.accessibility_help")}
+    >
       {#snippet leading()}<Ring tone={accessibility === null ? "off" : accessibility ? "ok" : "live"} />{/snippet}
       {#if accessibility === false}
         <button type="button" class="btn" onclick={askAccessibility}>{t("general.request")}</button>
@@ -363,9 +380,19 @@
         <span class="value">{t("common.granted")}</span>
       {/if}
     </Row>
-    <Row label={t("general.microphone_permission")}>
-      {#snippet leading()}<span class="ring-space"></span>{/snippet}
-      <button type="button" class="btn quiet" onclick={() => openPane("microphone")}>{t("general.open_system_settings")}</button>
+    <Row
+      label={t("general.microphone_permission")}
+      tag={microphone === "denied" ? notAllowed : microphone === "not_asked" ? notAsked : microphone === "restricted" ? restricted : undefined}
+      help={t(microphone === "denied" ? "general.microphone_denied" : microphone === "not_asked" ? "general.microphone_not_asked" : microphone === "restricted" ? "general.microphone_restricted" : "general.microphone_help")}
+    >
+      {#snippet leading()}<Ring tone={microphone === "granted" ? "ok" : microphone === "denied" || microphone === "restricted" ? "live" : "off"} />{/snippet}
+      {#if microphone === "granted"}
+        <span class="value">{t("common.granted")}</span>
+      {:else if microphone === "not_asked"}
+        <button type="button" class="btn" onclick={askMicrophone}>{t("general.request")}</button>
+      {:else if microphone === "denied"}
+        <button type="button" class="btn" onclick={() => openPane("microphone")}>{t("general.open_system_settings")}</button>
+      {/if}
     </Row>
   </Group>
 
@@ -604,7 +631,6 @@
   .folder-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; }
   .folder-actions { display: flex; align-items: center; gap: 8px; flex: none; }
   .folder .sub { display: block; margin-top: 6px; color: var(--ink-2); font-size: var(--text-sm); overflow-wrap: anywhere; }
-  .ring-space { width: 14px; flex: none; }
   /* The selects of the value column share one width. */
   .wide { width: 240px; }
   .method { width: 190px; }

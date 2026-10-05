@@ -21,6 +21,10 @@ pub const ID_APP: &str = "app";
 pub const ID_STATUS: &str = "status";
 pub const ID_FIX: &str = "fix";
 pub const ID_FIX_BACKUP: &str = "fix-backup";
+pub const ID_FIX_PERMISSIONS: &str = "fix-permissions";
+/// Where every prompt about a permission leads: the one place that opens
+/// the system's settings.
+pub const PERMISSIONS_PAGE: &str = "general@permissions";
 pub const ID_COPY_LAST: &str = "copy-last";
 pub const ID_HISTORY: &str = "history";
 pub const ID_STATISTICS: &str = "statistics";
@@ -49,7 +53,7 @@ fn idle_msg(idle: WidgetIdle) -> Msg {
 /// The action that resolves what the status line reports, if it reports a problem.
 fn fix_msg(state: UiState) -> Option<Msg> {
     match state {
-        UiState::NoAccessibility => Some(Msg::TrayFixAccessibility),
+        UiState::NoAccessibility => Some(Msg::TrayFixPermissions),
         UiState::EngineError => Some(Msg::TrayFixEngine),
         _ => None,
     }
@@ -57,8 +61,10 @@ fn fix_msg(state: UiState) -> Option<Msg> {
 
 /// A problem that does not stop dictation. Each one puts the badge on the
 /// icon and gets a line in the menu with an item that leads to its fix.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Notice {
+    MicrophoneDenied,
+    MicrophoneRestricted,
     BackupFolderMissing,
     BackupFolderNotWritable,
 }
@@ -67,6 +73,8 @@ impl Notice {
     /// What is wrong, as a line of the menu.
     fn line(self) -> Msg {
         match self {
+            Notice::MicrophoneDenied => Msg::TrayMicrophoneDenied,
+            Notice::MicrophoneRestricted => Msg::TrayMicrophoneRestricted,
             Notice::BackupFolderMissing => Msg::TrayBackupFolderMissing,
             Notice::BackupFolderNotWritable => Msg::TrayBackupFolderNotWritable,
         }
@@ -75,11 +83,35 @@ impl Notice {
     /// The item under the line: its id and its label.
     fn fix(self) -> (&'static str, Msg) {
         match self {
+            Notice::MicrophoneDenied | Notice::MicrophoneRestricted => {
+                (ID_FIX_PERMISSIONS, Msg::TrayFixPermissions)
+            }
             Notice::BackupFolderMissing | Notice::BackupFolderNotWritable => {
                 (ID_FIX_BACKUP, Msg::TrayFixBackup)
             }
         }
     }
+
+    pub fn about_permissions(self) -> bool {
+        self.fix().0 == ID_FIX_PERMISSIONS
+    }
+
+    pub fn about_backup(self) -> bool {
+        self.fix().0 == ID_FIX_BACKUP
+    }
+}
+
+/// The notices whose line goes under the status line, before its item:
+/// with the status already about a permission, one item serves them all.
+fn under_status(state: UiState, notices: &[Notice]) -> Vec<Notice> {
+    if state != UiState::NoAccessibility {
+        return Vec::new();
+    }
+    notices
+        .iter()
+        .copied()
+        .filter(|n| n.about_permissions())
+        .collect()
 }
 
 pub struct Tray<R: Runtime> {
@@ -126,6 +158,15 @@ pub(super) fn menu<R: Runtime>(
         app,
         &[&header, &PredefinedMenuItem::separator(app)?, &status],
     )?;
+    let joined = under_status(state, notices);
+    for notice in &joined {
+        menu.append(&MenuItem::new(
+            app,
+            text(language, notice.line()),
+            false,
+            None::<&str>,
+        )?)?;
+    }
     if let Some(msg) = fix_msg(state) {
         menu.append(&MenuItem::with_id(
             app,
@@ -135,7 +176,7 @@ pub(super) fn menu<R: Runtime>(
             None::<&str>,
         )?)?;
     }
-    for notice in notices {
+    for notice in notices.iter().filter(|n| !joined.contains(n)) {
         let (id, label) = notice.fix();
         menu.append(&PredefinedMenuItem::separator(app)?)?;
         menu.append(&MenuItem::new(
@@ -313,6 +354,15 @@ impl<R: Runtime> Tray<R> {
         self.rebuild();
     }
 
+    /// Replaces the notices of one kind (those `kind` says yes to) and
+    /// leaves the others as they are.
+    pub fn put_notices(&self, kind: fn(Notice) -> bool, now: Vec<Notice>) {
+        let mut all: Vec<Notice> = self.notices().into_iter().filter(|n| !kind(*n)).collect();
+        all.extend(now);
+        all.sort();
+        self.set_notices(all);
+    }
+
     pub fn notices(&self) -> Vec<Notice> {
         self.notices.lock().unwrap().clone()
     }
@@ -374,13 +424,31 @@ const SETTINGS_PAGES: &[&str] = &[
     "about",
 ];
 
-/// Shows the settings window; `page` selects a page through a URL hash.
-/// While the window is open the app uses the regular activation policy so it
-/// has a Dock icon and appears in the application switcher.
+/// A page, or a page and one of its sections as `page@section`, when both
+/// are safe to put into the script that selects them.
+fn target(page: &str) -> Option<String> {
+    let (name, section) = match page.split_once('@') {
+        Some((name, section)) => (name, Some(section)),
+        None => (page, None),
+    };
+    if !SETTINGS_PAGES.contains(&name) {
+        return None;
+    }
+    match section {
+        None => Some(name.to_string()),
+        Some(s) if !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase() || c == '-') => {
+            Some(format!("{name}@{s}"))
+        }
+        Some(_) => None,
+    }
+}
+
+/// Shows the settings window; `page` selects a page, or a section of a page
+/// (`page@section`), through a URL hash. While the window is open the app
+/// uses the regular activation policy so it has a Dock icon and appears in
+/// the application switcher.
 pub fn open_settings<R: Runtime>(app: &AppHandle<R>, page: Option<&str>) {
-    let page = page
-        .filter(|p| SETTINGS_PAGES.contains(p))
-        .map(str::to_string);
+    let page = page.and_then(target);
     let handle = app.clone();
     // Activation policy and window calls must run on the main thread.
     let _ = app.run_on_main_thread(move || {
@@ -388,7 +456,11 @@ pub fn open_settings<R: Runtime>(app: &AppHandle<R>, page: Option<&str>) {
         let _ = handle.set_activation_policy(tauri::ActivationPolicy::Regular);
         if let Some(w) = handle.get_webview_window("settings") {
             if let Some(p) = page {
-                let _ = w.eval(format!("window.location.hash = '#{p}'"));
+                // The same hash again announces nothing by itself, and the
+                // section still has to be scrolled to.
+                let _ = w.eval(format!(
+                    "location.hash === '#{p}' ? window.dispatchEvent(new Event('hashchange')) : (location.hash = '#{p}')"
+                ));
             }
             let _ = w.show();
             let _ = w.set_focus();
@@ -438,6 +510,14 @@ mod tests {
                 assert!(!text(language, notice.line()).is_empty());
             }
         }
+        for notice in [Notice::MicrophoneDenied, Notice::MicrophoneRestricted] {
+            assert_eq!(notice.fix(), (ID_FIX_PERMISSIONS, Msg::TrayFixPermissions));
+            assert!(notice.about_permissions() && !notice.about_backup());
+        }
+        assert_ne!(
+            Notice::MicrophoneDenied.line(),
+            Notice::MicrophoneRestricted.line()
+        );
         assert_ne!(
             Notice::BackupFolderMissing.line(),
             Notice::BackupFolderNotWritable.line()
@@ -450,7 +530,7 @@ mod tests {
         assert_eq!(fix_msg(UiState::Recording), None);
         assert_eq!(
             fix_msg(UiState::NoAccessibility),
-            Some(Msg::TrayFixAccessibility)
+            Some(Msg::TrayFixPermissions)
         );
         assert_eq!(fix_msg(UiState::EngineError), Some(Msg::TrayFixEngine));
     }
@@ -469,5 +549,25 @@ mod tests {
             assert!(SETTINGS_PAGES.contains(&page), "{page}");
         }
         assert!(!SETTINGS_PAGES.contains(&"javascript:alert(1)"));
+    }
+
+    #[test]
+    fn a_section_is_reached_through_its_page_and_nothing_else_gets_through() {
+        assert_eq!(target("general"), Some("general".into()));
+        assert_eq!(target(PERMISSIONS_PAGE), Some("general@permissions".into()));
+        assert_eq!(target("general@"), None);
+        assert_eq!(target("general@a';alert(1)//"), None);
+        assert_eq!(target("nowhere@permissions"), None);
+    }
+
+    #[test]
+    fn permission_notices_share_the_item_of_a_status_about_a_permission() {
+        let all = [Notice::MicrophoneDenied, Notice::BackupFolderMissing];
+        assert_eq!(
+            under_status(UiState::NoAccessibility, &all),
+            vec![Notice::MicrophoneDenied]
+        );
+        assert!(under_status(UiState::Idle, &all).is_empty());
+        assert!(under_status(UiState::EngineError, &all).is_empty());
     }
 }

@@ -25,7 +25,7 @@ The Speed test page, opened from the link at the foot of the Engines and models 
 
 ## Permissions and password fields
 
-The macOS client needs the Accessibility permission to insert text and the Microphone permission to record. When the Accessibility permission is taken away while Arcvox runs, the shortcuts stop at once and the menu-bar menu names the problem; they work again as soon as the permission is given back.
+The macOS client needs the Accessibility permission to insert text and the Microphone permission to record. When the Accessibility permission is taken away while Arcvox runs, the shortcuts stop at once and the menu-bar menu names the problem; they work again as soon as the permission is given back. The Input Monitoring permission is not needed and does not stand in for Accessibility. Settings > General shows the state of both permissions and is the one place that opens the system's settings for them; the menu-bar menu, the settings window and the panel next to the widget lead there. Text that cannot be put into an application for lack of the permission is shown in the panel with a Copy button.
 
 While macOS reports Secure Input (a password field has the keyboard), Arcvox does not insert text; a panel next to the widget shows the result with a Copy button. This depends on the application turning Secure Input on. Terminal does so for password prompts; in iTerm2 it is the "Secure Keyboard Entry" option; a terminal that never turns it on cannot be told apart from ordinary typing, so text dictated at its password prompt is inserted.
 

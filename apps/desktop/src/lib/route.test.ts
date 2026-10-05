@@ -1,5 +1,19 @@
 import { expect, test } from "vitest";
-import { NAV, navPage, parseRoute, routeHash, shouldIntercept } from "./route";
+import { NAV, navPage, parseRoute, routeHash, routeSection, shouldIntercept } from "./route";
+
+test("a hash can name a section of the page", () => {
+  expect(parseRoute("#general@permissions")).toEqual({ page: "general", arg: null });
+  expect(routeSection("#general@permissions")).toBe("permissions");
+  expect(parseRoute("#flow/mail@engine")).toEqual({ page: "flow", arg: "mail" });
+  expect(routeSection("#flow/mail@engine")).toBe("engine");
+  expect(routeSection("#general")).toBeNull();
+  expect(routeSection("#general@")).toBeNull();
+  expect(routeHash("general", null, "permissions")).toBe("#general@permissions");
+  // An argument's own at sign is escaped, so it is never taken for a section.
+  expect(routeHash("flow", "a@b")).toBe("#flow/a%40b");
+  expect(routeSection(routeHash("flow", "a@b"))).toBeNull();
+  expect(parseRoute(routeHash("flow", "a@b", "engine"))).toEqual({ page: "flow", arg: "a@b" });
+});
 
 test("an empty hash opens the overview", () => {
   expect(parseRoute("")).toEqual({ page: "home", arg: null });

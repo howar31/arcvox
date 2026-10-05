@@ -149,3 +149,9 @@ describe("positioning", () => {
     expect(faintOpacity(0)).toBeCloseTo(0.9);
   });
 });
+
+it("text that could not be put in for lack of the permission is kept, with the way to the permissions", () => {
+  const m = message({ kind: "info", key: "widget.accessibility_required", copyable: "聽寫結果" });
+  expect(labelKey("idle", m)).toBe("widget.not_inserted");
+  expect(panelView("idle", m, "", null, false)).toEqual({ title: t("widget.accessibility_required"), body: t("panel.accessibility"), result: "聽寫結果", actions: ["copy", "open_permissions"], close: true });
+});

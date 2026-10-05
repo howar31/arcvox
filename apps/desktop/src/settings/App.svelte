@@ -1,12 +1,12 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import { dictationState, onDictationState, permissions, uiLanguage, type WidgetState } from "../lib/api";
+  import { dictationState, onDictationState, permissions, uiLanguage, type Permissions, type WidgetState } from "../lib/api";
   import { setLanguage, t, type Lang } from "../lib/i18n";
   import { firstShortcut, otherShortcuts } from "../lib/shortcut";
   import { dictationLabelKey } from "../lib/widgetView";
   import { client, config, defaults } from "../lib/store.svelte";
-  import { go, NAV, navPage, parseRoute, routeHash, SETTINGS_PAGES, shouldIntercept, type SettingsPage } from "../lib/route";
+  import { go, NAV, navPage, parseRoute, routeHash, routeSection, SETTINGS_PAGES, shouldIntercept, type SettingsPage } from "../lib/route";
   import { guard } from "../lib/guard.svelte";
   import Icon from "../lib/ui/Icon.svelte";
   import Ring from "../lib/ui/Ring.svelte";
@@ -27,7 +27,13 @@
   // Nothing translated is rendered before the UI language is known.
   let langReady = $state(false);
   let ready = $state(false);
-  let accessibility = $state<boolean | null>(null);
+  let perms = $state<Permissions | null>(null);
+  const accessibility = $derived(perms ? perms.accessibility : null);
+  // What the system does not allow, each with the words that say so.
+  const missing = $derived([
+    ...(perms && !perms.accessibility ? ["shell.needs_access"] : []),
+    ...(perms && (perms.microphone === "denied" || perms.microphone === "restricted") ? ["shell.needs_microphone"] : []),
+  ]);
   let main: HTMLElement | undefined = $state();
   // Shown after a first press of the quit shortcut, for as long as a second press quits.
   // What the app is doing, as the widget shows it.
@@ -40,7 +46,31 @@
   const section = $derived((SETTINGS_PAGES as readonly string[]).includes(route.page) ? (route.page as SettingsPage) : null);
 
   async function checkPermissions() {
-    try { accessibility = (await permissions()).accessibility; } catch { accessibility = null; }
+    try { perms = await permissions(); } catch { perms = null; }
+  }
+
+  /** How long a section stays marked after a link led to it. */
+  const ARRIVED_MS = 1600;
+  let arrivedTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /** Brings the section a hash names into view, once the page that holds it is there. */
+  function reveal(hash: string) {
+    const name = routeSection(hash);
+    if (!name) return;
+    const find = () => main?.querySelector<HTMLElement>(`[data-section="${CSS.escape(name)}"]`);
+    tick().then(() => {
+      const el = find();
+      if (!el) return;
+      el.scrollIntoView({ block: "start" });
+      // Marked for a moment: a section that was already in view does not move.
+      delete el.dataset.arrived;
+      void el.offsetWidth;
+      el.dataset.arrived = "";
+      clearTimeout(arrivedTimer);
+      arrivedTimer = setTimeout(() => { delete el.dataset.arrived; }, ARRIVED_MS);
+    });
+    // What loads after the page is first shown moves the section.
+    setTimeout(() => find()?.scrollIntoView({ block: "start" }), 300);
   }
 
   onMount(() => {
@@ -56,6 +86,7 @@
       }
       if (next.page !== route.page) main?.scrollTo(0, 0);
       route = next;
+      reveal(location.hash);
     };
     const onFocus = () => { checkPermissions(); };
     window.addEventListener("hashchange", onHash);
@@ -74,6 +105,7 @@
       await config.watch();
       await client.watch();
       ready = true;
+      reveal(location.hash);
     })();
     return () => {
       window.removeEventListener("hashchange", onHash);
@@ -108,9 +140,12 @@
       <div class="state">
         {#if config.error}
           <Ring tone="live" /><span>{t("shell.engine_error")}</span>
-        {:else if accessibility === false}
-          <Ring tone="live" />
-          <button type="button" class="state-link" onclick={() => guard.request(() => go("general"))}>{t("shell.needs_access")}</button>
+        {:else if missing.length}
+          <div class="state-lines">
+            {#each missing as key (key)}
+              <div class="state-line"><Ring tone="live" /><button type="button" class="state-link" onclick={() => guard.request(() => go("general", null, "permissions"))}>{t(key)}</button></div>
+            {/each}
+          </div>
         {:else if active}
           <Ring tone="accent" /><span>{t(active)}</span>
         {:else if accessibility}
@@ -168,6 +203,8 @@
   .nav.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   .nav.on :global(.icon) { opacity: 1; }
   .state { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 12px; font-size: var(--text-sm); color: var(--ink-2); line-height: 1.35; }
+  .state-lines { display: flex; flex-direction: column; gap: 6px; }
+  .state-line { display: flex; align-items: center; gap: 8px; }
   .state-link { border: 0; background: none; padding: 0; color: var(--ink-2); text-align: left; cursor: default; }
   .state-link:hover { color: var(--ink); }
   /* Positioned: absolutely placed descendants (visually hidden labels) stay inside the scroll area. */

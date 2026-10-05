@@ -86,7 +86,7 @@ export function ringView(state: WidgetState, message: MessagePayload | null, don
   return { tone: "quiet", motion: "none", glyph: null };
 }
 
-export type PanelAction = "copy" | "copy_detail" | "open_engines" | "open_history";
+export type PanelAction = "copy" | "copy_detail" | "open_engines" | "open_history" | "open_permissions";
 
 export interface PanelView {
   /** A small line above the text. */
@@ -133,6 +133,9 @@ export function panelView(state: WidgetState, message: MessagePayload | null, tr
   }
   if (message.key in NOTICES) return null;
   const title = t(message.key);
+  if (message.key === "widget.accessibility_required") {
+    return { title, body: t("panel.accessibility"), result: message.copyable ?? undefined, actions: message.copyable ? ["copy", "open_permissions"] : ["open_permissions"], close: true };
+  }
   if (message.kind === "info" && message.copyable) return { title, result: message.copyable, actions: ["copy"], close: true };
   if (message.key === "widget.degraded") return { title, detail: message.detail ?? undefined, actions: [], close: false };
   const own = BODIES[message.key];

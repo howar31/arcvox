@@ -66,11 +66,10 @@ pub fn tray_action(app: &tauri::AppHandle<Wry>, id: &str) {
         tray::ID_QUIT => app.exit(0),
         tray::ID_PLACE => state.ui.set_placing(!state.ui.is_placing()),
         tray::ID_FIX => match state.ui.tray().state() {
-            UiState::NoAccessibility => {
-                let _ = crate::commands::system::system_open_privacy_pane("accessibility".into());
-            }
+            UiState::NoAccessibility => tray::open_settings(app, Some(tray::PERMISSIONS_PAGE)),
             _ => tray::open_settings(app, Some("engines")),
         },
+        tray::ID_FIX_PERMISSIONS => tray::open_settings(app, Some(tray::PERMISSIONS_PAGE)),
         tray::ID_FIX_BACKUP => tray::open_settings(app, Some("backup")),
         tray::ID_COPY_LAST => {
             let engine = state.engine.lock().unwrap().clone();
@@ -134,6 +133,7 @@ pub fn run() {
             crate::commands::system::system_permissions,
             crate::commands::system::system_request_accessibility,
             crate::commands::system::system_open_privacy_pane,
+            crate::commands::system::system_request_microphone,
             crate::commands::system::system_running_apps,
             crate::commands::system::system_app_names,
             crate::commands::system::system_info,
@@ -618,8 +618,9 @@ fn follow_trust(
         if let Some(state) = trust::state_for(false, engine_ready) {
             ui.set_state(state);
         }
-        crate::ui::tray::open_settings(&app, Some("general"));
+        crate::ui::tray::open_settings(&app, Some(crate::ui::tray::PERMISSIONS_PAGE));
     }
+    ui.set_microphone(platform.microphone_access());
 
     let (wake_tx, wake_rx) = std::sync::mpsc::channel::<()>();
     platform.watch_accessibility(Box::new(move || {
@@ -630,6 +631,7 @@ fn follow_trust(
         loop {
             // Woken by the system's announcement, else once a second.
             let _ = wake_rx.recv_timeout(TRUST_POLL);
+            ui.set_microphone(platform.microphone_access());
             let Some(action) = trust.observe(platform.accessibility_trusted(false)) else {
                 continue;
             };
@@ -645,7 +647,7 @@ fn follow_trust(
                     if let Some(state) = trust::state_for(false, engine_ready) {
                         ui.set_state(state);
                     }
-                    crate::ui::tray::open_settings(&app, Some("general"));
+                    crate::ui::tray::open_settings(&app, Some(crate::ui::tray::PERMISSIONS_PAGE));
                 }
                 trust::Action::Install => {
                     tracing::info!("accessibility trust granted; shortcuts started");

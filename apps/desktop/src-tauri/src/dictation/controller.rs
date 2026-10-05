@@ -678,6 +678,7 @@ impl Controller {
             target: &captured.target,
             frontmost: frontmost.as_ref(),
             secure_input: self.deps.platform.secure_input_active(),
+            trusted: self.deps.platform.accessibility_trusted(false),
             method,
         });
         let outcome = insert::run(
@@ -696,6 +697,7 @@ impl Controller {
                     ShowReason::SecureInput => Msg::WidgetSecureInput,
                     ShowReason::AppChanged => Msg::WidgetAppChanged,
                     ShowReason::EmptyText => Msg::WidgetEmptyResult,
+                    ShowReason::NotTrusted => Msg::WidgetAccessibilityRequired,
                 };
                 if matches!(reason, ShowReason::EmptyText) {
                     self.deps.ui.message(UiMessage::error(msg, None));
@@ -1457,6 +1459,34 @@ mod tests {
             "{msgs:?}"
         );
         assert!(!r.platform.calls().contains(&"paste".to_string()));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn without_the_trust_the_text_is_shown_and_not_reported_as_inserted() {
+        let r = rig(fast_settings()).await;
+        mock_ok(&r, "a", "文字").await;
+        *r.platform.trusted.lock().unwrap() = false;
+        hold_and_speak(&r, 0.5).await;
+        wait_for(
+            || {
+                r.ui.messages
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|m| m.msg == Msg::WidgetAccessibilityRequired)
+            },
+            "accessibility required",
+        )
+        .await;
+        wait_state(&r, UiState::Idle, "idle").await;
+        let msgs = r.ui.messages.lock().unwrap().clone();
+        let m = msgs
+            .iter()
+            .find(|m| m.msg == Msg::WidgetAccessibilityRequired)
+            .unwrap();
+        assert_eq!(m.copyable.as_deref(), Some("文字"));
+        assert!(r.platform.calls().is_empty());
+        assert!(!r.ui.log.lock().unwrap().iter().any(|l| l == "inserted"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

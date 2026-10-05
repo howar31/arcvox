@@ -63,6 +63,18 @@ pub enum PlatformError {
     Other(String),
 }
 
+/// The system's answer on recording with the microphone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MicAccess {
+    Granted,
+    /// The system has not asked the user yet; it asks at the first recording.
+    NotAsked,
+    Denied,
+    /// Ruled out by the device's management; the user cannot change it.
+    Restricted,
+}
+
 /// What recording a new shortcut reports to the settings window.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CaptureEvent {
@@ -111,6 +123,19 @@ pub trait Platform: Send + Sync {
     fn type_unicode(&self, text: &str);
     fn ax_insert(&self, pid: i32, text: &str) -> Result<(), PlatformError>;
     fn accessibility_trusted(&self, prompt: bool) -> bool;
+    /// Whether the system lets the process watch the keyboard without
+    /// letting it act on it: a permission of its own on macOS, which is not
+    /// the one the app needs.
+    fn keyboard_watch_only(&self) -> bool {
+        false
+    }
+    fn microphone_access(&self) -> MicAccess {
+        MicAccess::Granted
+    }
+    /// Asks the system for the microphone and waits for the answer.
+    fn request_microphone(&self) -> MicAccess {
+        self.microphone_access()
+    }
 }
 
 #[cfg(test)]
@@ -126,6 +151,7 @@ pub mod fake {
         pub clipboard: Mutex<Option<String>>,
         pub secure_input: Mutex<bool>,
         pub trusted: Mutex<bool>,
+        pub microphone: Mutex<Option<MicAccess>>,
         /// `Some(err)` makes `ax_insert` fail with that error.
         pub ax_insert_failure: Mutex<Option<PlatformError>>,
         pub monitor_tx: Mutex<Option<Sender<ModifierEvent>>>,
@@ -218,6 +244,12 @@ pub mod fake {
         }
         fn accessibility_trusted(&self, _prompt: bool) -> bool {
             *self.trusted.lock().unwrap()
+        }
+        fn microphone_access(&self) -> MicAccess {
+            self.microphone
+                .lock()
+                .unwrap()
+                .unwrap_or(MicAccess::Granted)
         }
     }
 }

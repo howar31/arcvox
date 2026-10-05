@@ -50,7 +50,9 @@ pub enum Msg {
     TrayWidgetIdleHidden,
     TrayWidgetIdleRing,
     TrayWidgetIdleLabel,
-    TrayFixAccessibility,
+    TrayFixPermissions,
+    TrayMicrophoneDenied,
+    TrayMicrophoneRestricted,
     TrayFixEngine,
     TrayBackupFolderMissing,
     TrayBackupFolderNotWritable,
@@ -92,7 +94,9 @@ pub const ALL_MSGS: &[Msg] = &[
     Msg::TrayWidgetIdleHidden,
     Msg::TrayWidgetIdleRing,
     Msg::TrayWidgetIdleLabel,
-    Msg::TrayFixAccessibility,
+    Msg::TrayFixPermissions,
+    Msg::TrayMicrophoneDenied,
+    Msg::TrayMicrophoneRestricted,
     Msg::TrayFixEngine,
     Msg::TrayBackupFolderMissing,
     Msg::TrayBackupFolderNotWritable,
@@ -137,7 +141,9 @@ impl Msg {
             Msg::TrayWidgetIdleHidden => "tray.widget_idle_hidden",
             Msg::TrayWidgetIdleRing => "tray.widget_idle_ring",
             Msg::TrayWidgetIdleLabel => "tray.widget_idle_label",
-            Msg::TrayFixAccessibility => "tray.fix_accessibility",
+            Msg::TrayFixPermissions => "tray.fix_permissions",
+            Msg::TrayMicrophoneDenied => "tray.microphone_denied",
+            Msg::TrayMicrophoneRestricted => "tray.microphone_restricted",
             Msg::TrayFixEngine => "tray.fix_engine",
             Msg::TrayBackupFolderMissing => "tray.backup_folder_missing",
             Msg::TrayBackupFolderNotWritable => "tray.backup_folder_not_writable",
@@ -196,8 +202,14 @@ pub fn text(lang: Language, msg: Msg) -> &'static str {
         (Language::En, Msg::TrayWidgetIdleRing) => "Ring",
         (Language::ZhTw, Msg::TrayWidgetIdleLabel) => "完整",
         (Language::En, Msg::TrayWidgetIdleLabel) => "Full",
-        (Language::ZhTw, Msg::TrayFixAccessibility) => "開啟系統設定...",
-        (Language::En, Msg::TrayFixAccessibility) => "Open System Settings...",
+        (Language::ZhTw, Msg::TrayFixPermissions) => "權限設定...",
+        (Language::En, Msg::TrayFixPermissions) => "Permissions...",
+        (Language::ZhTw, Msg::TrayMicrophoneDenied) => "需要麥克風權限",
+        (Language::En, Msg::TrayMicrophoneDenied) => "Microphone permission required",
+        (Language::ZhTw, Msg::TrayMicrophoneRestricted) => "麥克風受到這台 Mac 的管理設定限制",
+        (Language::En, Msg::TrayMicrophoneRestricted) => {
+            "The microphone is restricted by this Mac's management settings"
+        }
         (Language::ZhTw, Msg::TrayFixEngine) => "引擎與模型...",
         (Language::En, Msg::TrayFixEngine) => "Engines and models...",
         (Language::ZhTw, Msg::TrayBackupFolderMissing) => "找不到備份資料夾",
@@ -226,11 +238,9 @@ pub fn text(lang: Language, msg: Msg) -> &'static str {
         (Language::En, Msg::WidgetAppChanged) => "The frontmost app changed; text was not inserted",
         (Language::ZhTw, Msg::WidgetEmptyResult) => "沒有產生文字",
         (Language::En, Msg::WidgetEmptyResult) => "No text was produced",
-        (Language::ZhTw, Msg::WidgetAccessibilityRequired) => {
-            "請在系統設定允許 Arcvox 的輔助使用權限"
-        }
+        (Language::ZhTw, Msg::WidgetAccessibilityRequired) => "沒有輔助使用權限，文字未填入",
         (Language::En, Msg::WidgetAccessibilityRequired) => {
-            "Allow Arcvox under Accessibility in System Settings"
+            "No Accessibility permission; the text was not inserted"
         }
         (Language::ZhTw, Msg::WidgetMicrophoneUnavailable) => "無法使用麥克風",
         (Language::En, Msg::WidgetMicrophoneUnavailable) => "Microphone unavailable",

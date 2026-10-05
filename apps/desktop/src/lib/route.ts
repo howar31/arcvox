@@ -24,9 +24,21 @@ const PAGES = new Set<string>([...NAV.flatMap((g) => g.pages), ...Object.keys(UN
 /** Earlier page names that now live on another page. */
 const ALIASES: Record<string, Page> = { providers: "engines", models: "engines", profiles: "flow" };
 
-/** Reads `#<page>` or `#<page>/<arg>`; unknown pages resolve to the home page. */
-export function parseRoute(hash: string): { page: Page; arg: string | null } {
+/** A hash may end in `@<section>`: the part of the page to bring into view. */
+function split(hash: string): [string, string | null] {
   const body = hash.replace(/^#/, "");
+  const at = body.lastIndexOf("@");
+  return at < 0 ? [body, null] : [body.slice(0, at), body.slice(at + 1) || null];
+}
+
+/** The section a hash names, on whatever page it is. */
+export function routeSection(hash: string): string | null {
+  return split(hash)[1];
+}
+
+/** Reads `#<page>` or `#<page>/<arg>`, with or without a section; unknown pages resolve to the home page. */
+export function parseRoute(hash: string): { page: Page; arg: string | null } {
+  const [body] = split(hash);
   const slash = body.indexOf("/");
   const name = slash < 0 ? body : body.slice(0, slash);
   const rawArg = slash < 0 ? "" : body.slice(slash + 1);
@@ -39,12 +51,16 @@ export function parseRoute(hash: string): { page: Page; arg: string | null } {
   return { page, arg };
 }
 
-export function routeHash(page: Page, arg?: string | null): string {
-  return arg ? `#${page}/${encodeURIComponent(arg)}` : `#${page}`;
+export function routeHash(page: Page, arg?: string | null, section?: string | null): string {
+  const at = section ? `@${section}` : "";
+  return (arg ? `#${page}/${encodeURIComponent(arg)}` : `#${page}`) + at;
 }
 
-export function go(page: Page, arg?: string | null): void {
-  location.hash = routeHash(page, arg);
+export function go(page: Page, arg?: string | null, section?: string | null): void {
+  const hash = routeHash(page, arg, section);
+  // The same hash again announces nothing by itself, and a section still has to be scrolled to.
+  if (location.hash === hash) window.dispatchEvent(new Event("hashchange"));
+  else location.hash = hash;
 }
 
 export type Route = ReturnType<typeof parseRoute>;

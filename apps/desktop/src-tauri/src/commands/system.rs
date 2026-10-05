@@ -136,6 +136,9 @@ pub fn system_open_settings_window(app: AppHandle<Wry>, page: Option<String>) {
 #[derive(Serialize)]
 pub struct Permissions {
     pub accessibility: bool,
+    /// The system lets the app watch the keyboard but not act on it.
+    pub keyboard_watch_only: bool,
+    pub microphone: crate::platform::MicAccess,
 }
 
 #[derive(Serialize)]
@@ -177,7 +180,15 @@ pub fn system_list_displays(app: tauri::AppHandle) -> Vec<crate::ui::widget::Dis
 pub fn system_permissions(state: State<'_, AppState>) -> Permissions {
     Permissions {
         accessibility: state.platform.accessibility_trusted(false),
+        keyboard_watch_only: state.platform.keyboard_watch_only(),
+        microphone: state.platform.microphone_access(),
     }
+}
+
+/// Asks the system for the microphone; answers once the user has chosen.
+#[tauri::command(async)]
+pub fn system_request_microphone(state: State<'_, AppState>) -> crate::platform::MicAccess {
+    state.platform.request_microphone()
 }
 
 #[tauri::command]

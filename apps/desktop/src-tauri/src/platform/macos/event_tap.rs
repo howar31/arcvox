@@ -422,17 +422,30 @@ impl TapState {
 
 /// Whether the process may tap the keyboard right now. The system answers
 /// this from the current Accessibility list, while `AXIsProcessTrusted`
-/// keeps saying yes once it said yes during the life of the process, even
-/// after the permission was taken away again.
+/// keeps its earlier answer for the life of the process. The probe is a
+/// filtering tap like the real one: a listen-only tap is also allowed with
+/// the Input Monitoring permission alone, which lets the process neither
+/// filter nor post key events. It asks for an event that a keyboard never
+/// sends, so that no key press ever waits on it.
 pub fn can_tap_keyboard() -> bool {
-    let tap = CGEventTap::new(
+    probe(CGEventTapOptions::Default, CGEventType::TabletProximity)
+}
+
+/// Whether the process may at least watch the keyboard, which the Input
+/// Monitoring permission allows on its own.
+pub fn can_listen_keyboard() -> bool {
+    probe(CGEventTapOptions::ListenOnly, CGEventType::KeyDown)
+}
+
+fn probe(options: CGEventTapOptions, kind: CGEventType) -> bool {
+    CGEventTap::new(
         CGEventTapLocation::Session,
         CGEventTapPlacement::HeadInsertEventTap,
-        CGEventTapOptions::ListenOnly,
-        vec![CGEventType::KeyDown],
+        options,
+        vec![kind],
         |_proxy, _kind, _event| CallbackResult::Keep,
-    );
-    tap.is_ok()
+    )
+    .is_ok()
 }
 
 #[link(name = "CoreGraphics", kind = "framework")]
