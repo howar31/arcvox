@@ -2,9 +2,9 @@
 
 use std::ffi::{c_char, CStr, CString};
 
-use async_trait::async_trait;
 use arcvox_core::providers::{LlmOptions, LlmProvider, ProviderError};
 use arcvox_core::types::{ChatMessage, ErrorCode, Role};
+use async_trait::async_trait;
 use tokio::time::Instant;
 
 use super::ffi;

@@ -7,9 +7,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
 
-use async_trait::async_trait;
 use arcvox_core::providers::{AsrHint, AsrProvider, ProviderError};
 use arcvox_core::types::{AudioClip, ErrorCode, Transcript};
+use async_trait::async_trait;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 use crate::{lang, CancelFlag, CancelOnDrop};

@@ -3,7 +3,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use arcvox_core::config::{
     General, ProviderConfig, ProviderKind, NATIVE_APPLE_DICTATION, NATIVE_APPLE_FM,
 };
@@ -11,6 +10,7 @@ use arcvox_core::providers::probe::{ProbeFailure, ProbeResult};
 use arcvox_core::providers::{AsrProvider, LlmProvider, ProviderError};
 use arcvox_core::types::ErrorCode;
 use arcvox_core::ProviderFactory;
+use async_trait::async_trait;
 
 use super::{
     dictation_status, fm_status, locale_for_hint, AppleAsrProvider, AppleLlmProvider, NativeStatus,

@@ -4,10 +4,10 @@ use std::ffi::{c_char, CStr, CString};
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use arcvox_core::providers::{AsrHint, AsrProvider, ProviderError};
 use arcvox_core::types::{AudioClip, ErrorCode, Transcript};
 use arcvox_inference::{CancelFlag, CancelOnDrop};
+use async_trait::async_trait;
 
 use super::{ffi, locale_for_hint};
 

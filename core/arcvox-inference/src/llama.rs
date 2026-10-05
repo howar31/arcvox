@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
-use async_trait::async_trait;
 use arcvox_core::providers::{LlmOptions, LlmProvider, ProviderError};
 use arcvox_core::types::{ChatMessage, ErrorCode};
+use async_trait::async_trait;
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;

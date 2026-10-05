@@ -406,7 +406,6 @@ mod tests {
     use crate::audio::{AudioError, AudioHandle, AudioMsg, AudioSource};
     use crate::settings::MicrophoneChoice;
     use crate::vad::Vad;
-    use async_trait::async_trait;
     use arcvox_core::audio::encode_wav_pcm16;
     use arcvox_core::bench::BenchRole;
     use arcvox_core::config::{General, ProviderConfig, ProviderKind};
@@ -415,6 +414,7 @@ mod tests {
     use arcvox_core::types::{AudioClip, ChatMessage, ProviderId, Transcript};
     use arcvox_core::ProviderFactory;
     use arcvox_core::{DataDir, Engine, EngineOptions, FirstRunDefaults, MemorySecretStore};
+    use async_trait::async_trait;
     use std::sync::mpsc::Sender;
     use std::sync::{Arc, Mutex};
 

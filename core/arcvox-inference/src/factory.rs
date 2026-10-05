@@ -4,13 +4,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use arcvox_core::config::{General, ProviderConfig, ProviderKind, Runtime};
 use arcvox_core::models::{ModelError, ModelStore};
 use arcvox_core::providers::probe::{ProbeFailure, ProbeResult};
 use arcvox_core::providers::{AsrProvider, LlmProvider, ProviderError};
 use arcvox_core::types::ErrorCode;
 use arcvox_core::ProviderFactory;
+use async_trait::async_trait;
 
 use crate::llama::LlamaLlmProvider;
 use crate::whisper::WhisperAsrProvider;
