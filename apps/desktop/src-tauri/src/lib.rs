@@ -12,6 +12,7 @@ pub mod identity;
 pub mod insert;
 pub mod logging;
 pub mod platform;
+pub mod problems;
 pub mod providers;
 pub mod secrets;
 pub mod settings;

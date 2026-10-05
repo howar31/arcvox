@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::dictation::ui::UiState;
 use crate::i18n::{text, Language, Msg};
@@ -22,6 +22,10 @@ pub const ID_STATUS: &str = "status";
 pub const ID_FIX: &str = "fix";
 pub const ID_FIX_BACKUP: &str = "fix-backup";
 pub const ID_FIX_PERMISSIONS: &str = "fix-permissions";
+pub const ID_FIX_FLOW: &str = "fix-flow";
+pub const ID_FIX_ENGINES: &str = "fix-engines";
+/// Tells the settings window which of its pages have a problem to show.
+pub const PROBLEM_PAGES_EVENT: &str = "problem-pages";
 /// Where every prompt about a permission leads: the one place that opens
 /// the system's settings.
 pub const PERMISSIONS_PAGE: &str = "general@permissions";
@@ -60,44 +64,76 @@ fn fix_msg(state: UiState) -> Option<Msg> {
 }
 
 /// A problem that does not stop dictation. Each one puts the badge on the
-/// icon and gets a line in the menu with an item that leads to its fix.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+/// icon and gets a line in the menu, followed by an item that leads to its
+/// fix. They are listed in this order.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Notice {
     MicrophoneDenied,
     MicrophoneRestricted,
+    /// A profile, by name, that names an engine that is gone.
+    ProfileEngineMissing(String),
+    /// A profile, by name, whose engine has no model to run.
+    ProfileModelMissing(String),
+    /// An engine, by name, whose own model file is gone.
+    ModelFileMissing(String),
     BackupFolderMissing,
     BackupFolderNotWritable,
 }
 
 impl Notice {
     /// What is wrong, as a line of the menu.
-    fn line(self) -> Msg {
-        match self {
-            Notice::MicrophoneDenied => Msg::TrayMicrophoneDenied,
-            Notice::MicrophoneRestricted => Msg::TrayMicrophoneRestricted,
-            Notice::BackupFolderMissing => Msg::TrayBackupFolderMissing,
-            Notice::BackupFolderNotWritable => Msg::TrayBackupFolderNotWritable,
+    fn line(&self, language: Language) -> String {
+        let (msg, name) = match self {
+            Notice::MicrophoneDenied => (Msg::TrayMicrophoneDenied, None),
+            Notice::MicrophoneRestricted => (Msg::TrayMicrophoneRestricted, None),
+            Notice::ProfileEngineMissing(n) => (Msg::TrayProfileEngineMissing, Some(n)),
+            Notice::ProfileModelMissing(n) => (Msg::TrayProfileModelMissing, Some(n)),
+            Notice::ModelFileMissing(n) => (Msg::TrayModelFileMissing, Some(n)),
+            Notice::BackupFolderMissing => (Msg::TrayBackupFolderMissing, None),
+            Notice::BackupFolderNotWritable => (Msg::TrayBackupFolderNotWritable, None),
+        };
+        match name {
+            Some(name) => text(language, msg).replace("{name}", name),
+            None => text(language, msg).to_string(),
         }
     }
 
-    /// The item under the line: its id and its label.
-    fn fix(self) -> (&'static str, Msg) {
+    /// The item that leads to the fix: its id and its label.
+    fn fix(&self) -> (&'static str, Msg) {
         match self {
             Notice::MicrophoneDenied | Notice::MicrophoneRestricted => {
                 (ID_FIX_PERMISSIONS, Msg::TrayFixPermissions)
             }
+            Notice::ProfileEngineMissing(_) | Notice::ProfileModelMissing(_) => {
+                (ID_FIX_FLOW, Msg::TrayFixFlow)
+            }
+            Notice::ModelFileMissing(_) => (ID_FIX_ENGINES, Msg::TrayFixEngine),
             Notice::BackupFolderMissing | Notice::BackupFolderNotWritable => {
                 (ID_FIX_BACKUP, Msg::TrayFixBackup)
             }
         }
     }
 
-    pub fn about_permissions(self) -> bool {
+    /// The settings page where the problem shows and is resolved.
+    fn page(&self) -> &'static str {
+        match self.fix().0 {
+            ID_FIX_PERMISSIONS => "general",
+            ID_FIX_FLOW => "flow",
+            ID_FIX_ENGINES => "engines",
+            _ => "backup",
+        }
+    }
+
+    pub fn about_permissions(&self) -> bool {
         self.fix().0 == ID_FIX_PERMISSIONS
     }
 
-    pub fn about_backup(self) -> bool {
+    pub fn about_backup(&self) -> bool {
         self.fix().0 == ID_FIX_BACKUP
+    }
+
+    pub fn about_engines(&self) -> bool {
+        matches!(self.fix().0, ID_FIX_FLOW | ID_FIX_ENGINES)
     }
 }
 
@@ -109,9 +145,35 @@ fn under_status(state: UiState, notices: &[Notice]) -> Vec<Notice> {
     }
     notices
         .iter()
-        .copied()
         .filter(|n| n.about_permissions())
+        .cloned()
         .collect()
+}
+
+/// The notices that follow, in runs that share the item leading to their fix.
+fn runs(notices: &[Notice]) -> Vec<Vec<&Notice>> {
+    let mut out: Vec<Vec<&Notice>> = Vec::new();
+    for notice in notices {
+        match out.last_mut() {
+            Some(run) if run[0].fix() == notice.fix() => run.push(notice),
+            _ => out.push(vec![notice]),
+        }
+    }
+    out
+}
+
+/// The settings pages that have a problem to show, each once.
+fn problem_pages(state: UiState, notices: &[Notice]) -> Vec<&'static str> {
+    let mut pages = Vec::new();
+    if state == UiState::NoAccessibility {
+        pages.push("general");
+    }
+    for notice in notices {
+        if !pages.contains(&notice.page()) {
+            pages.push(notice.page());
+        }
+    }
+    pages
 }
 
 pub struct Tray<R: Runtime> {
@@ -162,7 +224,7 @@ pub(super) fn menu<R: Runtime>(
     for notice in &joined {
         menu.append(&MenuItem::new(
             app,
-            text(language, notice.line()),
+            notice.line(language),
             false,
             None::<&str>,
         )?)?;
@@ -176,15 +238,22 @@ pub(super) fn menu<R: Runtime>(
             None::<&str>,
         )?)?;
     }
-    for notice in notices.iter().filter(|n| !joined.contains(n)) {
-        let (id, label) = notice.fix();
+    let rest: Vec<Notice> = notices
+        .iter()
+        .filter(|n| !joined.contains(n))
+        .cloned()
+        .collect();
+    for run in runs(&rest) {
+        let (id, label) = run[0].fix();
         menu.append(&PredefinedMenuItem::separator(app)?)?;
-        menu.append(&MenuItem::new(
-            app,
-            text(language, notice.line()),
-            false,
-            None::<&str>,
-        )?)?;
+        for notice in run {
+            menu.append(&MenuItem::new(
+                app,
+                notice.line(language),
+                false,
+                None::<&str>,
+            )?)?;
+        }
         menu.append(&MenuItem::with_id(
             app,
             id,
@@ -313,6 +382,9 @@ impl<R: Runtime> Tray<R> {
     pub fn set_state(&self, state: UiState, language: Language) {
         let before = std::mem::replace(&mut *self.last_state.lock().unwrap(), state);
         self.show_icon(state);
+        if (before == UiState::NoAccessibility) != (state == UiState::NoAccessibility) {
+            self.announce_pages();
+        }
         if fix_msg(before) != fix_msg(state) {
             // The line under the status appears or goes away.
             self.rebuild();
@@ -352,12 +424,24 @@ impl<R: Runtime> Tray<R> {
         }
         self.show_icon(self.state());
         self.rebuild();
+        self.announce_pages();
+    }
+
+    /// The settings pages that have a problem to show.
+    pub fn problem_pages(&self) -> Vec<&'static str> {
+        problem_pages(self.state(), &self.notices())
+    }
+
+    fn announce_pages(&self) {
+        let _ = self
+            .app
+            .emit_to("settings", PROBLEM_PAGES_EVENT, self.problem_pages());
     }
 
     /// Replaces the notices of one kind (those `kind` says yes to) and
     /// leaves the others as they are.
-    pub fn put_notices(&self, kind: fn(Notice) -> bool, now: Vec<Notice>) {
-        let mut all: Vec<Notice> = self.notices().into_iter().filter(|n| !kind(*n)).collect();
+    pub fn put_notices(&self, kind: fn(&Notice) -> bool, now: Vec<Notice>) {
+        let mut all: Vec<Notice> = self.notices().into_iter().filter(|n| !kind(n)).collect();
         all.extend(now);
         all.sort();
         self.set_notices(all);
@@ -504,24 +588,79 @@ mod tests {
 
     #[test]
     fn every_notice_has_a_line_and_an_item_that_leads_to_its_fix() {
-        for notice in [Notice::BackupFolderMissing, Notice::BackupFolderNotWritable] {
-            assert_eq!(notice.fix(), (ID_FIX_BACKUP, Msg::TrayFixBackup));
+        let all = [
+            (Notice::MicrophoneDenied, ID_FIX_PERMISSIONS, "general"),
+            (Notice::MicrophoneRestricted, ID_FIX_PERMISSIONS, "general"),
+            (
+                Notice::ProfileEngineMissing("Mail".into()),
+                ID_FIX_FLOW,
+                "flow",
+            ),
+            (
+                Notice::ProfileModelMissing("Mail".into()),
+                ID_FIX_FLOW,
+                "flow",
+            ),
+            (
+                Notice::ModelFileMissing("Own".into()),
+                ID_FIX_ENGINES,
+                "engines",
+            ),
+            (Notice::BackupFolderMissing, ID_FIX_BACKUP, "backup"),
+            (Notice::BackupFolderNotWritable, ID_FIX_BACKUP, "backup"),
+        ];
+        let mut lines = std::collections::BTreeSet::new();
+        for (notice, id, page) in &all {
+            assert_eq!(notice.fix().0, *id);
+            assert_eq!(notice.page(), *page);
             for language in [Language::ZhTw, Language::En] {
-                assert!(!text(language, notice.line()).is_empty());
+                let line = notice.line(language);
+                assert!(!line.is_empty() && !line.contains("{name}"), "{line}");
+                assert!(lines.insert(line));
             }
         }
-        for notice in [Notice::MicrophoneDenied, Notice::MicrophoneRestricted] {
-            assert_eq!(notice.fix(), (ID_FIX_PERMISSIONS, Msg::TrayFixPermissions));
-            assert!(notice.about_permissions() && !notice.about_backup());
-        }
-        assert_ne!(
-            Notice::MicrophoneDenied.line(),
-            Notice::MicrophoneRestricted.line()
+        assert!(Notice::ProfileEngineMissing("Mail".into())
+            .line(Language::En)
+            .contains("Mail"));
+        assert_eq!(
+            Notice::ModelFileMissing(String::new()).fix().1,
+            Msg::TrayFixEngine
         );
-        assert_ne!(
-            Notice::BackupFolderMissing.line(),
-            Notice::BackupFolderNotWritable.line()
+    }
+
+    #[test]
+    fn notices_with_the_same_fix_share_its_item() {
+        let all = [
+            Notice::MicrophoneDenied,
+            Notice::ProfileEngineMissing("A".into()),
+            Notice::ProfileModelMissing("B".into()),
+            Notice::ModelFileMissing("C".into()),
+            Notice::BackupFolderMissing,
+        ];
+        let sizes: Vec<usize> = runs(&all).iter().map(Vec::len).collect();
+        assert_eq!(sizes, vec![1, 2, 1, 1]);
+        assert!(runs(&[]).is_empty());
+    }
+
+    #[test]
+    fn a_page_with_a_problem_is_named_once() {
+        let all = [
+            Notice::MicrophoneDenied,
+            Notice::ProfileEngineMissing("A".into()),
+            Notice::ProfileModelMissing("B".into()),
+            Notice::BackupFolderNotWritable,
+        ];
+        assert_eq!(
+            problem_pages(UiState::NoAccessibility, &all),
+            vec!["general", "flow", "backup"]
         );
+        assert_eq!(problem_pages(UiState::Idle, &[]), Vec::<&str>::new());
+        assert_eq!(
+            problem_pages(UiState::NoAccessibility, &[]),
+            vec!["general"]
+        );
+        // The engine that never opened has its own notice on every page.
+        assert_eq!(problem_pages(UiState::EngineError, &[]), Vec::<&str>::new());
     }
 
     #[test]

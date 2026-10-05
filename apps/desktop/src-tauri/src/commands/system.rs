@@ -185,6 +185,13 @@ pub fn system_permissions(state: State<'_, AppState>) -> Permissions {
     }
 }
 
+/// The settings pages that have a problem to show, read afresh.
+#[tauri::command]
+pub fn system_problem_pages(state: State<'_, AppState>) -> Vec<&'static str> {
+    state.refresh_problems();
+    state.ui.tray().problem_pages()
+}
+
 /// Asks the system for the microphone; answers once the user has chosen.
 #[tauri::command(async)]
 pub fn system_request_microphone(state: State<'_, AppState>) -> crate::platform::MicAccess {

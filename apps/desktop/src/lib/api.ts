@@ -148,6 +148,9 @@ export const listDisplays = () => invoke<DisplayName[]>("system_list_displays");
 export const permissions = () => invoke<Permissions>("system_permissions");
 export const requestAccessibility = () => invoke<boolean>("system_request_accessibility");
 export const requestMicrophone = () => invoke<MicAccess>("system_request_microphone");
+/** The settings pages that have a problem to show. */
+export const problemPages = () => invoke<string[]>("system_problem_pages");
+export const onProblemPages = (cb: (pages: string[]) => void) => listen<string[]>("problem-pages", (e) => cb(e.payload));
 export const openPrivacyPane = (pane: "accessibility" | "microphone" | "files") => invoke<void>("system_open_privacy_pane", { pane });
 export const runningApps = () => invoke<RunningApp[]>("system_running_apps");
 export const appNames = (bundleIds: string[]) => invoke<Record<string, string | null>>("system_app_names", { bundleIds });

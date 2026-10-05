@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import { dictationState, onDictationState, permissions, uiLanguage, type Permissions, type WidgetState } from "../lib/api";
+  import { dictationState, onDictationState, onProblemPages, permissions, problemPages, uiLanguage, type Permissions, type WidgetState } from "../lib/api";
   import { setLanguage, t, type Lang } from "../lib/i18n";
   import { firstShortcut, otherShortcuts } from "../lib/shortcut";
   import { dictationLabelKey } from "../lib/widgetView";
@@ -45,8 +45,12 @@
   const current = $derived(navPage(route.page));
   const section = $derived((SETTINGS_PAGES as readonly string[]).includes(route.page) ? (route.page as SettingsPage) : null);
 
+  // The pages that have a problem to show; the menu-bar menu lists the same problems.
+  let problems = $state<string[]>([]);
+
   async function checkPermissions() {
     try { perms = await permissions(); } catch { perms = null; }
+    problemPages().then((pages) => { problems = pages; }).catch(() => {});
   }
 
   /** How long a section stays marked after a link led to it. */
@@ -97,6 +101,7 @@
       quitTimer = setTimeout(() => { quitHint = false; }, e.payload);
     });
     const stateChanged = onDictationState((s) => { dictation = s; });
+    const problemsChanged = onProblemPages((pages) => { problems = pages; });
     dictationState().then((s) => { dictation = s; }).catch(() => {});
     (async () => {
       setLanguage((await uiLanguage()) as Lang);
@@ -112,6 +117,7 @@
       window.removeEventListener("focus", onFocus);
       quitArmed.then((off) => off());
       stateChanged.then((off) => off());
+      problemsChanged.then((off) => off());
       clearTimeout(quitTimer);
     };
   });
@@ -133,7 +139,7 @@
               class:on={current === p}
               aria-current={current === p ? "page" : undefined}
               onclick={() => guard.request(() => go(p))}
-            ><Icon name={p} size={18} /><span>{t(`nav.${p}`)}</span></button>
+            ><Icon name={p} size={18} /><span>{t(`nav.${p}`)}</span>{#if problems.includes(p)}<span class="bang" role="img" aria-label={t("shell.page_problem")} title={t("shell.page_problem")}>!</span>{/if}</button>
           {/each}
         {/each}
       </nav>
@@ -199,6 +205,9 @@
   .nav { display: flex; align-items: center; gap: 12px; height: 40px; padding: 0 12px; border-radius: 10px; font-size: var(--text); border: 0; background: none; color: var(--ink); text-align: left; cursor: default; white-space: nowrap; }
   .nav span { overflow: hidden; text-overflow: ellipsis; }
   .nav :global(.icon) { opacity: .75; }
+  /* Out of the row's flow and close to its edge: the name starts where the others do, and the longest names keep their full length. */
+  .nav:has(.bang) { position: relative; padding-right: 28px; }
+  .nav .bang { position: absolute; right: 7px; top: 50%; transform: translateY(-50%); width: 16px; height: 16px; border-radius: 50%; background: var(--live); color: #fff; font: 700 11px/16px var(--font-round); text-align: center; overflow: visible; }
   .nav:hover { background: var(--line); }
   .nav.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   .nav.on :global(.icon) { opacity: 1; }

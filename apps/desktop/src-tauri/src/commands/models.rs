@@ -59,12 +59,16 @@ pub fn models_installed(state: State<'_, AppState>) -> CmdResult<Vec<InstalledMo
 
 #[tauri::command]
 pub async fn models_download(id: String, state: State<'_, AppState>) -> CmdResult<InstalledModel> {
-    Ok(state.models.download(&id).await?)
+    let model = state.models.download(&id).await?;
+    state.refresh_problems();
+    Ok(model)
 }
 
 #[tauri::command]
 pub async fn models_download_recommended(state: State<'_, AppState>) -> CmdResult<()> {
-    Ok(download_recommended(&state.models).await?)
+    let done = download_recommended(&state.models).await;
+    state.refresh_problems();
+    Ok(done?)
 }
 
 #[tauri::command]
@@ -86,7 +90,9 @@ pub async fn delete(store: &ModelStore, engine: Option<&Engine>, id: &str) -> Cm
 #[tauri::command]
 pub async fn models_delete(id: String, state: State<'_, AppState>) -> CmdResult<()> {
     let engine = state.engine.lock().unwrap().clone();
-    delete(&state.models, engine.as_ref(), &id).await
+    let done = delete(&state.models, engine.as_ref(), &id).await;
+    state.refresh_problems();
+    done
 }
 
 #[tauri::command]
@@ -97,7 +103,9 @@ pub fn models_import(path: String, state: State<'_, AppState>) -> CmdResult<Inst
             message: format!("{} is not a file", path.display()),
         });
     }
-    Ok(state.models.import(&path)?)
+    let model = state.models.import(&path)?;
+    state.refresh_problems();
+    Ok(model)
 }
 
 #[tauri::command]

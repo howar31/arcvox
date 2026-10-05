@@ -43,6 +43,15 @@ pub struct AppState {
     pub version: String,
 }
 
+impl AppState {
+    /// Looks again at what is wrong with the profiles and the engines; the
+    /// installed models change without the configuration changing.
+    pub fn refresh_problems(&self) {
+        let engine = self.engine.lock().unwrap().clone();
+        crate::problems::refresh(engine.as_ref(), &self.models, &self.ui);
+    }
+}
+
 /// The keys held while a new shortcut is recorded, sent to the settings window.
 #[derive(serde::Serialize, Clone)]
 struct CapturePayload {
@@ -70,6 +79,8 @@ pub fn tray_action(app: &tauri::AppHandle<Wry>, id: &str) {
             _ => tray::open_settings(app, Some("engines")),
         },
         tray::ID_FIX_PERMISSIONS => tray::open_settings(app, Some(tray::PERMISSIONS_PAGE)),
+        tray::ID_FIX_FLOW => tray::open_settings(app, Some("flow")),
+        tray::ID_FIX_ENGINES => tray::open_settings(app, Some("engines")),
         tray::ID_FIX_BACKUP => tray::open_settings(app, Some("backup")),
         tray::ID_COPY_LAST => {
             let engine = state.engine.lock().unwrap().clone();
@@ -134,6 +145,7 @@ pub fn run() {
             crate::commands::system::system_request_accessibility,
             crate::commands::system::system_open_privacy_pane,
             crate::commands::system::system_request_microphone,
+            crate::commands::system::system_problem_pages,
             crate::commands::system::system_running_apps,
             crate::commands::system::system_app_names,
             crate::commands::system::system_info,
@@ -563,9 +575,12 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         e.warm_up_default_asr();
         let mut rx = e.config().subscribe();
         let app = app.clone();
+        let (watched, models, ui) = (e.clone(), state_models.clone(), ui.clone());
+        crate::problems::refresh(Some(&watched), &models, &ui);
         tauri::async_runtime::spawn(async move {
             while rx.changed().await.is_ok() {
                 backup.touch();
+                crate::problems::refresh(Some(&watched), &models, &ui);
                 let cfg = rx.borrow().clone();
                 let _ = tauri::Emitter::emit_to(&app, "settings", "config-changed", (*cfg).clone());
             }
@@ -575,7 +590,6 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
     if engine.is_none() {
         tracing::error!(error = ?engine_error, "engine failed to open");
         ui.set_state(UiState::EngineError);
-        crate::ui::tray::open_settings(&app, Some("general"));
     } else {
         ui.set_state(UiState::Idle);
     }
@@ -618,7 +632,6 @@ fn follow_trust(
         if let Some(state) = trust::state_for(false, engine_ready) {
             ui.set_state(state);
         }
-        crate::ui::tray::open_settings(&app, Some(crate::ui::tray::PERMISSIONS_PAGE));
     }
     ui.set_microphone(platform.microphone_access());
 
@@ -647,7 +660,6 @@ fn follow_trust(
                     if let Some(state) = trust::state_for(false, engine_ready) {
                         ui.set_state(state);
                     }
-                    crate::ui::tray::open_settings(&app, Some(crate::ui::tray::PERMISSIONS_PAGE));
                 }
                 trust::Action::Install => {
                     tracing::info!("accessibility trust granted; shortcuts started");

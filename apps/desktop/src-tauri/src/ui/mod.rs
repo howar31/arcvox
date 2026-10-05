@@ -202,6 +202,11 @@ impl TauriUi {
         self.tray.put_notices(tray::Notice::about_backup, notices);
     }
 
+    /// What is wrong with the profiles and the engines as they are set up.
+    pub fn set_engine_problems(&self, notices: Vec<tray::Notice>) {
+        self.tray.put_notices(tray::Notice::about_engines, notices);
+    }
+
     /// The system's answer on the microphone: one that rules recording out
     /// is a problem the menu-bar icon reports.
     pub fn set_microphone(&self, access: crate::platform::MicAccess) {
