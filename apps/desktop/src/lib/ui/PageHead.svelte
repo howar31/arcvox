@@ -6,7 +6,8 @@
   type Crumb = { label: string; page: Page; arg?: string | null };
   let { title, description, crumb, actions }: {
     title: string;
-    description?: string;
+    /** A line under the title: text, or content with a link in it. */
+    description?: string | Snippet;
     /** The page above this one, or the pages above it from the top down. */
     crumb?: Crumb | Crumb[];
     actions?: Snippet;
@@ -26,7 +27,7 @@
 <header class="head">
   <div class="grow">
     <h1>{title}</h1>
-    {#if description}<p>{description}</p>{/if}
+    {#if typeof description === "string"}<p>{description}</p>{:else if description}<p>{@render description()}</p>{/if}
   </div>
   {#if actions}<div class="actions">{@render actions()}</div>{/if}
 </header>

@@ -7,6 +7,7 @@
   import Group from "../../lib/ui/Group.svelte";
   import Row from "../../lib/ui/Row.svelte";
   import Icon from "../../lib/ui/Icon.svelte";
+  import PageLink from "../../lib/ui/PageLink.svelte";
 
   /** The package named in the route, or nothing for the list. */
   let { arg = null }: { arg?: string | null } = $props();
@@ -79,12 +80,13 @@ ${mitTerms}`;
     </Row>
   </Group>
 
-  <Group title={t("licenses.runtimes")} help={t("about.model_licenses")}>
+  <Group title={t("licenses.runtimes")}>
     <details>
       <summary><span class="label"><span class="name">{runtimes.join(", ")}</span><small>{t("licenses.runtime_copyright")}</small></span><span class="sub">MIT</span><span class="chev"><Icon name="chevron-right" size={14} /></span></summary>
       <pre class="text">{noticeText}</pre>
     </details>
   </Group>
+  <p class="help">{t("about.model_licenses_before")}<PageLink page="engines" label={t("nav.engines")} />{t("about.model_licenses_after")}</p>
 
   <Group title={`${t("licenses.packages")} · ${all.length}`}>
     {#snippet actions()}

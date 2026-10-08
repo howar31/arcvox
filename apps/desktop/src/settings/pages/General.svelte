@@ -24,6 +24,7 @@
   import Choices from "../../lib/ui/Choices.svelte";
   import SaveBar from "../../lib/ui/SaveBar.svelte";
   import Icon from "../../lib/ui/Icon.svelte";
+  import PageLink from "../../lib/ui/PageLink.svelte";
   import Modal from "../../lib/ui/Modal.svelte";
   import AddPerApp from "./AddPerApp.svelte";
   import { DEMO, SCENES, lookOf, previewRequest, sceneFor, type Look, type Scene } from "../../lib/widgetPreview";
@@ -523,11 +524,13 @@
       </Row>
     </Group>
 
+    {#snippet typingHelp()}{t("general.typing_speed_help_before")}<PageLink page="home" label={t("nav.home")} />{t("general.typing_speed_help_after")}{/snippet}
+    {#snippet statsHelp()}{t("general.stats_help_before")}<PageLink page="home" label={t("nav.home")} />{t("general.stats_help_after")}{/snippet}
     <Group title={t("nav.home")} onreset={together([resets.typing])}>
-      <Row label={t("general.typing_speed")} help={t("general.typing_speed_help")} reset={resets.typing}>
+      <Row label={t("general.typing_speed")} help={typingHelp} reset={resets.typing}>
         <NumberField bind:value={general.typing_chars_per_min} min={1} max={1000} unit={t("common.chars")} label={t("general.typing_speed")} />
       </Row>
-      <Row label={t("general.stats")} help={t("general.stats_help")}>
+      <Row label={t("general.stats")} help={statsHelp}>
         <button type="button" class="btn danger" onclick={() => (confirmStats = true)}>{t("general.stats_reset")}</button>
       </Row>
     </Group>

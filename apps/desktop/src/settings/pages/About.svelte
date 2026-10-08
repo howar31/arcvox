@@ -9,6 +9,7 @@
   import Icon, { type IconName } from "../../lib/ui/Icon.svelte";
   import Mark from "../../lib/ui/Mark.svelte";
   import Tag from "../../lib/ui/Tag.svelte";
+  import PageLink from "../../lib/ui/PageLink.svelte";
 
   let info = $state<SystemInfo | null>(null);
   const links: { link: AboutLink; icon: IconName; label: string }[] = [
@@ -51,13 +52,14 @@
 </Group>
 
 {#if info}
-  <Group title={t("about.locations")} help={t("about.model_licenses")}>
+  <Group title={t("about.locations")}>
     {#each [["about.config_dir", info.config_dir], ["about.data_dir", info.data_dir], ["about.recordings_dir", info.recordings_dir], ["about.cache_dir", info.cache_dir]] as [key, path] (key)}
       <Row label={t(key)} help={path}>
         <button type="button" class="btn quiet" onclick={() => show(path)}><Icon name="folder" size={14} />{t("about.reveal")}</button>
       </Row>
     {/each}
   </Group>
+  <p class="help">{t("about.model_licenses_before")}<PageLink page="engines" label={t("nav.engines")} />{t("about.model_licenses_after")}</p>
 {/if}
 
 <footer class="foot">{t("about.copyright")}<br>{t("about.license")}</footer>

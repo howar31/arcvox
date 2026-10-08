@@ -19,6 +19,7 @@
   import Empty from "../../lib/ui/Empty.svelte";
   import Group from "../../lib/ui/Group.svelte";
   import Icon from "../../lib/ui/Icon.svelte";
+  import PageLink from "../../lib/ui/PageLink.svelte";
   import Modal from "../../lib/ui/Modal.svelte";
   import PageHead from "../../lib/ui/PageHead.svelte";
   import Ring from "../../lib/ui/Ring.svelte";
@@ -151,7 +152,8 @@
     t("engines.model_meta", { size: formatBytes(m.size_bytes), license: m.license, languages: m.languages.join(t("engines.list_sep")) });
 </script>
 
-<PageHead title={t("nav.engines")} description={t("engines.description")}>
+{#snippet description()}{t("engines.description_before")}<PageLink page="flow" label={t("nav.flow")} />{t("engines.description_after")}{/snippet}
+<PageHead title={t("nav.engines")} {description}>
   {#snippet actions()}
     <button type="button" class="btn primary" onclick={() => openForm(null)}><Icon name="plus" size={14} />{t("engines.add")}</button>
   {/snippet}

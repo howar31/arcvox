@@ -8,7 +8,8 @@
     label?: string;
     /** A tag beside the label, where every page puts the tag of a name. */
     tag?: Snippet;
-    help?: string;
+    /** A line under the label: text, or content with a link in it. */
+    help?: string | Snippet;
     leading?: Snippet;
     children?: Snippet;
     /** Makes the whole row a button that ends in a chevron. */
@@ -25,7 +26,7 @@
   {#if label || help}
     <span class="label">
       {#if label}<span class="text" class:tagged={tag}>{label}{#if tag}{@render tag()}{/if}</span>{/if}
-      {#if help}<small>{help}</small>{/if}
+      {#if typeof help === "string"}<small>{help}</small>{:else if help}<small>{@render help()}</small>{/if}
     </span>
   {/if}
   <ResetButton {reset} />
