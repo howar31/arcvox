@@ -46,6 +46,14 @@
   let busy = $state<Record<number, boolean>>({});
   let attempts = $state<Record<number, Attempt[]>>({});
   let fresh = $state<Record<number, number>>({});
+  // The result whose delete button was pressed once; a second press within a few seconds deletes it.
+  let confirming = $state<number | null>(null);
+  let confirmTimer: ReturnType<typeof setTimeout> | undefined;
+  function askDelete(a: Attempt) {
+    clearTimeout(confirmTimer);
+    confirming = a.id;
+    confirmTimer = setTimeout(() => { if (confirming === a.id) confirming = null; }, 4000);
+  }
 
   async function reload() {
     clearTimeout(timer);
@@ -114,9 +122,13 @@
   }
 
   /** The profile a row is processed with again: the chosen one, else its own, else the default. */
+  /** The profile the dictation was made with: the original result's when another result is in use. */
+  function ownProfileId(u: Utterance): string {
+    return attempts[u.id]?.find((a) => a.origin)?.profile_id ?? u.profile_id;
+  }
   function redoProfile(u: Utterance) {
     const profiles = config.value?.profiles ?? [];
-    return profiles.find((p) => p.id === (chosen[u.id] || u.profile_id)) ?? profiles.find((p) => p.is_default) ?? null;
+    return profiles.find((p) => p.id === (chosen[u.id] || ownProfileId(u))) ?? profiles.find((p) => p.is_default) ?? null;
   }
   /** The engines of a profile, in the order they run. */
   function enginesOf(asr: string, llm: string | null): string {
@@ -159,6 +171,8 @@
     await Promise.all([reload(), loadAttempts(u.id)]);
   }
   async function removeAttempt(u: Utterance, a: Attempt) {
+    clearTimeout(confirmTimer);
+    confirming = null;
     try {
       await deleteAttempt(a.id);
       if (fresh[u.id] === a.id) delete fresh[u.id];
@@ -315,8 +329,8 @@
                 {:else}
                   <div class="again">
                     <select bind:value={() => chosen[u.id] ?? "", (v) => (chosen[u.id] = v)} aria-label={t("history.profile_choice")}>
-                      <option value="">{t("history.own_profile", { name: who.name })}</option>
-                      {#each (config.value?.profiles ?? []).filter((p) => p.id !== u.profile_id) as p (p.id)}<option value={p.id}>{p.name}</option>{/each}
+                      <option value="">{t("history.own_profile", { name: profileOf(ownProfileId(u)).name })}</option>
+                      {#each (config.value?.profiles ?? []).filter((p) => p.id !== ownProfileId(u)) as p (p.id)}<option value={p.id}>{p.name}</option>{/each}
                     </select>
                     <button type="button" class="btn" class:primary={failedRow} onclick={() => redo(u)}>{t(failedRow ? "history.retry" : "history.reprocess")}</button>
                     <span class="hint">{t(failedRow ? "history.retry_help" : "history.reprocess_help")}</span>
@@ -330,7 +344,11 @@
                     {@const isFresh = fresh[u.id] === a.id}
                     <div class="attempt" class:chosen={a.chosen} class:fresh={isFresh}>
                       {#if !a.chosen}
-                        <button type="button" class="x" aria-label={t("history.delete_attempt")} title={t("history.delete_attempt")} onclick={() => removeAttempt(u, a)}><Icon name="x" size={12} /></button>
+                        {#if confirming === a.id}
+                          <button type="button" class="btn sm danger sure" onclick={() => removeAttempt(u, a)}>{t("history.delete_attempt_confirm")}</button>
+                        {:else}
+                          <button type="button" class="x" aria-label={t("history.delete_attempt")} title={t("history.delete_attempt")} onclick={() => askDelete(a)}><Icon name="x" size={12} /></button>
+                        {/if}
                       {/if}
                       <div class="head num">
                         <span class="when">{attemptWhen(u, a)}</span>
@@ -452,6 +470,7 @@
   .attempt .text { line-height: 1.55; overflow-wrap: anywhere; white-space: pre-line; -webkit-user-select: text; user-select: text; }
   .attempt .x { position: absolute; top: 8px; right: 8px; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: none; color: var(--ink-3); cursor: default; }
   .attempt .x:hover { background: var(--sunken); color: var(--ink); }
+  .attempt .sure { position: absolute; top: 6px; right: 8px; height: 28px; padding: 0 10px; font-size: var(--text-xs); }
   .choose { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 10px; }
   .foot { display: flex; align-items: center; gap: 4px; margin-top: 12px; }
   .foot .btn:last-child { margin-right: -8px; }

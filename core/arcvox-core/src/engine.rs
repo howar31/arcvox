@@ -670,15 +670,22 @@ impl Engine {
     ) -> Result<Reprocessed, ReprocessError> {
         let history = self.inner.history.clone();
         let recordings = self.inner.recordings_dir();
-        let (row, clip) = tokio::task::spawn_blocking(move || {
+        let (row, origin, clip) = tokio::task::spawn_blocking(move || {
             let row = history.get(id)?.ok_or(ReprocessError::NoRow)?;
+            // The profile the dictation was made with, when the row shows
+            // another result's by now.
+            let origin = history
+                .attempts(id)?
+                .into_iter()
+                .find(|a| a.origin)
+                .map(|a| a.profile_id);
             let path = history
                 .recording_path(id, &recordings)?
                 .ok_or(ReprocessError::NoRecording)?;
             let bytes = std::fs::read(&path).map_err(|_| ReprocessError::NoRecording)?;
             let clip =
                 crate::audio::decode_wav_pcm16(&bytes).map_err(|_| ReprocessError::NoRecording)?;
-            Ok::<_, ReprocessError>((row, clip))
+            Ok::<_, ReprocessError>((row, origin, clip))
         })
         .await
         .map_err(|e| ReprocessError::Failed {
@@ -687,7 +694,7 @@ impl Engine {
         })??;
 
         let config = self.inner.config.current();
-        let wanted = profile.unwrap_or_else(|| row.profile_id.clone());
+        let wanted = profile.unwrap_or_else(|| origin.unwrap_or_else(|| row.profile_id.clone()));
         let profile =
             Arc::new(resolve(&config.profiles, &AppInfo::default(), Some(&wanted)).clone());
         let label = |id: &crate::types::ProviderId| {
@@ -2503,6 +2510,51 @@ pub(crate) mod tests {
         assert_eq!(rows[0].error_code.as_deref(), Some("interrupted"));
         assert_eq!(rows[0].audio_ms, Some(1000));
         assert!(crate::audio::decode_wav_pcm16(&std::fs::read(&path).unwrap()).is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_rerun_without_a_choice_uses_the_profile_of_the_dictation() {
+        let r = rig(true).await;
+        mock_ok(&r, "原文", "整理後").await;
+        r.engine
+            .config()
+            .update(|c| {
+                let mut other = c.profiles[0].clone();
+                other.id = ProfileId("other".into());
+                other.name = "Other".into();
+                other.is_default = false;
+                c.profiles.push(other);
+            })
+            .unwrap();
+        let s = r.engine.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        s.finish();
+        let events = drain(&s).await;
+        let Some(Event::Done {
+            history_id: Some(id),
+            ..
+        }) = events.last()
+        else {
+            panic!("{events:?}")
+        };
+        let own = r.engine.history().get(*id).unwrap().unwrap().profile_id;
+        let done = r
+            .engine
+            .reprocess(*id, Some(ProfileId("other".into())))
+            .await
+            .unwrap();
+        assert!(r
+            .engine
+            .history()
+            .choose_attempt(*id, done.attempt.id)
+            .unwrap());
+        assert_eq!(
+            r.engine.history().get(*id).unwrap().unwrap().profile_id.0,
+            "other"
+        );
+        // No choice: the profile of the dictation, not of the result in use.
+        let again = r.engine.reprocess(*id, None).await.unwrap();
+        assert_eq!(again.attempt.profile_id, own);
     }
 
     #[tokio::test]

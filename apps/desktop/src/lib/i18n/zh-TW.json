@@ -575,6 +575,7 @@
   "history.attempt_failed": "失敗",
   "history.use_result": "使用這個結果",
   "history.delete_attempt": "刪除這筆結果",
+  "history.delete_attempt_confirm": "確定刪除",
   "history.result_used": "已使用這個結果",
   "history.attempt_just_now": "剛剛",
   "error.attempt_gone": "這筆結果已不存在。",

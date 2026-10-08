@@ -575,6 +575,7 @@
   "history.attempt_failed": "Failed",
   "history.use_result": "Use this result",
   "history.delete_attempt": "Delete this result",
+  "history.delete_attempt_confirm": "Delete?",
   "history.result_used": "This result is now in use",
   "history.attempt_just_now": "Just now",
   "error.attempt_gone": "The result no longer exists.",
