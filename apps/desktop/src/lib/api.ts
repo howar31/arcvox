@@ -106,7 +106,10 @@ export const setPrompt = (text: string) => invoke<void>("prompt_set", { text });
 export const defaultPrompt = () => invoke<string>("prompt_default");
 export const restorePrompt = () => invoke<string>("prompt_restore");
 /** Recent rows; `query` keeps rows whose text contains it, `withAudio` rows with a recording. */
-export const listHistory = (limit = 200, query = "", withAudio = false) => invoke<Utterance[]>("history_list", { limit, query, withAudio });
+/** One page of history rows, newest first. `since` and `until` are unix seconds (end exclusive); `before` is the last row shown. */
+export interface HistoryPage { limit: number; query?: string; withAudio?: boolean; since?: number | null; until?: number | null; before?: { ts: number; id: number } | null }
+export const listHistory = (p: HistoryPage) =>
+  invoke<Utterance[]>("history_list", { limit: p.limit, query: p.query ?? "", withAudio: p.withAudio ?? false, since: p.since ?? null, until: p.until ?? null, beforeTs: p.before?.ts ?? null, beforeId: p.before?.id ?? null });
 export const historyAudio = (id: number) => invoke<ArrayBuffer>("history_audio", { id });
 export const reprocessHistory = (id: number, profileId: string | null) => invoke<RedoOutcome>("history_reprocess", { id, profileId });
 /** Every result a row had, newest first. */
@@ -119,6 +122,11 @@ export const clearRecordings = () => invoke<number>("history_clear_recordings");
 export const revealRecording = (id: number) => invoke<void>("history_reveal_recording", { id });
 export interface HistoryStorage { rows: number; recordings: number; recording_bytes: number }
 export const historyStorage = () => invoke<HistoryStorage>("history_storage");
+/** Rows per local day (`day` is YYYY-MM-DD), days without rows left out. */
+export interface DayCount { day: string; count: number }
+export const historyDays = (tzOffsetSecs: number, withAudio = false) => invoke<DayCount[]>("history_days", { tzOffsetSecs, withAudio });
+/** Rows per local hour (24 counts) between `since` and `until`, unix seconds. */
+export const historyHours = (since: number, until: number, tzOffsetSecs: number, withAudio = false) => invoke<number[]>("history_hours", { since, until, tzOffsetSecs, withAudio });
 /** The folder recordings are kept in, and what the last change of it moved. */
 export interface RecordingsDir { path: string; is_default: boolean; moved: number; left: number }
 export const recordingsDir = () => invoke<RecordingsDir>("recordings_dir_get");

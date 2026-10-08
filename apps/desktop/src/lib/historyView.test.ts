@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Utterance } from "./api";
-import { clipLength, groupByDay, rawState, redoneTag, seconds, totalSeconds } from "./historyView";
+import { clipLength, groupByDay, periodLabel, periodRange, rawState, redoneTag, seconds, totalSeconds } from "./historyView";
 import { setLanguage } from "./i18n";
 
 const at = (d: Date) => Math.floor(d.getTime() / 1000);
@@ -88,5 +88,45 @@ describe("clipLength", () => {
     expect(clipLength(6400)).toBe("0:06");
     expect(clipLength(161000)).toBe("2:41");
     expect(clipLength(0)).toBe("0:00");
+  });
+});
+
+describe("periodRange", () => {
+  const now = new Date(2026, 9, 8, 15, 30);
+  const sec = (d: Date) => Math.floor(d.getTime() / 1000);
+
+  it("has no bounds for all", () => {
+    expect(periodRange({ kind: "all" }, now)).toEqual({ since: null, until: null });
+  });
+
+  it("covers today or yesterday as one local day", () => {
+    expect(periodRange({ kind: "today" }, now)).toEqual({ since: sec(new Date(2026, 9, 8)), until: null });
+    expect(periodRange({ kind: "yesterday" }, now)).toEqual({ since: sec(new Date(2026, 9, 7)), until: sec(new Date(2026, 9, 8)) });
+  });
+
+  it("counts the last 7 and 30 days including today", () => {
+    expect(periodRange({ kind: "7d" }, now)).toEqual({ since: sec(new Date(2026, 9, 2)), until: null });
+    expect(periodRange({ kind: "30d" }, now)).toEqual({ since: sec(new Date(2026, 8, 9)), until: null });
+  });
+
+  it("takes a range of whole local days, and hours inside a single day", () => {
+    expect(periodRange({ kind: "range", from: "2026-09-29", to: "2026-10-03" }, now)).toEqual({ since: sec(new Date(2026, 8, 29)), until: sec(new Date(2026, 9, 4)) });
+    expect(periodRange({ kind: "range", from: "2026-10-03", to: "2026-10-03" }, now)).toEqual({ since: sec(new Date(2026, 9, 3)), until: sec(new Date(2026, 9, 4)) });
+    expect(periodRange({ kind: "range", from: "2026-10-03", to: "2026-10-03", hourFrom: 14, hourTo: 16 }, now)).toEqual({ since: sec(new Date(2026, 9, 3, 14)), until: sec(new Date(2026, 9, 3, 17)) });
+    // Hours are ignored over more than one day.
+    expect(periodRange({ kind: "range", from: "2026-10-02", to: "2026-10-03", hourFrom: 14, hourTo: 16 }, now)).toEqual({ since: sec(new Date(2026, 9, 2)), until: sec(new Date(2026, 9, 4)) });
+  });
+});
+
+describe("periodLabel", () => {
+  it("names the selection in words", () => {
+    setLanguage("zh-TW");
+    expect(periodLabel({ kind: "all" })).toBe("全部");
+    expect(periodLabel({ kind: "7d" })).toBe("最近 7 天");
+    expect(periodLabel({ kind: "range", from: "2026-09-29", to: "2026-10-03" })).toBe("9/29 到 10/3");
+    expect(periodLabel({ kind: "range", from: "2026-10-03", to: "2026-10-03" })).toBe("10/3");
+    expect(periodLabel({ kind: "range", from: "2026-10-03", to: "2026-10-03", hourFrom: 14, hourTo: 16 })).toBe("10/3 14:00 到 17:00");
+    setLanguage("en");
+    expect(periodLabel({ kind: "yesterday" })).toBe("Yesterday");
   });
 });

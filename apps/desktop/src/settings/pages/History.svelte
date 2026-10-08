@@ -6,7 +6,7 @@
   } from "../../lib/api";
   import { failureText } from "../../lib/failure";
   import { formatDateTime, formatDay, formatTime } from "../../lib/format";
-  import { clipLength, groupByDay, rawState, redoneTag, seconds, totalSeconds } from "../../lib/historyView";
+  import { clipLength, groupByDay, PAGE_SIZE, periodRange, rawState, redoneTag, seconds, totalSeconds, type PeriodSel } from "../../lib/historyView";
   import { t } from "../../lib/i18n";
   import { isImeKey } from "../../lib/ime";
   import { firstShortcut } from "../../lib/shortcut";
@@ -19,6 +19,7 @@
   import Segmented from "../../lib/ui/Segmented.svelte";
   import Tag from "../../lib/ui/Tag.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
+  import PeriodPicker from "./history/PeriodPicker.svelte";
   import Player from "./history/Player.svelte";
 
   /** How long typing pauses before the search runs. */
@@ -34,6 +35,20 @@
   let failed = $state(false);
   let query = $state("");
   let filter = $state<"all" | "audio">("all");
+  // The time window shown, chosen in the period picker.
+  let period = $state<PeriodSel>({ kind: "all" });
+  // Paging: how many rows the list shows at most (grows by a page as the user scrolls), whether the next
+  // page is being read, and whether the last page has been reached.
+  let want = PAGE_SIZE;
+  let loadingMore = $state(false);
+  let exhausted = $state(false);
+  let sentinel = $state<HTMLElement | null>(null);
+  // The page's scroll container (the shell's main area) and whether it is scrolled far enough for the
+  // back-to-top button.
+  let scroller: HTMLElement | null = null;
+  let scrolled = $state(false);
+  let host = $state<HTMLElement | null>(null);
+  const TOP_BUTTON_AFTER_PX = 600;
   // The expanded row, and whether its recording starts playing when it opens.
   let open = $state<number | null>(null);
   let autoplay = $state(false);
@@ -55,10 +70,16 @@
     confirmTimer = setTimeout(() => { if (confirming === a.id) confirming = null; }, 4000);
   }
 
+  function window_() {
+    return periodRange(period, new Date());
+  }
+  /** Reads the list again from the top, as many rows as were shown. */
   async function reload() {
     clearTimeout(timer);
     try {
-      rows = await listHistory(200, query, filter === "audio");
+      const got = await listHistory({ limit: want, query, withAudio: filter === "audio", ...window_() });
+      rows = got;
+      exhausted = got.length < want;
       now = new Date();
       failed = false;
     } catch (e) {
@@ -67,11 +88,43 @@
     }
     historyStorage().then((s) => { storage = s; }).catch(() => { storage = null; });
   }
+  /** Starts over with one page: the filter changed. */
+  function reset() {
+    want = PAGE_SIZE;
+    exhausted = false;
+    return reload();
+  }
+  /** Appends the next page after the last row shown. */
+  async function loadMore() {
+    if (loadingMore || exhausted || !rows?.length) return;
+    loadingMore = true;
+    const last = rows[rows.length - 1];
+    try {
+      const got = await listHistory({ limit: PAGE_SIZE, query, withAudio: filter === "audio", ...window_(), before: { ts: last.ts, id: last.id } });
+      rows = [...rows, ...got];
+      want = Math.max(want, Math.ceil(rows.length / PAGE_SIZE) * PAGE_SIZE);
+      exhausted = got.length < PAGE_SIZE;
+    } catch (e) {
+      toast.error(errorMessage(e));
+    }
+    loadingMore = false;
+  }
+  // The next page is read when the line under the list comes into view.
+  $effect(() => {
+    const el = sentinel;
+    if (!el) return;
+    const io = new IntersectionObserver((entries) => { if (entries.some((e) => e.isIntersecting)) loadMore(); }, { rootMargin: "200px" });
+    io.observe(el);
+    return () => io.disconnect();
+  });
 
   onMount(() => {
     reload();
     const onFocus = () => { reload(); };
     window.addEventListener("focus", onFocus);
+    scroller = host?.closest<HTMLElement>(".main") ?? null;
+    const onScroll = () => { scrolled = (scroller?.scrollTop ?? 0) > TOP_BUTTON_AFTER_PX; };
+    scroller?.addEventListener("scroll", onScroll, { passive: true });
     // A dictation that ended while the page is shown. The row of a dictation still being
     // finished is not listed yet, so the list is read a moment later.
     let disposed = false;
@@ -80,19 +133,27 @@
       clearTimeout(timer);
       timer = setTimeout(reload, CHANGE_DELAY_MS);
     }).then((u) => { if (disposed) u(); else unlisten = u; });
-    return () => { disposed = true; unlisten?.(); window.removeEventListener("focus", onFocus); clearTimeout(timer); };
+    return () => { disposed = true; unlisten?.(); window.removeEventListener("focus", onFocus); scroller?.removeEventListener("scroll", onScroll); clearTimeout(timer); };
   });
+  function toTop() {
+    scroller?.scrollTo({ top: 0, behavior: "smooth" });
+  }
 
   function search() {
     clearTimeout(timer);
-    timer = setTimeout(reload, SEARCH_DELAY_MS);
+    timer = setTimeout(reset, SEARCH_DELAY_MS);
   }
   function setFilter(v: "all" | "audio") {
     filter = v;
-    reload();
+    reset();
+  }
+  function setPeriod(v: PeriodSel) {
+    period = v;
+    reset();
   }
 
-  const filtered = $derived(query.trim() !== "" || filter === "audio");
+  const windowed = $derived.by(() => { const w = window_(); return w.since !== null || w.until !== null; });
+  const filtered = $derived(query.trim() !== "" || filter === "audio" || windowed);
   const groups = $derived(groupByDay(rows ?? [], now));
   function dayTitle(key: string): string {
     if (key === "today" || key === "yesterday") return t(`history.${key}`);
@@ -241,6 +302,7 @@
   }
 </script>
 
+<div class="host" bind:this={host}></div>
 <PageHead title={t("nav.history")} description={retention}>
   {#snippet actions()}
     <button type="button" class="btn danger" disabled={!storage?.rows} onclick={() => (confirmClear = true)}>{t("history.clear_all")}</button>
@@ -272,6 +334,7 @@
         oninput={search} onkeydown={(e) => { if (e.key === "Enter" && !isImeKey(e)) reload(); }}
       />
     </label>
+    <PeriodPicker value={period} withAudio={filter === "audio"} onchange={setPeriod} />
     <Segmented
       options={[{ value: "all", label: t("history.filter.all") }, { value: "audio", label: t("history.filter.with_audio") }]}
       bind:value={() => filter, setFilter} label={t("history.filter.label")}
@@ -397,6 +460,19 @@
       <Empty text={filtered ? t("history.no_match") : t("history.empty", { key: firstShortcut(client.value?.hotkey.shortcuts) })} />
     </Group>
   {/each}
+  {#if scrolled}
+    <button type="button" class="top" aria-label={t("history.to_top")} title={t("history.to_top")} onclick={toTop}><Icon name="arrow-up" /></button>
+  {/if}
+  {#if rows.length}
+    {#if exhausted}
+      <div class="end">{t("history.end", { n: rows.length.toLocaleString() })}</div>
+    {:else}
+      <div class="more" bind:this={sentinel} role="status">
+        <span class="spin" aria-hidden="true"></span>{t("history.more")}
+        {#if !filtered && storage}<span class="count">{t("history.shown", { n: rows.length.toLocaleString(), total: storage.rows.toLocaleString() })}</span>{/if}
+      </div>
+    {/if}
+  {/if}
 {/if}
 
 <Modal bind:open={confirmClear} title={t("history.confirm_clear")}>
@@ -424,6 +500,13 @@
   .search:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
   .search input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; background: none; color: var(--ink); outline: none; -webkit-appearance: none; appearance: none; }
   .search input::-webkit-search-cancel-button { -webkit-appearance: none; }
+  .more { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 52px; margin-top: 10px; color: var(--ink-2); font-size: var(--text-sm); }
+  .more .spin { width: 14px; height: 14px; border-width: 2px; }
+  .more .count { color: var(--ink-3); }
+  .end { text-align: center; padding: 18px 0 6px; color: var(--ink-3); font-size: var(--text-sm); }
+  .host { display: none; }
+  .top { position: fixed; right: 28px; bottom: 28px; z-index: 3; display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink-2); box-shadow: var(--lift); cursor: default; }
+  .top:hover { color: var(--accent); border-color: var(--accent); }
 
   .entry + :global(.entry) { border-top: 1px solid var(--line); }
   .line { display: flex; align-items: flex-start; gap: 12px; padding-right: var(--row-x); }
