@@ -740,6 +740,7 @@ mod tests {
         let wav = tmp.path().join("rec.wav");
         std::fs::write(&wav, encode_wav_pcm16(&one_second_clip())).unwrap();
         let history = HistoryStore::open_in_memory().unwrap();
+        history.set_recordings_dir(tmp.path());
         let row = |audio: Option<std::path::PathBuf>, text: &str| NewUtterance {
             ts: 1,
             profile_id: ProfileId("default".into()),

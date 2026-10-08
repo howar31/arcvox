@@ -368,6 +368,7 @@ mod tests {
         write(&a, &root, all(), &rec_a);
 
         let b = HistoryStore::open_in_memory().unwrap();
+        b.set_recordings_dir(&rec_b);
         let without = import(&b, &root, &["0f8b6a1e-aaaa"], text_only(), &rec_b);
         assert_eq!((without.added, without.recordings), (1, 0));
         assert_eq!(b.list(10, None, true).unwrap().len(), 0);

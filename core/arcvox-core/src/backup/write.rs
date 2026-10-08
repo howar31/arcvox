@@ -63,7 +63,7 @@ pub fn write_tree(
 
         if cats.history {
             let mut months: BTreeMap<String, Vec<HistoryLine>> = BTreeMap::new();
-            for (mut line, source) in store.export_rows(&device.id)? {
+            for (mut line, source) in store.export_rows(&device.id, recordings_dir)? {
                 let month = month_of(line.ts);
                 let rel = format!("recordings/{month}/{}.wav", line.origin_id);
                 let target = dir.join(&rel);
