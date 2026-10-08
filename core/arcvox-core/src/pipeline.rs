@@ -95,8 +95,31 @@ impl Pipeline {
         ctx: &PipelineContext,
         events: &mpsc::Sender<Event>,
     ) -> Result<Outcome, StepError> {
-        let mut text = String::new();
-        let mut raw_text = String::new();
+        self.run_inner(Some(audio), String::new(), ctx, events)
+            .await
+    }
+
+    /// Runs the steps after ASR on `transcript`, as if ASR had produced it.
+    /// For measuring the rewrite on its own.
+    pub async fn run_from_text(
+        &self,
+        transcript: &str,
+        ctx: &PipelineContext,
+        events: &mpsc::Sender<Event>,
+    ) -> Result<Outcome, StepError> {
+        self.run_inner(None, transcript.to_string(), ctx, events)
+            .await
+    }
+
+    async fn run_inner(
+        &self,
+        audio: Option<Arc<AudioClip>>,
+        start: String,
+        ctx: &PipelineContext,
+        events: &mpsc::Sender<Event>,
+    ) -> Result<Outcome, StepError> {
+        let mut raw_text = start.clone();
+        let mut text = start;
         let mut language = None;
         let mut degraded = false;
         let mut asr_ms = 0;
@@ -107,11 +130,14 @@ impl Pipeline {
 
         for step in &self.steps {
             let name = step.name();
+            if name == StepName::Asr && audio.is_none() {
+                continue;
+            }
             let _ = events.send(Event::StepStarted { step: name }).await;
             let started = Instant::now();
             let input = StepInput {
                 text: text.clone(),
-                audio: (name == StepName::Asr).then(|| audio.clone()),
+                audio: (name == StepName::Asr).then(|| audio.clone()).flatten(),
             };
             match step.run(input, ctx).await {
                 Ok(out) => {
@@ -232,6 +258,32 @@ mod tests {
             out.push(e);
         }
         out
+    }
+
+    #[tokio::test]
+    async fn run_from_text_skips_asr_and_treats_the_text_as_the_transcript() {
+        let (tx, mut rx) = mpsc::channel(64);
+        let asr = FakeAsr::failing(ErrorCode::ProviderTimeout);
+        let p = pipeline(asr, FakeLlm::ok("软件 整理後"));
+        let out = p
+            .run_from_text("软件 原文", &test_context(), &tx)
+            .await
+            .unwrap();
+        assert_eq!(out.raw_text, "软件 原文");
+        assert_eq!(out.final_text, "軟體 整理後");
+        assert_eq!(out.asr_ms, 0);
+        assert!(out.llm_ms.is_some());
+        let events = collect(&mut rx).await;
+        assert!(
+            !events.iter().any(|e| matches!(
+                e,
+                Event::StepStarted {
+                    step: StepName::Asr
+                }
+            )),
+            "{events:?}"
+        );
+        assert!(events.iter().any(|e| matches!(e, Event::Refined { .. })));
     }
 
     #[tokio::test]

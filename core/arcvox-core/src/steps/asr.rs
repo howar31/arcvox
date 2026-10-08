@@ -10,7 +10,7 @@ use crate::steps::{PipelineContext, Step, StepError, StepInput, StepOutput};
 use crate::types::{ErrorCode, StepName};
 
 /// Byte budget for the hotword prompt sent to Whisper-style servers.
-pub(crate) const ASR_HINT_BUDGET_BYTES: usize = 600;
+pub const ASR_HINT_BUDGET_BYTES: usize = 600;
 
 pub struct AsrStep {
     provider: Arc<dyn AsrProvider>,
