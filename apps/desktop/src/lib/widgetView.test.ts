@@ -17,6 +17,7 @@ describe("widget label", () => {
     expect(labelKey("idle", message({ kind: "info", key: "widget.cancelled" }))).toBe("widget.cancelled");
     expect(labelKey("idle", message({ key: "widget.no_speech", detail: "no speech" }))).toBe("widget.no_speech_short");
     expect(labelKey("idle", message({ key: "widget.degraded" }))).toBe("widget.rewrite_failed");
+    expect(labelKey("idle", message({ key: "widget.record_failed", detail: "the history row could not be written" }))).toBe("widget.record_failed_short");
     expect(labelKey("idle", message({ kind: "info", key: "widget.secure_input", copyable: "文字" }))).toBe("widget.not_inserted");
     expect(labelKey("idle", message({ copyable: "x", code: "provider_timeout" }))).toBe("widget.failed");
   });
@@ -112,6 +113,9 @@ describe("panel", () => {
   it("shows the reason of a failed rewrite", () => {
     const degraded = panelView("idle", message({ key: "widget.degraded", detail: "Ollama: timed out" }), "", null, false);
     expect(degraded).toEqual({ title: t("widget.degraded"), detail: "Ollama: timed out", actions: [], close: false });
+    const unsaved = panelView("idle", message({ key: "widget.record_failed", detail: "the history row could not be written: disk I/O error" }), "", null, false);
+    expect(unsaved).toEqual({ title: t("widget.record_failed"), detail: "the history row could not be written: disk I/O error", actions: [], close: false });
+    expect(ringView("idle", message({ key: "widget.record_failed" }), null)).toEqual(ringView("idle", message({ key: "widget.degraded" }), null));
   });
 });
 

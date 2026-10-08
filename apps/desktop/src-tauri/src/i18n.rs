@@ -80,6 +80,7 @@ pub enum Msg {
     WidgetModelCorrupt,
     WidgetNativeUnavailable,
     WidgetDegraded,
+    WidgetRecordFailed,
     WidgetCopy,
     WidgetDismiss,
 }
@@ -129,6 +130,7 @@ pub const ALL_MSGS: &[Msg] = &[
     Msg::WidgetModelCorrupt,
     Msg::WidgetNativeUnavailable,
     Msg::WidgetDegraded,
+    Msg::WidgetRecordFailed,
     Msg::WidgetCopy,
     Msg::WidgetDismiss,
 ];
@@ -181,6 +183,7 @@ impl Msg {
             Msg::WidgetModelCorrupt => "widget.model_corrupt",
             Msg::WidgetNativeUnavailable => "widget.native_unavailable",
             Msg::WidgetDegraded => "widget.degraded",
+            Msg::WidgetRecordFailed => "widget.record_failed",
             Msg::WidgetCopy => "widget.copy",
             Msg::WidgetDismiss => "widget.dismiss",
         }
@@ -281,6 +284,8 @@ pub fn text(lang: Language, msg: Msg) -> &'static str {
         (Language::En, Msg::WidgetNativeUnavailable) => "The Apple service is not available",
         (Language::ZhTw, Msg::WidgetDegraded) => "改寫失敗，改用原始辨識結果",
         (Language::En, Msg::WidgetDegraded) => "Rewrite failed; the raw transcript was used",
+        (Language::ZhTw, Msg::WidgetRecordFailed) => "已填入，但紀錄未保存",
+        (Language::En, Msg::WidgetRecordFailed) => "Inserted, but the record was not saved",
         (Language::ZhTw, Msg::WidgetCopy) => "複製",
         (Language::En, Msg::WidgetCopy) => "Copy",
         (Language::ZhTw, Msg::WidgetDismiss) => "關閉",

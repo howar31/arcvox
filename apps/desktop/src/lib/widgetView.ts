@@ -26,13 +26,14 @@ const DONE_LABELS: Record<NonNullable<Done>, string> = { inserted: "widget.inser
 const FAILED = "widget.failed";
 const NOT_INSERTED = "widget.not_inserted";
 const REWRITE_FAILED = "widget.rewrite_failed";
+const RECORD_FAILED = "widget.record_failed_short";
 
 /** Every label the widget can show; its long side holds the longest of them. */
-export const LABEL_KEYS: string[] = [...Object.values(STATE_LABELS), ...Object.values(NOTICES), READY, ...Object.values(DONE_LABELS), FAILED, NOT_INSERTED, REWRITE_FAILED];
+export const LABEL_KEYS: string[] = [...Object.values(STATE_LABELS), ...Object.values(NOTICES), READY, ...Object.values(DONE_LABELS), FAILED, NOT_INSERTED, REWRITE_FAILED, RECORD_FAILED];
 
 /** The text exists but is not in the application, or is not what the processing should have made of it. */
 function needsAttention(message: MessagePayload): boolean {
-  return message.key === "widget.degraded" || (message.kind === "info" && !!message.copyable);
+  return message.key === "widget.degraded" || message.key === "widget.record_failed" || (message.kind === "info" && !!message.copyable);
 }
 
 /**
@@ -43,6 +44,7 @@ export function labelKey(state: WidgetState, message: MessagePayload | null, don
   if (!message) return STATE_LABELS[state] ?? (done && state === "idle" ? DONE_LABELS[done] : null);
   if (message.key in NOTICES) return NOTICES[message.key];
   if (message.key === "widget.degraded") return REWRITE_FAILED;
+  if (message.key === "widget.record_failed") return RECORD_FAILED;
   return needsAttention(message) ? NOT_INSERTED : FAILED;
 }
 
@@ -137,7 +139,7 @@ export function panelView(state: WidgetState, message: MessagePayload | null, tr
     return { title, body: t("panel.accessibility"), result: message.copyable ?? undefined, actions: message.copyable ? ["copy", "open_permissions"] : ["open_permissions"], close: true };
   }
   if (message.kind === "info" && message.copyable) return { title, result: message.copyable, actions: ["copy"], close: true };
-  if (message.key === "widget.degraded") return { title, detail: message.detail ?? undefined, actions: [], close: false };
+  if (message.key === "widget.degraded" || message.key === "widget.record_failed") return { title, detail: message.detail ?? undefined, actions: [], close: false };
   const own = BODIES[message.key];
   const reason = message.key in BODIES ? (own ? t(own) : "") : failureText(message.code, null);
   // One sentence a line.

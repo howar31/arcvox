@@ -569,6 +569,7 @@ impl Controller {
                 }
             }
             Event::Error {
+                code,
                 message,
                 recoverable: true,
                 hint,
@@ -580,11 +581,13 @@ impl Controller {
                 // before anyone could read it. `on_done`/`insert` show
                 // it once insertion has actually finished and the
                 // widget is idle again.
+                let msg = match code {
+                    // The result is there; its row or its recording is not.
+                    ErrorCode::StorageFailed => Msg::WidgetRecordFailed,
+                    _ => Msg::WidgetDegraded,
+                };
                 if let State::Processing { notice, .. } = &mut self.state {
-                    *notice = Some(UiMessage::error(
-                        Msg::WidgetDegraded,
-                        hint.or(Some(message)),
-                    ));
+                    *notice = Some(UiMessage::error(msg, hint.or(Some(message))));
                 }
             }
             Event::Error {
@@ -1832,6 +1835,39 @@ mod tests {
         );
         // The notice is what the widget shows, not a plain "inserted".
         assert!(!log.iter().any(|e| e == "inserted"), "{log:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_result_whose_record_could_not_be_kept_is_inserted_and_says_so() {
+        let r = rig_with(fast_settings(), Vec::new(), |c| {
+            c.general.keep_recordings = true;
+        })
+        .await;
+        mock_ok(&r, "原文", "整理後").await;
+        // A file where the recordings folder should be: the write fails.
+        let dir = r.engine.recordings_dir();
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::write(&dir, b"").unwrap();
+        hold_and_speak(&r, 1.0).await;
+        wait_for(|| r.platform.calls().iter().any(|c| c == "paste"), "paste").await;
+        wait_for(
+            || {
+                r.ui.messages
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|m| m.msg == Msg::WidgetRecordFailed)
+            },
+            "record failed notice",
+        )
+        .await;
+        assert!(!r
+            .ui
+            .messages
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|m| m.msg == Msg::WidgetDegraded));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

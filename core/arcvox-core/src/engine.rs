@@ -891,6 +891,20 @@ impl Inner {
 /// `Session::cancel` gets here first wins, and the other is a no-op. This is
 /// what keeps a cancel racing the pipeline's tail from producing a second
 /// `Done` alongside the one `cancel` already sent.
+/// Says that the result is there but could not be kept; the client shows
+/// it after the text has been put in place.
+async fn storage_failed(tx: &mpsc::Sender<Event>, message: String) {
+    let _ = tx
+        .send(Event::Error {
+            step: None,
+            code: ErrorCode::StorageFailed,
+            message,
+            recoverable: true,
+            hint: None,
+        })
+        .await;
+}
+
 async fn send_done_once(
     tx: &mpsc::Sender<Event>,
     done_sent: &AtomicBool,
@@ -1252,7 +1266,16 @@ async fn run_session(
         let p = wav_path.clone();
         match tokio::task::spawn_blocking(move || std::fs::write(&p, bytes)).await {
             Ok(Ok(())) => Some(wav_path.clone()),
-            _ => None,
+            Ok(Err(e)) => {
+                tracing::warn!(path = %wav_path.display(), error = %e, "the recording could not be written");
+                storage_failed(&tx, format!("the recording could not be written: {e}")).await;
+                None
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "the recording's write did not finish");
+                storage_failed(&tx, "the recording could not be written".into()).await;
+                None
+            }
         }
     } else {
         None
@@ -1315,6 +1338,7 @@ async fn run_session(
     .unwrap_or((Ok(None), None));
     if let Err(e) = &inserted {
         tracing::warn!(session = %session_id, error = %e, "history insert failed");
+        storage_failed(&tx, format!("the history row could not be written: {e}")).await;
     }
     let history_id = inserted.ok().flatten();
 
@@ -1786,6 +1810,86 @@ pub(crate) mod tests {
         assert!(path.starts_with(r.engine.dirs().recordings_dir()));
         assert!(path.exists());
         assert_eq!(&std::fs::read(&path).unwrap()[0..4], b"RIFF");
+    }
+
+    /// The events after a result whose storage failed: the error that says
+    /// so, then `Done` without a row.
+    fn storage_failed_then_done(events: &[Event]) -> bool {
+        let n = events.len();
+        n >= 2
+            && matches!(
+                events[n - 2],
+                Event::Error {
+                    code: ErrorCode::StorageFailed,
+                    recoverable: true,
+                    ..
+                }
+            )
+            && matches!(
+                events[n - 1],
+                Event::Done {
+                    history_id: None,
+                    ..
+                }
+            )
+    }
+
+    #[tokio::test]
+    async fn a_recording_that_cannot_be_written_is_reported_before_done() {
+        let r = rig(true).await;
+        mock_ok(&r, "原文", "整理後").await;
+        // A file where the recordings folder should be: every write fails.
+        let dir = r.engine.recordings_dir();
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::write(&dir, b"").unwrap();
+        let s = r.engine.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        s.finish();
+        let events = drain(&s).await;
+        let n = events.len();
+        assert!(
+            matches!(
+                events[n - 2],
+                Event::Error {
+                    code: ErrorCode::StorageFailed,
+                    recoverable: true,
+                    ..
+                }
+            ),
+            "{events:?}"
+        );
+        // The text is still the result; only the recording is missing.
+        let Some(Event::Done {
+            history_id: Some(id),
+            ..
+        }) = events.last()
+        else {
+            panic!("{events:?}")
+        };
+        assert!(r
+            .engine
+            .history()
+            .get(*id)
+            .unwrap()
+            .unwrap()
+            .audio_path
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn a_row_that_cannot_be_written_is_reported_before_done() {
+        let r = rig(false).await;
+        mock_ok(&r, "原文", "整理後").await;
+        r.engine
+            .history()
+            .connection()
+            .execute_batch("DROP TABLE utterances")
+            .unwrap();
+        let s = r.engine.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        s.finish();
+        let events = drain(&s).await;
+        assert!(storage_failed_then_done(&events), "{events:?}");
     }
 
     #[tokio::test]

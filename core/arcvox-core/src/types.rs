@@ -52,6 +52,9 @@ pub enum ErrorCode {
     InferenceFailed,
     /// The dictation was recorded and never reached a result.
     Interrupted,
+    /// The result was produced, but its row or its recording could not be
+    /// written; recoverable, sent before `Done`.
+    StorageFailed,
 }
 
 impl ErrorCode {
@@ -72,6 +75,7 @@ impl ErrorCode {
             ErrorCode::NativeUnavailable => "native_unavailable",
             ErrorCode::InferenceFailed => "inference_failed",
             ErrorCode::Interrupted => "interrupted",
+            ErrorCode::StorageFailed => "storage_failed",
         }
     }
 }
