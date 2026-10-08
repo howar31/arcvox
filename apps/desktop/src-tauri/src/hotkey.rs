@@ -31,7 +31,8 @@ pub enum Gesture {
     Tap,
     /// Two short presses within the window.
     DoubleTap,
-    /// A key was pressed while fn was down: abort whatever fn was doing.
+    /// A key was pressed while fn was down and the hold had not started, or
+    /// Escape was pressed: abort whatever fn was doing.
     Abort,
 }
 
@@ -115,10 +116,16 @@ impl Recognizer {
             }
             Input::KeyDown { .. } | Input::Escape => {
                 if self.fn_down {
-                    if matches!(self.state, State::Pending { .. } | State::Holding) {
-                        out.push(Gesture::Abort);
+                    match self.state {
+                        // Once the hold is on, other keys go to the
+                        // application and the recording goes on.
+                        State::Holding if input != Input::Escape => {}
+                        State::Pending { .. } | State::Holding => {
+                            out.push(Gesture::Abort);
+                            self.state = State::Aborted;
+                        }
+                        _ => self.state = State::Aborted,
                     }
-                    self.state = State::Aborted;
                 } else if let State::TapWait { .. } = self.state {
                     self.state = State::Idle;
                 }
@@ -218,7 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn key_press_while_fn_down_aborts_and_cancels() {
+    fn key_press_before_the_threshold_aborts() {
         let (mut r, t0) = rec();
         r.on_input(Input::TriggerDown, t0);
         assert_eq!(
@@ -227,7 +234,27 @@ mod tests {
         );
         assert!(r.on_input(Input::TriggerUp, ms(t0, 100)).is_empty());
         assert!(r.on_tick(ms(t0, 1000)).is_empty());
+    }
 
+    #[test]
+    fn key_press_while_holding_keeps_the_hold() {
+        let (mut r, t0) = rec();
+        r.on_input(Input::TriggerDown, t0);
+        assert_eq!(r.on_tick(ms(t0, 250)), vec![Gesture::HoldStart]);
+        assert!(r
+            .on_input(Input::KeyDown { key_code: 123 }, ms(t0, 500))
+            .is_empty());
+        assert!(r
+            .on_input(Input::KeyDown { key_code: 0 }, ms(t0, 700))
+            .is_empty());
+        assert_eq!(
+            r.on_input(Input::TriggerUp, ms(t0, 900)),
+            vec![Gesture::HoldEnd]
+        );
+    }
+
+    #[test]
+    fn escape_while_holding_aborts() {
         let (mut r, t0) = rec();
         r.on_input(Input::TriggerDown, t0);
         assert_eq!(r.on_tick(ms(t0, 250)), vec![Gesture::HoldStart]);
