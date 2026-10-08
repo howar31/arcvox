@@ -24,8 +24,8 @@
   let status = $state<BackupStatus>({ state: "never" });
   // The status before the write that is running: its second line stays, so the row keeps its height.
   let before = $state<BackupStatus>({ state: "never" });
-  // What the folder is right now, apart from what the last write said.
-  let folder = $state<FolderState>("usable");
+  // What the folder is right now, apart from what the last write said; null until the first look has answered.
+  let folder = $state<FolderState | null>(null);
   let devices = $state<DeviceRow[]>([]);
   let renaming = $state<string | null>(null);
   let name = $state("");
@@ -40,7 +40,8 @@
   const backup = $derived(client.value?.backup ?? null);
   const kinds = $derived(backup?.categories ?? { settings: false, content: false, history: false, stats: false, recordings: false });
   const view = $derived(statusView(status, formatDateTime, kinds, folder));
-  const detail = $derived(status.state === "running" ? statusView(before, formatDateTime, kinds).detail : view.detail);
+  // While a write runs or the folder has not been looked at, the second line keeps its place so the row keeps its height.
+  const detail = $derived(status.state === "running" ? statusView(before, formatDateTime, kinds).detail : folder === null ? "\u00a0" : view.detail);
   // The date in file names: the local day as numbers.
   const today = new Date().toLocaleDateString("sv");
 
@@ -173,7 +174,7 @@
 
 {#if backup}
   <Group title={t("backup.folder")} help={t("backup.folder_note")}>
-    <Row label={t("backup.folder_path")} tag={backup.folder && folder !== "usable" ? folderTag : undefined} help={backup.folder ?? t("backup.folder_none")}>
+    <Row label={t("backup.folder_path")} tag={backup.folder && folder && folder !== "usable" ? folderTag : undefined} help={backup.folder ?? t("backup.folder_none")}>
       <span class="buttons">
         {#if backup.folder && view.fix === "create"}
           <button type="button" class="btn primary" onclick={createFolder}>{t("backup.create_again")}</button>

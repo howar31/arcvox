@@ -702,6 +702,7 @@
   "backup.status_failed": "無法備份",
   "backup.status_failed_last": "{reason}。上次成功：{time}",
   "backup.status_running": "備份中…",
+  "backup.status_checking": "檢查備份資料夾…",
   "backup.import_folder": "從資料夾匯入紀錄",
   "backup.import_folder_help": "把其他裝置備份到資料夾的紀錄併入這台，例如在多台電腦之間同步的資料夾。不會取代這台現有的紀錄。",
   "backup.choose_folder": "選擇資料夾…",

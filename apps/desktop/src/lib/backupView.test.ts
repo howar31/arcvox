@@ -66,6 +66,13 @@ describe("backupView", () => {
     expect(statusView({ state: "failed", at: 9, reason: "the folder is gone", last_ok: null }, time, all).detail).toBe("the folder is gone");
   });
 
+  it("says nothing about the folder until it has been looked at", () => {
+    const time = (ts: number) => `T${ts}`;
+    const ok = { state: "ok", at: 5, report: none } as const;
+    expect(statusView(ok, time, all, null)).toEqual({ tone: "idle", title: "檢查備份資料夾…", detail: "", fix: null, run: false });
+    expect(statusView({ state: "running" }, time, all, null).title).toBe("備份中…");
+  });
+
   it("puts a folder that cannot be used before the last write", () => {
     const time = (ts: number) => `T${ts}`;
     const ok = { state: "ok", at: 5, report: none } as const;

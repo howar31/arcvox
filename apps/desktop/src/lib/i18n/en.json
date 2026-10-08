@@ -702,6 +702,7 @@
   "backup.status_failed": "Could not back up",
   "backup.status_failed_last": "{reason}. Last success: {time}",
   "backup.status_running": "Backing up…",
+  "backup.status_checking": "Checking the backup folder…",
   "backup.import_folder": "Import records from a folder",
   "backup.import_folder_help": "Merges the records other devices backed up to a folder, for example one that is synced between computers. Nothing on this device is replaced.",
   "backup.choose_folder": "Choose folder…",

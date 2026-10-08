@@ -77,8 +77,10 @@ export function writtenLine(r: WriteReport, c: BackupCategories): string {
   return parts.length ? t("backup.wrote", { parts: parts.join(t("backup.list_sep")) }) : t("backup.wrote_none");
 }
 
-export function statusView(s: BackupStatus, time: (ts: number) => string, c: BackupCategories, folder: FolderState = "usable"): StatusView {
-  if (folder !== "usable" && s.state !== "running") {
+/** `folder` is null until the page has looked at the folder once; the row then claims nothing about it. */
+export function statusView(s: BackupStatus, time: (ts: number) => string, c: BackupCategories, folder: FolderState | null = "usable"): StatusView {
+  if (folder === null && s.state !== "running") return { tone: "idle", title: t("backup.status_checking"), detail: "", fix: null, run: false };
+  if (folder !== null && folder !== "usable" && s.state !== "running") {
     // The folder as it is now comes before what the last write said.
     const last = s.state === "ok" ? s.at : s.state === "failed" ? s.last_ok : null;
     const detail = t(`backup.folder_${folder}_detail`);
