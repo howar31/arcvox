@@ -6,7 +6,7 @@
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use block2::RcBlock;
@@ -21,9 +21,14 @@ use crate::platform::ModifierEvent;
 const KVK_FUNCTION: u16 = 63;
 
 struct Forwarder {
-    tx: Sender<ModifierEvent>,
+    tx: Mutex<Sender<ModifierEvent>>,
     fn_down: AtomicBool,
 }
+
+/// The one forwarder of the process: the monitors are installed once and
+/// live as long as the process, so a later `install` only changes where
+/// the events go.
+static INSTALLED: OnceLock<Arc<Forwarder>> = OnceLock::new();
 
 impl Forwarder {
     fn handle(&self, event: &NSEvent) {
@@ -40,7 +45,7 @@ impl Forwarder {
                     // event, rather than later when the controller thread
                     // gets around to handling it.
                     let at = Instant::now();
-                    let _ = self.tx.send(if down {
+                    self.send(if down {
                         ModifierEvent::TriggerDown { at }
                     } else {
                         ModifierEvent::TriggerUp { at }
@@ -49,7 +54,7 @@ impl Forwarder {
             }
             NSEventType::KeyDown => {
                 let key_code = event.keyCode();
-                let _ = self.tx.send(ModifierEvent::KeyDown {
+                self.send(ModifierEvent::KeyDown {
                     key_code,
                     at: Instant::now(),
                 });
@@ -57,14 +62,27 @@ impl Forwarder {
             _ => {}
         }
     }
+
+    fn send(&self, event: ModifierEvent) {
+        let _ = self
+            .tx
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .send(event);
+    }
 }
 
 /// Installs both monitors and leaks their handles: they live as long as
 /// the process. Returns `false` when the global monitor could not be
-/// installed (the process is not trusted).
+/// installed (the process is not trusted). Called again, it only replaces
+/// the channel the events go to.
 pub fn install(tx: Sender<ModifierEvent>) -> bool {
+    if let Some(fwd) = INSTALLED.get() {
+        *fwd.tx.lock().unwrap_or_else(|e| e.into_inner()) = tx;
+        return true;
+    }
     let fwd = Arc::new(Forwarder {
-        tx,
+        tx: Mutex::new(tx),
         fn_down: AtomicBool::new(false),
     });
     let mask = NSEventMask::FlagsChanged | NSEventMask::KeyDown;
@@ -96,11 +114,13 @@ pub fn install(tx: Sender<ModifierEvent>) -> bool {
     // SAFETY: `install` is documented to run on the main thread, which
     // AppKit requires for registering an event monitor; the handler block
     // above returns promptly and never unwinds across the ObjC boundary.
-    if let Some(handle) =
-        unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask, &local) }
-    {
-        std::mem::forget(handle);
+    match unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask, &local) } {
+        Some(handle) => std::mem::forget(handle),
+        // The global monitor sees other applications' events only; the
+        // shortcut then does nothing while this app's own windows are in front.
+        None => tracing::warn!("local event monitor could not be installed"),
     }
     std::mem::forget(local);
+    let _ = INSTALLED.set(fwd);
     true
 }
