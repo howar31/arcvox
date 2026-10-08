@@ -177,6 +177,8 @@ pub fn run() {
             crate::commands::history::history_clear_recordings,
             crate::commands::history::history_reveal_recording,
             crate::commands::history::history_storage,
+            crate::commands::history::history_days,
+            crate::commands::history::history_hours,
             crate::commands::history::recordings_dir_get,
             crate::commands::history::recordings_dir_set,
             crate::commands::history::recordings_dir_open,

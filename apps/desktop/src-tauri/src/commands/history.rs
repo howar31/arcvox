@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use arcvox_core::history::{Attempt, AttemptId, HistoryStore, Utterance};
+use arcvox_core::history::{Attempt, AttemptId, HistoryStore, ListFilter, Utterance};
 use arcvox_core::types::{HistoryId, ProfileId};
 use arcvox_core::{Engine, ReprocessError};
 use serde::Serialize;
@@ -193,23 +193,23 @@ impl UtteranceDto {
     }
 }
 
-/// `in_flight` says whether a recording belongs to a dictation still being
-/// processed; its row is left out until the result is known.
+/// One page of rows, newest first; see `ListFilter` for the window and the
+/// last row shown. `in_flight` says whether a recording belongs to a dictation still
+/// being processed; its row is left out until the result is known.
 pub fn list(
     history: &HistoryStore,
     recordings_dir: &Path,
     limit: usize,
-    query: Option<&str>,
-    with_audio: bool,
+    filter: &ListFilter,
     in_flight: impl Fn(&Path) -> bool,
 ) -> CmdResult<Vec<UtteranceDto>> {
     Ok(history
-        .list(limit, query, with_audio)?
+        .list_page(limit, filter)?
         .into_iter()
         .filter(|u| !u.audio_path.as_deref().is_some_and(&in_flight))
         .map(|u| UtteranceDto::new(u, recordings_dir))
         // A row whose file is gone has no recording to show.
-        .filter(|u| !with_audio || u.has_audio)
+        .filter(|u| !filter.with_audio || u.has_audio)
         .collect())
 }
 
@@ -229,20 +229,33 @@ fn recording(
         .ok_or_else(|| CmdError::new("recording_not_kept", "recording not found"))
 }
 
+/// `since` and `until` are unix seconds; `before_ts` and `before_id` name
+/// the last row of the page already shown.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn history_list(
     state: State<'_, AppState>,
     limit: Option<usize>,
     query: Option<String>,
     with_audio: Option<bool>,
+    since: Option<i64>,
+    until: Option<i64>,
+    before_ts: Option<i64>,
+    before_id: Option<i64>,
 ) -> CmdResult<Vec<UtteranceDto>> {
     let e = engine(&state)?;
+    let filter = ListFilter {
+        query,
+        with_audio: with_audio.unwrap_or(false),
+        since,
+        until,
+        before: before_ts.zip(before_id),
+    };
     list(
         &e.history(),
         &e.recordings_dir(),
-        limit.unwrap_or(200),
-        query.as_deref(),
-        with_audio.unwrap_or(false),
+        limit.unwrap_or(100),
+        &filter,
         |p| e.in_flight(p),
     )
 }
@@ -288,6 +301,32 @@ pub struct StorageDto {
     pub rows: u64,
     pub recordings: u64,
     pub recording_bytes: u64,
+}
+
+/// Rows per local day, for the period picker's calendar.
+#[tauri::command]
+pub fn history_days(
+    state: State<'_, AppState>,
+    tz_offset_secs: i32,
+    with_audio: Option<bool>,
+) -> CmdResult<Vec<arcvox_core::history::DayCount>> {
+    let e = engine(&state)?;
+    Ok(e.history()
+        .day_counts(tz_offset_secs, with_audio.unwrap_or(false))?)
+}
+
+/// Rows per local hour between `since` and `until`, for the picker's hour row.
+#[tauri::command]
+pub fn history_hours(
+    state: State<'_, AppState>,
+    since: i64,
+    until: i64,
+    tz_offset_secs: i32,
+    with_audio: Option<bool>,
+) -> CmdResult<Vec<u32>> {
+    let e = engine(&state)?;
+    Ok(e.history()
+        .hour_counts(since, until, tz_offset_secs, with_audio.unwrap_or(false))?)
 }
 
 #[tauri::command]
@@ -408,7 +447,7 @@ mod tests {
             .insert(row(3, "gone", Some(dir.path().join("missing.wav"))))
             .unwrap();
 
-        let rows = list(&history, dir.path(), 10, None, false, |_| false).unwrap();
+        let rows = list(&history, dir.path(), 10, &ListFilter::default(), |_| false).unwrap();
         let by_text = |t: &str| rows.iter().find(|r| r.final_text == t).unwrap();
         assert!(by_text("kept").has_audio);
         assert_eq!(by_text("kept").audio_bytes, Some(10));
@@ -433,11 +472,21 @@ mod tests {
 
         assert_eq!(audio(&history, dir.path(), id.0).unwrap(), b"RIFFdata");
         let only = |q: Option<&str>, with_audio: bool| {
-            list(&history, dir.path(), 10, q, with_audio, |_| false)
-                .unwrap()
-                .into_iter()
-                .map(|r| r.final_text)
-                .collect::<Vec<_>>()
+            list(
+                &history,
+                dir.path(),
+                10,
+                &ListFilter {
+                    query: q.map(str::to_string),
+                    with_audio,
+                    ..ListFilter::default()
+                },
+                |_| false,
+            )
+            .unwrap()
+            .into_iter()
+            .map(|r| r.final_text)
+            .collect::<Vec<_>>()
         };
         assert_eq!(only(None, true), vec!["with sound"]);
         history

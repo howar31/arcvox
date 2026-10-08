@@ -178,6 +178,27 @@ pub struct PruneReport {
     pub recordings_deleted: usize,
 }
 
+/// Rows on one local day, as `YYYY-MM-DD`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DayCount {
+    pub day: String,
+    pub count: u32,
+}
+
+/// What `HistoryStore::list_page` selects. Times are unix seconds.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ListFilter {
+    /// Matches the final and the raw text literally.
+    pub query: Option<String>,
+    pub with_audio: bool,
+    /// Rows at or after this time.
+    pub since: Option<i64>,
+    /// Rows before this time.
+    pub until: Option<i64>,
+    /// Rows older than this (time, id): the last row of the previous page.
+    pub before: Option<(i64, i64)>,
+}
+
 /// Contract for `audio_path` on every row: the column holds only the file
 /// name of the recording; the file lives directly inside the recordings
 /// folder of the moment. Rows read back carry the absolute path under the
@@ -1258,6 +1279,65 @@ impl HistoryStore {
         self.list(limit, None, false)
     }
 
+    /// How many rows each local day has, oldest day first, days without a
+    /// row left out. `tz_offset_secs` is the local time's offset east of UTC.
+    pub fn day_counts(
+        &self,
+        tz_offset_secs: i32,
+        with_audio: bool,
+    ) -> Result<Vec<DayCount>, HistoryError> {
+        let audio = if with_audio {
+            "WHERE audio_path IS NOT NULL"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT date(ts + ?1, 'unixepoch') AS d, COUNT(*) FROM utterances {audio} GROUP BY d ORDER BY d"
+        );
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![i64::from(tz_offset_secs)], |r| {
+            Ok(DayCount {
+                day: r.get(0)?,
+                count: r.get::<_, i64>(1)? as u32,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// How many rows fall into each local hour of the day between `since`
+    /// and `until` (unix seconds, end exclusive): 24 counts, hour 0 first.
+    pub fn hour_counts(
+        &self,
+        since: i64,
+        until: i64,
+        tz_offset_secs: i32,
+        with_audio: bool,
+    ) -> Result<Vec<u32>, HistoryError> {
+        let audio = if with_audio {
+            "AND audio_path IS NOT NULL"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT CAST(strftime('%H', ts + ?1, 'unixepoch') AS INTEGER) AS h, COUNT(*)
+             FROM utterances WHERE ts >= ?2 AND ts < ?3 {audio} GROUP BY h"
+        );
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&sql)?;
+        let mut out = vec![0u32; 24];
+        let rows = stmt.query_map(params![i64::from(tz_offset_secs), since, until], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+        })?;
+        for row in rows {
+            let (h, n) = row?;
+            if let Some(slot) = out.get_mut(h.clamp(0, 23) as usize) {
+                *slot = n as u32;
+            }
+        }
+        Ok(out)
+    }
+
     /// Newest first. `query` matches the final and the raw text literally
     /// (case-insensitive for ASCII); `with_audio` keeps rows with a recording.
     pub fn list(
@@ -1266,22 +1346,55 @@ impl HistoryStore {
         query: Option<&str>,
         with_audio: bool,
     ) -> Result<Vec<Utterance>, HistoryError> {
-        let mut clauses: Vec<&str> = Vec::new();
+        self.list_page(
+            limit,
+            &ListFilter {
+                query: query.map(str::to_string),
+                with_audio,
+                ..ListFilter::default()
+            },
+        )
+    }
+
+    /// One page of rows, newest first: those older than `before` (a time and
+    /// an id, so rows sharing a second are not repeated or skipped), from
+    /// `since` up to but not including `until`.
+    pub fn list_page(&self, limit: usize, f: &ListFilter) -> Result<Vec<Utterance>, HistoryError> {
+        let mut clauses: Vec<String> = Vec::new();
         let mut values: Vec<rusqlite::types::Value> = Vec::new();
-        if let Some(q) = query.map(str::trim).filter(|q| !q.is_empty()) {
-            clauses.push("(final_text LIKE ?1 ESCAPE '\\' OR raw_text LIKE ?1 ESCAPE '\\')");
-            values.push(format!("%{}%", escape_like(q)).into());
+        // Adds a bound value and returns its placeholder number.
+        fn bind(values: &mut Vec<rusqlite::types::Value>, v: rusqlite::types::Value) -> usize {
+            values.push(v);
+            values.len()
         }
-        if with_audio {
-            clauses.push("audio_path IS NOT NULL");
+        if let Some(q) = f.query.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
+            let n = bind(&mut values, format!("%{}%", escape_like(q)).into());
+            clauses.push(format!(
+                "(final_text LIKE ?{n} ESCAPE '\\' OR raw_text LIKE ?{n} ESCAPE '\\')"
+            ));
+        }
+        if f.with_audio {
+            clauses.push("audio_path IS NOT NULL".into());
+        }
+        if let Some(since) = f.since {
+            let n = bind(&mut values, since.into());
+            clauses.push(format!("ts >= ?{n}"));
+        }
+        if let Some(until) = f.until {
+            let n = bind(&mut values, until.into());
+            clauses.push(format!("ts < ?{n}"));
+        }
+        if let Some((ts, id)) = f.before {
+            let a = bind(&mut values, ts.into());
+            let b = bind(&mut values, id.into());
+            clauses.push(format!("(ts < ?{a} OR (ts = ?{a} AND id < ?{b}))"));
         }
         let filter = if clauses.is_empty() {
             String::new()
         } else {
             format!(" WHERE {}", clauses.join(" AND "))
         };
-        let limit_slot = values.len() + 1;
-        values.push((limit as i64).into());
+        let limit_slot = bind(&mut values, (limit as i64).into());
         let sql = format!("{SELECT}{filter} ORDER BY ts DESC, id DESC LIMIT ?{limit_slot}");
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(&sql)?;
@@ -2625,6 +2738,104 @@ INSERT INTO stats_meta (key, value) VALUES ('backfilled', '1');
             .unwrap();
         let id = s.insert(new(5, None)).unwrap();
         assert!(s.get(id).unwrap().is_some());
+    }
+
+    #[test]
+    fn activity_counts_rows_per_local_day_and_per_hour() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        // 2026-10-08 00:30 UTC is 08:30 in UTC+8; 2026-10-07 23:30 UTC is 07:30 on the 8th there.
+        let base = 1_791_419_400; // 2026-10-08T00:30:00Z
+        for (ts, audio) in [
+            (base, true),
+            (base + 60, false),
+            (base - 3600, true),        // 07:30 local, same day
+            (base - 10 * 3600, true),   // 22:30 local on the 7th
+            (base - 3 * 86_400, false), // the 5th
+        ] {
+            s.insert(new(ts, audio.then(|| PathBuf::from("/r/x.wav"))))
+                .unwrap();
+        }
+        let days = s.day_counts(8 * 3600, false).unwrap();
+        assert_eq!(
+            days.iter()
+                .map(|d| (d.day.as_str(), d.count))
+                .collect::<Vec<_>>(),
+            vec![("2026-10-05", 1), ("2026-10-07", 1), ("2026-10-08", 3)]
+        );
+        let with_audio = s.day_counts(8 * 3600, true).unwrap();
+        assert_eq!(
+            with_audio
+                .iter()
+                .map(|d| (d.day.as_str(), d.count))
+                .collect::<Vec<_>>(),
+            vec![("2026-10-07", 1), ("2026-10-08", 2)]
+        );
+        // The 8th in UTC+8 runs from 2026-10-07T16:00Z.
+        let day_start = base - 8 * 3600 - 1800;
+        let hours = s
+            .hour_counts(day_start, day_start + 86_400, 8 * 3600, false)
+            .unwrap();
+        assert_eq!(hours.len(), 24);
+        assert_eq!(hours[7], 1);
+        assert_eq!(hours[8], 2);
+        assert_eq!(hours.iter().sum::<u32>(), 3);
+    }
+
+    #[test]
+    fn list_page_pages_by_cursor_inside_a_time_window() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        // Two rows share a second: the cursor must tell them apart by id.
+        let ids: Vec<HistoryId> = [100, 200, 200, 300, 400]
+            .iter()
+            .map(|ts| s.insert(new(*ts, None)).unwrap())
+            .collect();
+        let texts = |rows: &[Utterance]| rows.iter().map(|u| u.id).collect::<Vec<_>>();
+
+        let window = ListFilter {
+            since: Some(200),
+            until: Some(400),
+            ..ListFilter::default()
+        };
+        let first = s.list_page(2, &window).unwrap();
+        assert_eq!(
+            texts(&first),
+            vec![ids[3], ids[2]],
+            "newest first, until is exclusive"
+        );
+        let cursor = first.last().map(|u| (u.ts, u.id.0));
+        let second = s
+            .list_page(
+                2,
+                &ListFilter {
+                    before: cursor,
+                    ..window.clone()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            texts(&second),
+            vec![ids[1]],
+            "since is inclusive; the page ends"
+        );
+        let third = s
+            .list_page(
+                2,
+                &ListFilter {
+                    before: second.last().map(|u| (u.ts, u.id.0)),
+                    ..window
+                },
+            )
+            .unwrap();
+        assert!(third.is_empty());
+
+        // The old call is the first page without a window.
+        assert_eq!(s.list(10, None, false).unwrap().len(), 5);
+        let searched = ListFilter {
+            query: Some("refined".into()),
+            with_audio: false,
+            ..ListFilter::default()
+        };
+        assert_eq!(s.list_page(10, &searched).unwrap().len(), 5);
     }
 
     #[test]
