@@ -17,6 +17,7 @@ describe("providerForm", () => {
     expect(describeProbe({ ok: false, failure: { kind: "model_missing" } }, t)).toBe("engines.probe_failed: engines.failure.model_missing");
     expect(describeProbe({ ok: false, failure: { kind: "native_unavailable", reason: "off" } }, t)).toContain("off");
     expect(describeProbe({ ok: false, failure: { kind: "native_unavailable", reason: "off" } }, t)).toBe("engines.probe_failed: engines.failure.native_unavailable (off)");
+    expect(describeProbe({ ok: false, failure: { kind: "server_error", status: 503 } }, t)).toBe("engines.probe_failed: engines.failure.server_error (503)");
     expect(describeProbe({ ok: true, failure: null }, t)).toBe("engines.probe_ok");
   });
 });

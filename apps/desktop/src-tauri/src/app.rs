@@ -12,6 +12,7 @@ use crate::audio::capture::CpalSource;
 use crate::audio::AudioSource;
 use crate::backup_auto::{BackupAuto, BackupStatus, Failure, LastWrite};
 use crate::commands::bench::BenchState;
+use crate::commands::CmdError;
 use crate::dictation::ui::{Ui, UiState};
 use crate::dictation::{self, ControllerHandle, Deps};
 use crate::hotkey::KEY_ESCAPE;
@@ -91,7 +92,9 @@ pub fn tray_action(app: &tauri::AppHandle<Wry>, id: &str) {
                 .and_then(|e| e.history().list_recent(20).ok())
                 .and_then(|rows| rows.into_iter().find(|u| !u.final_text.is_empty()));
             if let Some(u) = last {
-                state.platform.clipboard_write_text(&u.final_text);
+                if !state.platform.clipboard_write_text(&u.final_text) {
+                    tracing::warn!("the last result could not be put on the clipboard");
+                }
             }
         }
         other => {
@@ -323,7 +326,10 @@ fn backup_auto(
             let client = ClientSettings::load(&config_dir);
             let Some(folder) = client.backup.folder.clone() else {
                 return if manual {
-                    Err(Failure::other("no folder is chosen"))
+                    Err(Failure::error(CmdError::new(
+                        "no_backup_folder",
+                        "no folder is chosen",
+                    )))
                 } else {
                     Ok(None)
                 };
@@ -337,9 +343,9 @@ fn backup_auto(
             if !(found.usable() || (found == FolderState::Missing && recreate)) {
                 return Err(Failure::folder(found));
             }
-            let engine = engine
-                .clone()
-                .ok_or_else(|| Failure::other("engine unavailable"))?;
+            let engine = engine.clone().ok_or_else(|| {
+                Failure::error(CmdError::new("engine_unavailable", "engine unavailable"))
+            })?;
             let sections = crate::commands::backup::snapshot_sections(client.backup.categories);
             let snapshot = if sections.is_empty() {
                 None
@@ -347,7 +353,7 @@ fn backup_auto(
                 let file = crate::commands::backup::build_settings_file(
                     &engine, &client, &sections, &version,
                 )
-                .map_err(|e| Failure::other(e.message))?;
+                .map_err(Failure::error)?;
                 Some(file.to_bytes())
             };
             runtime
@@ -358,7 +364,7 @@ fn backup_auto(
                     recreate,
                 ))
                 .map(Some)
-                .map_err(|e| Failure::other(e.to_string()))
+                .map_err(|e| Failure::error(e.into()))
         }),
         Box::new(move || busy_engine.as_ref().is_some_and(Engine::busy)),
         Box::new(move |status| {

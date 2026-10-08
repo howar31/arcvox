@@ -43,6 +43,8 @@ pub struct General {
     pub asr_timeout_secs: u64,
     pub llm_timeout_secs: u64,
     pub llm_temperature: f32,
+    /// The least room the rewrite may take; a long transcript raises it.
+    /// `None` leaves the length to the model.
     pub llm_max_tokens: Option<u32>,
     pub llm_idle_unload_secs: u64,
     /// How many more times a request to an engine over the network is made

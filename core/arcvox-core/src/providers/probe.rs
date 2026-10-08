@@ -13,13 +13,22 @@ use crate::secrets::SecretStore;
 pub enum ProbeFailure {
     Unreachable,
     Unauthorized,
+    /// The server was reached but answered with a 5xx status: it is there,
+    /// and failing for the moment.
+    ServerError {
+        status: u16,
+    },
     NotCompatible,
     MissingBaseUrl,
     MissingKey,
     ModelMissing,
     ModelCorrupt,
-    NativeUnavailable { reason: String },
-    Other { message: String },
+    NativeUnavailable {
+        reason: String,
+    },
+    Other {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,6 +82,7 @@ pub async fn probe_http(
         }),
         Ok(resp) => match resp.status().as_u16() {
             401 | 403 => ProbeResult::fail(ProbeFailure::Unauthorized),
+            status @ 500..=599 => ProbeResult::fail(ProbeFailure::ServerError { status }),
             200 => match resp.json::<serde_json::Value>().await {
                 Ok(v) if v.get("data").map(|d| d.is_array()).unwrap_or(false) => ProbeResult {
                     ok: true,
@@ -153,6 +163,26 @@ mod tests {
             .await;
         let r = probe_http(&reqwest::Client::new(), &cfg(&server, None), &secrets()).await;
         assert_eq!(r.failure, Some(ProbeFailure::NotCompatible));
+
+        // A server that is there but failing is not an incompatible one.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        let r = probe_http(&reqwest::Client::new(), &cfg(&server, None), &secrets()).await;
+        assert_eq!(r.failure, Some(ProbeFailure::ServerError { status: 503 }));
+
+        // A path that is not there is still the wrong kind of server.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        let r = probe_http(&reqwest::Client::new(), &cfg(&server, None), &secrets()).await;
+        assert_eq!(r.failure, Some(ProbeFailure::NotCompatible));
     }
 
     #[tokio::test]
@@ -177,6 +207,7 @@ mod tests {
         let variants = [
             ProbeFailure::Unreachable,
             ProbeFailure::Unauthorized,
+            ProbeFailure::ServerError { status: 503 },
             ProbeFailure::NotCompatible,
             ProbeFailure::MissingBaseUrl,
             ProbeFailure::MissingKey,

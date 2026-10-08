@@ -64,6 +64,8 @@ describe("backupView", () => {
     expect(statusView({ state: "running" }, time, all)).toEqual({ tone: "busy", title: "備份中…", detail: "", fix: null, run: true });
     expect(statusView({ state: "failed", at: 9, reason: "the folder is gone", last_ok: 5 }, time, all)).toEqual({ tone: "bad", title: "無法備份", detail: "the folder is gone。上次成功：T5", fix: null, run: true });
     expect(statusView({ state: "failed", at: 9, reason: "the folder is gone", last_ok: null }, time, all).detail).toBe("the folder is gone");
+    // A failure with a code is worded in the interface language.
+    expect(statusView({ state: "failed", at: 9, reason: "engine unavailable", error: { message: "engine unavailable", code: "engine_unavailable" }, last_ok: null }, time, all).detail).toBe("引擎目前無法使用。");
   });
 
   it("says nothing about the folder until it has been looked at", () => {

@@ -40,6 +40,39 @@ fn copies_window_title(input: &str, output: &str, context: &Context) -> bool {
         && !input.contains(title)
 }
 
+/// How much longer than the input the output may be. A rewrite is about as
+/// long as the transcript; the room above it covers punctuation and a
+/// tokenizer that splits the output finer than the estimate.
+const OUTPUT_TO_INPUT_TOKENS: u32 = 2;
+
+/// Whether a character is one the tokenizer tends to keep whole: Chinese,
+/// Japanese and Korean script and their punctuation.
+fn is_cjk(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x2E80..=0x9FFF | 0xAC00..=0xD7AF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF
+    )
+}
+
+/// A rough token count of a transcript: a CJK character is about one
+/// token, other text about one token per three characters.
+pub(crate) fn estimated_tokens(text: &str) -> u32 {
+    let (cjk, other) = text
+        .chars()
+        .fold((0u32, 0u32), |(cjk, other), c| match is_cjk(c) {
+            true => (cjk + 1, other),
+            false => (cjk, other + 1),
+        });
+    cjk + other.div_ceil(3)
+}
+
+/// The output limit for a rewrite of `input`: the configured value is the
+/// floor, and a long transcript raises it so the rewrite is not cut short.
+/// `None` leaves the length to the model.
+fn output_tokens(configured: Option<u32>, input: &str) -> Option<u32> {
+    configured.map(|floor| floor.max(estimated_tokens(input) * OUTPUT_TO_INPUT_TOKENS))
+}
+
 pub struct LlmStep {
     provider: Arc<dyn LlmProvider>,
 }
@@ -69,7 +102,7 @@ impl Step for LlmStep {
         });
         let opts = LlmOptions {
             temperature: ctx.general.llm_temperature,
-            max_tokens: ctx.general.llm_max_tokens,
+            max_tokens: output_tokens(ctx.general.llm_max_tokens, &input.text),
             timeout: Duration::from_secs(ctx.general.llm_timeout_secs),
         };
         let text = self.provider.complete(messages, &opts).await?;
@@ -141,6 +174,8 @@ pub(crate) mod fakes {
     pub struct FakeLlm {
         pub result: Result<String, ProviderError>,
         pub calls: Mutex<Vec<Vec<ChatMessage>>>,
+        /// The output limit each call asked for.
+        pub limits: Mutex<Vec<Option<u32>>>,
         pub unloads: std::sync::atomic::AtomicUsize,
         /// When set, `complete` sleeps this long before answering.
         pub delay: Option<Duration>,
@@ -151,6 +186,7 @@ pub(crate) mod fakes {
             Arc::new(Self {
                 result: Ok(text.into()),
                 calls: Mutex::new(Vec::new()),
+                limits: Mutex::new(Vec::new()),
                 unloads: std::sync::atomic::AtomicUsize::new(0),
                 delay: None,
             })
@@ -159,6 +195,7 @@ pub(crate) mod fakes {
             Arc::new(Self {
                 result: Ok(text.into()),
                 calls: Mutex::new(Vec::new()),
+                limits: Mutex::new(Vec::new()),
                 unloads: std::sync::atomic::AtomicUsize::new(0),
                 delay: Some(delay),
             })
@@ -167,6 +204,7 @@ pub(crate) mod fakes {
             Arc::new(Self {
                 result: Err(ProviderError::new(code, "boom")),
                 calls: Mutex::new(Vec::new()),
+                limits: Mutex::new(Vec::new()),
                 unloads: std::sync::atomic::AtomicUsize::new(0),
                 delay: None,
             })
@@ -178,9 +216,10 @@ pub(crate) mod fakes {
         async fn complete(
             &self,
             messages: Vec<ChatMessage>,
-            _opts: &LlmOptions,
+            opts: &LlmOptions,
         ) -> Result<String, ProviderError> {
             self.calls.lock().unwrap().push(messages);
+            self.limits.lock().unwrap().push(opts.max_tokens);
             if let Some(d) = self.delay {
                 tokio::time::sleep(d).await;
             }
@@ -218,6 +257,51 @@ mod tests {
         assert_eq!(
             calls[0].last().unwrap().content,
             crate::prompt::frame_utterance("原文")
+        );
+    }
+
+    #[test]
+    fn tokens_are_estimated_by_script() {
+        assert_eq!(estimated_tokens(""), 0);
+        assert_eq!(estimated_tokens("今天天氣很好"), 6);
+        assert_eq!(estimated_tokens("the weather is fine"), 7);
+        assert_eq!(estimated_tokens("今天 weather 很好"), 4 + 3);
+    }
+
+    #[test]
+    fn a_short_input_keeps_the_configured_limit() {
+        assert_eq!(output_tokens(Some(1024), "今天天氣很好"), Some(1024));
+        assert_eq!(output_tokens(None, "今天天氣很好"), None);
+    }
+
+    #[test]
+    fn a_long_input_widens_the_limit() {
+        let long = "好".repeat(900);
+        assert_eq!(output_tokens(Some(1024), &long), Some(1800));
+        assert_eq!(output_tokens(Some(2000), &long), Some(2000));
+    }
+
+    #[tokio::test]
+    async fn the_limit_sent_follows_the_input_length() {
+        let fake = FakeLlm::ok("整理後");
+        let step = LlmStep::new(fake.clone());
+        let ctx = test_context();
+        for text in ["原文", &"好".repeat(900)] {
+            // The fake's short answer trips the ratio guard on the long
+            // input; only the limit asked for matters here.
+            let _ = step
+                .run(
+                    StepInput {
+                        text: text.into(),
+                        audio: None,
+                    },
+                    &ctx,
+                )
+                .await;
+        }
+        assert_eq!(
+            *fake.limits.lock().unwrap(),
+            vec![ctx.general.llm_max_tokens, Some(1800)]
         );
     }
 

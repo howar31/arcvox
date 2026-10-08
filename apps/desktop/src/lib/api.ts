@@ -30,7 +30,7 @@ export interface General {
   recordings_dir: string | null;
 }
 export interface Config { schema_version: number; general: General; providers: ProviderConfig[]; profiles: Profile[]; dictionary: DictionaryEntry[] }
-export interface ProbeResult { ok: boolean; failure: { kind: string; message?: string; reason?: string } | null }
+export interface ProbeResult { ok: boolean; failure: { kind: string; message?: string; reason?: string; status?: number } | null }
 export interface Utterance {
   id: number; ts: number; profile_id: string; app_name: string | null; raw_text: string; refined_text: string; final_text: string;
   degraded: boolean; has_audio: boolean; asr_ms: number; llm_ms: number | null;
@@ -327,7 +327,7 @@ export interface BackupDevice {
 export interface BackupInfo { version: number; devices: BackupDevice[] }
 export interface ImportReport { devices: number; added: number; updated: number; skipped: number; cells: number; recordings: number; missing_recordings: number; bad_lines: number; expiring: number }
 export interface DeviceRow { id: string; name: string; platform: string; rows: number; last_ts: number | null; this: boolean }
-export type BackupStatus = { state: "never" } | { state: "ok"; at: number; report: WriteReport } | { state: "failed"; at: number; reason: string; last_ok: number | null; folder?: FolderState | null } | { state: "running" };
+export type BackupStatus = { state: "never" } | { state: "ok"; at: number; report: WriteReport } | { state: "failed"; at: number; reason: string; error?: CmdError | null; last_ok: number | null; folder?: FolderState | null } | { state: "running" };
 export const exportSettings = (path: string, sections: string[]) => invoke<void>("settings_export", { path, sections });
 export const inspectSettings = (path: string) => invoke<SettingsInfo>("settings_inspect", { path });
 export const importSettings = (path: string, sections: string[]) => invoke<SettingsResult>("settings_import", { path, sections });

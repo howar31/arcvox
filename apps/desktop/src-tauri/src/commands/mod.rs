@@ -24,7 +24,7 @@ use serde::Serialize;
 /// for the interface's own wording, with `params` for its placeholders;
 /// `message` is the reason as the backend gives it, shown when no wording
 /// exists for the code.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CmdError {
     pub message: String,
     pub code: Option<&'static str>,

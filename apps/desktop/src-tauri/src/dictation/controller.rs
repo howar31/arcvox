@@ -726,6 +726,7 @@ impl Controller {
                     ShowReason::AppChanged => Msg::WidgetAppChanged,
                     ShowReason::EmptyText => Msg::WidgetEmptyResult,
                     ShowReason::NotTrusted => Msg::WidgetAccessibilityRequired,
+                    ShowReason::ClipboardFailed => Msg::WidgetClipboardFailed,
                 };
                 if matches!(reason, ShowReason::EmptyText) {
                     self.deps.ui.message(UiMessage::error(msg, None));

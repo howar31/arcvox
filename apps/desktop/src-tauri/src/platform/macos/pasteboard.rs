@@ -37,25 +37,32 @@ pub fn text() -> Option<String> {
     Some(s.to_string())
 }
 
-pub fn write_text(text: &str) {
+/// Puts `text` on the pasteboard. `false` when the system refused the
+/// write; the pasteboard is then empty.
+pub fn write_text(text: &str) -> bool {
     let pb = NSPasteboard::generalPasteboard();
     pb.clearContents();
     // SAFETY: `NSPasteboardTypeString` is a valid extern static; the
     // `NSString` argument is owned by this call and kept alive for its
     // duration.
-    unsafe {
-        pb.setString_forType(&NSString::from_str(text), NSPasteboardTypeString);
+    let ok = unsafe { pb.setString_forType(&NSString::from_str(text), NSPasteboardTypeString) };
+    if !ok {
+        tracing::warn!("the pasteboard refused the text");
     }
+    ok
 }
 
 /// The pasteboard type by which clipboard histories recognise content that
 /// is about to be replaced again (the nspasteboard.org convention).
 const TRANSIENT_TYPE: &str = "org.nspasteboard.TransientType";
 
-pub fn write_passing(text: &str) {
-    write_text(text);
+pub fn write_passing(text: &str) -> bool {
+    if !write_text(text) {
+        return false;
+    }
     let pb = NSPasteboard::generalPasteboard();
     pb.setData_forType(Some(&NSData::new()), &NSString::from_str(TRANSIENT_TYPE));
+    true
 }
 
 pub fn restore(snapshot: ClipboardSnapshot) {

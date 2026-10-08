@@ -1,6 +1,7 @@
 //! Keeps the backup folder up to date: a few minutes after a change, never
 //! while a dictation is being processed, and once more before the app ends.
 
+use crate::commands::CmdError;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
@@ -30,6 +31,8 @@ pub enum BackupStatus {
     Failed {
         at: i64,
         reason: String,
+        /// The failure with its code, when it has one the interface can word.
+        error: Option<CmdError>,
         /// The last write that worked.
         last_ok: Option<i64>,
         /// What the folder was found to be, when that is why.
@@ -106,6 +109,8 @@ impl Schedule {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Failure {
     pub reason: String,
+    /// The failure with its code, when it has one.
+    pub error: Option<CmdError>,
     /// What was found when the folder itself is the cause.
     pub folder: Option<FolderState>,
 }
@@ -114,6 +119,16 @@ impl Failure {
     pub fn other(reason: impl Into<String>) -> Self {
         Failure {
             reason: reason.into(),
+            error: None,
+            folder: None,
+        }
+    }
+
+    /// A failure the interface words by its code.
+    pub fn error(error: CmdError) -> Self {
+        Failure {
+            reason: error.message.clone(),
+            error: Some(error),
             folder: None,
         }
     }
@@ -126,6 +141,7 @@ impl Failure {
         };
         Failure {
             reason: reason.to_string(),
+            error: None,
             folder: Some(state),
         }
     }
@@ -205,7 +221,13 @@ impl Shared {
         self.set(BackupStatus::Running);
         let at = arcvox_core::history::now_unix();
         let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (self.run)(manual)))
-            .unwrap_or_else(|_| Err(Failure::other("the write stopped unexpectedly")));
+            .unwrap_or_else(|_| {
+                Err(Failure::error(CmdError::with(
+                    "internal",
+                    "the write stopped unexpectedly",
+                    &[("error", "the write stopped unexpectedly".to_string())],
+                )))
+            });
         match &ran {
             Ok(Some(_)) => self.saw(FolderState::Usable),
             Err(Failure {
@@ -217,9 +239,14 @@ impl Shared {
         let next = match ran {
             Ok(Some(report)) => BackupStatus::Ok { at, report },
             Ok(None) => before,
-            Err(Failure { reason, folder }) => BackupStatus::Failed {
+            Err(Failure {
+                reason,
+                error,
+                folder,
+            }) => BackupStatus::Failed {
                 at,
                 reason,
+                error,
                 folder,
                 last_ok: match before {
                     BackupStatus::Ok { at, .. } => Some(at),

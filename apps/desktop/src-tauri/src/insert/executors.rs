@@ -23,18 +23,20 @@ pub fn run(plan: &Plan, text: &str, platform: &dyn Platform, keep: bool) -> Outc
     match plan {
         Plan::Show(reason) => {
             if keep && *reason != ShowReason::EmptyText {
+                // The text is shown either way; a clipboard that refuses
+                // it changes nothing here.
                 platform.clipboard_write_text(text);
             }
             Outcome::Shown(*reason)
         }
-        Plan::Copy => {
-            platform.clipboard_write_text(text);
-            Outcome::Copied
-        }
-        Plan::Paste => {
-            paste(text, platform, keep);
-            Outcome::Inserted
-        }
+        Plan::Copy => match platform.clipboard_write_text(text) {
+            true => Outcome::Copied,
+            false => Outcome::Shown(ShowReason::ClipboardFailed),
+        },
+        Plan::Paste => match paste(text, platform, keep) {
+            true => Outcome::Inserted,
+            false => Outcome::Shown(ShowReason::ClipboardFailed),
+        },
         Plan::Type => {
             platform.type_unicode(text);
             if keep {
@@ -45,7 +47,9 @@ pub fn run(plan: &Plan, text: &str, platform: &dyn Platform, keep: bool) -> Outc
         Plan::Ax { pid } => {
             if let Err(e) = platform.ax_insert(*pid, text) {
                 tracing::debug!(error = %e, "ax insert failed, pasting instead");
-                paste(text, platform, keep);
+                if !paste(text, platform, keep) {
+                    return Outcome::Shown(ShowReason::ClipboardFailed);
+                }
             } else if keep {
                 platform.clipboard_write_text(text);
             }
@@ -54,17 +58,25 @@ pub fn run(plan: &Plan, text: &str, platform: &dyn Platform, keep: bool) -> Outc
     }
 }
 
-fn paste(text: &str, platform: &dyn Platform, keep: bool) {
+/// Pastes `text` through the clipboard. `false` when the clipboard refused
+/// the text: nothing was pasted, and what the user had on it is back.
+fn paste(text: &str, platform: &dyn Platform, keep: bool) -> bool {
     if keep {
-        platform.clipboard_write_text(text);
+        if !platform.clipboard_write_text(text) {
+            return false;
+        }
         platform.post_paste();
-        return;
+        return true;
     }
     let snapshot = platform.clipboard_snapshot();
-    platform.clipboard_write_passing(text);
+    if !platform.clipboard_write_passing(text) {
+        platform.clipboard_restore(snapshot);
+        return false;
+    }
     platform.post_paste();
     std::thread::sleep(PASTE_RESTORE_DELAY);
     platform.clipboard_restore(snapshot);
+    true
 }
 
 /// Splits into runs of at most `MAX_UNITS_PER_EVENT` UTF-16 units without
@@ -154,6 +166,31 @@ mod tests {
         );
         assert!(p.calls().is_empty());
     }
+    #[test]
+    fn a_refused_clipboard_pastes_nothing_and_says_so() {
+        let p = FakePlatform::new();
+        *p.clipboard.lock().unwrap() = Some("before".into());
+        *p.clipboard_failure.lock().unwrap() = true;
+        assert_eq!(
+            run(&Plan::Paste, "你好", &p, false),
+            Outcome::Shown(ShowReason::ClipboardFailed)
+        );
+        assert_eq!(p.calls(), vec!["snapshot", "passing:你好", "restore"]);
+        assert_eq!(p.clipboard.lock().unwrap().as_deref(), Some("before"));
+
+        let p = FakePlatform::new();
+        *p.clipboard_failure.lock().unwrap() = true;
+        assert_eq!(
+            run(&Plan::Copy, "x", &p, false),
+            Outcome::Shown(ShowReason::ClipboardFailed)
+        );
+        assert_eq!(
+            run(&Plan::Paste, "x", &p, true),
+            Outcome::Shown(ShowReason::ClipboardFailed)
+        );
+        assert!(!p.calls().contains(&"paste".to_string()));
+    }
+
     #[test]
     fn copy_writes_the_clipboard_and_nothing_else() {
         let p = FakePlatform::new();

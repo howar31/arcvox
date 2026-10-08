@@ -26,7 +26,7 @@ export function blankFor(kind: ProviderKind): ProviderConfig {
 export function describeProbe(r: ProbeResult, t: (k: string) => string): string {
   if (r.ok) return t("engines.probe_ok");
   const f = r.failure;
-  const extra = f?.reason ?? f?.message ?? "";
+  const extra = f?.reason ?? f?.message ?? (f?.status != null ? String(f.status) : "");
   return `${t("engines.probe_failed")}: ${t("engines.failure." + (f?.kind ?? "other"))}${extra ? " (" + extra + ")" : ""}`;
 }
 

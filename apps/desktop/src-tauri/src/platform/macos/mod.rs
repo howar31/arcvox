@@ -104,11 +104,11 @@ impl Platform for MacPlatform {
         pasteboard::snapshot()
     }
 
-    fn clipboard_write_text(&self, text: &str) {
+    fn clipboard_write_text(&self, text: &str) -> bool {
         pasteboard::write_text(text)
     }
 
-    fn clipboard_write_passing(&self, text: &str) {
+    fn clipboard_write_passing(&self, text: &str) -> bool {
         pasteboard::write_passing(text)
     }
 

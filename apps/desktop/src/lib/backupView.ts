@@ -1,4 +1,4 @@
-import { formatBytes, type BackupCategories, type BackupDevice, type BackupStatus, type FolderState, type ImportReport, type SettingsNote, type WriteReport } from "./api";
+import { errorMessage, formatBytes, type BackupCategories, type BackupDevice, type BackupStatus, type FolderState, type ImportReport, type SettingsNote, type WriteReport } from "./api";
 import { has, t } from "./i18n";
 import type { Page } from "./route";
 
@@ -91,8 +91,8 @@ export function statusView(s: BackupStatus, time: (ts: number) => string, c: Bac
     case "ok": return { tone: "ok", title: t("backup.status_ok"), detail: [time(s.at), ...(s.report.recreated ? [t("backup.recreated")] : []), writtenLine(s.report, c)].join(" · "), fix: null, run: true };
     case "running": return { tone: "busy", title: t("backup.status_running"), detail: "", fix: null, run: true };
     case "failed": {
-      // A write the folder refused is said in the interface language; other reasons come as the backend gives them.
-      const reason = s.folder && s.folder !== "usable" ? t(`backup.failed_${s.folder}`) : s.reason;
+      // A write the folder refused, or a failure with a code, is said in the interface language; anything else comes as the backend gives it.
+      const reason = s.folder && s.folder !== "usable" ? t(`backup.failed_${s.folder}`) : s.error ? errorMessage(s.error) : s.reason;
       return { tone: "bad", title: t("backup.status_failed"), detail: s.last_ok == null ? reason : t("backup.status_failed_last", { reason, time: time(s.last_ok) }), fix: null, run: true };
     }
   }

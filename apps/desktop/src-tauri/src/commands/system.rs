@@ -15,7 +15,12 @@ pub fn ui_language(state: State<'_, AppState>) -> String {
 
 #[tauri::command]
 pub fn widget_copy(state: State<'_, AppState>, text: String) -> CmdResult<()> {
-    state.platform.clipboard_write_text(&text);
+    if !state.platform.clipboard_write_text(&text) {
+        return Err(CmdError::new(
+            "clipboard_failed",
+            "the clipboard refused the text",
+        ));
+    }
     Ok(())
 }
 

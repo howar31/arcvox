@@ -73,6 +73,7 @@ pub enum Msg {
     WidgetAppChanged,
     WidgetEmptyResult,
     WidgetAccessibilityRequired,
+    WidgetClipboardFailed,
     WidgetMicrophoneUnavailable,
     WidgetEngineUnavailable,
     WidgetAsrFailed,
@@ -123,6 +124,7 @@ pub const ALL_MSGS: &[Msg] = &[
     Msg::WidgetAppChanged,
     Msg::WidgetEmptyResult,
     Msg::WidgetAccessibilityRequired,
+    Msg::WidgetClipboardFailed,
     Msg::WidgetMicrophoneUnavailable,
     Msg::WidgetEngineUnavailable,
     Msg::WidgetAsrFailed,
@@ -176,6 +178,7 @@ impl Msg {
             Msg::WidgetAppChanged => "widget.app_changed",
             Msg::WidgetEmptyResult => "widget.empty_result",
             Msg::WidgetAccessibilityRequired => "widget.accessibility_required",
+            Msg::WidgetClipboardFailed => "widget.clipboard_failed",
             Msg::WidgetMicrophoneUnavailable => "widget.microphone_unavailable",
             Msg::WidgetEngineUnavailable => "widget.engine_unavailable",
             Msg::WidgetAsrFailed => "widget.asr_failed",
@@ -269,6 +272,10 @@ pub fn text(lang: Language, msg: Msg) -> &'static str {
         (Language::ZhTw, Msg::WidgetAccessibilityRequired) => "沒有輔助使用權限，文字未填入",
         (Language::En, Msg::WidgetAccessibilityRequired) => {
             "No Accessibility permission; the text was not inserted"
+        }
+        (Language::ZhTw, Msg::WidgetClipboardFailed) => "無法寫入剪貼簿，文字未填入",
+        (Language::En, Msg::WidgetClipboardFailed) => {
+            "The clipboard refused the text; it was not inserted"
         }
         (Language::ZhTw, Msg::WidgetMicrophoneUnavailable) => "無法使用麥克風",
         (Language::En, Msg::WidgetMicrophoneUnavailable) => "Microphone unavailable",

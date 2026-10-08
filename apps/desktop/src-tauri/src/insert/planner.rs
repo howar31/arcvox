@@ -25,6 +25,8 @@ pub enum ShowReason {
     EmptyText,
     /// The process may not put text into other applications.
     NotTrusted,
+    /// The clipboard refused the text, so a paste or a copy could not be made.
+    ClipboardFailed,
 }
 
 pub struct Situation<'a> {

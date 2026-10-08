@@ -112,10 +112,11 @@ pub trait Platform: Send + Sync {
     fn clipboard_text(&self) -> Option<String>;
     fn secure_input_active(&self) -> bool;
     fn clipboard_snapshot(&self) -> ClipboardSnapshot;
-    fn clipboard_write_text(&self, text: &str);
+    /// Puts `text` on the clipboard; `false` when the system refused it.
+    fn clipboard_write_text(&self, text: &str) -> bool;
     /// Writes text that is on the clipboard only to be pasted and is taken
     /// off again; marked so that clipboard histories can leave it out.
-    fn clipboard_write_passing(&self, text: &str) {
+    fn clipboard_write_passing(&self, text: &str) -> bool {
         self.clipboard_write_text(text)
     }
     fn clipboard_restore(&self, snapshot: ClipboardSnapshot);
@@ -154,6 +155,8 @@ pub mod fake {
         pub microphone: Mutex<Option<MicAccess>>,
         /// `Some(err)` makes `ax_insert` fail with that error.
         pub ax_insert_failure: Mutex<Option<PlatformError>>,
+        /// `true` makes every clipboard write fail.
+        pub clipboard_failure: Mutex<bool>,
         pub monitor_tx: Mutex<Option<Sender<ModifierEvent>>>,
         pub calls: Mutex<Vec<String>>,
     }
@@ -212,13 +215,21 @@ pub mod fake {
                 )]],
             }
         }
-        fn clipboard_write_text(&self, text: &str) {
+        fn clipboard_write_text(&self, text: &str) -> bool {
             self.record(format!("write:{text}"));
+            if *self.clipboard_failure.lock().unwrap() {
+                return false;
+            }
             *self.clipboard.lock().unwrap() = Some(text.to_string());
+            true
         }
-        fn clipboard_write_passing(&self, text: &str) {
+        fn clipboard_write_passing(&self, text: &str) -> bool {
             self.record(format!("passing:{text}"));
+            if *self.clipboard_failure.lock().unwrap() {
+                return false;
+            }
             *self.clipboard.lock().unwrap() = Some(text.to_string());
+            true
         }
         fn clipboard_restore(&self, snapshot: ClipboardSnapshot) {
             self.record("restore".into());
