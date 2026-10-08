@@ -202,7 +202,10 @@ impl Controller {
     }
 
     fn apply_settings(&mut self, s: ClientSettings) {
-        self.recognizer = Recognizer::new(&s.hotkey);
+        // Retuned, not replaced: the shortcut may still be held (settings
+        // queued during a press are applied from `settle_idle` after an
+        // abort), and a new recogniser would miss its release.
+        self.recognizer.retune(&s.hotkey);
         self.deps
             .platform
             .set_shortcuts(crate::shortcut::sanitized(&s.hotkey.shortcuts));

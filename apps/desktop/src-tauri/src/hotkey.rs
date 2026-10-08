@@ -70,6 +70,13 @@ impl Recognizer {
         }
     }
 
+    /// Takes new thresholds and keeps the state, so that settings saved
+    /// while the trigger is held do not lose its release.
+    pub fn retune(&mut self, settings: &HotkeySettings) {
+        self.hold = Duration::from_millis(settings.hold_threshold_ms);
+        self.double_tap = Duration::from_millis(settings.double_tap_window_ms);
+    }
+
     pub fn fn_is_down(&self) -> bool {
         self.fn_down
     }
@@ -271,6 +278,31 @@ mod tests {
             .on_input(Input::KeyDown { key_code: 0 }, ms(t0, 100))
             .is_empty());
         assert!(r.on_tick(ms(t0, 1000)).is_empty());
+    }
+
+    #[test]
+    fn retune_keeps_the_hold_and_the_aborted_press() {
+        let (mut r, t0) = rec();
+        r.on_input(Input::TriggerDown, t0);
+        assert_eq!(r.on_tick(ms(t0, 250)), vec![Gesture::HoldStart]);
+        r.retune(&HotkeySettings {
+            hold_threshold_ms: 500,
+            ..HotkeySettings::default()
+        });
+        assert!(r.fn_is_down());
+        assert_eq!(
+            r.on_input(Input::TriggerUp, ms(t0, 900)),
+            vec![Gesture::HoldEnd]
+        );
+
+        let (mut r, t0) = rec();
+        r.on_input(Input::TriggerDown, t0);
+        r.on_input(Input::KeyDown { key_code: 123 }, ms(t0, 50));
+        r.retune(&HotkeySettings::default());
+        assert!(r.on_input(Input::TriggerUp, ms(t0, 100)).is_empty());
+        assert_eq!(r.next_deadline(), None);
+        assert!(r.on_input(Input::TriggerDown, ms(t0, 2000)).is_empty());
+        assert_eq!(r.next_deadline(), Some(ms(t0, 2250)));
     }
 
     #[test]
