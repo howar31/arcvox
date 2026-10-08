@@ -308,7 +308,7 @@ fn link_url(link: &str) -> Option<&'static str> {
     Some(match link {
         "sponsor" => "https://donate.howar31.com/",
         "source" => "https://github.com/howar31/arcvox",
-        "issue" => "https://github.com/howar31/arcvox/issues/new",
+        "issue" => "https://github.com/howar31/arcvox/issues/new/choose",
         "website" => "https://arcvox.howar31.com/",
         _ => return None,
     })
