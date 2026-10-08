@@ -579,7 +579,7 @@
   "history.result_used": "This result is now in use",
   "history.attempt_just_now": "Just now",
   "error.attempt_gone": "The result no longer exists.",
-  "error.attempt_in_use": "The result in use cannot be deleted.",
+  "error.attempt_in_use": "The result in use and the original one cannot be deleted.",
   "general.retry_count": "Retry on failure",
   "general.retry_count_help": "A connection failure, a server error or a timeout is tried again at once. Set to 0 for no retry.",
   "common.times": "times",

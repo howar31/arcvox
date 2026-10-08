@@ -157,7 +157,7 @@ pub fn history_delete_attempt(state: State<'_, AppState>, attempt: i64) -> CmdRe
     if !e.history().delete_attempt(AttemptId(attempt))? {
         return Err(CmdError::new(
             "attempt_in_use",
-            "the result the row shows cannot be removed",
+            "the result the row shows, and the original one, cannot be removed",
         ));
     }
     Ok(())

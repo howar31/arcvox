@@ -807,14 +807,15 @@ impl HistoryStore {
         Ok(true)
     }
 
-    /// Removes a recorded result that is not the row's. False when it is,
-    /// or when it is gone.
+    /// Removes a recorded result that is neither the row's nor the
+    /// original one (the dictation as it was made, which a rerun without a
+    /// chosen profile follows). False when it is one of those, or gone.
     pub fn delete_attempt(&self, attempt: AttemptId) -> Result<bool, HistoryError> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
-        let Some((utterance, chosen)) = tx
+        let Some((utterance, kept)) = tx
             .query_row(
-                "SELECT utterance_id, chosen FROM attempts WHERE id = ?1",
+                "SELECT utterance_id, chosen OR origin FROM attempts WHERE id = ?1",
                 params![attempt.0],
                 |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)? != 0)),
             )
@@ -822,7 +823,7 @@ impl HistoryStore {
         else {
             return Ok(false);
         };
-        if chosen {
+        if kept {
             return Ok(false);
         }
         tx.execute("DELETE FROM attempts WHERE id = ?1", params![attempt.0])?;
@@ -2022,8 +2023,22 @@ mod tests {
         // The chosen attempt stays; another goes.
         assert!(!s.delete_attempt(list[1].id).unwrap());
         assert!(s.delete_attempt(a1.id).unwrap());
-        assert_eq!(s.attempts(id).unwrap().len(), 1);
-        assert_eq!(s.get(id).unwrap().unwrap().redone, 0);
+        // The original stays even when another result is in use.
+        let a2 = s
+            .record_attempt(id, &done("mail", "second"), true)
+            .unwrap()
+            .unwrap();
+        assert!(a2.chosen);
+        let origin = s
+            .attempts(id)
+            .unwrap()
+            .into_iter()
+            .find(|a| a.origin)
+            .unwrap();
+        assert!(!s.delete_attempt(origin.id).unwrap());
+        assert!(!s.delete_attempt(a2.id).unwrap());
+        assert_eq!(s.attempts(id).unwrap().len(), 2);
+        assert_eq!(s.get(id).unwrap().unwrap().redone, 1);
         assert!(!s.choose_attempt(id, a1.id).unwrap());
         assert!(s
             .record_attempt(HistoryId(999), &done("x", "y"), false)

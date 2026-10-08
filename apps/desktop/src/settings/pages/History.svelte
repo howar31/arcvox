@@ -343,7 +343,7 @@
                   {#each attempts[u.id] as a (a.id)}
                     {@const isFresh = fresh[u.id] === a.id}
                     <div class="attempt" class:chosen={a.chosen} class:fresh={isFresh}>
-                      {#if !a.chosen}
+                      {#if !a.chosen && !a.origin}
                         {#if confirming === a.id}
                           <button type="button" class="btn sm danger sure" onclick={() => removeAttempt(u, a)}>{t("history.delete_attempt_confirm")}</button>
                         {:else}

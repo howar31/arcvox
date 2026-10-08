@@ -579,7 +579,7 @@
   "history.result_used": "已使用這個結果",
   "history.attempt_just_now": "剛剛",
   "error.attempt_gone": "這筆結果已不存在。",
-  "error.attempt_in_use": "使用中的結果不能刪除。",
+  "error.attempt_in_use": "使用中的結果與原始結果不能刪除。",
   "general.retry_count": "失敗時自動重試",
   "general.retry_count_help": "連線失敗、伺服器錯誤與逾時會立刻再試。設為 0 表示不重試。",
   "common.times": "次",
