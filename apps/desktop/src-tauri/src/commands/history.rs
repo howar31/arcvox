@@ -142,9 +142,10 @@ pub fn history_apply_redo(state: State<'_, AppState>, id: i64, redo: RedoDto) ->
     let e = engine(&state)?;
     state.backup.touch();
     if !e.history().apply_redo(HistoryId(id), &redo.redo())? {
-        return Err(CmdError {
-            message: "the history row no longer exists".into(),
-        });
+        return Err(CmdError::new(
+            "history_row_gone",
+            "the history row no longer exists",
+        ));
     }
     Ok(())
 }
@@ -211,9 +212,7 @@ fn recording(
 ) -> CmdResult<std::path::PathBuf> {
     history
         .recording_path(HistoryId(id), recordings_dir)?
-        .ok_or_else(|| CmdError {
-            message: "recording not found".into(),
-        })
+        .ok_or_else(|| CmdError::new("recording_not_kept", "recording not found"))
 }
 
 #[tauri::command]

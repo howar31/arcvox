@@ -113,6 +113,8 @@ describe("panel", () => {
   it("shows the reason of a failed rewrite", () => {
     const degraded = panelView("idle", message({ key: "widget.degraded", detail: "Ollama: timed out" }), "", null, false);
     expect(degraded).toEqual({ title: t("widget.degraded"), detail: "Ollama: timed out", actions: [], close: false });
+    const timedOut = panelView("idle", message({ key: "widget.degraded", detail: "Ollama: timed out", code: "provider_timeout" }), "", null, false);
+    expect(timedOut).toEqual({ title: t("widget.degraded"), body: t("failure.provider_timeout"), detail: "Ollama: timed out", actions: [], close: false });
     const unsaved = panelView("idle", message({ key: "widget.record_failed", detail: "the history row could not be written: disk I/O error" }), "", null, false);
     expect(unsaved).toEqual({ title: t("widget.record_failed"), detail: "the history row could not be written: disk I/O error", actions: [], close: false });
     expect(ringView("idle", message({ key: "widget.record_failed" }), null)).toEqual(ringView("idle", message({ key: "widget.degraded" }), null));

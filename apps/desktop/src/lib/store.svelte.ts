@@ -1,10 +1,10 @@
-import { getClient, getConfig, getDefaults, onConfigChanged, onWidgetIdle, updateClient, type ClientSettings, type Config, type Defaults } from "./api";
+import { errorMessage, getClient, getConfig, getDefaults, onConfigChanged, onWidgetIdle, updateClient, type ClientSettings, type Config, type Defaults } from "./api";
 
 class ConfigStore {
   value = $state<Config | null>(null);
   error = $state<string | null>(null);
   async load() {
-    try { this.value = await getConfig(); this.error = null; } catch (e) { this.error = String((e as { message?: string }).message ?? e); }
+    try { this.value = await getConfig(); this.error = null; } catch (e) { this.error = errorMessage(e); }
   }
   async watch() {
     return onConfigChanged((c) => { this.value = c; });

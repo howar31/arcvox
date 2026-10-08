@@ -137,9 +137,9 @@ pub(crate) async fn import_settings(
     sections: &[String],
 ) -> CmdResult<Imported> {
     let client_applied = ClientSettings::applied_sections(file, sections);
-    let next = client
-        .with_sections(file, sections)
-        .map_err(|message| CmdError { message })?;
+    let next = client.with_sections(file, sections).map_err(|reason| {
+        CmdError::with("settings_file_apply", reason.clone(), &[("reason", reason)])
+    })?;
     // What the settings named before the import: only ids that are new are
     // worth a note.
     let known: BTreeSet<String> = engine
@@ -341,9 +341,7 @@ pub async fn backup_folder_create(state: State<'_, AppState>) -> CmdResult<Folde
     let folder = ClientSettings::load(&state.dirs.config_dir)
         .backup
         .folder
-        .ok_or_else(|| CmdError {
-            message: "no folder is chosen".into(),
-        })?;
+        .ok_or_else(|| CmdError::new("no_backup_folder", "no folder is chosen"))?;
     if let Err(e) = std::fs::create_dir_all(&folder) {
         tracing::warn!(error = %e, "the backup folder was not made");
     }
@@ -360,13 +358,13 @@ pub fn backup_folder_open(state: State<'_, AppState>) -> CmdResult<()> {
     let folder = ClientSettings::load(&state.dirs.config_dir)
         .backup
         .folder
-        .ok_or_else(|| CmdError {
-            message: "no folder is chosen".into(),
-        })?;
+        .ok_or_else(|| CmdError::new("no_backup_folder", "no folder is chosen"))?;
     if !folder.is_dir() {
-        return Err(CmdError {
-            message: format!("the folder {} does not exist", folder.display()),
-        });
+        return Err(CmdError::with(
+            "folder_missing",
+            format!("the folder {} does not exist", folder.display()),
+            &[("path", folder.display().to_string())],
+        ));
     }
     std::process::Command::new("open").arg(folder).spawn()?;
     Ok(())

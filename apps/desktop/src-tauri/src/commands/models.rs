@@ -99,9 +99,11 @@ pub async fn models_delete(id: String, state: State<'_, AppState>) -> CmdResult<
 pub fn models_import(path: String, state: State<'_, AppState>) -> CmdResult<InstalledModel> {
     let path = PathBuf::from(path);
     if !path.is_file() {
-        return Err(CmdError {
-            message: format!("{} is not a file", path.display()),
-        });
+        return Err(CmdError::with(
+            "not_a_file",
+            format!("{} is not a file", path.display()),
+            &[("path", path.display().to_string())],
+        ));
     }
     let model = state.models.import(&path)?;
     state.refresh_problems();

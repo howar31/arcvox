@@ -34,7 +34,8 @@ pub struct AppState {
     pub ui: Arc<TauriUi>,
     pub dirs: DataDir,
     pub language: Mutex<Language>,
-    pub engine_error: Mutex<Option<String>>,
+    /// Why the engine could not open, coded for the interface.
+    pub engine_error: Mutex<Option<crate::commands::CmdError>>,
     pub bench: BenchState,
     pub window_state: WindowState,
     /// Keeps the backup folder up to date.
@@ -502,7 +503,7 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         .await
         {
             Ok(e) => (Some(e), None, runtime),
-            Err(e) => (None, Some(e.to_string()), runtime),
+            Err(e) => (None, Some(crate::commands::CmdError::from(e)), runtime),
         }
     });
 

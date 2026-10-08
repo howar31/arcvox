@@ -319,7 +319,13 @@ fn link_url(link: &str) -> Option<&'static str> {
 
 #[tauri::command]
 pub fn system_open_link(link: String) -> CmdResult<()> {
-    let url = link_url(&link).ok_or_else(|| CmdError::from(format!("unknown link {link}")))?;
+    let url = link_url(&link).ok_or_else(|| {
+        CmdError::with(
+            "unknown_link",
+            format!("unknown link {link}"),
+            &[("link", link.clone())],
+        )
+    })?;
     std::process::Command::new("open").arg(url).spawn()?;
     Ok(())
 }

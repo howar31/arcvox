@@ -587,7 +587,7 @@ impl Controller {
                     _ => Msg::WidgetDegraded,
                 };
                 if let State::Processing { notice, .. } = &mut self.state {
-                    *notice = Some(UiMessage::error(msg, hint.or(Some(message))));
+                    *notice = Some(UiMessage::error_coded(msg, hint.or(Some(message)), code));
                 }
             }
             Event::Error {

@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { PreviewRequest, Scene } from "./widgetPreview";
+import { failureText } from "./failure";
+import { has, t } from "./i18n";
 
 // Types match the JSON shapes produced by the core crate's serde derives.
 export type Runtime = "whisper" | "llama";
@@ -83,7 +85,8 @@ export interface Permissions {
 }
 export interface RunningApp { bundle_id: string; name: string }
 export interface SystemInfo { name: string; version: string; dev: boolean; config_dir: string; data_dir: string; cache_dir: string; recordings_dir: string }
-export interface CmdError { message: string }
+/** A failed command: `code` names the kind of failure for the interface's wording, with `params` for its placeholders; `message` is the reason as the backend gives it. */
+export interface CmdError { message: string; code?: string | null; params?: Record<string, string> }
 
 export const getConfig = () => invoke<Config>("config_get");
 export const updateGeneral = (general: General) => invoke<Config>("config_update_general", { general });
@@ -217,8 +220,15 @@ export function onWidgetFlip(cb: (flipped: boolean) => void): Promise<UnlistenFn
 export function onWidgetLevel(cb: (p: LevelPayload) => void): Promise<UnlistenFn> { return listen<LevelPayload>("widget-level", (e) => cb(e.payload)); }
 export function onWidgetMessage(cb: (p: MessagePayload) => void): Promise<UnlistenFn> { return listen<MessagePayload>("widget-message", (e) => cb(e.payload)); }
 
+/** A failed command in the interface language when its code has a text; else the backend's reason. */
 export function errorMessage(e: unknown): string {
-  if (typeof e === "object" && e && "message" in e) return String((e as CmdError).message);
+  if (typeof e === "object" && e && "message" in e) {
+    const err = e as CmdError;
+    // A dictation that failed again: worded by the failure's own code.
+    if (err.code === "dictation_failed") return failureText(err.params?.code ?? null, err.message);
+    if (err.code && has("error." + err.code)) return t("error." + err.code, err.params ?? {});
+    return String(err.message);
+  }
   return String(e);
 }
 

@@ -228,15 +228,14 @@ pub fn history_candidates(history: &HistoryStore) -> CmdResult<Vec<ClipCandidate
 
 /// Copies the recording of history entry `id` to `dest`.
 pub fn clip_from_history(history: &HistoryStore, id: i64, dest: &Path) -> CmdResult<ClipStatus> {
-    let entry = history.get(HistoryId(id))?.ok_or_else(|| CmdError {
-        message: "history entry not found".into(),
-    })?;
-    let source = entry.audio_path.ok_or_else(|| CmdError {
-        message: "recording not kept".into(),
-    })?;
-    let clip = read_clip(&source).ok_or_else(|| CmdError {
-        message: "recording not readable".into(),
-    })?;
+    let entry = history
+        .get(HistoryId(id))?
+        .ok_or_else(|| CmdError::new("history_row_gone", "history entry not found"))?;
+    let source = entry
+        .audio_path
+        .ok_or_else(|| CmdError::new("recording_not_kept", "recording not kept"))?;
+    let clip = read_clip(&source)
+        .ok_or_else(|| CmdError::new("recording_unreadable", "recording not readable"))?;
     write_clip(dest, &clip)?;
     Ok(clip_status(dest))
 }
@@ -309,9 +308,7 @@ pub async fn bench_record_stop(state: State<'_, AppState>) -> CmdResult<ClipStat
         .lock()
         .unwrap()
         .take()
-        .ok_or_else(|| CmdError {
-            message: "not recording".into(),
-        })?;
+        .ok_or_else(|| CmdError::new("not_recording", "not recording"))?;
     let clip = rec.stop(&mut EarshotVad::new())?;
     let path = clip_path(&state);
     write_clip(&path, &clip)?;
@@ -345,11 +342,7 @@ pub fn bench_start(
             samples: Vec::new(),
             sample_rate: SAMPLE_RATE,
         },
-        None => {
-            return Err(CmdError {
-                message: "no test clip".into(),
-            })
-        }
+        None => return Err(CmdError::new("no_test_clip", "no test clip")),
     };
     let asr = asr.into_iter().map(ProviderId).collect();
     let llm = llm.into_iter().map(ProviderId).collect();

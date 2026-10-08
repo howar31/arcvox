@@ -62,6 +62,14 @@ impl UiMessage {
             retry: false,
         }
     }
+    /// An error whose kind the interface can word by `code`; `detail` is
+    /// the reason as the engine gave it.
+    pub fn error_coded(msg: Msg, detail: Option<String>, code: ErrorCode) -> Self {
+        Self {
+            code: Some(code),
+            ..Self::error(msg, detail)
+        }
+    }
     pub fn copyable(msg: Msg, text: String) -> Self {
         Self {
             kind: MessageKind::Info,

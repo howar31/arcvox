@@ -139,7 +139,8 @@ export function panelView(state: WidgetState, message: MessagePayload | null, tr
     return { title, body: t("panel.accessibility"), result: message.copyable ?? undefined, actions: message.copyable ? ["copy", "open_permissions"] : ["open_permissions"], close: true };
   }
   if (message.kind === "info" && message.copyable) return { title, result: message.copyable, actions: ["copy"], close: true };
-  if (message.key === "widget.degraded" || message.key === "widget.record_failed") return { title, detail: message.detail ?? undefined, actions: [], close: false };
+  // The reason in the interface language when the failure's kind has one; the engine's own words stay as the detail.
+  if (message.key === "widget.degraded" || message.key === "widget.record_failed") return { title, body: failureText(message.code, null) || undefined, detail: message.detail ?? undefined, actions: [], close: false };
   const own = BODIES[message.key];
   const reason = message.key in BODIES ? (own ? t(own) : "") : failureText(message.code, null);
   // One sentence a line.

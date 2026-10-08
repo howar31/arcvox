@@ -26,9 +26,10 @@ pub fn upsert(engine: &Engine, profile: Profile) -> CmdResult<Config> {
 pub fn delete(engine: &Engine, id: &ProfileId) -> CmdResult<Config> {
     let current = engine.config().current();
     if current.profiles.iter().any(|p| &p.id == id && p.is_default) {
-        return Err(CmdError {
-            message: "the default profile cannot be deleted".into(),
-        });
+        return Err(CmdError::new(
+            "default_profile_protected",
+            "the default profile cannot be deleted",
+        ));
     }
     let next = engine
         .config()
@@ -69,17 +70,19 @@ pub fn add_preset(engine: &Engine, preset_id: &str, name: &str) -> CmdResult<Con
     let preset = presets()
         .iter()
         .find(|p| p.id == preset_id)
-        .ok_or_else(|| CmdError {
-            message: format!("unknown preset {preset_id}"),
+        .ok_or_else(|| {
+            CmdError::with(
+                "unknown_preset",
+                format!("unknown preset {preset_id}"),
+                &[("preset", preset_id.to_string())],
+            )
         })?;
     let current = engine.config().current();
     let base = current
         .profiles
         .iter()
         .find(|p| p.is_default)
-        .ok_or_else(|| CmdError {
-            message: "no default profile".into(),
-        })?;
+        .ok_or_else(|| CmdError::new("no_default_profile", "no default profile"))?;
     let taken: Vec<ProfileId> = current.profiles.iter().map(|p| p.id.clone()).collect();
     upsert(
         engine,

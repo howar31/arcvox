@@ -126,15 +126,11 @@ pub async fn native_install_language(
         tokio::task::spawn_blocking(move || imp::install(&app, language_hint.as_deref()))
             .await
             .map_err(CmdError::from)?
-            .map_err(|s| CmdError {
-                message: imp::status_string(s).into(),
-            })
+            .map_err(|s| CmdError::plain(imp::status_string(s)))
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (app, language_hint);
-        Err(CmdError {
-            message: "os_too_old".into(),
-        })
+        Err(CmdError::plain("os_too_old"))
     }
 }
