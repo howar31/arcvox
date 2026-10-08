@@ -40,13 +40,17 @@ export interface Utterance {
   error: string | null;
   /** The kind of failure, when it was kept. */
   error_code: string | null;
+  /** How many times the recording was processed again. */
+  redone: number;
 }
-/** What processing a row again gave: a result, or why the engines failed. */
-export interface RedoOutcome { redo: Redo | null; failure: { code: string; detail: string } | null }
-/** The result of processing a row's recording again; `applied` when it was stored at once (the row had failed). */
-export interface Redo {
-  applied: boolean; profile_id: string; raw_text: string; final_text: string; degraded: boolean; asr_ms: number; llm_ms: number | null;
-  dict_fixes: number; snippets: number; llm_changed: boolean; asr_label: string; llm_label: string | null;
+/** What processing a row again gave: the result recorded with the row, or why the engines failed (recorded too). */
+export interface RedoOutcome { attempt: Attempt | null; failure: { code: string; detail: string } | null }
+/** One result a row had: what processing its recording gave, or how it failed. The chosen one is what the row shows. */
+export interface Attempt {
+  id: number; ts: number; profile_id: string; asr_label: string | null; llm_label: string | null; raw_text: string; final_text: string;
+  degraded: boolean; asr_ms: number; llm_ms: number | null; error: string | null; error_code: string | null;
+  /** The result the row had before it was first processed again. */
+  origin: boolean; chosen: boolean;
 }
 export type InsertMethod = "paste" | "type" | "ax" | "copy";
 export interface ClientSettings {
@@ -105,7 +109,10 @@ export const restorePrompt = () => invoke<string>("prompt_restore");
 export const listHistory = (limit = 200, query = "", withAudio = false) => invoke<Utterance[]>("history_list", { limit, query, withAudio });
 export const historyAudio = (id: number) => invoke<ArrayBuffer>("history_audio", { id });
 export const reprocessHistory = (id: number, profileId: string | null) => invoke<RedoOutcome>("history_reprocess", { id, profileId });
-export const applyRedo = (id: number, redo: Redo) => invoke<void>("history_apply_redo", { id, redo });
+/** Every result a row had, newest first. */
+export const historyAttempts = (id: number) => invoke<Attempt[]>("history_attempts", { id });
+export const chooseAttempt = (id: number, attempt: number) => invoke<void>("history_choose_attempt", { id, attempt });
+export const deleteAttempt = (attempt: number) => invoke<void>("history_delete_attempt", { attempt });
 export const deleteRecording = (id: number) => invoke<void>("history_delete_recording", { id });
 /** Deletes every recording and returns how many files were removed. */
 export const clearRecordings = () => invoke<number>("history_clear_recordings");

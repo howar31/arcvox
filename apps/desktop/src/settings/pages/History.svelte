@@ -1,12 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
-    applyRedo, clearHistory, clearRecordings, deleteHistory, deleteRecording, errorMessage, formatBytes, historyStorage, listHistory, onHistoryChanged, openRecordingsDir, reprocessHistory, revealRecording, widgetCopy,
-    type HistoryStorage, type Redo, type Utterance,
+    chooseAttempt, clearHistory, deleteAttempt, historyAttempts, clearRecordings, deleteHistory, deleteRecording, errorMessage, formatBytes, historyStorage, listHistory, onHistoryChanged, openRecordingsDir, reprocessHistory, revealRecording, widgetCopy,
+    type Attempt, type HistoryStorage, type Utterance,
   } from "../../lib/api";
   import { failureText } from "../../lib/failure";
   import { formatDateTime, formatDay, formatTime } from "../../lib/format";
-  import { clipLength, groupByDay, rawState, seconds, totalSeconds } from "../../lib/historyView";
+  import { clipLength, groupByDay, rawState, redoneTag, seconds, totalSeconds } from "../../lib/historyView";
   import { t } from "../../lib/i18n";
   import { isImeKey } from "../../lib/ime";
   import { firstShortcut } from "../../lib/shortcut";
@@ -40,10 +40,12 @@
   // Bumped by each press of a play pill, so pressing it on an open row starts the recording again.
   let plays = $state(0);
   let timer: ReturnType<typeof setTimeout> | undefined;
-  // Per row: the profile chosen for processing it again ("" is the row's own), whether that is running, and a result waiting to be accepted.
+  // Per row: the profile chosen for processing it again ("" is the row's own), whether that is running,
+  // every result it had (loaded when the row opens), and the result just made that waits to be chosen.
   let chosen = $state<Record<number, string>>({});
   let busy = $state<Record<number, boolean>>({});
-  let results = $state<Record<number, Redo>>({});
+  let attempts = $state<Record<number, Attempt[]>>({});
+  let fresh = $state<Record<number, number>>({});
 
   async function reload() {
     clearTimeout(timer);
@@ -127,39 +129,61 @@
     const rewrites = p.steps.some((s) => s.step === "llm");
     return enginesOf(label(p.asr_provider) ?? "", rewrites ? label(p.llm_provider) : null);
   }
-  /** Processes the row's recording again. A failed row takes the result at once; otherwise it waits to be accepted. */
+  /** The results a row had, newest first. */
+  async function loadAttempts(id: number) {
+    try { attempts[id] = await historyAttempts(id); } catch (e) { toast.error(errorMessage(e)); }
+  }
+  /** Processes the row's recording again. The result joins the row's results; a failed row takes it at once. */
   async function redo(u: Utterance) {
     busy[u.id] = true;
-    delete results[u.id];
+    delete fresh[u.id];
     try {
-      const { redo: r, failure } = await reprocessHistory(u.id, chosen[u.id] || null);
+      const { attempt, failure } = await reprocessHistory(u.id, chosen[u.id] || null);
       if (failure) toast.error(failureText(failure.code, failure.detail));
-      else if (r?.applied) toast.ok(t("history.retry_done"));
-      else if (r) results[u.id] = r;
+      else if (attempt?.chosen) toast.ok(t("history.retry_done"));
+      else if (attempt) fresh[u.id] = attempt.id;
     } catch (e) {
       toast.error(errorMessage(e));
     }
     delete busy[u.id];
-    await reload();
+    await Promise.all([reload(), loadAttempts(u.id)]);
   }
-  async function replace(u: Utterance) {
-    const r = results[u.id];
-    if (!r) return;
+  async function use(u: Utterance, a: Attempt) {
     try {
-      await applyRedo(u.id, r);
-      delete results[u.id];
-      toast.ok(t("history.replaced"));
+      await chooseAttempt(u.id, a.id);
+      if (fresh[u.id] === a.id) delete fresh[u.id];
+      toast.ok(t("history.result_used"));
     } catch (e) {
       toast.error(errorMessage(e));
     }
-    await reload();
+    await Promise.all([reload(), loadAttempts(u.id)]);
+  }
+  async function removeAttempt(u: Utterance, a: Attempt) {
+    try {
+      await deleteAttempt(a.id);
+      if (fresh[u.id] === a.id) delete fresh[u.id];
+    } catch (e) {
+      toast.error(errorMessage(e));
+    }
+    await Promise.all([reload(), loadAttempts(u.id)]);
+  }
+  /** When a result was made, for its line: the row's own time for the origin, "just now" for the one just made. */
+  function attemptWhen(u: Utterance, a: Attempt): string {
+    if (fresh[u.id] === a.id) return t("history.attempt_just_now");
+    return formatTime(a.ts);
   }
 
   function toggle(id: number, play = false) {
     if (open === id && !play) { open = null; return; }
     autoplay = play;
     if (play) plays++;
-    open = id;
+    if (open !== id) {
+      open = id;
+      delete fresh[id];
+      const row = rows?.find((u) => u.id === id);
+      if (row?.redone) loadAttempts(id);
+      else delete attempts[id];
+    }
   }
 
   async function copy(text: string) {
@@ -255,6 +279,7 @@
                   {#if u.profile_id}<span>{who.name}{#if who.deleted}<span class="deleted">{t("history.deleted_profile")}</span>{/if}</span>{/if}
                   {#if u.error !== null}<Tag tone="live">{t("history.failed_tag")}</Tag>{/if}
                   {#if u.degraded}<Tag tone="warn">{t("history.not_rewritten")}</Tag>{/if}
+                  {#if redoneTag(u.redone)}<Tag tone="accent">{redoneTag(u.redone)}</Tag>{/if}
                 </span>
               </span>
             </button>
@@ -297,23 +322,41 @@
                     <span class="hint">{t(failedRow ? "history.retry_help" : "history.reprocess_help")}</span>
                   </div>
                 {/if}
-                {#if results[u.id]}
-                  {@const r = results[u.id]}
-                  <div class="result">
-                    <div class="text">{r.final_text}</div>
-                    <div class="by num">
-                      <span>{t("history.result_by", { profile: profileOf(r.profile_id).name })}</span>
-                      <span>{t("history.result_engines", { engines: enginesOf(r.asr_label, r.llm_label) })}</span>
-                      {#if timing(r)}<span>{timing(r)}</span>{/if}
-                      {#if r.degraded}<Tag tone="warn">{t("history.not_rewritten")}</Tag>{/if}
+              {/if}
+              {#if attempts[u.id]?.length}
+                <div class="label">{t("history.attempts")}</div>
+                <div class="attempts">
+                  {#each attempts[u.id] as a (a.id)}
+                    {@const isFresh = fresh[u.id] === a.id}
+                    <div class="attempt" class:chosen={a.chosen} class:fresh={isFresh}>
+                      {#if !a.chosen}
+                        <button type="button" class="x" aria-label={t("history.delete_attempt")} title={t("history.delete_attempt")} onclick={() => removeAttempt(u, a)}><Icon name="x" size={12} /></button>
+                      {/if}
+                      <div class="head num">
+                        <span class="when">{attemptWhen(u, a)}</span>
+                        <span>{profileOf(a.profile_id).name}</span>
+                        {#if a.asr_label}<span>{enginesOf(a.asr_label, a.llm_label)}</span>{/if}
+                        {#if a.error === null && timing(a)}<span>{timing(a)}</span>{/if}
+                        {#if a.chosen}<Tag tone="accent">{t("history.attempt_chosen")}</Tag>{/if}
+                        {#if isFresh}<Tag tone="accent">{t("history.attempt_fresh")}</Tag>{/if}
+                        {#if a.origin}<Tag>{t("history.attempt_origin")}</Tag>{/if}
+                        {#if a.error !== null}<Tag tone="live">{t("history.attempt_failed")}</Tag>{/if}
+                        {#if a.degraded}<Tag tone="warn">{t("history.not_rewritten")}</Tag>{/if}
+                      </div>
+                      {#if a.error !== null}
+                        <div class="text problem">{failureText(a.error_code, a.error)}</div>
+                      {:else}
+                        <div class="text">{a.final_text}</div>
+                        {#if !a.chosen}
+                          <div class="choose">
+                            <button type="button" class="btn quiet icon-btn" aria-label={t("history.copy_result")} title={t("history.copy_result")} onclick={() => copy(a.final_text)}><Icon name="copy" /></button>
+                            <button type="button" class="btn" class:primary={isFresh} onclick={() => use(u, a)}>{t("history.use_result")}</button>
+                          </div>
+                        {/if}
+                      {/if}
                     </div>
-                    <div class="choose">
-                      <button type="button" class="btn" onclick={() => { delete results[u.id]; }}>{t("common.discard")}</button>
-                      <button type="button" class="btn quiet icon-btn" aria-label={t("history.copy_result")} title={t("history.copy_result")} onclick={() => copy(r.final_text)}><Icon name="copy" /></button>
-                      <button type="button" class="btn primary" onclick={() => replace(u)}>{t("history.replace")}</button>
-                    </div>
-                  </div>
-                {/if}
+                  {/each}
+                </div>
               {/if}
               <div class="foot">
                 <span class="facts num">
@@ -400,10 +443,16 @@
   .busy { display: flex; align-items: center; gap: 9px; min-height: var(--control); color: var(--ink-2); font-size: var(--text-control); }
   .spin { width: 16px; height: 16px; flex: none; border-radius: 50%; border: 2.5px solid var(--accent); border-right-color: transparent; animation: spin .9s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .result { margin-top: 10px; padding: 14px 16px; border-radius: 14px; border: 1px solid var(--accent); background: var(--accent-soft); }
-  .result .text { line-height: 1.55; overflow-wrap: anywhere; white-space: pre-line; -webkit-user-select: text; user-select: text; }
-  .by { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 14px; margin-top: 4px; color: var(--ink-2); font-size: var(--text-sm); }
-  .choose { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+  .attempts { display: flex; flex-direction: column; gap: 8px; }
+  .attempt { position: relative; padding: 12px 16px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); }
+  .attempt.chosen { border-color: var(--accent); background: var(--accent-soft); }
+  .attempt.fresh { border-color: var(--accent); border-style: dashed; }
+  .attempt .head { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 12px; margin-bottom: 4px; padding-right: 28px; color: var(--ink-2); font-size: var(--text-sm); }
+  .attempt .when { color: var(--ink); font-weight: 600; }
+  .attempt .text { line-height: 1.55; overflow-wrap: anywhere; white-space: pre-line; -webkit-user-select: text; user-select: text; }
+  .attempt .x { position: absolute; top: 8px; right: 8px; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: none; color: var(--ink-3); cursor: default; }
+  .attempt .x:hover { background: var(--sunken); color: var(--ink); }
+  .choose { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 10px; }
   .foot { display: flex; align-items: center; gap: 4px; margin-top: 12px; }
   .foot .btn:last-child { margin-right: -8px; }
   .facts { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 2px 14px; color: var(--ink-2); font-size: var(--text-sm); }

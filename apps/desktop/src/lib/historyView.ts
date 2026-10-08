@@ -1,4 +1,5 @@
 import type { Utterance } from "./api";
+import { t } from "./i18n";
 
 export type DayKey = "today" | "yesterday" | string;
 
@@ -41,6 +42,12 @@ export function clipLength(ms: number): string {
 
 /** How the raw transcript relates to the final text: absent, changed by the rewrite, left as it was by the rewrite,
  * inserted because the rewrite failed, or the profile does not rewrite. */
+/** The tag of a row processed again: once, or how many times. */
+export function redoneTag(redone: number): string | null {
+  if (redone <= 0) return null;
+  return redone === 1 ? t("history.redone") : t("history.redone_times", { n: String(redone) });
+}
+
 export function rawState(u: Utterance): "none" | "changed" | "same" | "failed" | "off" {
   const raw = u.raw_text.trim();
   if (raw === "") return "none";

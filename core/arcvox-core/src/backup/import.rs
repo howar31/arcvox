@@ -170,9 +170,30 @@ mod tests {
     fn a_tree_written_then_imported_into_an_empty_store_is_equal() {
         let tmp = tempfile::tempdir().unwrap();
         let a = store_of("dev-a", "Anna");
-        a.insert(utt(SEP + 10, "one", None)).unwrap();
+        let one = a.insert(utt(SEP + 10, "one", None)).unwrap();
         a.insert(utt(OCT + 10, "two", None)).unwrap();
         a.insert(utt(OCT + 4000, "three", None)).unwrap();
+        // A row processed again carries its results along.
+        a.record_attempt(
+            one,
+            &crate::history::Outcome::Done {
+                redo: crate::history::Redo {
+                    profile_id: crate::types::ProfileId("mail".into()),
+                    raw_text: "raw".into(),
+                    final_text: "one again".into(),
+                    degraded: false,
+                    asr_ms: 1,
+                    llm_ms: None,
+                    dict_fixes: 0,
+                    snippets: 0,
+                    llm_changed: false,
+                },
+                asr_label: "Breeze".into(),
+                llm_label: None,
+            },
+            true,
+        )
+        .unwrap();
         write(&a, tmp.path(), text_only(), Path::new(""));
 
         let b = HistoryStore::open_in_memory().unwrap();
@@ -182,6 +203,17 @@ mod tests {
             (1, 3, 0, 0)
         );
         assert_eq!(texts(&b), texts(&a));
+        let imported = b.list_recent(10).unwrap();
+        let again = imported
+            .iter()
+            .find(|u| u.final_text == "one again")
+            .unwrap();
+        assert_eq!(again.redone, 1);
+        let attempts = b.attempts(again.id).unwrap();
+        assert_eq!(attempts.len(), 2);
+        assert!(attempts[0].chosen && !attempts[0].origin);
+        assert_eq!(attempts[0].asr_label.as_deref(), Some("Breeze"));
+        assert!(attempts[1].origin);
         assert_eq!(b.stats(0, 0).unwrap().totals, a.stats(0, 0).unwrap().totals);
         let devices = b.devices().unwrap();
         assert_eq!(devices.len(), 2);

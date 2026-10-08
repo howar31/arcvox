@@ -73,6 +73,46 @@ pub struct HistoryLine {
     /// separators.
     #[serde(default)]
     pub audio: Option<String>,
+    /// Every result the row had, oldest first; empty for a row never processed again.
+    #[serde(default)]
+    pub attempts: Vec<AttemptLine>,
+}
+
+/// One result of a row: what processing its recording gave, or how it
+/// failed. The chosen one is what the row shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttemptLine {
+    pub ts: i64,
+    pub profile_id: String,
+    #[serde(default)]
+    pub asr_label: Option<String>,
+    #[serde(default)]
+    pub llm_label: Option<String>,
+    #[serde(default)]
+    pub raw_text: String,
+    #[serde(default)]
+    pub final_text: String,
+    #[serde(default)]
+    pub degraded: bool,
+    #[serde(default)]
+    pub asr_ms: u64,
+    #[serde(default)]
+    pub llm_ms: Option<u64>,
+    #[serde(default)]
+    pub dict_fixes: u32,
+    #[serde(default)]
+    pub snippets: u32,
+    #[serde(default)]
+    pub llm_changed: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub error_code: Option<String>,
+    /// The result the row had before it was first processed again.
+    #[serde(default)]
+    pub origin: bool,
+    #[serde(default)]
+    pub chosen: bool,
 }
 
 /// One statistics bucket: its key, when it last changed, and its counters

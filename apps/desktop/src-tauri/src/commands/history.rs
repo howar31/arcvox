@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use arcvox_core::history::{HistoryStore, Redo, Utterance};
+use arcvox_core::history::{Attempt, AttemptId, HistoryStore, Utterance};
 use arcvox_core::types::{HistoryId, ProfileId};
 use arcvox_core::{Engine, ReprocessError};
 use serde::Serialize;
@@ -29,12 +29,15 @@ pub struct UtteranceDto {
     pub error: Option<String>,
     /// The kind of failure, when it was kept.
     pub error_code: Option<String>,
+    /// How many times the recording was processed again.
+    pub redone: u32,
 }
 
-/// What `history_reprocess` returns: a result, or why the engines failed.
+/// What `history_reprocess` returns: the result recorded with the row, or
+/// why the engines failed (recorded too).
 #[derive(Debug, Clone, Serialize)]
 pub struct RedoOutcome {
-    pub redo: Option<RedoDto>,
+    pub attempt: Option<AttemptDto>,
     pub failure: Option<FailureDto>,
 }
 
@@ -44,85 +47,70 @@ pub struct FailureDto {
     pub detail: String,
 }
 
-/// The result of processing a row's recording again.
-#[derive(Debug, Clone, Serialize, serde::Deserialize)]
-pub struct RedoDto {
-    /// True when the result was stored right away (the row had failed).
-    pub applied: bool,
+/// One result a row had: what processing its recording gave, or how it
+/// failed. The chosen one is what the row shows.
+#[derive(Debug, Clone, Serialize)]
+pub struct AttemptDto {
+    pub id: i64,
+    pub ts: i64,
     pub profile_id: String,
+    pub asr_label: Option<String>,
+    pub llm_label: Option<String>,
     pub raw_text: String,
     pub final_text: String,
     pub degraded: bool,
     pub asr_ms: u64,
     pub llm_ms: Option<u64>,
-    pub dict_fixes: u32,
-    pub snippets: u32,
-    pub llm_changed: bool,
-    pub asr_label: String,
-    pub llm_label: Option<String>,
+    pub error: Option<String>,
+    pub error_code: Option<String>,
+    pub origin: bool,
+    pub chosen: bool,
 }
 
-impl RedoDto {
-    fn redo(&self) -> Redo {
-        Redo {
-            profile_id: ProfileId(self.profile_id.clone()),
-            raw_text: self.raw_text.clone(),
-            final_text: self.final_text.clone(),
-            degraded: self.degraded,
-            asr_ms: self.asr_ms,
-            llm_ms: self.llm_ms,
-            dict_fixes: self.dict_fixes,
-            snippets: self.snippets,
-            llm_changed: self.llm_changed,
+impl From<Attempt> for AttemptDto {
+    fn from(a: Attempt) -> Self {
+        AttemptDto {
+            id: a.id.0,
+            ts: a.ts,
+            profile_id: a.profile_id.0,
+            asr_label: a.asr_label,
+            llm_label: a.llm_label,
+            raw_text: a.raw_text,
+            final_text: a.final_text,
+            degraded: a.degraded,
+            asr_ms: a.asr_ms,
+            llm_ms: a.llm_ms,
+            error: a.error,
+            error_code: a.error_code,
+            origin: a.origin,
+            chosen: a.chosen,
         }
     }
 }
 
 /// Processes a row's recording again with the named profile, or the row's
-/// own. A row that had failed takes the result at once, or the new reason
-/// when this attempt fails too; a row that has text is left as it is and
-/// the result is returned for the user to accept.
+/// own. The result is recorded with the row; a row that had failed takes it
+/// at once, one that has text keeps its own until the user chooses.
 pub async fn reprocess(
     engine: &Engine,
     id: i64,
     profile_id: Option<String>,
 ) -> CmdResult<RedoOutcome> {
     let id = HistoryId(id);
-    let history = engine.history();
-    let was_failed = history.get(id)?.is_some_and(|u| u.error.is_some());
-    let done = match engine.reprocess(id, profile_id.map(ProfileId)).await {
-        Ok(done) => done,
-        Err(ReprocessError::Failed { code, text }) => {
-            history.set_error(id, code, &text)?;
-            return Ok(RedoOutcome {
-                redo: None,
-                failure: Some(FailureDto {
-                    code: code.name(),
-                    detail: text,
-                }),
-            });
-        }
-        Err(e) => return Err(e.into()),
-    };
-    let applied = was_failed && history.apply_redo(id, &done.redo)?;
-    let r = done.redo;
-    Ok(RedoOutcome {
-        failure: None,
-        redo: Some(RedoDto {
-            applied,
-            profile_id: r.profile_id.0,
-            raw_text: r.raw_text,
-            final_text: r.final_text,
-            degraded: r.degraded,
-            asr_ms: r.asr_ms,
-            llm_ms: r.llm_ms,
-            dict_fixes: r.dict_fixes,
-            snippets: r.snippets,
-            llm_changed: r.llm_changed,
-            asr_label: done.asr_label,
-            llm_label: done.llm_label,
+    match engine.reprocess(id, profile_id.map(ProfileId)).await {
+        Ok(done) => Ok(RedoOutcome {
+            attempt: Some(done.attempt.into()),
+            failure: None,
         }),
-    })
+        Err(ReprocessError::Failed { code, text }) => Ok(RedoOutcome {
+            attempt: None,
+            failure: Some(FailureDto {
+                code: code.name(),
+                detail: text,
+            }),
+        }),
+        Err(e) => Err(e.into()),
+    }
 }
 
 #[tauri::command]
@@ -136,15 +124,40 @@ pub async fn history_reprocess(
     reprocess(&e, id, profile_id).await
 }
 
-/// Replaces a row's text with a result `history_reprocess` returned.
+/// Every result a row had, newest first.
 #[tauri::command]
-pub fn history_apply_redo(state: State<'_, AppState>, id: i64, redo: RedoDto) -> CmdResult<()> {
+pub fn history_attempts(state: State<'_, AppState>, id: i64) -> CmdResult<Vec<AttemptDto>> {
+    let e = engine(&state)?;
+    Ok(e.history()
+        .attempts(HistoryId(id))?
+        .into_iter()
+        .map(AttemptDto::from)
+        .collect())
+}
+
+/// Makes a recorded result the row's text.
+#[tauri::command]
+pub fn history_choose_attempt(state: State<'_, AppState>, id: i64, attempt: i64) -> CmdResult<()> {
     let e = engine(&state)?;
     state.backup.touch();
-    if !e.history().apply_redo(HistoryId(id), &redo.redo())? {
+    if !e
+        .history()
+        .choose_attempt(HistoryId(id), AttemptId(attempt))?
+    {
+        return Err(CmdError::new("attempt_gone", "the result no longer exists"));
+    }
+    Ok(())
+}
+
+/// Removes a recorded result that the row does not show.
+#[tauri::command]
+pub fn history_delete_attempt(state: State<'_, AppState>, attempt: i64) -> CmdResult<()> {
+    let e = engine(&state)?;
+    state.backup.touch();
+    if !e.history().delete_attempt(AttemptId(attempt))? {
         return Err(CmdError::new(
-            "history_row_gone",
-            "the history row no longer exists",
+            "attempt_in_use",
+            "the result the row shows cannot be removed",
         ));
     }
     Ok(())
@@ -175,6 +188,7 @@ impl UtteranceDto {
             audio_bytes,
             error: u.error,
             error_code: u.error_code,
+            redone: u.redone,
         }
     }
 }

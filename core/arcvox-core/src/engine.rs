@@ -72,13 +72,12 @@ pub enum ReprocessError {
     Failed { code: ErrorCode, text: String },
 }
 
-/// The result of `Engine::reprocess` and the engines that produced it.
+/// The result of `Engine::reprocess`, recorded with the row. `chosen`
+/// says the row took it at once (it had failed before).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reprocessed {
-    pub redo: crate::history::Redo,
-    pub asr_label: String,
-    /// None when the profile does not rewrite.
-    pub llm_label: Option<String>,
+    pub attempt: crate::history::Attempt,
+    pub chosen: bool,
 }
 
 /// Rearms the idle unload of the language model when a rerun ends.
@@ -735,21 +734,43 @@ impl Engine {
         let outcome = pipeline.run(Arc::new(clip), &ctx, &tx).await;
         drop(tx);
         let _ = drain.await;
-        let outcome = outcome.map_err(|e| fail(&e))?;
-        Ok(Reprocessed {
-            asr_label,
-            llm_label,
-            redo: crate::history::Redo {
-                profile_id: profile.id.clone(),
-                raw_text: outcome.raw_text,
-                final_text: outcome.final_text,
-                degraded: outcome.degraded,
-                asr_ms: outcome.asr_ms,
-                llm_ms: outcome.llm_ms,
-                dict_fixes: outcome.dict_fixes,
-                snippets: outcome.snippets,
-                llm_changed: outcome.llm_changed,
+        // Recorded with the row either way; a failed run is a result too.
+        let recorded = match &outcome {
+            Ok(out) => crate::history::Outcome::Done {
+                redo: crate::history::Redo {
+                    profile_id: profile.id.clone(),
+                    raw_text: out.raw_text.clone(),
+                    final_text: out.final_text.clone(),
+                    degraded: out.degraded,
+                    asr_ms: out.asr_ms,
+                    llm_ms: out.llm_ms,
+                    dict_fixes: out.dict_fixes,
+                    snippets: out.snippets,
+                    llm_changed: out.llm_changed,
+                },
+                asr_label,
+                llm_label,
             },
+            Err(e) => crate::history::Outcome::Failed {
+                profile_id: profile.id.clone(),
+                code: e.code,
+                text: failure_text(e),
+            },
+        };
+        let history = self.inner.history.clone();
+        let stored =
+            tokio::task::spawn_blocking(move || history.record_attempt(id, &recorded, false))
+                .await
+                .map_err(|e| ReprocessError::Failed {
+                    code: ErrorCode::Internal,
+                    text: e.to_string(),
+                })??;
+        let outcome = outcome.map_err(|e| fail(&e))?;
+        drop(outcome);
+        let attempt = stored.ok_or(ReprocessError::NoRow)?;
+        Ok(Reprocessed {
+            chosen: attempt.chosen,
+            attempt,
         })
     }
 
@@ -2031,21 +2052,23 @@ pub(crate) mod tests {
         drop(down);
         mock_ok(&r, "原文", "整理後").await;
         let done = r.engine.reprocess(row.id, None).await.unwrap();
-        assert_eq!(done.redo.final_text, "整理後");
-        assert_eq!(done.redo.raw_text, "原文");
-        assert_eq!(done.redo.profile_id, row.profile_id);
-        assert!(done.llm_label.is_some());
-        // Nothing is stored until the result is applied.
-        assert!(r
-            .engine
-            .history()
-            .get(row.id)
-            .unwrap()
-            .unwrap()
-            .error
-            .is_some());
-        assert!(r.engine.history().apply_redo(row.id, &done.redo).unwrap());
+        assert_eq!(done.attempt.final_text, "整理後");
+        assert_eq!(done.attempt.raw_text, "原文");
+        assert_eq!(done.attempt.profile_id, row.profile_id);
+        assert!(done.attempt.llm_label.is_some());
+        // A row that had failed takes the result at once.
+        assert!(done.chosen);
+        let row = r.engine.history().get(row.id).unwrap().unwrap();
+        assert_eq!(
+            (row.error, row.final_text.as_str(), row.redone),
+            (None, "整理後", 2)
+        );
         assert_eq!(r.engine.history().stats(0, 0).unwrap().totals.count, 1);
+        // The failed run before it is in the record too, after the failure the row had.
+        let attempts = r.engine.history().attempts(row.id).unwrap();
+        assert_eq!(attempts.len(), 3);
+        assert_eq!(attempts[1].error_code.as_deref(), Some("provider_error"));
+        assert!(attempts[2].origin);
     }
 
     #[tokio::test]
@@ -2503,7 +2526,7 @@ pub(crate) mod tests {
         // It can be processed again like any failed row.
         mock_ok(&r, "原文", "整理後").await;
         let again = r.engine.reprocess(rows[0].id, None).await.unwrap();
-        assert_eq!(again.redo.final_text, "整理後");
+        assert_eq!(again.attempt.final_text, "整理後");
     }
 
     #[tokio::test]

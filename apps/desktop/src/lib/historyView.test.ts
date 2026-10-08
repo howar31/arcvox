@@ -1,11 +1,23 @@
 import { describe, expect, it } from "vitest";
 import type { Utterance } from "./api";
-import { clipLength, groupByDay, rawState, seconds, totalSeconds } from "./historyView";
+import { clipLength, groupByDay, rawState, redoneTag, seconds, totalSeconds } from "./historyView";
+import { setLanguage } from "./i18n";
 
 const at = (d: Date) => Math.floor(d.getTime() / 1000);
 const u = (id: number, when: Date, raw = "raw", fin = "final", degraded = false): Utterance => ({
   id, ts: at(when), profile_id: "default", app_name: "Notes", raw_text: raw, refined_text: fin, final_text: fin,
-  degraded, has_audio: false, asr_ms: 1180, llm_ms: degraded ? null : 940, audio_ms: null, audio_bytes: null, error: null, error_code: null,
+  degraded, has_audio: false, asr_ms: 1180, llm_ms: degraded ? null : 940, audio_ms: null, audio_bytes: null, error: null, error_code: null, redone: 0,
+});
+
+describe("redoneTag", () => {
+  it("names once or how many times", () => {
+    setLanguage("zh-TW");
+    expect(redoneTag(0)).toBeNull();
+    expect(redoneTag(1)).toBe("已重新處理");
+    expect(redoneTag(3)).toBe("已重新處理 3 次");
+    setLanguage("en");
+    expect(redoneTag(2)).toBe("Processed again 2 times");
+  });
 });
 
 describe("groupByDay", () => {

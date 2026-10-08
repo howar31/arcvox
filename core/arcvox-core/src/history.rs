@@ -6,7 +6,7 @@ use std::sync::Mutex;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::backup::format::{DeviceMeta, HistoryLine, StatsLine};
+use crate::backup::format::{AttemptLine, DeviceMeta, HistoryLine, StatsLine};
 use crate::stats::{self, Stats};
 use crate::types::{ErrorCode, HistoryId, ProfileId};
 
@@ -60,6 +60,52 @@ pub struct Utterance {
     /// The kind of failure, as `ErrorCode::name`; None for rows stored
     /// before the kind was kept.
     pub error_code: Option<String>,
+    /// How many times the recording was processed again.
+    pub redone: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct AttemptId(pub i64);
+
+/// One result a row had: what processing its recording gave, or how it
+/// failed. The chosen one is what the row shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attempt {
+    pub id: AttemptId,
+    pub utterance_id: HistoryId,
+    pub ts: i64,
+    pub profile_id: ProfileId,
+    pub asr_label: Option<String>,
+    pub llm_label: Option<String>,
+    pub raw_text: String,
+    pub final_text: String,
+    pub degraded: bool,
+    pub asr_ms: u64,
+    pub llm_ms: Option<u64>,
+    pub dict_fixes: u32,
+    pub snippets: u32,
+    pub llm_changed: bool,
+    pub error: Option<String>,
+    pub error_code: Option<String>,
+    /// The result the row had before it was first processed again.
+    pub origin: bool,
+    pub chosen: bool,
+}
+
+/// A result to record for a row: `Ok` with the engines that made it, or
+/// the failure of the run.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Outcome {
+    Done {
+        redo: Redo,
+        asr_label: String,
+        llm_label: Option<String>,
+    },
+    Failed {
+        profile_id: ProfileId,
+        code: ErrorCode,
+        text: String,
+    },
 }
 
 /// A dictation that failed after it was recorded.
@@ -157,6 +203,27 @@ CREATE TABLE IF NOT EXISTS utterances (
     llm_ms INTEGER
 );
 CREATE INDEX IF NOT EXISTS utterances_ts ON utterances(ts);
+CREATE TABLE IF NOT EXISTS attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    utterance_id INTEGER NOT NULL REFERENCES utterances(id) ON DELETE CASCADE,
+    ts INTEGER NOT NULL,
+    profile_id TEXT NOT NULL,
+    asr_label TEXT,
+    llm_label TEXT,
+    raw_text TEXT NOT NULL DEFAULT '',
+    final_text TEXT NOT NULL DEFAULT '',
+    degraded INTEGER NOT NULL DEFAULT 0,
+    asr_ms INTEGER NOT NULL DEFAULT 0,
+    llm_ms INTEGER,
+    dict_fixes INTEGER NOT NULL DEFAULT 0,
+    snippets INTEGER NOT NULL DEFAULT 0,
+    llm_changed INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    error_code TEXT,
+    origin INTEGER NOT NULL DEFAULT 0,
+    chosen INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS attempts_utterance ON attempts(utterance_id);
 ";
 
 const STATS_SCHEMA: &str = "
@@ -371,6 +438,7 @@ impl HistoryStore {
 
     pub fn open_in_memory() -> Result<Self, HistoryError> {
         let conn = Connection::open_in_memory()?;
+        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
         conn.execute_batch(SCHEMA)?;
         let device = DeviceRef {
             id: TEST_DEVICE,
@@ -581,59 +649,196 @@ impl HistoryStore {
     /// had failed becomes an ordinary one and is counted in the statistics
     /// now, at the time it was spoken; a row that already had text is not
     /// counted a second time. False when the row no longer exists.
+    /// Makes a result the row's text, profile and timings. True when the
+    /// row exists. A row that had failed is counted in the statistics now.
     pub fn apply_redo(&self, id: HistoryId, r: &Redo) -> Result<bool, HistoryError> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
-        let row: Option<(i64, Option<String>, Option<i64>, bool)> = tx
+        let applied = apply_in(&tx, &self.device_id, id, r)?;
+        tx.commit()?;
+        Ok(applied)
+    }
+
+    /// Records a result of processing the row's recording again. Before the
+    /// first one, the row's own result or failure is kept as the origin
+    /// attempt. With `choose`, or for a row that had failed, the result
+    /// becomes the row's. None when the row is gone.
+    pub fn record_attempt(
+        &self,
+        id: HistoryId,
+        outcome: &Outcome,
+        choose: bool,
+    ) -> Result<Option<Attempt>, HistoryError> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let Some(row) = tx
+            .query_row(&format!("{SELECT} WHERE id = ?1"), params![id.0], map_row)
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        let has_attempts: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM attempts WHERE utterance_id = ?1)",
+            params![id.0],
+            |r| r.get(0),
+        )?;
+        let was_failed = row.error.is_some();
+        if !has_attempts {
+            insert_attempt(
+                &tx,
+                id.0,
+                &AttemptLine {
+                    ts: row.ts,
+                    profile_id: row.profile_id.0.clone(),
+                    asr_label: None,
+                    llm_label: None,
+                    raw_text: row.raw_text.clone(),
+                    final_text: row.final_text.clone(),
+                    degraded: row.degraded,
+                    asr_ms: row.asr_ms,
+                    llm_ms: row.llm_ms,
+                    dict_fixes: 0,
+                    snippets: 0,
+                    llm_changed: false,
+                    error: row.error.clone(),
+                    error_code: row.error_code.clone(),
+                    origin: true,
+                    chosen: !was_failed,
+                },
+            )?;
+        }
+        let ts = now_unix();
+        let line = match outcome {
+            Outcome::Done {
+                redo,
+                asr_label,
+                llm_label,
+            } => AttemptLine {
+                ts,
+                profile_id: redo.profile_id.0.clone(),
+                asr_label: Some(asr_label.clone()),
+                llm_label: llm_label.clone(),
+                raw_text: redo.raw_text.clone(),
+                final_text: redo.final_text.clone(),
+                degraded: redo.degraded,
+                asr_ms: redo.asr_ms,
+                llm_ms: redo.llm_ms,
+                dict_fixes: redo.dict_fixes,
+                snippets: redo.snippets,
+                llm_changed: redo.llm_changed,
+                error: None,
+                error_code: None,
+                origin: false,
+                chosen: false,
+            },
+            Outcome::Failed {
+                profile_id,
+                code,
+                text,
+            } => AttemptLine {
+                ts,
+                profile_id: profile_id.0.clone(),
+                asr_label: None,
+                llm_label: None,
+                raw_text: String::new(),
+                final_text: String::new(),
+                degraded: false,
+                asr_ms: 0,
+                llm_ms: None,
+                dict_fixes: 0,
+                snippets: 0,
+                llm_changed: false,
+                error: Some(text.clone()),
+                error_code: Some(code.name().to_string()),
+                origin: false,
+                chosen: false,
+            },
+        };
+        let attempt_id = insert_attempt(&tx, id.0, &line)?;
+        if let (Outcome::Done { redo, .. }, true) = (outcome, choose || was_failed) {
+            apply_in(&tx, &self.device_id, id, redo)?;
+            choose_in(&tx, id, attempt_id)?;
+        } else {
+            touch_in(&tx, id)?;
+        }
+        let attempt = tx.query_row(
+            &format!("{SELECT_ATTEMPT} WHERE id = ?1"),
+            params![attempt_id],
+            map_attempt,
+        )?;
+        tx.commit()?;
+        Ok(Some(attempt))
+    }
+
+    /// Makes a recorded result the row's. False when the row or the
+    /// attempt is gone, or the attempt is a failure.
+    pub fn choose_attempt(&self, id: HistoryId, attempt: AttemptId) -> Result<bool, HistoryError> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let Some(a) = tx
             .query_row(
-                "SELECT ts, app_name, audio_ms, error IS NOT NULL FROM utterances WHERE id = ?1",
-                params![id.0],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                &format!("{SELECT_ATTEMPT} WHERE id = ?1 AND utterance_id = ?2"),
+                params![attempt.0, id.0],
+                map_attempt,
             )
-            .optional()?;
-        let Some((ts, app_name, audio_ms, was_failed)) = row else {
+            .optional()?
+        else {
             return Ok(false);
         };
-        tx.execute(
-            "UPDATE utterances SET profile_id = ?1, raw_text = ?2, refined_text = ?3, final_text = ?3, degraded = ?4,
-                asr_ms = ?5, llm_ms = ?6, dict_fixes = ?7, snippets = ?8, error = NULL, error_code = NULL, updated = ?10 WHERE id = ?9",
-            params![
-                r.profile_id.0,
-                r.raw_text,
-                r.final_text,
-                r.degraded as i64,
-                r.asr_ms as i64,
-                r.llm_ms.map(|v| v as i64),
-                r.dict_fixes as i64,
-                r.snippets as i64,
-                id.0,
-                now_ms(),
-            ],
-        )?;
-        if was_failed {
-            let counted = stats::add(
-                &tx,
-                &stats::Sample {
-                    device_id: &self.device_id,
-                    ts,
-                    app_name: app_name.as_deref().unwrap_or(""),
-                    profile_id: &r.profile_id.0,
-                    text: &r.final_text,
-                    audio_ms: audio_ms.map(|v| v as u64),
-                    asr_ms: r.asr_ms,
-                    llm_ms: r.llm_ms,
-                    changed: r.llm_changed,
-                    degraded: r.degraded,
-                    dict_fixes: r.dict_fixes,
-                    snippets: r.snippets,
-                },
-            );
-            if let Err(e) = counted {
-                tracing::warn!(error = %e, "statistics write failed for a retried dictation");
-            }
+        if a.error.is_some() {
+            return Ok(false);
         }
+        let redo = Redo {
+            profile_id: a.profile_id,
+            raw_text: a.raw_text,
+            final_text: a.final_text,
+            degraded: a.degraded,
+            asr_ms: a.asr_ms,
+            llm_ms: a.llm_ms,
+            dict_fixes: a.dict_fixes,
+            snippets: a.snippets,
+            llm_changed: a.llm_changed,
+        };
+        if !apply_in(&tx, &self.device_id, id, &redo)? {
+            return Ok(false);
+        }
+        choose_in(&tx, id, attempt.0)?;
         tx.commit()?;
         Ok(true)
+    }
+
+    /// Removes a recorded result that is not the row's. False when it is,
+    /// or when it is gone.
+    pub fn delete_attempt(&self, attempt: AttemptId) -> Result<bool, HistoryError> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let Some((utterance, chosen)) = tx
+            .query_row(
+                "SELECT utterance_id, chosen FROM attempts WHERE id = ?1",
+                params![attempt.0],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)? != 0)),
+            )
+            .optional()?
+        else {
+            return Ok(false);
+        };
+        if chosen {
+            return Ok(false);
+        }
+        tx.execute("DELETE FROM attempts WHERE id = ?1", params![attempt.0])?;
+        touch_in(&tx, HistoryId(utterance))?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Every result a row had, newest first.
+    pub fn attempts(&self, id: HistoryId) -> Result<Vec<Attempt>, HistoryError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&format!(
+            "{SELECT_ATTEMPT} WHERE utterance_id = ?1 ORDER BY ts DESC, id DESC"
+        ))?;
+        let rows = stmt.query_map(params![id.0], map_attempt)?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
     pub fn set_final(&self, id: HistoryId, text: &str) -> Result<(), HistoryError> {
@@ -673,7 +878,7 @@ impl HistoryStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT origin_id, ts, updated, profile_id, app_name, raw_text, refined_text, final_text, degraded,
-                    asr_ms, llm_ms, audio_ms, dict_fixes, snippets, error, error_code, audio_path
+                    asr_ms, llm_ms, audio_ms, dict_fixes, snippets, error, error_code, audio_path, id
              FROM utterances
              WHERE device_id = ?1 AND origin_id IS NOT NULL AND (error_code IS NULL OR error_code != ?2)
              ORDER BY origin_id",
@@ -697,10 +902,21 @@ impl HistoryStore {
                 error: r.get(14)?,
                 error_code: r.get(15)?,
                 audio: None,
+                attempts: Vec::new(),
             };
-            Ok((line, r.get::<_, Option<String>>(16)?.map(PathBuf::from)))
+            Ok((
+                line,
+                r.get::<_, Option<String>>(16)?.map(PathBuf::from),
+                r.get::<_, i64>(17)?,
+            ))
         })?;
-        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        let mut out = Vec::new();
+        for row in rows {
+            let (mut line, audio, id) = row?;
+            line.attempts = attempt_lines(&conn, id)?;
+            out.push((line, audio));
+        }
+        Ok(out)
     }
 
     /// A device's statistics buckets for a backup.
@@ -800,6 +1016,10 @@ impl HistoryStore {
                             l.updated,
                         ],
                     )?;
+                    let new_id = tx.last_insert_rowid();
+                    for a in &l.attempts {
+                        insert_attempt(&tx, new_id, a)?;
+                    }
                     merged.added += 1;
                     if l.ts < cutoff {
                         merged.expiring += 1;
@@ -830,6 +1050,10 @@ impl HistoryStore {
                                 id,
                             ],
                         )?;
+                        tx.execute("DELETE FROM attempts WHERE utterance_id = ?1", params![id])?;
+                        for a in &l.attempts {
+                            insert_attempt(&tx, id, a)?;
+                        }
                         merged.updated += 1;
                     } else {
                         merged.skipped += 1;
@@ -1286,7 +1510,170 @@ fn remove_recording(
     Ok(removed)
 }
 
-const SELECT: &str = "SELECT id, ts, profile_id, app_name, raw_text, refined_text, final_text, degraded, audio_path, asr_ms, llm_ms, audio_ms, error, error_code FROM utterances";
+/// Makes a result the row's text, profile and timings, on an open
+/// transaction. True when the row exists. A row that had failed is counted
+/// in the statistics now; one that had text is not counted again.
+fn apply_in(
+    tx: &Connection,
+    device_id: &str,
+    id: HistoryId,
+    r: &Redo,
+) -> Result<bool, HistoryError> {
+    let row: Option<(i64, Option<String>, Option<i64>, bool)> = tx
+        .query_row(
+            "SELECT ts, app_name, audio_ms, error IS NOT NULL FROM utterances WHERE id = ?1",
+            params![id.0],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .optional()?;
+    let Some((ts, app_name, audio_ms, was_failed)) = row else {
+        return Ok(false);
+    };
+    tx.execute(
+        "UPDATE utterances SET profile_id = ?1, raw_text = ?2, refined_text = ?3, final_text = ?3, degraded = ?4,
+            asr_ms = ?5, llm_ms = ?6, dict_fixes = ?7, snippets = ?8, error = NULL, error_code = NULL, updated = ?10 WHERE id = ?9",
+        params![
+            r.profile_id.0,
+            r.raw_text,
+            r.final_text,
+            r.degraded as i64,
+            r.asr_ms as i64,
+            r.llm_ms.map(|v| v as i64),
+            r.dict_fixes as i64,
+            r.snippets as i64,
+            id.0,
+            now_ms(),
+        ],
+    )?;
+    if was_failed {
+        let counted = stats::add(
+            tx,
+            &stats::Sample {
+                device_id,
+                ts,
+                app_name: app_name.as_deref().unwrap_or(""),
+                profile_id: &r.profile_id.0,
+                text: &r.final_text,
+                audio_ms: audio_ms.map(|v| v as u64),
+                asr_ms: r.asr_ms,
+                llm_ms: r.llm_ms,
+                changed: r.llm_changed,
+                degraded: r.degraded,
+                dict_fixes: r.dict_fixes,
+                snippets: r.snippets,
+            },
+        );
+        if let Err(e) = counted {
+            tracing::warn!(error = %e, "statistics write failed for a retried dictation");
+        }
+    }
+    Ok(true)
+}
+
+/// Marks one attempt as the row's and the others as not.
+fn choose_in(tx: &Connection, id: HistoryId, attempt: i64) -> rusqlite::Result<()> {
+    tx.execute(
+        "UPDATE attempts SET chosen = (id = ?1) WHERE utterance_id = ?2",
+        params![attempt, id.0],
+    )?;
+    Ok(())
+}
+
+/// Says the row changed, so a backup takes it again.
+fn touch_in(tx: &Connection, id: HistoryId) -> rusqlite::Result<()> {
+    tx.execute(
+        "UPDATE utterances SET updated = ?1 WHERE id = ?2",
+        params![now_ms(), id.0],
+    )?;
+    Ok(())
+}
+
+const SELECT: &str = "SELECT id, ts, profile_id, app_name, raw_text, refined_text, final_text, degraded, audio_path, asr_ms, llm_ms, audio_ms, error, error_code,
+    (SELECT COUNT(*) FROM attempts a WHERE a.utterance_id = utterances.id AND a.origin = 0) FROM utterances";
+
+const SELECT_ATTEMPT: &str = "SELECT id, utterance_id, ts, profile_id, asr_label, llm_label, raw_text, final_text, degraded, asr_ms, llm_ms,
+    dict_fixes, snippets, llm_changed, error, error_code, origin, chosen FROM attempts";
+
+fn map_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<Attempt> {
+    Ok(Attempt {
+        id: AttemptId(r.get(0)?),
+        utterance_id: HistoryId(r.get(1)?),
+        ts: r.get(2)?,
+        profile_id: ProfileId(r.get(3)?),
+        asr_label: r.get(4)?,
+        llm_label: r.get(5)?,
+        raw_text: r.get(6)?,
+        final_text: r.get(7)?,
+        degraded: r.get::<_, i64>(8)? != 0,
+        asr_ms: r.get::<_, i64>(9)? as u64,
+        llm_ms: r.get::<_, Option<i64>>(10)?.map(|v| v as u64),
+        dict_fixes: r.get::<_, i64>(11)? as u32,
+        snippets: r.get::<_, i64>(12)? as u32,
+        llm_changed: r.get::<_, i64>(13)? != 0,
+        error: r.get(14)?,
+        error_code: r.get(15)?,
+        origin: r.get::<_, i64>(16)? != 0,
+        chosen: r.get::<_, i64>(17)? != 0,
+    })
+}
+
+/// Writes one attempt line; `chosen` and `origin` as given.
+fn insert_attempt(tx: &Connection, utterance: i64, a: &AttemptLine) -> rusqlite::Result<i64> {
+    tx.execute(
+        "INSERT INTO attempts (utterance_id, ts, profile_id, asr_label, llm_label, raw_text, final_text, degraded, asr_ms, llm_ms,
+            dict_fixes, snippets, llm_changed, error, error_code, origin, chosen)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+        params![
+            utterance,
+            a.ts,
+            a.profile_id,
+            a.asr_label,
+            a.llm_label,
+            a.raw_text,
+            a.final_text,
+            a.degraded as i64,
+            a.asr_ms as i64,
+            a.llm_ms.map(|v| v as i64),
+            a.dict_fixes as i64,
+            a.snippets as i64,
+            a.llm_changed as i64,
+            a.error,
+            a.error_code,
+            a.origin as i64,
+            a.chosen as i64,
+        ],
+    )?;
+    Ok(tx.last_insert_rowid())
+}
+
+/// The attempts of a row for a records file, oldest first.
+fn attempt_lines(conn: &Connection, utterance: i64) -> rusqlite::Result<Vec<AttemptLine>> {
+    let mut stmt = conn.prepare(&format!(
+        "{SELECT_ATTEMPT} WHERE utterance_id = ?1 ORDER BY ts, id"
+    ))?;
+    let rows = stmt.query_map(params![utterance], |r| {
+        let a = map_attempt(r)?;
+        Ok(AttemptLine {
+            ts: a.ts,
+            profile_id: a.profile_id.0,
+            asr_label: a.asr_label,
+            llm_label: a.llm_label,
+            raw_text: a.raw_text,
+            final_text: a.final_text,
+            degraded: a.degraded,
+            asr_ms: a.asr_ms,
+            llm_ms: a.llm_ms,
+            dict_fixes: a.dict_fixes,
+            snippets: a.snippets,
+            llm_changed: a.llm_changed,
+            error: a.error,
+            error_code: a.error_code,
+            origin: a.origin,
+            chosen: a.chosen,
+        })
+    })?;
+    rows.collect()
+}
 
 fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Utterance> {
     Ok(Utterance {
@@ -1304,6 +1691,7 @@ fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Utterance> {
         audio_ms: r.get::<_, Option<i64>>(11)?.map(|v| v as u64),
         error: r.get(12)?,
         error_code: r.get(13)?,
+        redone: r.get::<_, i64>(14)? as u32,
     })
 }
 
@@ -1579,6 +1967,129 @@ mod tests {
         s.set_error(id, ErrorCode::Internal, "ignored").unwrap();
         assert_eq!(s.get(id).unwrap().unwrap().error, None);
         assert!(!s.apply_redo(HistoryId(999), &redo).unwrap());
+    }
+
+    fn done(profile: &str, text: &str) -> Outcome {
+        Outcome::Done {
+            redo: Redo {
+                profile_id: ProfileId(profile.into()),
+                raw_text: "raw".into(),
+                final_text: text.into(),
+                degraded: false,
+                asr_ms: 10,
+                llm_ms: Some(20),
+                dict_fixes: 0,
+                snippets: 0,
+                llm_changed: true,
+            },
+            asr_label: "Breeze".into(),
+            llm_label: Some("Gemma".into()),
+        }
+    }
+
+    #[test]
+    fn a_result_is_recorded_and_the_row_keeps_its_own_until_one_is_chosen() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let id = s.insert(new(100, None)).unwrap();
+        assert_eq!(s.get(id).unwrap().unwrap().redone, 0);
+        let a1 = s
+            .record_attempt(id, &done("mail", "first"), false)
+            .unwrap()
+            .unwrap();
+        assert!(!a1.chosen && !a1.origin);
+        assert_eq!(a1.asr_label.as_deref(), Some("Breeze"));
+        let row = s.get(id).unwrap().unwrap();
+        assert_eq!((row.final_text.as_str(), row.redone), ("refined", 1));
+        let list = s.attempts(id).unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].id, a1.id);
+        assert!(list[1].origin && list[1].chosen);
+        assert_eq!(list[1].final_text, "refined");
+
+        assert!(s.choose_attempt(id, a1.id).unwrap());
+        let row = s.get(id).unwrap().unwrap();
+        assert_eq!(
+            (row.final_text.as_str(), row.profile_id.0.as_str()),
+            ("first", "mail")
+        );
+        let list = s.attempts(id).unwrap();
+        assert!(list[0].chosen && !list[1].chosen);
+        // Switching back is the origin attempt again, not a run.
+        assert!(s.choose_attempt(id, list[1].id).unwrap());
+        assert_eq!(s.get(id).unwrap().unwrap().final_text, "refined");
+        assert_eq!(s.stats(0, 0).unwrap().totals.count, 1);
+
+        // The chosen attempt stays; another goes.
+        assert!(!s.delete_attempt(list[1].id).unwrap());
+        assert!(s.delete_attempt(a1.id).unwrap());
+        assert_eq!(s.attempts(id).unwrap().len(), 1);
+        assert_eq!(s.get(id).unwrap().unwrap().redone, 0);
+        assert!(!s.choose_attempt(id, a1.id).unwrap());
+        assert!(s
+            .record_attempt(HistoryId(999), &done("x", "y"), false)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn a_failed_row_takes_its_first_result_and_keeps_the_failure_as_its_origin() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let id = s
+            .insert_failed(FailedUtterance {
+                ts: 100,
+                profile_id: ProfileId("default".into()),
+                app_name: None,
+                audio_path: PathBuf::from("/tmp/x.wav"),
+                audio_ms: Some(1000),
+                code: ErrorCode::ProviderError,
+                error: "down".into(),
+            })
+            .unwrap();
+        let again = s
+            .record_attempt(
+                id,
+                &Outcome::Failed {
+                    profile_id: ProfileId("default".into()),
+                    code: ErrorCode::ProviderTimeout,
+                    text: "late".into(),
+                },
+                false,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(again.error.as_deref(), Some("late"));
+        assert!(s.get(id).unwrap().unwrap().error.is_some());
+        assert!(!s.choose_attempt(id, again.id).unwrap());
+
+        let ok = s
+            .record_attempt(id, &done("default", "done"), false)
+            .unwrap()
+            .unwrap();
+        assert!(ok.chosen);
+        let row = s.get(id).unwrap().unwrap();
+        assert_eq!(
+            (row.final_text.as_str(), row.error, row.redone),
+            ("done", None, 2)
+        );
+        assert_eq!(s.stats(0, 0).unwrap().totals.count, 1);
+        let list = s.attempts(id).unwrap();
+        assert_eq!(list.len(), 3);
+        let origin = list.last().unwrap();
+        assert!(origin.origin && !origin.chosen);
+        assert_eq!(origin.error_code.as_deref(), Some("provider_error"));
+    }
+
+    #[test]
+    fn deleting_the_row_takes_its_attempts() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let id = s.insert(new(100, None)).unwrap();
+        s.record_attempt(id, &done("mail", "first"), false).unwrap();
+        s.delete(id).unwrap();
+        let n: i64 = s
+            .connection()
+            .query_row("SELECT COUNT(*) FROM attempts", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
     }
 
     #[test]
