@@ -22,6 +22,7 @@
   import History from "./pages/History.svelte";
   import Speed from "./pages/Speed.svelte";
   import About from "./pages/About.svelte";
+  import Licenses from "./pages/Licenses.svelte";
   import Backup from "./pages/Backup.svelte";
 
   let route = $state(parseRoute(location.hash));
@@ -169,6 +170,7 @@
         {#if route.page === "home"}<Home />
         {:else if section}{#key section}<General {section} />{/key}
         {:else if route.page === "about"}<About />
+        {:else if route.page === "licenses"}<Licenses arg={route.arg} />
         {:else if route.page === "backup"}<Backup />
         {:else if route.page === "engines"}<Engines arg={route.arg} />
         {:else if route.page === "flow"}<Flow arg={route.arg} />

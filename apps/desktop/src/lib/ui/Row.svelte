@@ -4,7 +4,7 @@
   import ResetButton from "./ResetButton.svelte";
   import type { Reset } from "../reset";
 
-  let { label, tag, help, leading, children, onclick, reset }: {
+  let { label, tag, help, leading, children, onclick, external = false, reset }: {
     label?: string;
     /** A tag beside the label, where every page puts the tag of a name. */
     tag?: Snippet;
@@ -13,6 +13,8 @@
     children?: Snippet;
     /** Makes the whole row a button that ends in a chevron. */
     onclick?: () => void;
+    /** The row opens something outside the app: it ends in the external mark instead of the chevron. */
+    external?: boolean;
     /** Set while the row's value differs from its default. */
     reset?: Reset;
   } = $props();
@@ -33,7 +35,7 @@
 {#if onclick}
   <button type="button" class="item link" {onclick}>
     {@render body()}
-    <span class="chev"><Icon name="chevron-right" /></span>
+    <span class="chev"><Icon name={external ? "external" : "chevron-right"} /></span>
   </button>
 {:else}
   <div class="item">{@render body()}</div>

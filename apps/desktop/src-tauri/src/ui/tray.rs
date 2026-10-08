@@ -33,6 +33,7 @@ pub const ID_COPY_LAST: &str = "copy-last";
 pub const ID_HISTORY: &str = "history";
 pub const ID_STATISTICS: &str = "statistics";
 pub const ID_SETTINGS: &str = "settings";
+pub const ID_ABOUT: &str = "about";
 pub const ID_QUIT: &str = "quit";
 pub const ID_PLACE: &str = "widget-place";
 
@@ -321,6 +322,13 @@ pub(super) fn menu<R: Runtime>(
         text(language, Msg::TraySettings),
         true,
         Some("CmdOrCtrl+,"),
+    )?)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        ID_ABOUT,
+        text(language, Msg::TrayAbout),
+        true,
+        None::<&str>,
     )?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     menu.append(&MenuItem::with_id(
@@ -684,6 +692,7 @@ mod tests {
             "general",
             "models",
             "providers",
+            "about",
         ] {
             assert!(SETTINGS_PAGES.contains(&page), "{page}");
         }

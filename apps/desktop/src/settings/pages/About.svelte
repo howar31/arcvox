@@ -1,64 +1,58 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { errorMessage, reveal, systemInfo, type SystemInfo } from "../../lib/api";
+  import { errorMessage, openLink, reveal, systemInfo, type AboutLink, type SystemInfo } from "../../lib/api";
   import { t } from "../../lib/i18n";
+  import { go } from "../../lib/route";
   import { toast } from "../../lib/ui/toast.svelte";
-  import PageHead from "../../lib/ui/PageHead.svelte";
   import Group from "../../lib/ui/Group.svelte";
   import Row from "../../lib/ui/Row.svelte";
-  import Icon from "../../lib/ui/Icon.svelte";
+  import Icon, { type IconName } from "../../lib/ui/Icon.svelte";
+  import Mark from "../../lib/ui/Mark.svelte";
+  import Tag from "../../lib/ui/Tag.svelte";
 
   let info = $state<SystemInfo | null>(null);
-  const mitTerms = `Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.`;
-  const mitNotice = `MIT License
-
-Copyright (c) 2023-2024 The ggml authors (whisper.cpp)
-Copyright (c) 2023-2026 The ggml authors (llama.cpp, ggml)
-
-${mitTerms}`;
-  // Reflow the hard-wrapped paragraphs so the notice fits any window width.
-  const noticeText = mitNotice.replace(/([^\n])\n(?!\n|Copyright)/g, "$1 ");
-  const runtimes = ["whisper.cpp", "llama.cpp", "ggml"];
+  const links: { link: AboutLink; icon: IconName; label: string }[] = [
+    { link: "sponsor", icon: "heart", label: "about.sponsor" },
+    { link: "source", icon: "code", label: "about.source" },
+    { link: "issue", icon: "bug", label: "about.issue" },
+    { link: "website", icon: "about", label: "about.website" },
+  ];
 
   onMount(async () => {
     try { info = await systemInfo(); } catch (e) { toast.error(errorMessage(e)); }
   });
+
+  async function open(link: AboutLink) {
+    try { await openLink(link); } catch (e) { toast.error(errorMessage(e)); }
+  }
 
   async function show(path: string) {
     try { await reveal(path); } catch (e) { toast.error(errorMessage(e)); }
   }
 </script>
 
-<PageHead title={t("nav.about")} />
-
-<div class="app">
-  <span class="mark" aria-hidden="true"></span>
-  <div>
-    <div class="app-name">{t("app.title")}</div>
-    <div class="sub">{info ? t("about.version", { version: info.version }) : ""}</div>
-  </div>
+<div class="lockup">
+  <Mark size={64} />
+  <div class="word"><em>A</em>rcvox</div>
+  {#if info}
+    <div class="version"><span>{t("about.version", { version: info.version })}</span>{#if info.dev}<Tag>{t("about.dev")}</Tag>{/if}</div>
+  {/if}
 </div>
-<p class="license">{t("about.license")}</p>
+
+<Group title={t("about.links")}>
+  {#each links as l (l.link)}
+    <Row label={t(l.label)} onclick={() => open(l.link)} external>
+      {#snippet leading()}<span class="lead"><Icon name={l.icon} size={18} /></span>{/snippet}
+    </Row>
+  {/each}
+  <Row label={t("about.licenses")} onclick={() => go("licenses")}>
+    {#snippet leading()}<span class="lead"><Icon name="scale" size={18} /></span>{/snippet}
+  </Row>
+</Group>
 
 {#if info}
-  <Group title={t("about.locations")}>
-    {#each [["about.config_dir", info.config_dir], ["about.data_dir", info.data_dir], ["about.cache_dir", info.cache_dir]] as [key, path] (key)}
+  <Group title={t("about.locations")} help={t("about.model_licenses")}>
+    {#each [["about.config_dir", info.config_dir], ["about.data_dir", info.data_dir], ["about.recordings_dir", info.recordings_dir], ["about.cache_dir", info.cache_dir]] as [key, path] (key)}
       <Row label={t(key)} help={path}>
         <button type="button" class="btn quiet" onclick={() => show(path)}><Icon name="folder" size={14} />{t("about.reveal")}</button>
       </Row>
@@ -66,25 +60,14 @@ ${mitTerms}`;
   </Group>
 {/if}
 
-<Group title={t("about.licenses")} help={t("about.model_licenses")}>
-  <details>
-    <summary><span class="name">{runtimes.join(", ")}</span><span class="sub">MIT</span><span class="chev"><Icon name="chevron-right" size={14} /></span></summary>
-    <pre class="notice">{noticeText}</pre>
-  </details>
-</Group>
+<footer class="foot">{t("about.copyright")}<br>{t("about.license")}</footer>
 
 <style>
-  .app { display: flex; align-items: center; gap: 14px; }
-  .mark { width: 40px; height: 40px; border-radius: 50%; border: 6px solid var(--accent); flex: none; }
-  .app-name { font: 600 var(--text-lg)/1.3 var(--font-round); }
-  .license { margin: 12px 0 0; color: var(--ink-2); }
-  details summary { display: flex; align-items: center; gap: 10px; min-height: var(--row-min); padding: var(--row-y) var(--row-x); list-style: none; cursor: default; border-radius: calc(var(--radius-group) - 1px); }
-  details summary::-webkit-details-marker { display: none; }
-  details summary:hover { background: var(--sunken); }
-  details summary:focus-visible { outline-offset: -2px; }
-  summary .name { flex: 1; min-width: 0; }
-  .chev { display: flex; color: var(--ink-3); transition: transform .15s; }
-  details[open] .chev { transform: rotate(90deg); }
-  details[open] summary { border-radius: calc(var(--radius-group) - 1px) calc(var(--radius-group) - 1px) 0 0; }
-  .notice { margin: 0; padding: 14px var(--row-x) 16px; border-top: 1px solid var(--line); white-space: pre-wrap; font: 12px/1.55 var(--font-mono); color: var(--ink-2); max-height: 260px; overflow: auto; }
+  /* The lockup takes the page head's place; the update state will sit under the version. */
+  .lockup { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 8px 0 0; }
+  .word { margin-top: 14px; font: 800 30px/1 var(--font-round); letter-spacing: -.035em; }
+  .word em { font-style: normal; background: linear-gradient(315deg, var(--brand-1), var(--brand-2) 52%, var(--brand-3)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .version { display: flex; align-items: center; gap: 8px; margin-top: 10px; min-height: 24px; color: var(--ink-2); font-size: var(--text-control); }
+  .lead { display: flex; color: var(--accent); }
+  .foot { margin-top: 40px; text-align: center; color: var(--ink-3); font-size: var(--text-xs); line-height: 1.7; }
 </style>

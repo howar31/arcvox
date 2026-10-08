@@ -47,6 +47,8 @@ With a folder chosen under "Back up to a folder", the app backs up this device's
 
 Layered open core. The Rust core and the desktop and iOS clients are Apache-2.0 (see `LICENSE` and `core/LICENSE`). The self-hosted engine server under `server/` is AGPL-3.0 and carries its own license file. The hosted service's operations layer is not part of this repository.
 
+Settings > About lists the licenses of the inference runtimes and of every package a build ships, with their texts; the list is written at build time from the dependencies of that build (`apps/desktop/scripts/third-party.ts`, with the license texts in `apps/desktop/licenses/`). The menu-bar menu has an About entry that opens the page.
+
 ## Trademark
 
 "Arcvox" is a trademark of the project owner. Forks must use a different name and logo.

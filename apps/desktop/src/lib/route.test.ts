@@ -36,6 +36,13 @@ test("the old provider and model pages resolve to engines", () => {
   expect(parseRoute("#providers")).toEqual({ page: "engines", arg: null });
 });
 
+test("the licences page sits under About and can name a package", () => {
+  expect(parseRoute("#licenses")).toEqual({ page: "licenses", arg: null });
+  expect(parseRoute("#licenses/tokio")).toEqual({ page: "licenses", arg: "tokio" });
+  expect(parseRoute(routeHash("licenses", "beta@rust"))).toEqual({ page: "licenses", arg: "beta@rust" });
+  expect(navPage("licenses")).toBe("about");
+});
+
 test("unknown pages resolve to the overview", () => {
   expect(parseRoute("#nope")).toEqual({ page: "home", arg: null });
   expect(parseRoute("#nope/x")).toEqual({ page: "home", arg: null });

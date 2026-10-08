@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State, Wry};
 
-use super::CmdResult;
+use super::{CmdError, CmdResult};
 use crate::app::AppState;
 use crate::settings::{WidgetFade, WidgetIdle, WidgetSize};
 use crate::ui::preview::{Look, Sample, Scene};
@@ -150,6 +150,8 @@ pub struct RunningApp {
 #[derive(Serialize)]
 pub struct SystemInfo {
     pub version: String,
+    /// A development build, shown as such beside the version.
+    pub dev: bool,
     pub config_dir: String,
     pub data_dir: String,
     pub cache_dir: String,
@@ -285,6 +287,7 @@ pub fn system_app_names(bundle_ids: Vec<String>) -> HashMap<String, Option<Strin
 pub fn system_info(app: AppHandle<Wry>, state: State<'_, AppState>) -> SystemInfo {
     SystemInfo {
         version: crate::identity::version(app.package_info()),
+        dev: crate::identity::is_dev(app.package_info()),
         config_dir: state.dirs.config_dir.display().to_string(),
         data_dir: state.dirs.data_dir.display().to_string(),
         cache_dir: state.dirs.cache_dir.display().to_string(),
@@ -298,6 +301,24 @@ pub fn system_info(app: AppHandle<Wry>, state: State<'_, AppState>) -> SystemInf
             .display()
             .to_string(),
     }
+}
+
+/// The pages the About page links to, by name; the page never passes a URL.
+fn link_url(link: &str) -> Option<&'static str> {
+    Some(match link {
+        "sponsor" => "https://donate.howar31.com/",
+        "source" => "https://github.com/howar31/arcvox",
+        "issue" => "https://github.com/howar31/arcvox/issues/new",
+        "website" => "https://arcvox.howar31.com/",
+        _ => return None,
+    })
+}
+
+#[tauri::command]
+pub fn system_open_link(link: String) -> CmdResult<()> {
+    let url = link_url(&link).ok_or_else(|| CmdError::from(format!("unknown link {link}")))?;
+    std::process::Command::new("open").arg(url).spawn()?;
+    Ok(())
 }
 
 #[tauri::command]

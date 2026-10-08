@@ -3,18 +3,23 @@
   import { guard } from "../guard.svelte";
   import { go, type Page } from "../route";
 
+  type Crumb = { label: string; page: Page; arg?: string | null };
   let { title, description, crumb, actions }: {
     title: string;
     description?: string;
-    crumb?: { label: string; page: Page; arg?: string | null };
+    /** The page above this one, or the pages above it from the top down. */
+    crumb?: Crumb | Crumb[];
     actions?: Snippet;
   } = $props();
+  const crumbs = $derived(crumb === undefined ? [] : Array.isArray(crumb) ? crumb : [crumb]);
 </script>
 
-{#if crumb}
+{#if crumbs.length}
   <nav class="crumb">
-    <button type="button" onclick={() => guard.request(() => go(crumb.page, crumb.arg))}>{crumb.label}</button>
-    <span aria-hidden="true">›</span>
+    {#each crumbs as c (c.page + (c.arg ?? ""))}
+      <button type="button" onclick={() => guard.request(() => go(c.page, c.arg))}>{c.label}</button>
+      <span aria-hidden="true">›</span>
+    {/each}
     <span class="here">{title}</span>
   </nav>
 {/if}

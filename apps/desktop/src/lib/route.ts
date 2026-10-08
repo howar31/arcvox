@@ -1,11 +1,14 @@
-export type Page = "home" | "history" | "flow" | "dictionary" | "prompt" | "engines" | "speed" | "general" | "recording" | "data" | "backup" | "advanced" | "about";
+export type Page = "home" | "history" | "flow" | "dictionary" | "prompt" | "engines" | "speed" | "general" | "recording" | "data" | "backup" | "advanced" | "about" | "licenses";
 
 /** The pages of settings: one set of settings shown in parts. */
 export const SETTINGS_PAGES = ["general", "recording", "data", "advanced"] as const;
 export type SettingsPage = (typeof SETTINGS_PAGES)[number];
 
+/** The pages with a sidebar entry (and an icon of their own). */
+export type NavPage = Exclude<Page, "speed" | "licenses">;
+
 /** Sidebar layout: an optional group label key and its pages, in order. */
-export const NAV: { group: string | null; pages: Page[] }[] = [
+export const NAV: { group: string | null; pages: NavPage[] }[] = [
   { group: null, pages: ["home", "history"] },
   { group: "nav.group.dictation", pages: ["flow", "engines", "prompt", "dictionary"] },
   { group: "nav.group.settings", pages: ["general", "recording", "data", "backup", "advanced"] },
@@ -13,7 +16,7 @@ export const NAV: { group: string | null; pages: Page[] }[] = [
 ];
 
 /** Pages without a sidebar entry, and the entry that stands for each. */
-const UNDER: Partial<Record<Page, Page>> = { speed: "engines" };
+const UNDER: Partial<Record<Page, Page>> = { speed: "engines", licenses: "about" };
 
 /** The sidebar entry that is current while `page` is shown. */
 export function navPage(page: Page): Page {

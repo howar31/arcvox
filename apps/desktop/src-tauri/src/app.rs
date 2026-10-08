@@ -72,6 +72,7 @@ pub fn tray_action(app: &tauri::AppHandle<Wry>, id: &str) {
         tray::ID_SETTINGS => tray::open_settings(app, Some("general")),
         tray::ID_HISTORY => tray::open_settings(app, Some("history")),
         tray::ID_STATISTICS => tray::open_settings(app, Some("home")),
+        tray::ID_ABOUT => tray::open_settings(app, Some("about")),
         tray::ID_QUIT => app.exit(0),
         tray::ID_PLACE => state.ui.set_placing(!state.ui.is_placing()),
         tray::ID_FIX => match state.ui.tray().state() {
@@ -150,6 +151,7 @@ pub fn run() {
             crate::commands::system::system_app_names,
             crate::commands::system::system_info,
             crate::commands::system::system_reveal,
+            crate::commands::system::system_open_link,
             crate::commands::config::config_get,
             crate::commands::config::config_update_general,
             crate::commands::providers::providers_upsert,

@@ -4,10 +4,15 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "generate": "node scripts/third-party.ts",
+    "predev": "npm run generate",
     "dev": "vite",
+    "prebuild": "npm run generate",
     "build": "vite build",
     "preview": "vite preview",
+    "precheck": "npm run generate",
     "check": "svelte-check --tsconfig ./tsconfig.json",
+    "pretest": "npm run generate",
     "test": "vitest run",
     "tauri": "tauri"
   },

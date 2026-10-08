@@ -15,6 +15,15 @@ pub fn version(info: &PackageInfo) -> String {
     version_text(&info.version.to_string())
 }
 
+/// Whether this is a development build, made under its own product name.
+pub fn is_dev(info: &PackageInfo) -> bool {
+    dev_name(&info.name)
+}
+
+fn dev_name(name: &str) -> bool {
+    name.ends_with(" Dev")
+}
+
 /// "Arcvox v0.1.0".
 pub fn name_and_version(info: &PackageInfo) -> String {
     format!("{} {}", name(info), version(info))
@@ -27,6 +36,12 @@ fn version_text(version: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_development_build_is_known_by_its_name() {
+        assert!(dev_name("Arcvox Dev"));
+        assert!(!dev_name("Arcvox"));
+    }
 
     #[test]
     fn the_version_has_a_leading_v() {

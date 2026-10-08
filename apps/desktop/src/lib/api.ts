@@ -82,7 +82,7 @@ export interface Permissions {
   microphone: MicAccess;
 }
 export interface RunningApp { bundle_id: string; name: string }
-export interface SystemInfo { version: string; config_dir: string; data_dir: string; cache_dir: string; recordings_dir: string }
+export interface SystemInfo { version: string; dev: boolean; config_dir: string; data_dir: string; cache_dir: string; recordings_dir: string }
 export interface CmdError { message: string }
 
 export const getConfig = () => invoke<Config>("config_get");
@@ -156,6 +156,8 @@ export const runningApps = () => invoke<RunningApp[]>("system_running_apps");
 export const appNames = (bundleIds: string[]) => invoke<Record<string, string | null>>("system_app_names", { bundleIds });
 export const systemInfo = () => invoke<SystemInfo>("system_info");
 export const reveal = (path: string) => invoke<void>("system_reveal", { path });
+export type AboutLink = "sponsor" | "source" | "issue" | "website";
+export const openLink = (link: AboutLink) => invoke<void>("system_open_link", { link });
 export const uiLanguage = () => invoke<string>("ui_language");
 export const widgetCopy = (text: string) => invoke<void>("widget_copy", { text });
 export const widgetDismiss = () => invoke<void>("widget_dismiss");
