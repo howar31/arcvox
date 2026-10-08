@@ -7,6 +7,7 @@ pub mod config;
 pub mod device;
 pub mod dictionary;
 pub mod engine;
+pub mod eval;
 pub mod history;
 pub(crate) mod journal;
 pub mod models;

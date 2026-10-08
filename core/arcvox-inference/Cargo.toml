@@ -10,6 +10,8 @@ default = []
 metal = ["whisper-rs/metal", "llama-cpp-2/metal"]
 vulkan = ["whisper-rs/vulkan", "llama-cpp-2/vulkan"]
 cuda = ["whisper-rs/cuda", "llama-cpp-2/cuda"]
+# The quality measurement command (`arcvox-eval`).
+cli = ["reqwest", "serde_json"]
 
 [dependencies]
 arcvox-core = { path = "../arcvox-core" }
@@ -19,6 +21,13 @@ encoding_rs = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 async-trait = "0.1"
 tracing = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
+serde_json = { version = "1", optional = true }
+
+[[bin]]
+name = "arcvox-eval"
+path = "src/bin/arcvox_eval.rs"
+required-features = ["cli"]
 
 [dev-dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }

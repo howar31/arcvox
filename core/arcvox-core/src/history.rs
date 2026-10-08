@@ -436,6 +436,22 @@ impl HistoryStore {
         Self::upgraded(conn, recordings_dir, device)
     }
 
+    /// Opens an existing store for reading only: no schema upgrade, no
+    /// device row, every write refused by the database. For tools that look
+    /// at an installation's history while the application may be running.
+    pub fn open_read_only(path: &Path) -> Result<Self, HistoryError> {
+        let conn = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        let device: String = conn
+            .query_row("SELECT id FROM devices ORDER BY rowid LIMIT 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap_or_default();
+        Ok(Self::from_connection(conn, &device))
+    }
+
     pub fn open_in_memory() -> Result<Self, HistoryError> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
@@ -1772,6 +1788,29 @@ mod tests {
         let id = s.insert(new(1, None)).unwrap();
         s.delete(id).unwrap();
         assert_eq!(s.get(id).unwrap(), None);
+    }
+
+    #[test]
+    fn read_only_store_reads_rows_and_refuses_writes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("history.sqlite");
+        let device = DeviceRef {
+            id: TEST_DEVICE,
+            name: "Test",
+            platform: "",
+        };
+        let writer = HistoryStore::open(&path, tmp.path(), &device).unwrap();
+        let id = writer.insert(tests_support::utterance()).unwrap();
+
+        let reader = HistoryStore::open_read_only(&path).unwrap();
+        let row = reader.get(id).unwrap().unwrap();
+        assert_eq!(row.raw_text, tests_support::utterance().raw_text);
+        assert!(
+            reader.insert(tests_support::utterance()).is_err(),
+            "a read-only store must not write"
+        );
+        // The writer is untouched by the reader's refusal.
+        assert_eq!(writer.list_recent(10).unwrap().len(), 1);
     }
 
     #[test]
