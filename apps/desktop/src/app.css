@@ -22,7 +22,7 @@
   /* Type scale and density of the settings window. */
   --text: 16px; --text-control: 14.5px; --text-sm: 13.5px; --text-xs: 12.5px; --text-lg: 18px; --text-title: 31px; --text-stat: 36px;
   --control: 36px; --radius: 10px; --radius-group: 18px;
-  --row-min: 70px; --row-y: 17px; --row-x: 24px; --page-x: 48px; --page-top: 44px; --gap-group: 36px; --card-pad: 28px;
+  --row-min: 70px; --row-y: 17px; --row-x: 24px; --page-x: 48px; --page-top: 52px; --titlebar: 52px; --gap-group: 36px; --card-pad: 28px;
 
   --font: -apple-system, BlinkMacSystemFont, "PingFang TC", "Segoe UI", "Microsoft JhengHei", sans-serif;
   --font-round: ui-rounded, "SF Pro Rounded", -apple-system, "PingFang TC", "Segoe UI", sans-serif;

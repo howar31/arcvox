@@ -82,7 +82,7 @@ export interface Permissions {
   microphone: MicAccess;
 }
 export interface RunningApp { bundle_id: string; name: string }
-export interface SystemInfo { version: string; dev: boolean; config_dir: string; data_dir: string; cache_dir: string; recordings_dir: string }
+export interface SystemInfo { name: string; version: string; dev: boolean; config_dir: string; data_dir: string; cache_dir: string; recordings_dir: string }
 export interface CmdError { message: string }
 
 export const getConfig = () => invoke<Config>("config_get");

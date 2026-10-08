@@ -149,6 +149,8 @@ pub struct RunningApp {
 
 #[derive(Serialize)]
 pub struct SystemInfo {
+    /// The app name of this build ("Arcvox", or "Arcvox Dev").
+    pub name: String,
     pub version: String,
     /// A development build, shown as such beside the version.
     pub dev: bool,
@@ -286,6 +288,7 @@ pub fn system_app_names(bundle_ids: Vec<String>) -> HashMap<String, Option<Strin
 #[tauri::command]
 pub fn system_info(app: AppHandle<Wry>, state: State<'_, AppState>) -> SystemInfo {
     SystemInfo {
+        name: crate::identity::name(app.package_info()),
         version: crate::identity::version(app.package_info()),
         dev: crate::identity::is_dev(app.package_info()),
         config_dir: state.dirs.config_dir.display().to_string(),

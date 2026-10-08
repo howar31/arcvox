@@ -405,9 +405,9 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
     let app_name = crate::identity::name(app.package_info());
     let dirs = DataDir::resolve(&app_name).ok_or("no home directory")?;
     dirs.ensure()?;
-    // The settings window carries the name of this build.
+    // The settings window carries the name and version of this build.
     if let Some(w) = app.get_webview_window(SETTINGS_WINDOW) {
-        let _ = w.set_title(&app_name);
+        let _ = w.set_title(&crate::identity::name_and_version(app.package_info()));
     }
     #[cfg(target_os = "macos")]
     crate::platform::macos::dock_icon::follow_appearance();

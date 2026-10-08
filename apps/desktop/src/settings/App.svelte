@@ -1,10 +1,8 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import { dictationState, onDictationState, onProblemPages, permissions, problemPages, uiLanguage, type Permissions, type WidgetState } from "../lib/api";
+  import { onProblemPages, problemPages, systemInfo, uiLanguage, type SystemInfo } from "../lib/api";
   import { setLanguage, t, type Lang } from "../lib/i18n";
-  import { firstShortcut, otherShortcuts } from "../lib/shortcut";
-  import { dictationLabelKey } from "../lib/widgetView";
   import { client, config, defaults } from "../lib/store.svelte";
   import { go, NAV, navPage, parseRoute, routeHash, routeSection, SETTINGS_PAGES, shouldIntercept, type SettingsPage } from "../lib/route";
   import { guard } from "../lib/guard.svelte";
@@ -29,19 +27,10 @@
   // Nothing translated is rendered before the UI language is known.
   let langReady = $state(false);
   let ready = $state(false);
-  let perms = $state<Permissions | null>(null);
-  const accessibility = $derived(perms ? perms.accessibility : null);
-  // What the system does not allow, each with the words that say so.
-  const missing = $derived([
-    ...(perms && !perms.accessibility ? ["shell.needs_access"] : []),
-    ...(perms && (perms.microphone === "denied" || perms.microphone === "restricted") ? ["shell.needs_microphone"] : []),
-  ]);
+  // The version of this build, at the foot of the sidebar.
+  let info = $state<SystemInfo | null>(null);
   let main: HTMLElement | undefined = $state();
   // Shown after a first press of the quit shortcut, for as long as a second press quits.
-  // What the app is doing, as the widget shows it.
-  let dictation = $state<WidgetState>("idle");
-  const active = $derived(dictationLabelKey(dictation));
-  const others = $derived(otherShortcuts(client.value?.hotkey.shortcuts));
   let quitHint = $state(false);
   let quitTimer: ReturnType<typeof setTimeout> | undefined;
   const current = $derived(navPage(route.page));
@@ -50,8 +39,7 @@
   // The pages that have a problem to show; the menu-bar menu lists the same problems.
   let problems = $state<string[]>([]);
 
-  async function checkPermissions() {
-    try { perms = await permissions(); } catch { perms = null; }
+  function checkProblems() {
     problemPages().then((pages) => { problems = pages; }).catch(() => {});
   }
 
@@ -94,7 +82,7 @@
       route = next;
       reveal(location.hash);
     };
-    const onFocus = () => { checkPermissions(); };
+    const onFocus = () => { checkProblems(); };
     window.addEventListener("hashchange", onHash);
     window.addEventListener("focus", onFocus);
     const quitArmed = listen<number>("quit-armed", (e) => {
@@ -102,13 +90,13 @@
       clearTimeout(quitTimer);
       quitTimer = setTimeout(() => { quitHint = false; }, e.payload);
     });
-    const stateChanged = onDictationState((s) => { dictation = s; });
     const problemsChanged = onProblemPages((pages) => { problems = pages; });
-    dictationState().then((s) => { dictation = s; }).catch(() => {});
+    systemInfo().then((i) => { info = i; }).catch(() => {});
     (async () => {
       setLanguage((await uiLanguage()) as Lang);
       langReady = true;
-      await Promise.all([config.load(), client.load(), defaults.load(), checkPermissions()]);
+      await Promise.all([config.load(), client.load(), defaults.load()]);
+      checkProblems();
       await config.watch();
       await client.watch();
       ready = true;
@@ -118,7 +106,6 @@
       window.removeEventListener("hashchange", onHash);
       window.removeEventListener("focus", onFocus);
       quitArmed.then((off) => off());
-      stateChanged.then((off) => off());
       problemsChanged.then((off) => off());
       clearTimeout(quitTimer);
     };
@@ -130,6 +117,7 @@
 {:else}
   <div class="shell">
     <aside class="sidebar">
+      <div class="titlebar" data-tauri-drag-region></div>
       <div class="brand"><Mark size={25} /><span><em>A</em>rcvox</span></div>
       <nav aria-label={t("app.title")}>
         {#each NAV as g, gi (gi)}
@@ -145,24 +133,13 @@
           {/each}
         {/each}
       </nav>
-      <div class="state">
-        {#if config.error}
-          <Ring tone="live" /><span>{t("shell.engine_error")}</span>
-        {:else if missing.length}
-          <div class="state-lines">
-            {#each missing as key (key)}
-              <div class="state-line"><Ring tone="live" /><button type="button" class="state-link" onclick={() => guard.request(() => go("general", null, "permissions"))}>{t(key)}</button></div>
-            {/each}
-          </div>
-        {:else if active}
-          <Ring tone="accent" /><span>{t(active)}</span>
-        {:else if accessibility}
-          <Ring tone="ok" /><span title={others ? t("shell.ready_more", { keys: others }) : undefined}>{t("shell.ready", { key: firstShortcut(client.value?.hotkey.shortcuts) })}</span>
-        {/if}
-      </div>
+      {#if info}
+        <div class="version">{info.name} {info.version}</div>
+      {/if}
     </aside>
 
     <main class="main" bind:this={main}>
+      <div class="titlebar main-titlebar" data-tauri-drag-region></div>
       <div class="page" class:wide={route.page === "home" || route.page === "history"}>
         {#if config.error}
           <div class="banner" role="alert"><Ring tone="live" /><span>{t("common.engine_error", { detail: config.error })}</span></div>
@@ -199,8 +176,11 @@
 <style>
   .loading { height: 100vh; display: grid; place-items: center; color: var(--ink-2); }
   .shell { display: grid; grid-template-columns: 248px minmax(0, 1fr); height: 100vh; }
-  .sidebar { background: var(--sidebar); border-right: 1px solid var(--line); padding: 18px 14px 14px; display: flex; flex-direction: column; gap: 3px; min-height: 0; overflow-y: auto; }
-  .brand { display: flex; align-items: center; gap: 8.5px; padding: 6px 12px 18px; font: 800 21px/1 var(--font-round); letter-spacing: -.035em; }
+  .sidebar { background: var(--sidebar); border-right: 1px solid var(--line); padding: 0 14px 14px; display: flex; flex-direction: column; gap: 3px; min-height: 0; overflow-y: auto; }
+  /* The title bar is transparent and the content runs behind it; this band keeps the window controls clear and moves the window. */
+  .titlebar { flex: none; height: var(--titlebar); }
+  .main-titlebar { position: absolute; inset: 0 0 auto; }
+  .brand { display: flex; align-items: center; gap: 8.5px; padding: 0 12px 18px; font: 800 21px/1 var(--font-round); letter-spacing: -.035em; }
   .brand em { font-style: normal; background: linear-gradient(315deg, var(--brand-1), var(--brand-2) 52%, var(--brand-3)); -webkit-background-clip: text; background-clip: text; color: transparent; }
   nav { display: flex; flex-direction: column; gap: 3px; }
   .nav-group { font-size: var(--text-xs); font-weight: 600; color: var(--ink-2); padding: 14px 12px 6px; }
@@ -214,11 +194,7 @@
   .nav:hover { background: var(--line); }
   .nav.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   .nav.on :global(.icon) { opacity: 1; }
-  .state { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 12px; font-size: var(--text-sm); color: var(--ink-2); line-height: 1.35; }
-  .state-lines { display: flex; flex-direction: column; gap: 6px; }
-  .state-line { display: flex; align-items: center; gap: 8px; }
-  .state-link { border: 0; background: none; padding: 0; color: var(--ink-2); text-align: left; cursor: default; }
-  .state-link:hover { color: var(--ink); }
+  .version { margin-top: auto; padding: 16px; font-size: 11.5px; font-weight: 500; color: var(--ink-3); white-space: nowrap; }
   /* Positioned: absolutely placed descendants (visually hidden labels) stay inside the scroll area. */
   .main { position: relative; overflow-x: hidden; overflow-y: auto; min-width: 0; }
   /* Centered once the window is wider than the content; pages can lay themselves out by this width. */
