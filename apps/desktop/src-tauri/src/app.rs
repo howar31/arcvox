@@ -391,6 +391,12 @@ fn end_process(app: &tauri::AppHandle<Wry>) {
         // A change that still waits for its write to the backup folder.
         state.backup.flush();
     }
+    tracing::info!("exiting");
+    // `_exit` below skips every destructor, so the log's buffered lines are
+    // written here.
+    if let Some(slot) = app.try_state::<crate::logging::LogSlot>() {
+        slot.close();
+    }
     #[cfg(unix)]
     {
         extern "C" {
@@ -412,9 +418,7 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "macos")]
     crate::platform::macos::dock_icon::follow_appearance();
     let log_guard = crate::logging::init(&dirs.data_dir);
-    if let Some(g) = log_guard {
-        app.manage(g);
-    }
+    app.manage(crate::logging::LogSlot(std::sync::Mutex::new(log_guard)));
     let settings = ClientSettings::load(&dirs.config_dir);
     let language = Language::from_setting(
         settings.ui_language,

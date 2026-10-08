@@ -6,6 +6,17 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 pub struct LogGuard(#[allow(dead_code)] tracing_appender::non_blocking::WorkerGuard);
 
+/// Holds the guard for the life of the process, so that it can be dropped,
+/// and the lines still buffered written, before the process is ended.
+pub struct LogSlot(pub std::sync::Mutex<Option<LogGuard>>);
+
+impl LogSlot {
+    /// Writes the lines still buffered. The log file takes nothing after this.
+    pub fn close(&self) {
+        drop(self.0.lock().unwrap_or_else(|e| e.into_inner()).take());
+    }
+}
+
 pub fn init(data_dir: &Path) -> Option<LogGuard> {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,arcvox_desktop=debug,arcvox_core=debug"));
