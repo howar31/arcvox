@@ -107,6 +107,7 @@ impl From<arcvox_core::engine::EngineError> for CmdError {
             E::UnknownSession(_) => CmdError::new("unknown_session", message),
             E::Busy => CmdError::new("busy", message),
             E::Folder(reason) => CmdError::with("folder_unusable", message, &[("reason", reason)]),
+            E::Task(e) => CmdError::with("internal", message, &[("error", e.to_string())]),
         }
     }
 }
@@ -378,6 +379,14 @@ mod tests {
         let e: CmdError = arcvox_core::engine::EngineError::Folder("read only".into()).into();
         assert_eq!(e.code, Some("folder_unusable"));
         assert_eq!(e.params["reason"], "read only");
+
+        let join = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async { tokio::task::spawn_blocking(|| panic!("boom")).await })
+            .unwrap_err();
+        let e: CmdError = arcvox_core::engine::EngineError::Task(join).into();
+        assert_eq!(e.code, Some("internal"));
+        assert!(e.params["error"].contains("boom"));
 
         // Wrapped errors keep the inner code.
         let inner = arcvox_core::config::ConfigError::DuplicateId("x".into());

@@ -27,7 +27,16 @@ use crate::SAMPLE_RATE;
 
 /// Shorter utterances are rejected before any provider call.
 pub const MIN_UTTERANCE_SECS: f32 = 0.2;
+/// The longest recording a session keeps; audio past it is dropped. Clients
+/// end a recording at their own, shorter limit; this one bounds the memory
+/// a session can take whatever the client does.
+pub const MAX_UTTERANCE_SECS: u32 = 30 * 60;
+const MAX_UTTERANCE_SAMPLES: usize = MAX_UTTERANCE_SECS as usize * SAMPLE_RATE as usize;
 const EVENT_BUFFER: usize = 256;
+/// Finished sessions whose history row is still remembered for
+/// `record_final`. Dictations happen one at a time, so once this many have
+/// gone without a final text, every one of them is stale.
+const SESSIONS_KEPT: usize = 16;
 const PRUNE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(86_400);
 
 #[derive(Debug, thiserror::Error)]
@@ -48,6 +57,10 @@ pub enum EngineError {
     Backup(#[from] BackupError),
     #[error(transparent)]
     Settings(#[from] crate::settings_file::SettingsFileError),
+    /// A blocking task (history, backup, a file move) stopped before it
+    /// produced a result, usually because it panicked.
+    #[error("a background task failed: {0}")]
+    Task(#[from] tokio::task::JoinError),
 }
 
 /// Where a backup is read from.
@@ -210,8 +223,7 @@ impl Engine {
                 };
                 HistoryStore::open(&path, &history_recordings, &device)
             })
-            .await
-            .expect("join")?,
+            .await??,
         );
 
         // Earlier builds kept recordings in the cache directory. They are the
@@ -387,11 +399,7 @@ impl Engine {
         let history = self.inner.history.clone();
         let recordings = self.inner.recordings_dir();
         let id = id.to_string();
-        Ok(
-            tokio::task::spawn_blocking(move || history.remove_device(&id, &recordings))
-                .await
-                .expect("join")?,
-        )
+        Ok(tokio::task::spawn_blocking(move || history.remove_device(&id, &recordings)).await??)
     }
 
     /// Whether a dictation is being processed.
@@ -447,8 +455,7 @@ impl Engine {
             drop(staging);
             packed
         })
-        .await
-        .expect("join")?;
+        .await??;
         Ok(report)
     }
 
@@ -474,8 +481,7 @@ impl Engine {
                 &in_use,
             )
         })
-        .await
-        .expect("join")?)
+        .await??)
     }
 
     /// The tree of a source: the folder itself, or the archive unpacked
@@ -505,8 +511,7 @@ impl Engine {
             let (root, _staging) = Self::open_source(&inner.dirs.cache_dir, &src)?;
             backup::inspect(&root, inner.history.device_id())
         })
-        .await
-        .expect("join")?)
+        .await??)
     }
 
     /// Merges the named devices of a backup into the history. Refused while
@@ -534,8 +539,7 @@ impl Engine {
                 retention,
             )
         })
-        .await
-        .expect("join")?)
+        .await??)
     }
 
     /// The folder recordings are kept in: the one the user chose, or the
@@ -574,8 +578,7 @@ impl Engine {
             let _ = std::fs::remove_file(&probe);
             Ok::<_, EngineError>(history.move_recordings(&old, &to)?)
         })
-        .await
-        .expect("join")?;
+        .await??;
         let setting = (target != default).then_some(target);
         self.inner
             .config
@@ -642,6 +645,7 @@ impl Engine {
             id,
             profile_id: profile.id.clone(),
             audio,
+            max_samples: MAX_UTTERANCE_SAMPLES,
             cmd_tx: Mutex::new(Some(cmd_tx)),
             events_tx,
             events_rx: Mutex::new(Some(events_rx)),
@@ -792,14 +796,11 @@ impl Engine {
             .sessions
             .lock()
             .unwrap()
-            .get(session_id)
-            .copied()
+            .remove(session_id)
             .ok_or_else(|| EngineError::UnknownSession(session_id.clone()))?;
         let history = self.inner.history.clone();
         let text = text.to_string();
-        tokio::task::spawn_blocking(move || history.set_final(history_id, &text))
-            .await
-            .expect("join")?;
+        tokio::task::spawn_blocking(move || history.set_final(history_id, &text)).await??;
         Ok(())
     }
 
@@ -1467,11 +1468,11 @@ async fn run_session(
     }
 
     if let Some(id) = history_id {
-        inner
-            .sessions
-            .lock()
-            .unwrap()
-            .insert(session_id.clone(), id);
+        let mut sessions = inner.sessions.lock().unwrap();
+        if sessions.len() >= SESSIONS_KEPT {
+            sessions.clear();
+        }
+        sessions.insert(session_id.clone(), id);
     }
     // done_sent was already claimed by the swap above, so send directly
     // rather than through send_done_once (which would just re-check it).
@@ -1823,6 +1824,48 @@ pub(crate) mod tests {
             .record_final(&SessionId("nope".into()), "x")
             .await
             .is_err());
+        // The session is forgotten once its final text is recorded.
+        assert!(matches!(
+            r.engine.record_final(s.id(), "再一次").await,
+            Err(EngineError::UnknownSession(_))
+        ));
+        assert!(r.engine.inner.sessions.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn sessions_never_told_their_final_text_do_not_pile_up() {
+        let r = rig(false).await;
+        mock_ok(&r, "原文", "整理後").await;
+        {
+            let mut map = r.engine.inner.sessions.lock().unwrap();
+            for i in 0..SESSIONS_KEPT {
+                map.insert(SessionId(format!("old-{i}")), HistoryId(i as i64 + 1000));
+            }
+        }
+        let s = r.engine.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        s.finish();
+        let events = drain(&s).await;
+        assert!(matches!(
+            events.last(),
+            Some(Event::Done {
+                history_id: Some(_),
+                ..
+            })
+        ));
+        let map = r.engine.inner.sessions.lock().unwrap();
+        assert_eq!(map.len(), 1);
+        assert!(map.contains_key(s.id()));
+    }
+
+    #[tokio::test]
+    async fn a_failed_blocking_task_is_an_error_not_a_panic() {
+        let join = tokio::task::spawn_blocking(|| panic!("boom"))
+            .await
+            .unwrap_err();
+        let e = EngineError::from(join);
+        assert!(matches!(e, EngineError::Task(_)), "{e}");
+        assert!(e.to_string().contains("boom"), "{e}");
     }
 
     #[tokio::test]
@@ -2469,6 +2512,35 @@ pub(crate) mod tests {
         assert_eq!(row.audio_path.as_deref(), Some(path.as_path()));
         assert!((wav_secs_when(&path, 1.9).await - 2.0).abs() < 0.05);
         assert_eq!(r.engine.history().list_recent(10).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn audio_past_the_limit_is_dropped() {
+        let r = rig(true).await;
+        mock_ok(&r, "原文", "整理後").await;
+        let mut s = r.engine.start_session(SessionRequest::default());
+        s.max_samples = SAMPLE_RATE as usize * 2;
+        for _ in 0..3 {
+            for chunk in one_second().chunks(1600) {
+                s.push_audio(chunk);
+            }
+        }
+        assert_eq!(s.audio.lock().unwrap().len(), SAMPLE_RATE as usize * 2);
+        let rows = rows_when(&r, |rows| rows.len() == 1).await;
+        let path = rows[0].audio_path.clone().unwrap();
+        assert!((wav_secs_when(&path, 1.9).await - 2.0).abs() < 0.05);
+        s.finish();
+        let events = drain(&s).await;
+        let Some(Event::Done {
+            history_id: Some(id),
+            ..
+        }) = events.last()
+        else {
+            panic!("{events:?}")
+        };
+        let row = r.engine.history().get(*id).unwrap().unwrap();
+        assert!((row.audio_ms.unwrap() as f32 / 1000.0 - 2.0).abs() < 0.05);
+        assert!((wav_secs_when(&path, 1.9).await - 2.0).abs() < 0.05);
     }
 
     #[tokio::test]

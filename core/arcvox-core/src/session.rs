@@ -50,6 +50,8 @@ pub struct Session {
     pub(crate) id: SessionId,
     pub(crate) profile_id: ProfileId,
     pub(crate) audio: Arc<Mutex<Vec<f32>>>,
+    /// Samples kept at most; see `engine::MAX_UTTERANCE_SECS`.
+    pub(crate) max_samples: usize,
     pub(crate) cmd_tx: Mutex<Option<mpsc::UnboundedSender<SessionCmd>>>,
     pub(crate) events_tx: mpsc::Sender<Event>,
     pub(crate) events_rx: Mutex<Option<mpsc::Receiver<Event>>>,
@@ -72,11 +74,27 @@ impl Session {
 
     /// Appends 16 kHz mono f32 samples. Safe to call from the audio thread.
     /// When recordings are kept, the block goes to the recording's file at
-    /// once, so a dictation cut short by a crash is not lost.
+    /// once, so a dictation cut short by a crash is not lost. Audio past
+    /// the session's limit is dropped.
     pub fn push_audio(&self, pcm: &[f32]) {
-        self.audio.lock().unwrap().extend_from_slice(pcm);
+        let kept = {
+            let mut audio = self.audio.lock().unwrap();
+            let room = self.max_samples.saturating_sub(audio.len());
+            if room == 0 {
+                return;
+            }
+            if pcm.len() > room {
+                tracing::warn!(
+                    samples = self.max_samples,
+                    "the recording reached its limit; further audio is dropped"
+                );
+            }
+            let kept = &pcm[..pcm.len().min(room)];
+            audio.extend_from_slice(kept);
+            kept.to_vec()
+        };
         if let Some(tx) = self.cmd_tx.lock().unwrap().as_ref() {
-            let _ = tx.send(SessionCmd::Audio(pcm.to_vec()));
+            let _ = tx.send(SessionCmd::Audio(kept));
         }
     }
 
