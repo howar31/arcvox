@@ -178,14 +178,31 @@ pub struct PruneReport {
     pub recordings_deleted: usize,
 }
 
-/// Contract for `audio_path` on every row: it is an absolute path produced
-/// by the engine under `DataDir::recordings_dir()`. `prune` and `clear_all`
-/// compare paths exactly as given (via `Path::starts_with`) and never
-/// canonicalize them, so callers are responsible for always storing and
-/// passing absolute, already-resolved paths.
+/// Contract for `audio_path` on every row: the column holds only the file
+/// name of the recording; the file lives directly inside the recordings
+/// folder of the moment. Rows read back carry the absolute path under the
+/// store's current folder (`set_recordings_dir`), so a folder that is
+/// renamed or moved by hand still finds its files. Callers pass any path;
+/// only its file name is kept.
 pub struct HistoryStore {
     conn: Mutex<Connection>,
     device_id: String,
+    recordings_dir: Mutex<PathBuf>,
+}
+
+/// The file name a row stores for a recording.
+fn name_of(path: &Path) -> Option<String> {
+    path.file_name().map(|n| n.to_string_lossy().to_string())
+}
+
+/// Where a stored name points under `dir`. A stored value that is still a
+/// path (written before names were kept) is reduced to its name first.
+fn resolve(name: &str, dir: &Path) -> PathBuf {
+    let name = Path::new(name)
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
+    dir.join(name)
 }
 
 pub(crate) const SCHEMA: &str = "
@@ -342,10 +359,34 @@ pub(crate) fn upgrade(
         params![device.id, device.name, device.platform],
     )?;
     give_stats_to_device(conn, device.id)?;
+    // Earlier builds stored the recording's absolute path; only the name is
+    // kept now, so a folder renamed or moved by hand keeps its recordings.
+    keep_names_only(conn)?;
     conn.execute_batch(STATS_SCHEMA)?;
     // A failed backfill leaves the history usable; it runs again at the next open.
     if let Err(e) = stats::backfill(conn, recordings_dir, device.id) {
         tracing::warn!(error = %e, "statistics backfill failed");
+    }
+    Ok(())
+}
+
+/// Reduces every stored recording path to its file name.
+fn keep_names_only(conn: &Connection) -> Result<(), HistoryError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, audio_path FROM utterances WHERE audio_path LIKE '%/%' OR audio_path LIKE '%\\%'",
+    )?;
+    let rows: Vec<(i64, String)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    drop(stmt);
+    for (id, path) in rows {
+        let name = Path::new(&path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string());
+        conn.execute(
+            "UPDATE utterances SET audio_path = ?1 WHERE id = ?2",
+            params![name, id],
+        )?;
     }
     Ok(())
 }
@@ -394,7 +435,7 @@ fn insert_row(conn: &Connection, u: &NewUtterance, device: &str) -> rusqlite::Re
             u.refined_text,
             u.final_text,
             u.degraded as i64,
-            u.audio_path.as_ref().map(|p| p.to_string_lossy().to_string()),
+            u.audio_path.as_deref().and_then(name_of),
             u.asr_ms as i64,
             u.llm_ms.map(|v| v as i64),
             u.audio_ms.map(|v| v as i64),
@@ -436,10 +477,27 @@ impl HistoryStore {
         Self::upgraded(conn, recordings_dir, device)
     }
 
+    /// The folder the rows' recordings are reported under from now on.
+    pub fn set_recordings_dir(&self, dir: &Path) {
+        *self.recordings_dir.lock().unwrap() = dir.to_path_buf();
+    }
+
+    fn dir(&self) -> PathBuf {
+        self.recordings_dir.lock().unwrap().clone()
+    }
+
+    /// Gives a row the absolute path of its recording.
+    fn locate(&self, mut u: Utterance) -> Utterance {
+        if let Some(p) = u.audio_path.take() {
+            u.audio_path = Some(resolve(&p.to_string_lossy(), &self.dir()));
+        }
+        u
+    }
+
     /// Opens an existing store for reading only: no schema upgrade, no
     /// device row, every write refused by the database. For tools that look
     /// at an installation's history while the application may be running.
-    pub fn open_read_only(path: &Path) -> Result<Self, HistoryError> {
+    pub fn open_read_only(path: &Path, recordings_dir: &Path) -> Result<Self, HistoryError> {
         let conn = Connection::open_with_flags(
             path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -449,7 +507,9 @@ impl HistoryStore {
                 r.get(0)
             })
             .unwrap_or_default();
-        Ok(Self::from_connection(conn, &device))
+        let store = Self::from_connection(conn, &device);
+        store.set_recordings_dir(recordings_dir);
+        Ok(store)
     }
 
     pub fn open_in_memory() -> Result<Self, HistoryError> {
@@ -470,13 +530,16 @@ impl HistoryStore {
         device: &DeviceRef<'_>,
     ) -> Result<Self, HistoryError> {
         upgrade(&conn, recordings_dir, device)?;
-        Ok(Self::from_connection(conn, device.id))
+        let store = Self::from_connection(conn, device.id);
+        store.set_recordings_dir(recordings_dir);
+        Ok(store)
     }
 
     pub(crate) fn from_connection(conn: Connection, device_id: &str) -> Self {
         Self {
             conn: Mutex::new(conn),
             device_id: device_id.to_string(),
+            recordings_dir: Mutex::new(PathBuf::new()),
         }
     }
 
@@ -569,7 +632,7 @@ impl HistoryStore {
                 u.ts,
                 u.profile_id.0,
                 u.app_name,
-                u.audio_path.to_string_lossy().to_string(),
+                name_of(&u.audio_path),
                 u.audio_ms.map(|v| v as i64),
                 u.error,
                 u.code.name(),
@@ -610,27 +673,26 @@ impl HistoryStore {
     pub fn discard_interrupted(&self, path: &Path) -> Result<bool, HistoryError> {
         let removed = self.conn.lock().unwrap().execute(
             "DELETE FROM utterances WHERE audio_path = ?1 AND error_code = ?2",
-            params![
-                path.to_string_lossy().to_string(),
-                ErrorCode::Interrupted.name()
-            ],
+            params![name_of(path), ErrorCode::Interrupted.name()],
         )?;
         Ok(removed > 0)
     }
 
-    /// Moves every recording directly inside `from` into `to` and points
-    /// the rows at the new place. A file that cannot be moved, or whose name
-    /// is taken in `to`, stays where it is with its row unchanged.
+    /// Moves every recording directly inside `from` into `to`, which is the
+    /// rows' folder from then on; rows hold names only and need no change.
+    /// A file that cannot be moved, or whose name is taken in `to`, stays
+    /// where it is and is counted in `left`; its row then names the file of
+    /// that name in `to`, or nothing when there is none.
     pub fn move_recordings(&self, from: &Path, to: &Path) -> Result<MoveReport, HistoryError> {
         let mut report = MoveReport::default();
         if from == to {
             return Ok(report);
         }
         let Ok(entries) = std::fs::read_dir(from) else {
+            self.set_recordings_dir(to);
             return Ok(report);
         };
         std::fs::create_dir_all(to)?;
-        let conn = self.conn.lock().unwrap();
         for entry in entries.flatten() {
             let old = entry.path();
             let is_wav = old
@@ -649,15 +711,8 @@ impl HistoryStore {
                 continue;
             }
             report.moved += 1;
-            conn.execute(
-                "UPDATE utterances SET audio_path = ?1, updated = ?3 WHERE audio_path = ?2",
-                params![
-                    new.to_string_lossy().to_string(),
-                    old.to_string_lossy().to_string(),
-                    now_ms()
-                ],
-            )?;
         }
+        self.set_recordings_dir(to);
         Ok(report)
     }
 
@@ -891,6 +946,7 @@ impl HistoryStore {
     pub(crate) fn export_rows(
         &self,
         device: &str,
+        recordings_dir: &Path,
     ) -> Result<Vec<(HistoryLine, Option<PathBuf>)>, HistoryError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -921,15 +977,12 @@ impl HistoryStore {
                 audio: None,
                 attempts: Vec::new(),
             };
-            Ok((
-                line,
-                r.get::<_, Option<String>>(16)?.map(PathBuf::from),
-                r.get::<_, i64>(17)?,
-            ))
+            Ok((line, r.get::<_, Option<String>>(16)?, r.get::<_, i64>(17)?))
         })?;
         let mut out = Vec::new();
         for row in rows {
             let (mut line, audio, id) = row?;
+            let audio = audio.map(|name| resolve(&name, recordings_dir));
             line.attempts = attempt_lines(&conn, id)?;
             out.push((line, audio));
         }
@@ -998,7 +1051,7 @@ impl HistoryStore {
         let tx = conn.unchecked_transaction()?;
         let mut merged = Merged::default();
         for (l, audio) in lines {
-            let audio = audio.as_ref().map(|p| p.to_string_lossy().to_string());
+            let audio = audio.as_deref().and_then(name_of);
             let existing: Option<(i64, i64, bool)> = tx
                 .query_row(
                     "SELECT id, updated, audio_path IS NOT NULL FROM utterances WHERE device_id = ?1 AND origin_id = ?2",
@@ -1182,10 +1235,8 @@ impl HistoryStore {
         tx.execute("DELETE FROM stats_hourly WHERE device_id = ?1", params![id])?;
         tx.execute("DELETE FROM devices WHERE id = ?1", params![id])?;
         tx.commit()?;
-        for path in paths.iter().map(PathBuf::from) {
-            if inside(&path, recordings_dir) {
-                let _ = std::fs::remove_file(&path);
-            }
+        for name in &paths {
+            let _ = std::fs::remove_file(resolve(name, recordings_dir));
         }
         Ok(rows)
     }
@@ -1200,7 +1251,7 @@ impl HistoryStore {
         let row = conn
             .query_row(&format!("{SELECT} WHERE id = ?1"), params![id.0], map_row)
             .optional()?;
-        Ok(row)
+        Ok(row.map(|u| self.locate(u)))
     }
 
     pub fn list_recent(&self, limit: usize) -> Result<Vec<Utterance>, HistoryError> {
@@ -1235,7 +1286,8 @@ impl HistoryStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(values), map_row)?;
-        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        let rows = rows.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows.into_iter().map(|u| self.locate(u)).collect())
     }
 
     /// Statistics of the buckets from the hour containing `since`, with days
@@ -1282,13 +1334,10 @@ impl HistoryStore {
         let paths: Vec<String> = stmt
             .query_map([], |r| r.get(0))?
             .collect::<Result<_, _>>()?;
-        for p in paths {
-            let p = PathBuf::from(p);
-            if inside(&p, recordings_dir) {
-                if let Ok(meta) = std::fs::metadata(&p) {
-                    out.recordings += 1;
-                    out.recording_bytes += meta.len();
-                }
+        for name in paths {
+            if let Ok(meta) = std::fs::metadata(resolve(&name, recordings_dir)) {
+                out.recordings += 1;
+                out.recording_bytes += meta.len();
             }
         }
         Ok(out)
@@ -1369,14 +1418,13 @@ impl HistoryStore {
             .query_map(params![recording_cutoff], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<Result<_, _>>()?;
         drop(stmt);
-        for (id, path) in old {
-            let p = PathBuf::from(&path);
-            if p.starts_with(recordings_dir) && p.exists() && std::fs::remove_file(&p).is_ok() {
+        for (id, name) in old {
+            let p = resolve(&name, recordings_dir);
+            if p.exists() && std::fs::remove_file(&p).is_ok() {
                 report.recordings_deleted += 1;
             }
             // Clear the reference only once the file is confirmed gone. A
-            // failed removal, or a path outside recordings_dir that still
-            // exists, leaves the row pointing at the still-present file.
+            // failed removal leaves the row pointing at the still-present file.
             if !p.exists() {
                 conn.execute(
                     "UPDATE utterances SET audio_path = NULL, updated = ?2 WHERE id = ?1",
@@ -1392,9 +1440,9 @@ impl HistoryStore {
             .query_map(params![history_cutoff], |r| r.get(0))?
             .collect::<Result<_, _>>()?;
         drop(stmt);
-        for path in doomed {
-            let p = PathBuf::from(&path);
-            if p.starts_with(recordings_dir) && p.exists() && std::fs::remove_file(&p).is_ok() {
+        for name in doomed {
+            let p = resolve(&name, recordings_dir);
+            if p.exists() && std::fs::remove_file(&p).is_ok() {
                 report.recordings_deleted += 1;
             }
         }
@@ -1449,8 +1497,8 @@ fn recording_of(
         .optional()?
         .flatten();
     Ok(path
-        .map(PathBuf::from)
-        .filter(|p| inside(p, recordings_dir) && p.is_file()))
+        .map(|name| resolve(&name, recordings_dir))
+        .filter(|p| p.is_file()))
 }
 
 /// Removes the `.wav` files directly inside `recordings_dir` that no row
@@ -1468,7 +1516,7 @@ fn sweep_unreferenced(
         conn.prepare("SELECT audio_path FROM utterances WHERE audio_path IS NOT NULL")?;
     let referenced: std::collections::HashSet<PathBuf> = stmt
         .query_map([], |r| r.get::<_, String>(0))?
-        .map(|p| p.map(PathBuf::from))
+        .map(|p| p.map(|name| resolve(&name, recordings_dir)))
         .collect::<Result<_, _>>()?;
     let mut removed = 0;
     for entry in entries.flatten() {
@@ -1511,12 +1559,9 @@ fn remove_recording(
         )
         .optional()?
         .flatten();
-    let Some(path) = path.map(PathBuf::from) else {
+    let Some(path) = path.map(|name| resolve(&name, recordings_dir)) else {
         return Ok(false);
     };
-    if !inside(&path, recordings_dir) {
-        return Ok(false);
-    }
     let removed = path.is_file() && std::fs::remove_file(&path).is_ok();
     if !path.exists() {
         conn.execute(
@@ -1791,6 +1836,83 @@ mod tests {
     }
 
     #[test]
+    fn a_recording_is_stored_by_name_and_reported_in_the_current_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rec = tmp.path().join("recordings");
+        std::fs::create_dir_all(&rec).unwrap();
+        std::fs::write(rec.join("a.wav"), b"x").unwrap();
+        let s = HistoryStore::open_in_memory().unwrap();
+        s.set_recordings_dir(&rec);
+        let id = s.insert(new(100, Some(rec.join("a.wav")))).unwrap();
+
+        let stored: String = s
+            .connection()
+            .query_row(
+                "SELECT audio_path FROM utterances WHERE id = ?1",
+                params![id.0],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "a.wav", "only the name is kept");
+        assert_eq!(
+            s.get(id).unwrap().unwrap().audio_path,
+            Some(rec.join("a.wav"))
+        );
+        assert_eq!(s.recording_path(id, &rec).unwrap(), Some(rec.join("a.wav")));
+
+        // The folder moves: the row follows without being rewritten.
+        let other = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::rename(rec.join("a.wav"), other.join("a.wav")).unwrap();
+        s.set_recordings_dir(&other);
+        assert_eq!(
+            s.get(id).unwrap().unwrap().audio_path,
+            Some(other.join("a.wav"))
+        );
+        assert_eq!(
+            s.recording_path(id, &other).unwrap(),
+            Some(other.join("a.wav"))
+        );
+    }
+
+    #[test]
+    fn absolute_paths_from_earlier_builds_become_names_at_open() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rec = tmp.path().join("recordings");
+        std::fs::create_dir_all(&rec).unwrap();
+        std::fs::write(rec.join("x.wav"), b"x").unwrap();
+        let path = tmp.path().join("history.sqlite");
+        let device = DeviceRef {
+            id: TEST_DEVICE,
+            name: "Test",
+            platform: "",
+        };
+        let id = {
+            let s = HistoryStore::open(&path, &rec, &device).unwrap();
+            let id = s.insert(new(100, None)).unwrap();
+            // An earlier build wrote the absolute path of a folder since renamed.
+            s.connection()
+                .execute(
+                    "UPDATE utterances SET audio_path = ?1 WHERE id = ?2",
+                    params!["/Volumes/old name/recordings/x.wav", id.0],
+                )
+                .unwrap();
+            id
+        };
+        let s = HistoryStore::open(&path, &rec, &device).unwrap();
+        assert_eq!(
+            s.get(id).unwrap().unwrap().audio_path,
+            Some(rec.join("x.wav"))
+        );
+        assert_eq!(s.recording_path(id, &rec).unwrap(), Some(rec.join("x.wav")));
+        let r = HistoryStore::open_read_only(&path, &rec).unwrap();
+        assert_eq!(
+            r.get(id).unwrap().unwrap().audio_path,
+            Some(rec.join("x.wav"))
+        );
+    }
+
+    #[test]
     fn read_only_store_reads_rows_and_refuses_writes() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("history.sqlite");
@@ -1802,7 +1924,7 @@ mod tests {
         let writer = HistoryStore::open(&path, tmp.path(), &device).unwrap();
         let id = writer.insert(tests_support::utterance()).unwrap();
 
-        let reader = HistoryStore::open_read_only(&path).unwrap();
+        let reader = HistoryStore::open_read_only(&path, tmp.path()).unwrap();
         let row = reader.get(id).unwrap().unwrap();
         assert_eq!(row.raw_text, tests_support::utterance().raw_text);
         assert!(
@@ -1902,6 +2024,7 @@ mod tests {
         std::fs::write(&orphan, b"x").unwrap();
         age(&orphan, 4000);
         let s = HistoryStore::open_in_memory().unwrap();
+        s.set_recordings_dir(&rec);
         let id = s
             .insert(new(now_unix() - 4000 * 86_400, Some(wav.clone())))
             .unwrap();
@@ -2185,31 +2308,6 @@ mod tests {
         );
         assert!(!old_wav.exists());
         assert!(stuck.exists(), "a removal failure must not stop the prune");
-    }
-
-    #[test]
-    fn prune_keeps_audio_path_for_files_outside_recordings_dir() {
-        let tmp = tempfile::tempdir().unwrap();
-        let rec = tmp.path().join("recordings");
-        std::fs::create_dir_all(&rec).unwrap();
-        let outside = tmp.path().join("outside.wav");
-        std::fs::write(&outside, b"x").unwrap();
-
-        let now = now_unix();
-        let s = HistoryStore::open_in_memory().unwrap();
-        let id = s
-            .insert(new(now - 10 * 86_400, Some(outside.clone())))
-            .unwrap();
-
-        let report = s.prune(90, 7, &rec).unwrap();
-        assert!(outside.exists());
-        let got = s.get(id).unwrap().unwrap();
-        assert_eq!(
-            got.audio_path,
-            Some(outside),
-            "reference must not be silently wiped"
-        );
-        assert_eq!(report.recordings_deleted, 0);
     }
 
     #[test]
@@ -2656,6 +2754,7 @@ INSERT INTO stats_meta (key, value) VALUES ('backfilled', '1');
     #[test]
     fn the_result_replaces_the_row_that_held_the_recording() {
         let s = HistoryStore::open_in_memory().unwrap();
+        s.set_recordings_dir(Path::new("/rec"));
         let path = PathBuf::from("/rec/a.wav");
         let holding = s.insert_failed(held(&path)).unwrap();
         let id = s
@@ -2738,7 +2837,12 @@ INSERT INTO stats_meta (key, value) VALUES ('backfilled', '1');
             Some(to.join("a.wav"))
         );
         assert!(to.join("a.wav").is_file() && !moved.exists());
-        assert_eq!(s.get(b).unwrap().unwrap().audio_path, Some(taken.clone()));
+        // The row names the file of that name in the new folder; the file
+        // that could not be moved stays behind and is counted in `left`.
+        assert_eq!(
+            s.get(b).unwrap().unwrap().audio_path,
+            Some(to.join("b.wav"))
+        );
         assert!(taken.is_file());
         assert!(to.join("c.wav").is_file() && !stray.exists());
         assert!(from.join("notes.txt").is_file());

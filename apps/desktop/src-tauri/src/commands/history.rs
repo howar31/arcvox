@@ -397,6 +397,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let elsewhere = tempfile::tempdir().unwrap();
         let history = HistoryStore::open_in_memory().unwrap();
+        history.set_recordings_dir(dir.path());
         let kept = dir.path().join("a.wav");
         let stray = elsewhere.path().join("b.wav");
         std::fs::write(&kept, b"0123456789").unwrap();
@@ -424,6 +425,7 @@ mod tests {
     fn audio_returns_the_file_and_the_list_filters() {
         let dir = tempfile::tempdir().unwrap();
         let history = HistoryStore::open_in_memory().unwrap();
+        history.set_recordings_dir(dir.path());
         let path = dir.path().join("a.wav");
         std::fs::write(&path, b"RIFFdata").unwrap();
         let id = history.insert(row(1, "with sound", Some(path))).unwrap();

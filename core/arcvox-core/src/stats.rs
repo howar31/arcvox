@@ -250,13 +250,9 @@ pub(crate) fn backfill(
         mapped.collect::<Result<_, _>>()?
     };
     for row in rows {
-        let audio_ms = row.audio_path.as_deref().and_then(|p| {
-            let p = Path::new(p);
-            if crate::history::inside(p, recordings_dir) {
-                crate::audio::wav_duration_ms(p)
-            } else {
-                None
-            }
+        let audio_ms = row.audio_path.as_deref().and_then(|name| {
+            let name = Path::new(name).file_name()?;
+            crate::audio::wav_duration_ms(&recordings_dir.join(name))
         });
         if let Some(ms) = audio_ms {
             tx.execute(

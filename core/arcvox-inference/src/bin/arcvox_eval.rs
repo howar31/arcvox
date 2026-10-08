@@ -176,7 +176,8 @@ fn read_config(dirs: &DataDir) -> Result<(ConfigStore, PathBuf), String> {
 fn export(args: &Args) -> Result<(), String> {
     let dirs = data_dir(args)?;
     let (_, recordings) = read_config(&dirs)?;
-    let history = HistoryStore::open_read_only(&dirs.history_path()).map_err(|e| e.to_string())?;
+    let history = HistoryStore::open_read_only(&dirs.history_path(), &recordings)
+        .map_err(|e| e.to_string())?;
     let out = PathBuf::from(args.required("out")?);
     let limit: usize = args
         .flag("limit")
@@ -200,16 +201,10 @@ fn export(args: &Args) -> Result<(), String> {
         if !wanted.is_empty() && !wanted.contains(&id) {
             continue;
         }
-        // A row stores the recording's absolute path; after the folder was
-        // renamed or moved by hand, the file is still there under its name.
-        let resolved = history
+        let Some(path) = history
             .recording_path(u.id, &recordings)
             .map_err(|e| e.to_string())?
-            .or_else(|| {
-                let name = u.audio_path.as_ref()?.file_name()?;
-                Some(recordings.join(name)).filter(|p| p.is_file())
-            });
-        let Some(path) = resolved else {
+        else {
             continue;
         };
         let tags = guess_tags(&u.raw_text, u.audio_ms);
