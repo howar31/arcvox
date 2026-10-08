@@ -36,8 +36,10 @@ pub(crate) struct SessionFlags {
     pub(crate) tail_started: AtomicBool,
 }
 
-/// What a session is told once its recording is complete.
+/// What a session is told while it records and once its recording is complete.
 pub(crate) enum SessionCmd {
+    /// A block of audio, in the order it was spoken.
+    Audio(Vec<f32>),
     /// Keep the recording now, before anything is done with it.
     Store,
     /// Run the pipeline on this part of the audio, or on all of it.
@@ -69,8 +71,13 @@ impl Session {
     }
 
     /// Appends 16 kHz mono f32 samples. Safe to call from the audio thread.
+    /// When recordings are kept, the block goes to the recording's file at
+    /// once, so a dictation cut short by a crash is not lost.
     pub fn push_audio(&self, pcm: &[f32]) {
         self.audio.lock().unwrap().extend_from_slice(pcm);
+        if let Some(tx) = self.cmd_tx.lock().unwrap().as_ref() {
+            let _ = tx.send(SessionCmd::Audio(pcm.to_vec()));
+        }
     }
 
     /// The recording is complete. When recordings are kept it is written

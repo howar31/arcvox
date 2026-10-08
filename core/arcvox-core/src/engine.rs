@@ -955,6 +955,74 @@ impl Drop for InFlight {
     }
 }
 
+/// The row that keeps a recording while it is being made, and the file it
+/// is written to as it comes in. Only when recordings are kept; None when
+/// the row or the file could not be made, in which case `hold` writes the
+/// whole recording at the end as before.
+async fn start_journal(
+    inner: &Arc<Inner>,
+    profile: &crate::config::Profile,
+    req: &SessionRequest,
+    path: &Path,
+) -> Option<(HistoryId, crate::journal::Journal)> {
+    if !inner.config.current().general.keep_recordings {
+        return None;
+    }
+    let row = crate::history::FailedUtterance {
+        ts: crate::history::now_unix(),
+        profile_id: profile.id.clone(),
+        app_name: req.app.app_name.clone(),
+        audio_path: path.to_path_buf(),
+        audio_ms: None,
+        code: ErrorCode::Interrupted,
+        error: INTERRUPTED.into(),
+    };
+    inner.in_flight.lock().unwrap().insert(path.to_path_buf());
+    let history = inner.history.clone();
+    let p = path.to_path_buf();
+    let started = tokio::task::spawn_blocking(move || {
+        let journal = crate::journal::Journal::open(p.clone(), history.clone())?;
+        let id = match history.insert_failed(row) {
+            Ok(id) => id,
+            Err(e) => {
+                drop(journal);
+                let _ = std::fs::remove_file(&p);
+                return Err(e);
+            }
+        };
+        journal.set_row(id);
+        Ok::<_, HistoryError>((id, journal))
+    })
+    .await;
+    match started {
+        Ok(Ok(found)) => Some(found),
+        Ok(Err(e)) => {
+            tracing::warn!(path = %path.display(), error = %e, "the recording's file could not be started");
+            None
+        }
+        Err(_) => None,
+    }
+}
+
+/// Closes the recording's file. When the file could not be made whole, the
+/// row and the file go, and `hold` writes the whole recording afterwards.
+async fn settle_journal(
+    inner: &Arc<Inner>,
+    journal: &mut Option<crate::journal::Journal>,
+    held: &mut Option<HistoryId>,
+    path: &Path,
+) {
+    let Some(j) = journal.take() else {
+        return;
+    };
+    if !j.close().await {
+        tracing::warn!(path = %path.display(), "the recording's file was not whole; written again");
+        if let Some(id) = held.take() {
+            drop_held(inner, id, path).await;
+        }
+    }
+}
+
 /// Writes the recording as it is, with a row that says the dictation did
 /// not finish, before anything is done with the audio. Only when recordings
 /// are kept. Returns the row, which the result replaces later.
@@ -1127,9 +1195,23 @@ async fn run_session(
     };
     // The row that keeps the recording until there is a result.
     let mut held: Option<HistoryId> = None;
+    // The recording's file, written while the audio comes in.
+    let mut journal: Option<crate::journal::Journal> = None;
     let range = loop {
         match cmd_rx.recv().await {
+            Some(SessionCmd::Audio(chunk)) => {
+                if journal.is_none() && held.is_none() {
+                    if let Some((id, j)) = start_journal(&inner, &profile, &req, &wav_path).await {
+                        held = Some(id);
+                        journal = Some(j);
+                    }
+                }
+                if let Some(j) = &journal {
+                    j.push(chunk);
+                }
+            }
             Some(SessionCmd::Store) => {
+                settle_journal(&inner, &mut journal, &mut held, &wav_path).await;
                 if held.is_none() {
                     held = hold(&inner, &profile, &req, &audio, &wav_path, &flags).await;
                 }
@@ -1139,12 +1221,16 @@ async fn run_session(
                 // Ended without `finish`. A cancel removes what was kept;
                 // a session that was dropped leaves the row and its
                 // recording, to be processed again from the history.
+                if let Some(j) = journal.take() {
+                    j.close().await;
+                }
                 send_done_once(&tx, &flags.done_sent, &session_id, None).await;
                 inner.schedule_idle_unload();
                 return;
             }
         }
     };
+    settle_journal(&inner, &mut journal, &mut held, &wav_path).await;
     if held.is_none() {
         held = hold(&inner, &profile, &req, &audio, &wav_path, &flags).await;
     }
@@ -2275,7 +2361,7 @@ pub(crate) mod tests {
         s.store();
         // Nothing was asked of the engines yet; the recording is on disk
         // with a row that says the dictation did not finish.
-        let rows = rows_when(&r, |rows| rows.len() == 1).await;
+        let rows = rows_when(&r, |rows| rows.len() == 1 && rows[0].audio_ms.is_some()).await;
         let path = rows[0].audio_path.clone().unwrap();
         assert_eq!(rows[0].error_code.as_deref(), Some("interrupted"));
         assert_eq!(rows[0].audio_ms, Some(1000));
@@ -2307,6 +2393,95 @@ pub(crate) mod tests {
         assert!(!r.engine.in_flight(&path));
     }
 
+    /// Waits until the recording file holds at least `secs` of audio.
+    async fn wav_secs_when(path: &Path, secs: f32) -> f32 {
+        for _ in 0..300 {
+            if let Some(ms) = crate::audio::wav_duration_ms(path) {
+                let got = ms as f32 / 1000.0;
+                if got >= secs {
+                    return got;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("the recording never reached {secs} s");
+    }
+
+    #[tokio::test]
+    async fn a_recording_is_on_disk_while_it_is_being_made() {
+        let r = rig(true).await;
+        mock_ok(&r, "原文", "整理後").await;
+        let s = r.engine.start_session(SessionRequest::default());
+        // Pushed in the small blocks a microphone delivers.
+        for chunk in one_second().chunks(1600) {
+            s.push_audio(chunk);
+        }
+        // The row and the file exist before the recording is finished.
+        let rows = rows_when(&r, |rows| rows.len() == 1).await;
+        assert_eq!(rows[0].error_code.as_deref(), Some("interrupted"));
+        let path = rows[0].audio_path.clone().unwrap();
+        assert!(wav_secs_when(&path, 0.9).await >= 0.9);
+        // More audio, then the end: the result replaces the row and the file holds all of it.
+        for chunk in one_second().chunks(1600) {
+            s.push_audio(chunk);
+        }
+        s.finish();
+        let events = drain(&s).await;
+        let Some(Event::Done {
+            history_id: Some(id),
+            ..
+        }) = events.last()
+        else {
+            panic!("{events:?}")
+        };
+        let row = r.engine.history().get(*id).unwrap().unwrap();
+        assert_eq!(row.error_code, None);
+        assert_eq!(row.audio_path.as_deref(), Some(path.as_path()));
+        assert!((wav_secs_when(&path, 1.9).await - 2.0).abs() < 0.05);
+        assert_eq!(r.engine.history().list_recent(10).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_cancel_while_recording_leaves_nothing() {
+        let r = rig(true).await;
+        let s = r.engine.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        let rows = rows_when(&r, |rows| rows.len() == 1).await;
+        let path = rows[0].audio_path.clone().unwrap();
+        wav_secs_when(&path, 0.9).await;
+        s.cancel();
+        rows_when(&r, |rows| rows.is_empty()).await;
+        for _ in 0..100 {
+            if !path.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn a_session_dropped_while_recording_leaves_a_whole_file() {
+        let r = rig(true).await;
+        let s = r.engine.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        let rows = rows_when(&r, |rows| rows.len() == 1).await;
+        let path = rows[0].audio_path.clone().unwrap();
+        wav_secs_when(&path, 0.9).await;
+        drop(s);
+        for _ in 0..100 {
+            if !r.engine.in_flight(&path) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let rows = r.engine.history().list_recent(10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].error_code.as_deref(), Some("interrupted"));
+        assert_eq!(rows[0].audio_ms, Some(1000));
+        assert!(crate::audio::decode_wav_pcm16(&std::fs::read(&path).unwrap()).is_ok());
+    }
+
     #[tokio::test]
     async fn a_session_dropped_after_store_leaves_its_recording_to_retry() {
         let r = rig(true).await;
@@ -2314,7 +2489,7 @@ pub(crate) mod tests {
         s.push_audio(&one_second());
         s.store();
         drop(s);
-        let rows = rows_when(&r, |rows| rows.len() == 1).await;
+        let rows = rows_when(&r, |rows| rows.len() == 1 && rows[0].audio_ms.is_some()).await;
         assert_eq!(rows[0].error_code.as_deref(), Some("interrupted"));
         let path = rows[0].audio_path.clone().unwrap();
         assert!(path.is_file());

@@ -26,6 +26,8 @@ struct Capture {
     recorder: Option<Recorder>,
     /// Set for a hands-free dictation that ends by itself after a pause.
     pause: Option<vad::SilenceWatch>,
+    /// How many of the recorder's samples the session has been given.
+    sent: usize,
 }
 
 impl Capture {
@@ -33,6 +35,17 @@ impl Capture {
         self.recorder
             .get_or_insert_with(|| Recorder::new(rate))
             .push(mono)
+    }
+    /// Hands the session the samples it has not seen yet, so the recording
+    /// is kept as it is made.
+    fn feed(&mut self, session: &Session) {
+        if let Some(r) = &self.recorder {
+            let all = r.samples();
+            if all.len() > self.sent {
+                session.push_audio(&all[self.sent..]);
+                self.sent = all.len();
+            }
+        }
     }
     /// True when the speaker has paused for as long as the setting says.
     fn paused(&mut self) -> bool {
@@ -44,11 +57,15 @@ impl Capture {
     fn secs(&self) -> f32 {
         self.recorder.as_ref().map(|r| r.len_secs()).unwrap_or(0.0)
     }
-    fn stop(mut self) -> Vec<f32> {
+    /// Ends the capture: the whole recording, and how much of it the
+    /// session already has.
+    fn stop(mut self) -> (Vec<f32>, usize) {
         if let Some(h) = self.handle.take() {
             h.stop();
         }
-        self.recorder.take().map(|r| r.finish()).unwrap_or_default()
+        let samples = self.recorder.take().map(|r| r.finish()).unwrap_or_default();
+        let sent = self.sent.min(samples.len());
+        (samples, sent)
     }
 }
 
@@ -166,8 +183,8 @@ impl Controller {
             State::Recording {
                 session, capture, ..
             } => {
-                let samples = capture.stop();
-                session.push_audio(&samples);
+                let (samples, sent) = capture.stop();
+                session.push_audio(&samples[sent..]);
                 session.store();
             }
             State::Processing { .. } => {}
@@ -288,6 +305,7 @@ impl Controller {
                         handle: Some(handle),
                         recorder: None,
                         pause: None,
+                        sent: 0,
                     },
                 };
             }
@@ -386,6 +404,7 @@ impl Controller {
                     handle: Some(handle),
                     recorder: None,
                     pause: None,
+                    sent: 0,
                 },
                 Err(e) => {
                     self.deps.ui.message(UiMessage::error(
@@ -457,8 +476,11 @@ impl Controller {
                     State::Armed { capture } => {
                         capture.push(rate, &mono);
                     }
-                    State::Recording { capture, .. } => {
+                    State::Recording {
+                        capture, session, ..
+                    } => {
                         let level = capture.push(rate, &mono);
+                        capture.feed(session);
                         self.deps.ui.level(level.min(1.0));
                         if capture.secs() >= max || capture.paused() {
                             self.finish_recording();
@@ -506,11 +528,11 @@ impl Controller {
         else {
             return;
         };
-        let samples = capture.stop();
+        let (samples, sent) = capture.stop();
         // The engine has the whole recording, and keeps it when recordings
         // are kept, before anything is done with it here: a failure from
         // this point on leaves it in the history to be processed again.
-        session.push_audio(&samples);
+        session.push_audio(&samples[sent..]);
         session.store();
         let mut vad = (self.deps.vad_factory)();
         match vad::trim(&samples, vad.as_mut()) {
@@ -1128,6 +1150,45 @@ mod tests {
             "paste",
         )
         .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_recording_is_on_disk_while_the_shortcut_is_held() {
+        let r = rig_with(fast_settings(), Vec::new(), |c| {
+            c.general.keep_recordings = true;
+        })
+        .await;
+        mock_ok(&r, "原文", "整理後").await;
+        r.modifier.send(fn_down()).unwrap();
+        wait_state(&r, UiState::Recording, "recording").await;
+        speak_and_wait(&r, 1.0).await;
+        speak_and_wait(&r, 1.0).await;
+        // Still held: the file is there and holds what was said so far.
+        let dir = r.engine.recordings_dir();
+        let wav = |dir: &std::path::Path| {
+            std::fs::read_dir(dir)
+                .ok()
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path())
+                .find(|p| p.extension().is_some_and(|x| x == "wav"))
+        };
+        wait_for(
+            || {
+                wav(&dir).is_some_and(|p| {
+                    arcvox_core::audio::wav_duration_ms(&p).is_some_and(|ms| ms >= 1000)
+                })
+            },
+            "recording on disk while held",
+        )
+        .await;
+        r.modifier.send(fn_up()).unwrap();
+        wait_for(|| r.platform.calls().iter().any(|c| c == "paste"), "paste").await;
+        let rows = r.engine.history().list_recent(10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].error_code, None);
+        assert!(rows[0].audio_path.as_deref().is_some_and(|p| p.is_file()));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

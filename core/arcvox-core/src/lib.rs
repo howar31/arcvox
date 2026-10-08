@@ -8,6 +8,7 @@ pub mod device;
 pub mod dictionary;
 pub mod engine;
 pub mod history;
+pub(crate) mod journal;
 pub mod models;
 pub mod paths;
 pub mod pipeline;
