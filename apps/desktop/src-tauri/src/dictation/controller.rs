@@ -1276,12 +1276,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn final_transcript_reaches_the_ui() {
         let r = rig(fast_settings()).await;
-        mock_ok(&r, "软件 原文", "软件 整理後").await;
+        mock_ok(&r, "汉字 原文", "汉字 整理後").await;
         hold_and_speak(&r, 1.0).await;
         wait_state(&r, UiState::Idle, "idle").await;
         // The raw ASR output, sent before the OpenCC step runs.
         let transcripts = r.ui.transcripts.lock().unwrap().clone();
-        assert_eq!(transcripts, vec!["软件 原文".to_string()]);
+        assert_eq!(transcripts, vec!["汉字 原文".to_string()]);
         let log = r.ui.log.lock().unwrap().clone();
         let t = log
             .iter()
@@ -1303,7 +1303,7 @@ mod tests {
         let mut settings = fast_settings();
         settings.insertion.default = InsertMethod::Copy;
         let r = rig(settings).await;
-        mock_ok(&r, "软件 原文", "软件 整理後").await;
+        mock_ok(&r, "汉字 原文", "汉字 整理後").await;
         // A copy goes ahead where an insertion would be held back.
         *r.platform.secure_input.lock().unwrap() = true;
         hold_and_speak(&r, 1.0).await;
@@ -1312,7 +1312,7 @@ mod tests {
             "copied",
         )
         .await;
-        assert_eq!(r.platform.calls(), vec!["write:軟體 整理後"]);
+        assert_eq!(r.platform.calls(), vec!["write:漢字 整理後"]);
         wait_state(&r, UiState::Idle, "idle").await;
         assert!(r.ui.messages.lock().unwrap().is_empty());
         assert!(!r.ui.log.lock().unwrap().iter().any(|l| l == "inserted"));
@@ -1321,7 +1321,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn push_to_talk_inserts_refined_text_and_records_final() {
         let r = rig(fast_settings()).await;
-        mock_ok(&r, "软件 原文", "软件 整理後").await;
+        mock_ok(&r, "汉字 原文", "汉字 整理後").await;
         hold_and_speak(&r, 1.0).await;
         // Wait for the clipboard restore, not just the paste: `paste()` in
         // `insert::executors` sleeps for `PASTE_RESTORE_DELAY` between the
@@ -1333,7 +1333,7 @@ mod tests {
         .await;
         assert_eq!(
             r.platform.calls(),
-            vec!["snapshot", "passing:軟體 整理後", "paste", "restore"]
+            vec!["snapshot", "passing:漢字 整理後", "paste", "restore"]
         );
         wait_state(&r, UiState::Idle, "idle").await;
         let states = r.ui.states.lock().unwrap().clone();
@@ -1354,7 +1354,7 @@ mod tests {
                     .list_recent(1)
                     .unwrap()
                     .first()
-                    .map(|u| u.final_text == "軟體 整理後")
+                    .map(|u| u.final_text == "漢字 整理後")
                     .unwrap_or(false)
             },
             "record_final",

@@ -8,7 +8,7 @@ use url::Url;
 
 use crate::types::{ProfileId, ProviderId};
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 pub const MODEL_ID_DEFAULT_ASR: &str = "breeze-asr-25-q5_0";
 pub const MODEL_ID_DEFAULT_LLM: &str = "gemma-3-4b-it-q4_k_m";
@@ -155,7 +155,8 @@ pub enum StepSpec {
     Asr,
     #[serde(rename = "opencc")]
     OpenCc {
-        /// OpenCC config name, for example `s2twp`.
+        /// OpenCC config name, for example `s2tw` (characters only) or
+        /// `s2twp` (characters and Taiwan phrasing).
         config: String,
     },
     Llm,
@@ -317,11 +318,11 @@ impl Config {
         vec![
             StepSpec::Asr,
             StepSpec::OpenCc {
-                config: "s2twp".into(),
+                config: "s2tw".into(),
             },
             StepSpec::Llm,
             StepSpec::OpenCc {
-                config: "s2twp".into(),
+                config: "s2tw".into(),
             },
             StepSpec::Rules,
         ]
@@ -441,7 +442,7 @@ mod tests {
         assert_eq!(json[0], serde_json::json!({"step":"asr"}));
         assert_eq!(
             json[1],
-            serde_json::json!({"step":"opencc","config":"s2twp"})
+            serde_json::json!({"step":"opencc","config":"s2tw"})
         );
         assert_eq!(json[2], serde_json::json!({"step":"llm"}));
         assert_eq!(json[4], serde_json::json!({"step":"rules"}));

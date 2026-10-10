@@ -199,9 +199,10 @@ enum MigrateError {
     NoPath(u32),
 }
 
-/// Schema ladder. Version 1 is the only one so far. A higher version is
-/// refused so an older build never rewrites a newer file; `open` moves the
-/// file aside and reports the reason.
+/// Schema ladder. A higher version is refused so an older build never
+/// rewrites a newer file; `open` moves the file aside and reports the reason.
+/// The migrated value is published in memory; the file keeps its version
+/// until the next update writes it.
 fn migrate(value: serde_json::Value) -> Result<serde_json::Value, MigrateError> {
     let version = value
         .get("schema_version")
@@ -209,9 +210,32 @@ fn migrate(value: serde_json::Value) -> Result<serde_json::Value, MigrateError> 
         .unwrap_or(0) as u32;
     match version {
         SCHEMA_VERSION => Ok(value),
+        1 => Ok(v1_to_v2(value)),
         v if v > SCHEMA_VERSION => Err(MigrateError::Unsupported(v)),
         v => Err(MigrateError::NoPath(v)),
     }
+}
+
+/// Version 2: the script conversion converts characters only. Every profile
+/// step that converted with the Taiwan phrase table (`s2twp`) now converts
+/// with `s2tw`; a phrase table replaced words the user had actually said.
+fn v1_to_v2(mut value: serde_json::Value) -> serde_json::Value {
+    if let Some(profiles) = value.get_mut("profiles").and_then(|p| p.as_array_mut()) {
+        for profile in profiles {
+            let Some(steps) = profile.get_mut("steps").and_then(|s| s.as_array_mut()) else {
+                continue;
+            };
+            for step in steps {
+                if step.get("step").and_then(|v| v.as_str()) == Some("opencc")
+                    && step.get("config").and_then(|v| v.as_str()) == Some("s2twp")
+                {
+                    step["config"] = serde_json::Value::from("s2tw");
+                }
+            }
+        }
+    }
+    value["schema_version"] = serde_json::Value::from(2);
+    value
 }
 
 /// Reads and parses an existing `config.json`. A newer `schema_version` is
@@ -343,6 +367,41 @@ mod tests {
             "broken file must be moved, not overwritten"
         );
         assert_eq!(std::fs::read_to_string(backup).unwrap(), raw);
+    }
+
+    #[test]
+    fn version_one_phrase_conversion_becomes_characters_only_in_memory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = DataDir::custom(tmp.path());
+        dirs.ensure().unwrap();
+        let mut v = serde_json::to_value(Config::first_run()).unwrap();
+        v["schema_version"] = serde_json::json!(1);
+        v["profiles"][0]["steps"][1] = serde_json::json!({"step":"opencc","config":"s2twp"});
+        v["profiles"][0]["steps"][3] = serde_json::json!({"step":"opencc","config":"s2hk"});
+        let raw = serde_json::to_string(&v).unwrap();
+        std::fs::write(dirs.config_path(), &raw).unwrap();
+        let store = ConfigStore::open(&dirs).unwrap();
+        let c = store.current();
+        assert_eq!(c.schema_version, SCHEMA_VERSION);
+        let configs: Vec<&str> = c.profiles[0]
+            .steps
+            .iter()
+            .filter_map(|s| match s {
+                StepSpec::OpenCc { config } => Some(config.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(configs, ["s2tw", "s2hk"], "only s2twp changes");
+        assert_eq!(
+            std::fs::read_to_string(dirs.config_path()).unwrap(),
+            raw,
+            "open does not rewrite the file; the next update does"
+        );
+        store.update(|_| {}).unwrap();
+        let on_disk: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dirs.config_path()).unwrap()).unwrap();
+        assert_eq!(on_disk["schema_version"], serde_json::json!(2));
+        assert_eq!(on_disk["profiles"][0]["steps"][1]["config"], "s2tw");
     }
 
     #[test]

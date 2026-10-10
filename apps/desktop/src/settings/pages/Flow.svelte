@@ -353,10 +353,11 @@
         <Segmented
           options={[
             { value: "tw", label: t("flow.script_tw") },
+            { value: "twp", label: t("flow.script_twp") },
             ...(typeof script === "object" ? [{ value: "other", label: script.other }] : []),
             { value: "none", label: t("flow.script_none") },
           ]}
-          bind:value={() => (typeof script === "object" ? "other" : script), (v) => { if (v !== "other") draft = withScript(snapshot(), v === "tw", true); }}
+          bind:value={() => (typeof script === "object" ? "other" : script), (v) => { if (v !== "other") draft = withScript(snapshot(), v); }}
           label={t("flow.script")}
         />
       </Row>

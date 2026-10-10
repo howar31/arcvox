@@ -1779,7 +1779,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn full_session_writes_history_and_emits_done() {
         let r = rig(false).await;
-        mock_ok(&r, "软件 原文", "软件 整理後").await;
+        mock_ok(&r, "汉字 原文", "汉字 整理後").await;
         let s = r.engine.start_session(SessionRequest {
             app: AppInfo {
                 app_name: Some("TextEdit".into()),
@@ -1798,7 +1798,7 @@ pub(crate) mod tests {
             })
         ));
         assert!(events.iter().any(
-            |e| matches!(e, Event::Refined { text, degraded: false } if text == "軟體 整理後")
+            |e| matches!(e, Event::Refined { text, degraded: false } if text == "漢字 整理後")
         ));
         let Some(Event::Done {
             history_id: Some(id),
@@ -1808,8 +1808,8 @@ pub(crate) mod tests {
             panic!("{events:?}")
         };
         let row = r.engine.history().get(*id).unwrap().unwrap();
-        assert_eq!(row.raw_text, "软件 原文");
-        assert_eq!(row.final_text, "軟體 整理後");
+        assert_eq!(row.raw_text, "汉字 原文");
+        assert_eq!(row.final_text, "漢字 整理後");
         assert_eq!(row.app_name.as_deref(), Some("TextEdit"));
         assert!(row.audio_path.is_none());
         assert!(row.audio_ms.is_some());

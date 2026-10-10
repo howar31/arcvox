@@ -1,4 +1,5 @@
-//! Simplified to Traditional conversion with Taiwan phrasing (`s2twp`).
+//! Simplified to Traditional conversion: characters only (`s2tw`, the
+//! default) or characters and Taiwan phrasing (`s2twp`).
 //! Pure Rust via opencc-fmmseg; no C dependency.
 
 use async_trait::async_trait;

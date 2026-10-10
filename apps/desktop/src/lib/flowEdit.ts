@@ -13,23 +13,36 @@ export function convertsScript(profile: Profile): boolean {
   return profile.steps.some((s) => s.step === "opencc");
 }
 
-const TAIWAN = ["s2twp", "s2tw", "t2tw"];
+/** The conversions the page offers: characters only, or characters and Taiwan phrasing. */
+export type ScriptKind = "tw" | "twp";
+const CONFIG: Record<ScriptKind, string> = { tw: "s2tw", twp: "s2twp" };
 
-/** The conversion a profile applies: Taiwan Traditional, none, or the name of another configuration. */
-export function scriptChoice(profile: Profile): "tw" | "none" | { other: string } {
+/** The conversion a profile applies: characters only, characters and phrasing, none, or the name of another configuration. */
+export function scriptChoice(profile: Profile): ScriptKind | "none" | { other: string } {
   const step = profile.steps.find((s) => s.step === "opencc");
   if (!step) return "none";
-  const config = step.config ?? "s2twp";
-  return TAIWAN.includes(config) ? "tw" : { other: config };
+  const config = step.config ?? CONFIG.tw;
+  if (config === CONFIG.tw) return "tw";
+  if (config === CONFIG.twp) return "twp";
+  return { other: config };
 }
 
-/** A copy without any conversion step, or with one added after speech recognition when there was none. */
-export function withScript(profile: Profile, on: boolean, replace = false): Profile {
+/**
+ * A copy with the chosen conversion: "none" removes every conversion step; a kind
+ * sets it on every conversion step the profile has, or, when it has none, adds one
+ * after speech recognition and one after the rewrite.
+ */
+export function withScript(profile: Profile, choice: ScriptKind | "none"): Profile {
   let steps = copy(profile.steps);
-  if (!on) return { ...profile, steps: steps.filter((s) => s.step !== "opencc") };
-  // Choosing Taiwan Traditional over another configuration replaces that step in place.
-  if (replace) steps = steps.map((s) => (s.step === "opencc" ? { ...s, config: "s2twp" } : s));
-  if (!convertsScript(profile)) steps.splice(steps.findIndex((s) => s.step === "asr") + 1, 0, { step: "opencc", config: "s2twp" });
+  if (choice === "none") return { ...profile, steps: steps.filter((s) => s.step !== "opencc") };
+  const config = CONFIG[choice];
+  if (convertsScript(profile)) {
+    steps = steps.map((s) => (s.step === "opencc" ? { ...s, config } : s));
+    return { ...profile, steps };
+  }
+  const llm = steps.findIndex((s) => s.step === "llm");
+  if (llm >= 0) steps.splice(llm + 1, 0, { step: "opencc", config });
+  steps.splice(steps.findIndex((s) => s.step === "asr") + 1, 0, { step: "opencc", config });
   return { ...profile, steps };
 }
 

@@ -38,7 +38,11 @@ export function engineLine(providers: ProviderConfig[], id: string | null, insta
 /** The output stage; `method` is the default insertion method. */
 export function outputLine(profile: Profile, method: InsertMethod = "paste"): StageLine {
   const script = scriptChoice(profile);
-  const meta = script === "tw" ? t("home.output_opencc") : script === "none" ? t("home.output_plain") : t("home.output_opencc_other", { config: script.other });
+  const meta =
+    script === "tw" ? t("home.output_opencc")
+    : script === "twp" ? t("home.output_opencc_twp")
+    : script === "none" ? t("home.output_plain")
+    : t("home.output_opencc_other", { config: script.other });
   return { name: t("home.output_" + method), meta, known: true, missing: false };
 }
 
