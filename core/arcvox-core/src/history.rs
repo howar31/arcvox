@@ -1135,7 +1135,8 @@ impl HistoryStore {
     }
 
     /// What the stages of a row's current result did, in order: the chosen
-    /// rerun's when one is chosen, else the dictation's own.
+    /// rerun's when one is chosen and recorded them, else the dictation's
+    /// own (a rerun from before stages were kept has none).
     pub fn stages(&self, id: HistoryId) -> Result<Vec<StageRecord>, HistoryError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -1145,15 +1146,30 @@ impl HistoryStore {
              ORDER BY position, id",
         )?;
         let rows = stmt.query_map(params![id.0], map_stage)?;
+        let chosen = rows.collect::<Result<Vec<_>, _>>()?;
+        if !chosen.is_empty() {
+            return Ok(chosen);
+        }
+        let mut stmt = conn.prepare(
+            "SELECT position, kind, text, ms, detail FROM stages
+             WHERE utterance_id = ?1 AND attempt_id IS NULL ORDER BY position, id",
+        )?;
+        let rows = stmt.query_map(params![id.0], map_stage)?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
-    /// The newest finished dictation made with a profile.
+    /// The newest finished dictation made with a profile whose stages were
+    /// kept; rows from before that, or brought in by an import, are passed
+    /// over.
     pub fn last_for_profile(&self, profile: &ProfileId) -> Result<Option<Utterance>, HistoryError> {
         let conn = self.conn.lock().unwrap();
         let row = conn
             .query_row(
-                &format!("{SELECT} WHERE profile_id = ?1 AND error IS NULL ORDER BY ts DESC, id DESC LIMIT 1"),
+                &format!(
+                    "{SELECT} WHERE profile_id = ?1 AND error IS NULL
+                     AND EXISTS (SELECT 1 FROM stages s WHERE s.utterance_id = utterances.id)
+                     ORDER BY ts DESC, id DESC LIMIT 1"
+                ),
                 params![profile.0],
                 map_row,
             )
@@ -2275,10 +2291,46 @@ mod tests {
     }
 
     #[test]
+    fn last_for_profile_skips_rows_written_without_stages() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let mut with = new(100, None);
+        with.stages = vec![stage(3, StageKind::Asr, "a")];
+        let a = s.insert(with).unwrap();
+        // Newer, but from before stages were kept (or imported): not the one shown.
+        s.insert(new(200, None)).unwrap();
+        let got = s
+            .last_for_profile(&ProfileId("default".into()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.id, a);
+        let s2 = HistoryStore::open_in_memory().unwrap();
+        s2.insert(new(100, None)).unwrap();
+        assert!(s2
+            .last_for_profile(&ProfileId("default".into()))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn stages_fall_back_to_the_rows_own_when_the_chosen_rerun_has_none() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let mut u = new(100, None);
+        u.stages = vec![stage(3, StageKind::Asr, "own")];
+        let id = s.insert(u).unwrap();
+        s.record_attempt(id, &redo_with(Vec::new()), true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(s.stages(id).unwrap()[0].text.as_deref(), Some("own"));
+    }
+
+    #[test]
     fn last_for_profile_skips_failed_rows_and_other_profiles() {
         let s = HistoryStore::open_in_memory().unwrap();
-        let a = s.insert(new(100, None)).unwrap();
+        let mut first = new(100, None);
+        first.stages = vec![stage(3, StageKind::Asr, "a")];
+        let a = s.insert(first).unwrap();
         let mut other = new(300, None);
+        other.stages = vec![stage(3, StageKind::Asr, "b")];
         other.profile_id = ProfileId("mail".into());
         s.insert(other).unwrap();
         s.insert_failed(FailedUtterance {
