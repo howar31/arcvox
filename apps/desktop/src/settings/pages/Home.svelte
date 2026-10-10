@@ -9,7 +9,6 @@
   import { t } from "../../lib/i18n";
   import { defaultProfile } from "../../lib/labels";
   import { go } from "../../lib/route";
-  import { engineLine, micLine, outputLine } from "../../lib/stages";
   import {
     canInsertRow, canResize, cardDef, COLS, DEFAULT_LAYOUT, fits, GRID_GAP, hidden as hideCard, insertedAt, movedTo, occupant, resized, ROW_HEIGHT, rowCount,
     sameLayout, sanitized, supports, swapped, type CardId,
@@ -24,7 +23,6 @@
   import Empty from "../../lib/ui/Empty.svelte";
   import Heatmap from "../../lib/ui/Heatmap.svelte";
   import PageHead from "../../lib/ui/PageHead.svelte";
-  import Ring from "../../lib/ui/Ring.svelte";
   import Segmented from "../../lib/ui/Segmented.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
 
@@ -259,19 +257,6 @@
     speed: "home.speed.title", rewrite: "home.rewrite.title", time: "home.time.title", lang: "home.lang.title", storage: "home.storage.title",
   };
 
-  // The default profile's flow in one line.
-  const flowLine = $derived.by(() => {
-    const p = defaultProfile(config.value);
-    if (!p) return null;
-    const providers = config.value?.providers ?? [];
-    const installed = { ids: models ? new Set(models.map((m) => m.id)) : null, paths: new Set((models ?? []).map((m) => m.path)) };
-    return [
-      micLine(client.value?.microphone ?? "builtin", mics).name,
-      engineLine(providers, p.asr_provider, installed).name,
-      engineLine(providers, p.llm_provider, installed).name,
-      outputLine(p, client.value?.insertion.default).name,
-    ].join(t("home.flow_sep"));
-  });
 
   // ---- The grid of cards: where each one sits, and the editing of that.
   let layout = $state<StatsCard[]>(sanitized(client.value?.stats_layout));
@@ -666,13 +651,6 @@
     </div>
   {/if}
 
-  {#if flowLine}
-    <div class="status">
-      <Ring tone="accent" />
-      <span class="grow">{t("home.flow_line", { flow: flowLine })}</span>
-      <button type="button" class="btn quiet" onclick={() => guard.request(() => go("flow"))}>{t("home.flow_button")}</button>
-    </div>
-  {/if}
 {/if}
 
 <style>
@@ -766,5 +744,4 @@
   .tray { margin-top: 14px; padding: 14px 16px; border: 1.5px dashed var(--line); border-radius: var(--radius-group); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: var(--text-sm); color: var(--ink-2); }
   .chip { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 10px; cursor: grab; color: var(--ink); }
 
-  .status { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding: 14px var(--row-x); border-radius: var(--radius-group); background: var(--surface); border: 1px solid var(--line); font-size: var(--text-control); color: var(--ink-2); }
 </style>
