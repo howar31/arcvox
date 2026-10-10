@@ -29,6 +29,19 @@ pub enum ShowReason {
     ClipboardFailed,
 }
 
+impl ShowReason {
+    /// The reason as the history records it.
+    pub fn name(self) -> &'static str {
+        match self {
+            ShowReason::SecureInput => "secure_input",
+            ShowReason::AppChanged => "app_changed",
+            ShowReason::EmptyText => "empty_text",
+            ShowReason::NotTrusted => "not_trusted",
+            ShowReason::ClipboardFailed => "clipboard_failed",
+        }
+    }
+}
+
 pub struct Situation<'a> {
     pub text: &'a str,
     pub target: &'a InsertTarget,

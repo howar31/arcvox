@@ -5,6 +5,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
+use arcvox_core::history::Delivery;
 use arcvox_core::types::{ErrorCode, SessionId};
 use arcvox_core::{Engine, Event, Session, SessionRequest};
 use tokio_stream::StreamExt;
@@ -742,8 +743,18 @@ impl Controller {
                 let id = session.id().clone();
                 let final_text = text.clone();
                 let ui = self.deps.ui.clone();
+                let delivery = Delivery {
+                    method: method.name().into(),
+                    outcome: match &outcome {
+                        Outcome::Inserted => "inserted",
+                        Outcome::Copied => "copied",
+                        Outcome::Shown(reason) => reason.name(),
+                    }
+                    .into(),
+                    app_name: captured.app.app_name.clone(),
+                };
                 self.deps.runtime.spawn(async move {
-                    if let Err(e) = engine.record_final(&id, &final_text).await {
+                    if let Err(e) = engine.record_final(&id, &final_text, Some(delivery)).await {
                         tracing::debug!(error = %e, "record_final failed");
                     }
                     ui.history_changed();

@@ -100,6 +100,15 @@ impl Step for LlmStep {
             utterance: &input.text,
             context_limit_bytes: ctx.general.context_limit_bytes,
         });
+        // What the model was given, for the stage record.
+        let prompt = serde_json::json!({
+            "base_chars": ctx.base_prompt.trim().chars().count(),
+            "addition_chars": ctx.profile.prompt_addition.trim().chars().count(),
+            "terms": terms.len(),
+            "few_shot": ctx.profile.few_shot.len(),
+            "window_title": ctx.context.window_title,
+            "app_name": ctx.context.app_name,
+        });
         let opts = LlmOptions {
             temperature: ctx.general.llm_temperature,
             max_tokens: output_tokens(ctx.general.llm_max_tokens, &input.text),
@@ -130,6 +139,11 @@ impl Step for LlmStep {
             ));
         }
         Ok(StepOutput {
+            detail: serde_json::json!({
+                "in_chars": input_chars,
+                "out_chars": output_chars,
+                "prompt": prompt,
+            }),
             text,
             language: None,
             ..Default::default()

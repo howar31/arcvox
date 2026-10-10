@@ -184,6 +184,8 @@ pub fn run() {
             crate::commands::history::recordings_dir_open,
             crate::commands::history::history_reprocess,
             crate::commands::history::history_attempts,
+            crate::commands::history::history_stages,
+            crate::commands::history::history_last,
             crate::commands::history::history_choose_attempt,
             crate::commands::history::history_delete_attempt,
             crate::commands::stats::stats_get,

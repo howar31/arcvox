@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use arcvox_core::history::{Attempt, AttemptId, HistoryStore, ListFilter, Utterance};
+use arcvox_core::history::{
+    Attempt, AttemptId, HistoryStore, ListFilter, StageKind, StageRecord, Utterance,
+};
 use arcvox_core::types::{HistoryId, ProfileId};
 use arcvox_core::{Engine, ReprocessError};
 use serde::Serialize;
@@ -133,6 +135,63 @@ pub fn history_attempts(state: State<'_, AppState>, id: i64) -> CmdResult<Vec<At
         .into_iter()
         .map(AttemptDto::from)
         .collect())
+}
+
+/// What one stage of a run did; `detail` holds the stage's own facts.
+#[derive(Debug, Clone, Serialize)]
+pub struct StageDto {
+    pub position: u32,
+    pub kind: StageKind,
+    pub text: Option<String>,
+    pub ms: Option<u64>,
+    pub detail: serde_json::Value,
+}
+
+impl From<StageRecord> for StageDto {
+    fn from(s: StageRecord) -> Self {
+        StageDto {
+            position: s.position,
+            kind: s.kind,
+            text: s.text,
+            ms: s.ms,
+            detail: s.detail,
+        }
+    }
+}
+
+/// The newest dictation made with a profile and what its stages did.
+#[derive(Debug, Clone, Serialize)]
+pub struct LastRunDto {
+    pub row: UtteranceDto,
+    pub stages: Vec<StageDto>,
+}
+
+/// The stages of a row's current result, in order.
+#[tauri::command]
+pub fn history_stages(state: State<'_, AppState>, id: i64) -> CmdResult<Vec<StageDto>> {
+    let e = engine(&state)?;
+    Ok(e.history()
+        .stages(HistoryId(id))?
+        .into_iter()
+        .map(StageDto::from)
+        .collect())
+}
+
+/// The newest dictation made with a profile, with its stages; None when the
+/// profile has not been used yet.
+#[tauri::command]
+pub async fn history_last(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> CmdResult<Option<LastRunDto>> {
+    let e = engine(&state)?;
+    let recordings_dir = e.recordings_dir();
+    Ok(e.last_run(&ProfileId(profile_id))
+        .await?
+        .map(|(row, stages)| LastRunDto {
+            row: UtteranceDto::new(row, &recordings_dir),
+            stages: stages.into_iter().map(StageDto::from).collect(),
+        }))
 }
 
 /// Makes a recorded result the row's text.
@@ -428,6 +487,7 @@ mod tests {
             dict_fixes: 0,
             snippets: 0,
             llm_changed: false,
+            stages: Vec::new(),
         }
     }
 

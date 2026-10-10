@@ -11,7 +11,10 @@ use crate::audio::encode_wav_pcm16;
 use crate::backup::{self, BackupError, BackupInfo, Categories, ImportReport, Scope, WriteReport};
 use crate::config::{ConfigStore, FirstRunDefaults, ProviderConfig, ProviderKind, StoreError};
 use crate::device::Device;
-use crate::history::{DeviceRef, DeviceRow, HistoryError, HistoryStore, MoveReport, NewUtterance};
+use crate::history::{
+    Delivery, DeviceRef, DeviceRow, HistoryError, HistoryStore, MoveReport, NewUtterance,
+    StageKind, StageRecord,
+};
 use crate::paths::DataDir;
 use crate::pipeline::Pipeline;
 use crate::profile::resolve;
@@ -742,6 +745,7 @@ impl Engine {
             .inner
             .runtime
             .spawn(async move { while rx.recv().await.is_some() {} });
+        let clip_duration_ms = clip_ms(&clip).unwrap_or(0);
         let outcome = pipeline.run(Arc::new(clip), &ctx, &tx).await;
         drop(tx);
         let _ = drain.await;
@@ -758,6 +762,24 @@ impl Engine {
                     dict_fixes: out.dict_fixes,
                     snippets: out.snippets,
                     llm_changed: out.llm_changed,
+                    // A rerun starts from the kept recording: nothing to
+                    // trim, nothing inserted.
+                    stages: std::iter::once(StageRecord {
+                        position: StageKind::Capture.position(0),
+                        kind: StageKind::Capture,
+                        text: None,
+                        ms: None,
+                        detail: serde_json::json!({ "duration_ms": clip_duration_ms }),
+                    })
+                    .chain(out.stages.iter().cloned())
+                    .chain(std::iter::once(StageRecord {
+                        position: StageKind::Record.position(0),
+                        kind: StageKind::Record,
+                        text: None,
+                        ms: None,
+                        detail: serde_json::json!({ "history": true, "recording": true }),
+                    }))
+                    .collect(),
                 },
                 asr_label,
                 llm_label,
@@ -785,11 +807,13 @@ impl Engine {
         })
     }
 
-    /// Records what the user actually inserted for a finished session.
+    /// Records what the user actually inserted for a finished session, and
+    /// how it was delivered when the client says.
     pub async fn record_final(
         &self,
         session_id: &SessionId,
         text: &str,
+        delivery: Option<Delivery>,
     ) -> Result<(), EngineError> {
         let history_id = self
             .inner
@@ -800,8 +824,30 @@ impl Engine {
             .ok_or_else(|| EngineError::UnknownSession(session_id.clone()))?;
         let history = self.inner.history.clone();
         let text = text.to_string();
-        tokio::task::spawn_blocking(move || history.set_final(history_id, &text)).await??;
+        tokio::task::spawn_blocking(move || match delivery {
+            Some(d) => history.set_final_delivered(history_id, &text, &d),
+            None => history.set_final(history_id, &text),
+        })
+        .await??;
         Ok(())
+    }
+
+    /// The newest finished dictation made with a profile, with what each
+    /// of its stages did.
+    pub async fn last_run(
+        &self,
+        profile: &ProfileId,
+    ) -> Result<Option<(crate::history::Utterance, Vec<StageRecord>)>, EngineError> {
+        let history = self.inner.history.clone();
+        let profile = profile.clone();
+        Ok(tokio::task::spawn_blocking(move || {
+            let Some(row) = history.last_for_profile(&profile)? else {
+                return Ok::<_, HistoryError>(None);
+            };
+            let stages = history.stages(row.id)?;
+            Ok(Some((row, stages)))
+        })
+        .await??)
     }
 
     pub(crate) fn registry(&self) -> &ProviderRegistry {
@@ -1265,6 +1311,7 @@ async fn run_session(
     }
 
     let mut samples = std::mem::take(&mut *audio.lock().unwrap());
+    let recorded_ms = samples.len() as u64 * 1000 / SAMPLE_RATE as u64;
     let mut trimmed = false;
     if let Some(range) = range {
         let end = range.end.min(samples.len());
@@ -1409,6 +1456,33 @@ async fn run_session(
         return;
     }
 
+    // The audio stages before the steps, the record stage after them; the
+    // insertion stage comes from the client with the final text.
+    let kept_ms = clip_ms(&clip).unwrap_or(0);
+    let mut stages = vec![
+        StageRecord {
+            position: StageKind::Capture.position(0),
+            kind: StageKind::Capture,
+            text: None,
+            ms: None,
+            detail: serde_json::json!({ "duration_ms": recorded_ms }),
+        },
+        StageRecord {
+            position: StageKind::Trim.position(0),
+            kind: StageKind::Trim,
+            text: None,
+            ms: None,
+            detail: serde_json::json!({ "removed_ms": recorded_ms.saturating_sub(kept_ms) }),
+        },
+    ];
+    stages.extend(outcome.stages);
+    stages.push(StageRecord {
+        position: StageKind::Record.position(0),
+        kind: StageKind::Record,
+        text: None,
+        ms: None,
+        detail: serde_json::json!({ "history": true, "recording": audio_path.is_some() }),
+    });
     let new = NewUtterance {
         ts: crate::history::now_unix(),
         profile_id: profile.id.clone(),
@@ -1418,6 +1492,7 @@ async fn run_session(
         final_text: outcome.final_text,
         degraded: outcome.degraded,
         audio_path,
+        stages,
         asr_ms: outcome.asr_ms,
         llm_ms: outcome.llm_ms,
         audio_ms: clip_ms(&clip),
@@ -1813,20 +1888,47 @@ pub(crate) mod tests {
         assert_eq!(row.app_name.as_deref(), Some("TextEdit"));
         assert!(row.audio_path.is_none());
         assert!(row.audio_ms.is_some());
+        // Every stage but the insertion, which the client reports later.
+        let stages = r.engine.history().stages(*id).unwrap();
+        let positions: Vec<u32> = stages.iter().map(|s| s.position).collect();
+        assert_eq!(positions, [1, 2, 3, 4, 5, 6, 7, 9]);
+        assert!(stages[0].detail["duration_ms"].as_u64().unwrap() > 0);
+        assert_eq!(stages[7].detail["recording"], false);
 
-        r.engine.record_final(s.id(), "使用者改過").await.unwrap();
+        r.engine
+            .record_final(
+                s.id(),
+                "使用者改過",
+                Some(Delivery {
+                    method: "paste".into(),
+                    outcome: "inserted".into(),
+                    app_name: Some("TextEdit".into()),
+                }),
+            )
+            .await
+            .unwrap();
         assert_eq!(
             r.engine.history().get(*id).unwrap().unwrap().final_text,
             "使用者改過"
         );
+        let (last, stages) = r
+            .engine
+            .last_run(&ProfileId("default".into()))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(last.id, *id);
+        assert_eq!(stages.len(), 9);
+        assert_eq!(stages[7].kind, StageKind::Insert);
+        assert_eq!(stages[7].detail["method"], "paste");
         assert!(r
             .engine
-            .record_final(&SessionId("nope".into()), "x")
+            .record_final(&SessionId("nope".into()), "x", None)
             .await
             .is_err());
         // The session is forgotten once its final text is recorded.
         assert!(matches!(
-            r.engine.record_final(s.id(), "再一次").await,
+            r.engine.record_final(s.id(), "再一次", None).await,
             Err(EngineError::UnknownSession(_))
         ));
         assert!(r.engine.inner.sessions.lock().unwrap().is_empty());
@@ -2851,6 +2953,7 @@ pub(crate) mod tests {
             dict_fixes: 0,
             snippets: 0,
             llm_changed: false,
+            stages: Vec::new(),
         }
     }
 

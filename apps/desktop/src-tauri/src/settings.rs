@@ -288,6 +288,18 @@ pub enum InsertMethod {
     Copy,
 }
 
+impl InsertMethod {
+    /// The method as the settings file and the history name it.
+    pub fn name(self) -> &'static str {
+        match self {
+            InsertMethod::Paste => "paste",
+            InsertMethod::Type => "type",
+            InsertMethod::Ax => "ax",
+            InsertMethod::Copy => "copy",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum UiLanguage {

@@ -187,6 +187,7 @@ mod tests {
                     dict_fixes: 0,
                     snippets: 0,
                     llm_changed: false,
+                    stages: Vec::new(),
                 },
                 asr_label: "Breeze".into(),
                 llm_label: None,

@@ -27,6 +27,8 @@ pub struct StepOutput {
     pub language: Option<String>,
     /// Dictionary replacements this step made.
     pub aliases: AliasCounts,
+    /// Facts of the step's own for the stage record: an object, or Null.
+    pub detail: serde_json::Value,
 }
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]

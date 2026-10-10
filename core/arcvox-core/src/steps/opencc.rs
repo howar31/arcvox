@@ -53,11 +53,29 @@ impl Step for OpenCcStep {
     }
 
     async fn run(&self, input: StepInput, _ctx: &PipelineContext) -> Result<StepOutput, StepError> {
+        let text = self.convert(&input.text);
         Ok(StepOutput {
-            text: self.convert(&input.text),
+            detail: serde_json::json!({
+                "config": self.config,
+                "changed_chars": changed_chars(&input.text, &text),
+            }),
+            text,
             language: None,
             ..Default::default()
         })
+    }
+}
+
+/// How many characters the conversion changed: the differing positions when
+/// the length is kept, else every character of the result that the input
+/// does not contain.
+fn changed_chars(from: &str, to: &str) -> usize {
+    let a: Vec<char> = from.chars().collect();
+    let b: Vec<char> = to.chars().collect();
+    if a.len() == b.len() {
+        a.iter().zip(&b).filter(|(x, y)| x != y).count()
+    } else {
+        b.iter().filter(|c| !a.contains(c)).count()
     }
 }
 

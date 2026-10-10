@@ -19,6 +19,10 @@ impl Step for RulesStep {
         Ok(StepOutput {
             text,
             language: None,
+            detail: serde_json::json!({
+                "fixes": aliases.fixes,
+                "snippets": aliases.snippets,
+            }),
             aliases,
         })
     }

@@ -8,6 +8,7 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 
 use crate::config::{Config, Profile, StepSpec};
+use crate::history::{StageKind, StageRecord};
 use crate::protocol::Event;
 use crate::providers::registry::ProviderRegistry;
 use crate::steps::asr::AsrStep;
@@ -34,6 +35,9 @@ pub struct Outcome {
     pub snippets: u32,
     /// The rewrite step ran, did not fail, and returned different text.
     pub llm_changed: bool,
+    /// What each text step did, in order; a step that failed and was
+    /// skipped has no text and names the error in its detail.
+    pub stages: Vec<StageRecord>,
 }
 
 impl Pipeline {
@@ -127,11 +131,23 @@ impl Pipeline {
         let mut dict_fixes = 0u32;
         let mut snippets = 0u32;
         let mut llm_changed = false;
+        let mut stages = Vec::with_capacity(self.steps.len());
+        let mut conversions = 0u32;
 
         for step in &self.steps {
             let name = step.name();
             if name == StepName::Asr && audio.is_none() {
                 continue;
+            }
+            let kind = match name {
+                StepName::Asr => StageKind::Asr,
+                StepName::OpenCc => StageKind::OpenCc,
+                StepName::Llm => StageKind::Llm,
+                StepName::Rules => StageKind::Rules,
+            };
+            let position = kind.position(conversions);
+            if kind == StageKind::OpenCc {
+                conversions += 1;
             }
             let _ = events.send(Event::StepStarted { step: name }).await;
             let started = Instant::now();
@@ -142,6 +158,13 @@ impl Pipeline {
             match step.run(input, ctx).await {
                 Ok(out) => {
                     let elapsed = started.elapsed().as_millis() as u64;
+                    stages.push(StageRecord {
+                        position,
+                        kind,
+                        text: Some(out.text.clone()),
+                        ms: Some(elapsed),
+                        detail: out.detail.clone(),
+                    });
                     match name {
                         StepName::Asr => {
                             asr_ms = elapsed;
@@ -201,6 +224,16 @@ impl Pipeline {
                     if !err.recoverable || name == StepName::Asr {
                         return Err(err);
                     }
+                    stages.push(StageRecord {
+                        position,
+                        kind,
+                        text: None,
+                        ms: Some(started.elapsed().as_millis() as u64),
+                        detail: serde_json::json!({
+                            "error": err.code.name(),
+                            "message": err.message,
+                        }),
+                    });
                     degraded = true;
                 }
             }
@@ -221,6 +254,7 @@ impl Pipeline {
             dict_fixes,
             snippets,
             llm_changed,
+            stages,
         })
     }
 }
@@ -258,6 +292,69 @@ mod tests {
             out.push(e);
         }
         out
+    }
+
+    #[tokio::test]
+    async fn positions_follow_the_kind_order() {
+        let (tx, _rx) = mpsc::channel(64);
+        let p = pipeline(FakeAsr::ok("软件 原文"), FakeLlm::ok("软件 整理後"));
+        let out = p.run(audio(), &test_context(), &tx).await.unwrap();
+        let positions: Vec<(u32, StageKind)> =
+            out.stages.iter().map(|s| (s.position, s.kind)).collect();
+        assert_eq!(
+            positions,
+            [
+                (3, StageKind::Asr),
+                (4, StageKind::OpenCc),
+                (5, StageKind::Llm),
+                (6, StageKind::OpenCc),
+                (7, StageKind::Rules)
+            ]
+        );
+        assert_eq!(out.stages[0].text.as_deref(), Some("软件 原文"));
+        assert_eq!(out.stages[1].text.as_deref(), Some("軟體 原文"));
+        assert_eq!(out.stages[1].detail["config"], "s2twp");
+        assert_eq!(out.stages[1].detail["changed_chars"], 2);
+        assert_eq!(out.stages[2].detail["in_chars"], 5);
+        assert_eq!(out.stages[2].detail["out_chars"], 6);
+        assert!(
+            out.stages[2].detail["prompt"]["base_chars"]
+                .as_u64()
+                .unwrap()
+                > 0
+        );
+        assert_eq!(out.stages[4].detail["fixes"], 0);
+        assert!(out.stages.iter().all(|s| s.ms.is_some()));
+    }
+
+    #[tokio::test]
+    async fn a_failed_step_is_recorded_without_text() {
+        let (tx, _rx) = mpsc::channel(64);
+        let p = pipeline(
+            FakeAsr::ok("原文"),
+            FakeLlm::failing(ErrorCode::ProviderTimeout),
+        );
+        let out = p.run(audio(), &test_context(), &tx).await.unwrap();
+        assert!(out.degraded);
+        let llm = out
+            .stages
+            .iter()
+            .find(|s| s.kind == StageKind::Llm)
+            .unwrap();
+        assert_eq!(llm.position, 5);
+        assert_eq!(llm.text, None);
+        assert_eq!(llm.detail["error"], "provider_timeout");
+        assert!(llm.detail["message"].is_string());
+        assert_eq!(out.stages.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn run_from_text_has_no_asr_stage() {
+        let (tx, _rx) = mpsc::channel(64);
+        let p = pipeline(FakeAsr::ok("x"), FakeLlm::ok("整理後"));
+        let out = p.run_from_text("原文", &test_context(), &tx).await.unwrap();
+        assert_eq!(out.stages[0].kind, StageKind::OpenCc);
+        assert_eq!(out.stages[0].position, 4);
     }
 
     #[tokio::test]

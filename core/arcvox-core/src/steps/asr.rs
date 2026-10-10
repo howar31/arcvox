@@ -56,6 +56,10 @@ impl Step for AsrStep {
                 ..StepError::from(e)
             })?;
         Ok(StepOutput {
+            detail: serde_json::json!({
+                "language": t.language,
+                "chars": t.text.chars().count(),
+            }),
             text: t.text,
             language: t.language,
             ..Default::default()

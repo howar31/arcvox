@@ -52,6 +52,12 @@ export interface Attempt {
   /** The result the row had before it was first processed again. */
   origin: boolean; chosen: boolean;
 }
+/** The nine stages of a dictation, in their fixed order (positions 1 to 9; the script conversion takes 4 and 6). */
+export type StageKind = "capture" | "trim" | "asr" | "opencc" | "llm" | "rules" | "insert" | "record";
+/** What one stage did in one run: the text it handed on (null for the audio stages and a failed step), its time, and its own facts. */
+export interface Stage { position: number; kind: StageKind; text: string | null; ms: number | null; detail: Record<string, unknown> }
+/** The newest dictation made with a profile and what its stages did. */
+export interface LastRun { row: Utterance; stages: Stage[] }
 export type InsertMethod = "paste" | "type" | "ax" | "copy";
 export interface ClientSettings {
   schema_version: number;
@@ -114,6 +120,8 @@ export const historyAudio = (id: number) => invoke<ArrayBuffer>("history_audio",
 export const reprocessHistory = (id: number, profileId: string | null) => invoke<RedoOutcome>("history_reprocess", { id, profileId });
 /** Every result a row had, newest first. */
 export const historyAttempts = (id: number) => invoke<Attempt[]>("history_attempts", { id });
+export const historyStages = (id: number) => invoke<Stage[]>("history_stages", { id });
+export const historyLast = (profileId: string) => invoke<LastRun | null>("history_last", { profileId });
 export const chooseAttempt = (id: number, attempt: number) => invoke<void>("history_choose_attempt", { id, attempt });
 export const deleteAttempt = (attempt: number) => invoke<void>("history_delete_attempt", { attempt });
 export const deleteRecording = (id: number) => invoke<void>("history_delete_recording", { id });

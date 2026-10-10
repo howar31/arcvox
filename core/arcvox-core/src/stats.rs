@@ -466,6 +466,7 @@ mod tests {
             dict_fixes: 2,
             snippets: 1,
             llm_changed: llm_ms.is_some(),
+            stages: Vec::new(),
         }
     }
 

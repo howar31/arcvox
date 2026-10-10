@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 
 use crate::backup::format::{AttemptLine, DeviceMeta, HistoryLine, StatsLine};
 use crate::stats::{self, Stats};
@@ -18,6 +19,93 @@ pub enum HistoryError {
     Io(#[from] std::io::Error),
     #[error("the rows of this device are not removed as a device")]
     OwnDevice,
+}
+
+/// The nine stages a dictation passes through, in their fixed order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StageKind {
+    Capture,
+    Trim,
+    Asr,
+    #[serde(rename = "opencc")]
+    OpenCc,
+    Llm,
+    Rules,
+    Insert,
+    Record,
+}
+
+impl StageKind {
+    /// The stage's place in the fixed order. `nth` counts earlier stages of
+    /// the same kind in the run: the second script conversion sits after
+    /// the rewrite.
+    pub fn position(self, nth: u32) -> u32 {
+        match self {
+            StageKind::Capture => 1,
+            StageKind::Trim => 2,
+            StageKind::Asr => 3,
+            StageKind::OpenCc => {
+                if nth == 0 {
+                    4
+                } else {
+                    6
+                }
+            }
+            StageKind::Llm => 5,
+            StageKind::Rules => 7,
+            StageKind::Insert => 8,
+            StageKind::Record => 9,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            StageKind::Capture => "capture",
+            StageKind::Trim => "trim",
+            StageKind::Asr => "asr",
+            StageKind::OpenCc => "opencc",
+            StageKind::Llm => "llm",
+            StageKind::Rules => "rules",
+            StageKind::Insert => "insert",
+            StageKind::Record => "record",
+        }
+    }
+
+    fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "capture" => StageKind::Capture,
+            "trim" => StageKind::Trim,
+            "asr" => StageKind::Asr,
+            "opencc" => StageKind::OpenCc,
+            "llm" => StageKind::Llm,
+            "rules" => StageKind::Rules,
+            "insert" => StageKind::Insert,
+            "record" => StageKind::Record,
+            _ => return None,
+        })
+    }
+}
+
+/// What one stage did in one run: the text it handed on (None for the
+/// audio stages and for a step that failed), how long it took, and facts
+/// of its own in `detail`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StageRecord {
+    pub position: u32,
+    pub kind: StageKind,
+    pub text: Option<String>,
+    pub ms: Option<u64>,
+    pub detail: serde_json::Value,
+}
+
+/// How the final text reached the user: the insertion stage, reported by
+/// the client once it has put the text somewhere.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Delivery {
+    pub method: String,
+    pub outcome: String,
+    pub app_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -38,6 +126,8 @@ pub struct NewUtterance {
     pub snippets: u32,
     /// The rewrite step ran, did not fail, and returned different text.
     pub llm_changed: bool,
+    /// What each stage did, in order; the insertion stage comes later.
+    pub stages: Vec<StageRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -132,6 +222,8 @@ pub struct Redo {
     pub dict_fixes: u32,
     pub snippets: u32,
     pub llm_changed: bool,
+    /// What each stage of the rerun did, in order.
+    pub stages: Vec<StageRecord>,
 }
 
 /// Row and recording counts of the history.
@@ -264,6 +356,22 @@ CREATE TABLE IF NOT EXISTS attempts (
 CREATE INDEX IF NOT EXISTS attempts_utterance ON attempts(utterance_id);
 ";
 
+/// What each stage of a run did. `attempt_id` is NULL for the dictation's
+/// own run and names the attempt for a rerun; both go when their owner goes.
+const STAGES_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS stages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    utterance_id INTEGER NOT NULL REFERENCES utterances(id) ON DELETE CASCADE,
+    attempt_id INTEGER REFERENCES attempts(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    text TEXT,
+    ms INTEGER,
+    detail TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS stages_utterance ON stages(utterance_id, attempt_id, position);
+";
+
 const STATS_SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS stats_hourly (
     device_id TEXT NOT NULL, updated INTEGER NOT NULL DEFAULT 0,
@@ -384,6 +492,7 @@ pub(crate) fn upgrade(
     // kept now, so a folder renamed or moved by hand keeps its recordings.
     keep_names_only(conn)?;
     conn.execute_batch(STATS_SCHEMA)?;
+    conn.execute_batch(STAGES_SCHEMA)?;
     // A failed backfill leaves the history usable; it runs again at the next open.
     if let Err(e) = stats::backfill(conn, recordings_dir, device.id) {
         tracing::warn!(error = %e, "statistics backfill failed");
@@ -466,7 +575,46 @@ fn insert_row(conn: &Connection, u: &NewUtterance, device: &str) -> rusqlite::Re
             now_ms(),
         ],
     )?;
-    own_last_row(conn)
+    let id = own_last_row(conn)?;
+    insert_stages(conn, id, None, &u.stages)?;
+    Ok(id)
+}
+
+/// Writes the stages of one run, under the attempt when it was a rerun.
+fn insert_stages(
+    conn: &Connection,
+    utterance: i64,
+    attempt: Option<i64>,
+    stages: &[StageRecord],
+) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare_cached(
+        "INSERT INTO stages (utterance_id, attempt_id, position, kind, text, ms, detail)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+    )?;
+    for s in stages {
+        stmt.execute(params![
+            utterance,
+            attempt,
+            s.position as i64,
+            s.kind.name(),
+            s.text,
+            s.ms.map(|v| v as i64),
+            s.detail.to_string(),
+        ])?;
+    }
+    Ok(())
+}
+
+fn map_stage(r: &rusqlite::Row<'_>) -> rusqlite::Result<StageRecord> {
+    let kind: String = r.get(1)?;
+    let detail: String = r.get(4)?;
+    Ok(StageRecord {
+        position: r.get::<_, i64>(0)? as u32,
+        kind: StageKind::parse(&kind).unwrap_or(StageKind::Record),
+        text: r.get(2)?,
+        ms: r.get::<_, Option<i64>>(3)?.map(|v| v as u64),
+        detail: serde_json::from_str(&detail).unwrap_or(serde_json::Value::Null),
+    })
 }
 
 pub fn now_unix() -> i64 {
@@ -847,6 +995,9 @@ impl HistoryStore {
             },
         };
         let attempt_id = insert_attempt(&tx, id.0, &line)?;
+        if let Outcome::Done { redo, .. } = outcome {
+            insert_stages(&tx, id.0, Some(attempt_id), &redo.stages)?;
+        }
         if let (Outcome::Done { redo, .. }, true) = (outcome, choose || was_failed) {
             apply_in(&tx, &self.device_id, id, redo)?;
             choose_in(&tx, id, attempt_id)?;
@@ -890,6 +1041,8 @@ impl HistoryStore {
             dict_fixes: a.dict_fixes,
             snippets: a.snippets,
             llm_changed: a.llm_changed,
+            // The attempt's stages are already stored under its id.
+            stages: Vec::new(),
         };
         if !apply_in(&tx, &self.device_id, id, &redo)? {
             return Ok(false);
@@ -940,6 +1093,72 @@ impl HistoryStore {
             params![text, id.0, now_ms()],
         )?;
         Ok(())
+    }
+
+    /// `set_final`, and the insertion stage of the dictation's own run is
+    /// written (replacing an earlier one).
+    pub fn set_final_delivered(
+        &self,
+        id: HistoryId,
+        text: &str,
+        delivery: &Delivery,
+    ) -> Result<(), HistoryError> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE utterances SET final_text = ?1, updated = ?3 WHERE id = ?2",
+            params![text, id.0, now_ms()],
+        )?;
+        let position = StageKind::Insert.position(0);
+        tx.execute(
+            "DELETE FROM stages WHERE utterance_id = ?1 AND attempt_id IS NULL AND position = ?2",
+            params![id.0, position as i64],
+        )?;
+        insert_stages(
+            &tx,
+            id.0,
+            None,
+            &[StageRecord {
+                position,
+                kind: StageKind::Insert,
+                text: None,
+                ms: None,
+                detail: serde_json::json!({
+                    "method": delivery.method,
+                    "outcome": delivery.outcome,
+                    "app_name": delivery.app_name,
+                }),
+            }],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// What the stages of a row's current result did, in order: the chosen
+    /// rerun's when one is chosen, else the dictation's own.
+    pub fn stages(&self, id: HistoryId) -> Result<Vec<StageRecord>, HistoryError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT position, kind, text, ms, detail FROM stages
+             WHERE utterance_id = ?1
+               AND attempt_id IS (SELECT id FROM attempts WHERE utterance_id = ?1 AND chosen = 1 AND origin = 0)
+             ORDER BY position, id",
+        )?;
+        let rows = stmt.query_map(params![id.0], map_stage)?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// The newest finished dictation made with a profile.
+    pub fn last_for_profile(&self, profile: &ProfileId) -> Result<Option<Utterance>, HistoryError> {
+        let conn = self.conn.lock().unwrap();
+        let row = conn
+            .query_row(
+                &format!("{SELECT} WHERE profile_id = ?1 AND error IS NULL ORDER BY ts DESC, id DESC LIMIT 1"),
+                params![profile.0],
+                map_row,
+            )
+            .optional()?;
+        Ok(row.map(|u| self.locate(u)))
     }
 
     /// Removes one row. Used to unwind a history insert for a session that
@@ -1891,6 +2110,7 @@ pub(crate) mod tests_support {
             dict_fixes: 0,
             snippets: 0,
             llm_changed: false,
+            stages: Vec::new(),
         }
     }
 }
@@ -1922,7 +2142,164 @@ mod tests {
             dict_fixes: 0,
             snippets: 0,
             llm_changed: false,
+            stages: Vec::new(),
         }
+    }
+
+    fn stage(position: u32, kind: StageKind, text: &str) -> StageRecord {
+        StageRecord {
+            position,
+            kind,
+            text: Some(text.into()),
+            ms: Some(10),
+            detail: serde_json::json!({ "n": position }),
+        }
+    }
+
+    fn redo_with(stages: Vec<StageRecord>) -> Outcome {
+        Outcome::Done {
+            redo: Redo {
+                profile_id: ProfileId("default".into()),
+                raw_text: "raw2".into(),
+                final_text: "final2".into(),
+                degraded: false,
+                asr_ms: 1,
+                llm_ms: None,
+                dict_fixes: 0,
+                snippets: 0,
+                llm_changed: false,
+                stages,
+            },
+            asr_label: "asr".into(),
+            llm_label: None,
+        }
+    }
+
+    #[test]
+    fn upgrade_adds_the_stages_table() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let id = s.insert(new(100, None)).unwrap();
+        assert_eq!(s.stages(id).unwrap(), Vec::<StageRecord>::new());
+    }
+
+    #[test]
+    fn stages_are_stored_with_the_row_and_read_in_order() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let mut u = new(100, None);
+        u.stages = vec![stage(5, StageKind::Llm, "b"), stage(3, StageKind::Asr, "a")];
+        let id = s.insert(u).unwrap();
+        let got = s.stages(id).unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].position, 3);
+        assert_eq!(got[0].kind, StageKind::Asr);
+        assert_eq!(got[0].text.as_deref(), Some("a"));
+        assert_eq!(got[0].detail["n"], 3);
+        assert_eq!(got[1].position, 5);
+    }
+
+    #[test]
+    fn stages_follow_the_chosen_attempt() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let mut u = new(100, None);
+        u.stages = vec![stage(3, StageKind::Asr, "own")];
+        let id = s.insert(u).unwrap();
+        let a = s
+            .record_attempt(
+                id,
+                &redo_with(vec![stage(3, StageKind::Asr, "rerun")]),
+                false,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(s.stages(id).unwrap()[0].text.as_deref(), Some("own"));
+        assert!(s.choose_attempt(id, a.id).unwrap());
+        assert_eq!(s.stages(id).unwrap()[0].text.as_deref(), Some("rerun"));
+        // Back to the origin attempt: its stages are the row's own.
+        let origin = s
+            .attempts(id)
+            .unwrap()
+            .into_iter()
+            .find(|x| x.origin)
+            .unwrap();
+        assert!(s.choose_attempt(id, origin.id).unwrap());
+        assert_eq!(s.stages(id).unwrap()[0].text.as_deref(), Some("own"));
+        assert!(s.delete_attempt(a.id).unwrap());
+        let n: i64 = s
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM stages WHERE attempt_id IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn record_final_appends_the_insertion_stage() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let mut u = new(100, None);
+        u.stages = vec![stage(9, StageKind::Record, "")];
+        let id = s.insert(u).unwrap();
+        let d = Delivery {
+            method: "paste".into(),
+            outcome: "inserted".into(),
+            app_name: Some("Slack".into()),
+        };
+        s.set_final_delivered(id, "typed", &d).unwrap();
+        s.set_final_delivered(id, "typed", &d).unwrap();
+        let got = s.stages(id).unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].kind, StageKind::Insert);
+        assert_eq!(got[0].detail["method"], "paste");
+        assert_eq!(got[0].detail["app_name"], "Slack");
+        assert_eq!(s.get(id).unwrap().unwrap().final_text, "typed");
+    }
+
+    #[test]
+    fn deleting_a_row_removes_its_stages() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let mut u = new(100, None);
+        u.stages = vec![stage(3, StageKind::Asr, "a")];
+        let id = s.insert(u).unwrap();
+        s.delete(id).unwrap();
+        let n: i64 = s
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM stages", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn last_for_profile_skips_failed_rows_and_other_profiles() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let a = s.insert(new(100, None)).unwrap();
+        let mut other = new(300, None);
+        other.profile_id = ProfileId("mail".into());
+        s.insert(other).unwrap();
+        s.insert_failed(FailedUtterance {
+            ts: 400,
+            profile_id: ProfileId("default".into()),
+            app_name: None,
+            audio_path: PathBuf::from("x.wav"),
+            audio_ms: None,
+            code: ErrorCode::ProviderTimeout,
+            error: "timeout".into(),
+        })
+        .unwrap();
+        let got = s
+            .last_for_profile(&ProfileId("default".into()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.id, a);
+        assert!(s
+            .last_for_profile(&ProfileId("code".into()))
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -2214,6 +2591,7 @@ mod tests {
             dict_fixes: 0,
             snippets: 0,
             llm_changed: true,
+            stages: Vec::new(),
         };
         assert!(s.apply_redo(id, &redo).unwrap());
         let row = s.get(id).unwrap().unwrap();
@@ -2257,6 +2635,7 @@ mod tests {
                 dict_fixes: 0,
                 snippets: 0,
                 llm_changed: true,
+                stages: Vec::new(),
             },
             asr_label: "Breeze".into(),
             llm_label: Some("Gemma".into()),
@@ -2639,6 +3018,7 @@ INSERT INTO stats_meta (key, value) VALUES ('backfilled', '1');
             dict_fixes: 0,
             snippets: 0,
             llm_changed: false,
+            stages: Vec::new(),
         };
         assert!(s.apply_redo(failed, &redo).unwrap());
         assert!(meta(&s, failed).2 > 1);
