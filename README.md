@@ -21,6 +21,8 @@ The Profiles page edits one profile at a time; the menu at its top lists every p
 
 Each profile converts Simplified characters in the recognised and the rewritten text to Taiwan Traditional. By default only the characters are converted and the wording stays as it was spoken; a profile can instead also replace mainland phrasing with Taiwan phrasing, or not convert at all.
 
+The Profiles page lists the nine stages a dictation passes through, from capture to the stored record, with each stage's current setting and what it did in the profile's newest dictation; selecting a stage shows the text it handed on, with the changes marked, beside its settings. A profile also chooses whether the dictionary's terms are given to the recognition engine and to the rewrite model, whether the front window's title is given to the model, and whether a rewrite much shorter than the spoken text is refused in favour of the recognised text.
+
 A dictionary term can span several lines. When one of its aliases is spoken, the whole term is inserted as written. For terms of this kind, their aliases are sent as the speech hint in place of the text, and the term is left out of the term list given to the language model.
 
 The Speed test page, opened from the link at the foot of the Engines and models page, records a sentence, or uses a kept history recording, and runs it through the selected engines with a cold run and a warm run each. It measures speed only. Results are not saved.

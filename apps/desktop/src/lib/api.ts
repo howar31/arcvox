@@ -20,6 +20,10 @@ export interface Matcher { app_ids: string[]; url_patterns: string[] }
 export interface Profile {
   id: string; name: string; is_default: boolean; matcher: Matcher; asr_provider: string; llm_provider: string | null;
   language_hint: string | null; prompt_addition: string; few_shot: Example[]; steps: StepSpec[];
+  /** The dictionary's hinted terms are given to the recognition engine. */
+  asr_dictionary_hint: boolean;
+  /** What the rewrite model is told besides the utterance, and whether a much shorter rewrite is refused. */
+  llm_dictionary_terms: boolean; llm_window_title: boolean; llm_short_fallback: boolean;
 }
 export interface DictionaryEntry { term: string; aliases: string[]; asr_hint: boolean }
 export interface General {

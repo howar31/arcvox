@@ -90,12 +90,21 @@ impl Step for LlmStep {
     }
 
     async fn run(&self, input: StepInput, ctx: &PipelineContext) -> Result<StepOutput, StepError> {
-        let terms = llm_terms(&ctx.dictionary);
+        // The profile decides what besides the utterance the model is told.
+        let terms = if ctx.profile.llm_dictionary_terms {
+            llm_terms(&ctx.dictionary)
+        } else {
+            Vec::new()
+        };
+        let mut context = ctx.context.clone();
+        if !ctx.profile.llm_window_title {
+            context.window_title = None;
+        }
         let messages = assemble(&PromptParts {
             base: &ctx.base_prompt,
             profile_addition: &ctx.profile.prompt_addition,
             dictionary_terms: &terms,
-            context: &ctx.context,
+            context: &context,
             few_shot: &ctx.profile.few_shot,
             utterance: &input.text,
             context_limit_bytes: ctx.general.context_limit_bytes,
@@ -106,8 +115,8 @@ impl Step for LlmStep {
             "addition_chars": ctx.profile.prompt_addition.trim().chars().count(),
             "terms": terms.len(),
             "few_shot": ctx.profile.few_shot.len(),
-            "window_title": ctx.context.window_title,
-            "app_name": ctx.context.app_name,
+            "window_title": context.window_title,
+            "app_name": context.app_name,
         });
         let opts = LlmOptions {
             temperature: ctx.general.llm_temperature,
@@ -124,7 +133,8 @@ impl Step for LlmStep {
         }
         let input_chars = input.text.chars().count();
         let output_chars = text.chars().count();
-        if input_chars > MIN_INPUT_CHARS_FOR_RATIO_GUARD
+        if ctx.profile.llm_short_fallback
+            && input_chars > MIN_INPUT_CHARS_FOR_RATIO_GUARD
             && (output_chars as f64) < (input_chars as f64) * MIN_OUTPUT_RATIO
         {
             return Err(StepError::recoverable(
@@ -132,7 +142,7 @@ impl Step for LlmStep {
                 "llm output rejected as a reply rather than a rewrite",
             ));
         }
-        if copies_window_title(&input.text, &text, &ctx.context) {
+        if copies_window_title(&input.text, &text, &context) {
             return Err(StepError::recoverable(
                 ErrorCode::ProviderError,
                 "llm output rejected: it contains the window title",
@@ -353,6 +363,87 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::ProviderError);
         assert!(err.recoverable);
+    }
+
+    fn with_profile(ctx: &mut PipelineContext, edit: impl FnOnce(&mut crate::config::Profile)) {
+        let mut profile = (*ctx.profile).clone();
+        edit(&mut profile);
+        ctx.profile = Arc::new(profile);
+    }
+
+    #[tokio::test]
+    async fn short_output_is_accepted_when_the_guard_is_off() {
+        let input: String = "測".repeat(MIN_INPUT_CHARS_FOR_RATIO_GUARD + 1);
+        let mut ctx = test_context();
+        with_profile(&mut ctx, |p| p.llm_short_fallback = false);
+        let out = LlmStep::new(FakeLlm::ok("好"))
+            .run(
+                StepInput {
+                    text: input,
+                    audio: None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.text, "好");
+    }
+
+    #[tokio::test]
+    async fn terms_are_left_out_when_off() {
+        let fake = FakeLlm::ok("整理後");
+        let mut ctx = test_context();
+        ctx.dictionary = Arc::new(vec![crate::config::DictionaryEntry {
+            term: "Arcvox".into(),
+            aliases: vec![],
+            asr_hint: true,
+        }]);
+        with_profile(&mut ctx, |p| p.llm_dictionary_terms = false);
+        let out = LlmStep::new(fake.clone())
+            .run(
+                StepInput {
+                    text: "原文".into(),
+                    audio: None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+        let calls = fake.calls.lock().unwrap();
+        assert!(
+            !calls[0][0].content.contains("Arcvox"),
+            "{}",
+            calls[0][0].content
+        );
+        assert_eq!(out.detail["prompt"]["terms"], 0);
+    }
+
+    #[tokio::test]
+    async fn window_title_is_withheld_when_off() {
+        let fake = FakeLlm::ok("週報 社群圖片下載工具 整理後");
+        let mut ctx = titled("週報 社群圖片下載工具");
+        with_profile(&mut ctx, |p| p.llm_window_title = false);
+        // The title is neither in the prompt nor used to refuse the output.
+        let out = LlmStep::new(fake.clone())
+            .run(
+                StepInput {
+                    text: "原文".into(),
+                    audio: None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+        let calls = fake.calls.lock().unwrap();
+        assert!(
+            !calls[0][0].content.contains("週報"),
+            "{}",
+            calls[0][0].content
+        );
+        assert_eq!(
+            out.detail["prompt"]["window_title"],
+            serde_json::Value::Null
+        );
     }
 
     #[tokio::test]

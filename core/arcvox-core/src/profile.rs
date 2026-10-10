@@ -113,6 +113,10 @@ impl Profile {
             prompt_addition: preset.prompt_addition.to_string(),
             few_shot: vec![],
             steps: base.steps.clone(),
+            asr_dictionary_hint: base.asr_dictionary_hint,
+            llm_dictionary_terms: base.llm_dictionary_terms,
+            llm_window_title: base.llm_window_title,
+            llm_short_fallback: base.llm_short_fallback,
         }
     }
 }

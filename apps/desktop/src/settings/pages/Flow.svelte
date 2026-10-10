@@ -374,6 +374,9 @@
               <option value="">{t("profiles.lang.auto")}</option>
             </select>
           </Row>
+          <Row label={t("flow.asr_hint")} help={t("flow.asr_hint_help")}>
+            <Switch bind:checked={draft.asr_dictionary_hint} label={t("flow.asr_hint")} />
+          </Row>
         </Group>
       {:else if stage === "llm"}
         <div class="bar"><h2>{t("flow.llm_engines")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("engines", "llm"))}>{t("flow.manage")}</button></div>
@@ -404,6 +407,18 @@
               <span class="arrow" aria-hidden="true">→</span>
               <input type="text" class="pair-text" bind:value={newRefined} placeholder={t("profiles.refined")} aria-label={t("profiles.refined")} aria-invalid={problem && halfExample && !newRefined.trim() ? "true" : undefined} onkeydown={(e) => { if (e.key === "Enter" && !isImeKey(e)) addExample(); }} />
               <span class="end"><button type="button" class="btn" disabled={!newRaw.trim() || !newRefined.trim()} onclick={addExample}><Icon name="plus" size={14} />{t("common.add")}</button></span>
+            </Row>
+          </Group>
+
+          <Group title={t("flow.llm_rules")}>
+            <Row label={t("flow.llm_terms")} help={t("flow.llm_terms_help")}>
+              <Switch bind:checked={draft.llm_dictionary_terms} label={t("flow.llm_terms")} />
+            </Row>
+            <Row label={t("flow.llm_title")} help={t("flow.llm_title_help")}>
+              <Switch bind:checked={draft.llm_window_title} label={t("flow.llm_title")} />
+            </Row>
+            <Row label={t("flow.llm_short")} help={t("flow.llm_short_help")}>
+              <Switch bind:checked={draft.llm_short_fallback} label={t("flow.llm_short")} />
             </Row>
           </Group>
         {/if}

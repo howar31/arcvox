@@ -12,7 +12,7 @@ const base: ProviderConfig = {
 const httpProvider: ProviderConfig = { ...base, id: "b", label: "B label", capabilities: { ...caps, chat: true } };
 const profile = (id: string, name: string, asr: string, llm: string | null, isDefault = false) => ({
   id, name, is_default: isDefault, matcher: { app_ids: [], url_patterns: [] }, asr_provider: asr, llm_provider: llm,
-  language_hint: null, prompt_addition: "", few_shot: [], steps: [],
+  language_hint: null, prompt_addition: "", few_shot: [], asr_dictionary_hint: true, llm_dictionary_terms: true, llm_window_title: true, llm_short_fallback: true, steps: [],
 });
 const cfg = {
   schema_version: 1, general: {}, dictionary: [],

@@ -1019,5 +1019,14 @@
   "flow.record_recordings": "錄音與保留天數在「一般」",
   "flow.rules_off": "不套用字典",
   "flow.trim_help": "錄音前後的靜音在辨識前去掉，中間的停頓保留。",
-  "flow.stage_setting": "目前設定"
+  "flow.stage_setting": "目前設定",
+  "flow.asr_hint": "把字典的詞告訴辨識引擎",
+  "flow.asr_hint_help": "標記為辨識提示的詞會優先被認出。",
+  "flow.llm_rules": "改寫規則",
+  "flow.llm_terms": "送出字典的詞",
+  "flow.llm_terms_help": "讓模型知道這些詞的正確寫法。",
+  "flow.llm_title": "送出前景視窗的標題",
+  "flow.llm_title_help": "讓模型知道你在哪個應用程式裡說話。",
+  "flow.llm_short": "輸出太短就退回原文",
+  "flow.llm_short_help": "短於原文的一半時視為失敗，改用辨識結果。"
 }

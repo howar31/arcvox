@@ -56,6 +56,7 @@ export function blankProfile(base: Profile): Profile {
     id: "", name: "", is_default: false, matcher: { app_ids: [], url_patterns: [] },
     asr_provider: base.asr_provider, llm_provider: base.llm_provider, language_hint: base.language_hint,
     prompt_addition: "", few_shot: [], steps: base.steps.map((s) => ({ ...s })),
+    asr_dictionary_hint: base.asr_dictionary_hint, llm_dictionary_terms: base.llm_dictionary_terms, llm_window_title: base.llm_window_title, llm_short_fallback: base.llm_short_fallback,
   };
 }
 

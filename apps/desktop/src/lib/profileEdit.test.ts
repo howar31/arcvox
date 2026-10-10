@@ -4,7 +4,7 @@ import { appsSummary, blankProfile, engineMeta, slugId, withLlm } from "./profil
 
 const profile = (steps: StepSpec[], llm: string | null = "llm-a"): Profile => ({
   id: "p", name: "P", is_default: true, matcher: { app_ids: [], url_patterns: [] }, asr_provider: "asr-a", llm_provider: llm,
-  language_hint: null, prompt_addition: "", few_shot: [], steps,
+  language_hint: null, prompt_addition: "", few_shot: [], asr_dictionary_hint: true, llm_dictionary_terms: true, llm_window_title: true, llm_short_fallback: true, steps,
 });
 const full: StepSpec[] = [{ step: "asr" }, { step: "opencc", config: "s2twp" }, { step: "llm" }, { step: "opencc", config: "s2twp" }, { step: "rules" }];
 
@@ -81,7 +81,7 @@ describe("blankProfile", () => {
     const blank = blankProfile(base);
     expect(blank).toEqual({
       id: "", name: "", is_default: false, matcher: { app_ids: [], url_patterns: [] }, asr_provider: "asr-a", llm_provider: "llm-a",
-      language_hint: "ja", prompt_addition: "", few_shot: [], steps: full,
+      language_hint: "ja", prompt_addition: "", few_shot: [], asr_dictionary_hint: true, llm_dictionary_terms: true, llm_window_title: true, llm_short_fallback: true, steps: full,
     });
     blank.steps.push({ step: "rules" });
     expect(base.steps).toEqual(full);

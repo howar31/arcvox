@@ -45,7 +45,11 @@ impl Step for AsrStep {
         })?;
         let hint = AsrHint {
             language: ctx.profile.language_hint.clone(),
-            prompt: asr_hint(&ctx.dictionary, ASR_HINT_BUDGET_BYTES),
+            prompt: ctx
+                .profile
+                .asr_dictionary_hint
+                .then(|| asr_hint(&ctx.dictionary, ASR_HINT_BUDGET_BYTES))
+                .flatten(),
         };
         let t = self
             .provider
@@ -148,6 +152,32 @@ mod tests {
         let hints = fake.hints.lock().unwrap();
         assert_eq!(hints[0].language.as_deref(), Some("zh-TW"));
         assert_eq!(hints[0].prompt.as_deref(), Some("Arcvox"));
+    }
+
+    #[tokio::test]
+    async fn hint_is_left_out_when_the_profile_says_so() {
+        let fake = FakeAsr::ok("原文");
+        let mut ctx = test_context();
+        ctx.dictionary = Arc::new(vec![DictionaryEntry {
+            term: "Arcvox".into(),
+            aliases: vec![],
+            asr_hint: true,
+        }]);
+        let mut profile = (*ctx.profile).clone();
+        profile.asr_dictionary_hint = false;
+        ctx.profile = Arc::new(profile);
+        AsrStep::new(fake.clone())
+            .run(
+                StepInput {
+                    text: String::new(),
+                    audio: Some(audio()),
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+        let hints = fake.hints.lock().unwrap();
+        assert_eq!(hints[0].prompt, None);
     }
 
     #[tokio::test]

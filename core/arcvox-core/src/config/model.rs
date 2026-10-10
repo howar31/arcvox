@@ -182,6 +182,18 @@ pub struct Profile {
     #[serde(default)]
     pub few_shot: Vec<Example>,
     pub steps: Vec<StepSpec>,
+    /// The dictionary's hinted terms are given to the recognition engine.
+    #[serde(default = "default_true")]
+    pub asr_dictionary_hint: bool,
+    /// The dictionary's terms are listed in the rewrite prompt.
+    #[serde(default = "default_true")]
+    pub llm_dictionary_terms: bool,
+    /// The front window's title is given to the rewrite model as background.
+    #[serde(default = "default_true")]
+    pub llm_window_title: bool,
+    /// A rewrite much shorter than its input is refused and the input kept.
+    #[serde(default = "default_true")]
+    pub llm_short_fallback: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -279,6 +291,10 @@ impl Config {
             prompt_addition: String::new(),
             few_shot: Vec::new(),
             steps: Self::default_steps(),
+            asr_dictionary_hint: true,
+            llm_dictionary_terms: true,
+            llm_window_title: true,
+            llm_short_fallback: true,
         };
         Self {
             schema_version: SCHEMA_VERSION,
@@ -417,6 +433,16 @@ mod tests {
         let p: ProviderConfig = serde_json::from_str(json).unwrap();
         assert_eq!(p.model_id, None);
         assert_eq!(p.runtime, None);
+    }
+
+    #[test]
+    fn profile_switches_default_to_on_when_the_file_has_none() {
+        let json = r#"{"id":"p","name":"P","asr_provider":"a","steps":[{"step":"asr"}]}"#;
+        let p: Profile = serde_json::from_str(json).unwrap();
+        assert!(p.asr_dictionary_hint);
+        assert!(p.llm_dictionary_terms);
+        assert!(p.llm_window_title);
+        assert!(p.llm_short_fallback);
     }
 
     #[test]

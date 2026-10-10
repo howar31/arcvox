@@ -1019,5 +1019,14 @@
   "flow.record_recordings": "Recordings and retention are in General",
   "flow.rules_off": "Dictionary not applied",
   "flow.trim_help": "Silence before and after the speech is removed before recognition; pauses inside stay.",
-  "flow.stage_setting": "Setting"
+  "flow.stage_setting": "Setting",
+  "flow.asr_hint": "Tell the recognition engine the dictionary terms",
+  "flow.asr_hint_help": "Terms marked for recognition are recognised first.",
+  "flow.llm_rules": "Rewrite rules",
+  "flow.llm_terms": "Send the dictionary terms",
+  "flow.llm_terms_help": "So the model knows how they are written.",
+  "flow.llm_title": "Send the front window's title",
+  "flow.llm_title_help": "So the model knows which application you are speaking in.",
+  "flow.llm_short": "Fall back when the output is too short",
+  "flow.llm_short_help": "Shorter than half the input counts as a failure and the recognised text is used."
 }

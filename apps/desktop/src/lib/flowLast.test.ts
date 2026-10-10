@@ -5,7 +5,7 @@ import { setLanguage } from "./i18n";
 
 const profile: Profile = {
   id: "default", name: "Default", is_default: true, matcher: { app_ids: [], url_patterns: [] },
-  asr_provider: "a", llm_provider: "l", language_hint: null, prompt_addition: "", few_shot: [],
+  asr_provider: "a", llm_provider: "l", language_hint: null, prompt_addition: "", few_shot: [], asr_dictionary_hint: true, llm_dictionary_terms: true, llm_window_title: true, llm_short_fallback: true,
   steps: [{ step: "asr" }, { step: "opencc", config: "s2tw" }, { step: "llm" }, { step: "opencc", config: "s2tw" }, { step: "rules" }],
 };
 const stage = (position: number, kind: Stage["kind"], text: string | null, ms: number | null, detail: Record<string, unknown>): Stage => ({ position, kind, text, ms, detail });
