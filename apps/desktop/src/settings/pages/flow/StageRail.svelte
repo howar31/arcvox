@@ -45,10 +45,15 @@
   .blk:hover { background: color-mix(in srgb, var(--sunken) 60%, transparent); }
   .blk.on { background: var(--sel); }
   .blk:focus-visible { outline-offset: -2px; }
-  /* The chevron under the number column, riding on the dividing line to the next cell. */
-  .blk:not(:last-child)::after { content: ""; position: absolute; left: 27px; bottom: -6px; width: 10px; height: 10px; border-right: 1.5px solid var(--line); border-bottom: 1.5px solid var(--line); transform: translateX(-50%) rotate(45deg); background: var(--surface); z-index: 1; }
-  .blk.on:not(:last-child)::after { background: var(--sel); }
+  /* The chevron under the number column, riding on the dividing line to the next cell: a line-coloured
+     triangle (the V) with a smaller one in the cell's own colour inside it. Two clipped triangles rather
+     than a rotated square: the square's edges inside the cell showed as a diamond in the app. */
+  .blk:not(:last-child)::before, .blk:not(:last-child)::after { content: ""; position: absolute; left: 27px; transform: translateX(-50%); clip-path: polygon(0 0, 100% 0, 50% 100%); z-index: 1; pointer-events: none; }
+  .blk:not(:last-child)::before { bottom: -8px; width: 14px; height: 8px; background: var(--line); }
+  .blk:not(:last-child)::after { bottom: -6px; width: 11px; height: 6.5px; background: var(--surface); }
+  /* The inside is the cell's own colour in every state, so the cell and its chevron read as one shape. */
   .blk:hover:not(:last-child)::after { background: color-mix(in srgb, var(--sunken) 60%, var(--surface)); }
+  .blk.on:not(:last-child)::after { background: var(--sel); }
   .num { width: 26px; height: 26px; margin-top: 1px; border-radius: 13px; background: var(--sunken); color: var(--ink-2); font: 600 13px/26px var(--font); text-align: center; }
   .blk.on .num { background: var(--accent); color: var(--accent-ink); }
   .blk.off .num { background: transparent; border: 1px dashed var(--line-strong); color: var(--ink-3); line-height: 24px; }
