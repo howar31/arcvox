@@ -150,6 +150,13 @@ impl Pipeline {
                 StepName::Rules => StageKind::Rules,
             };
             let position = kind.position(after_rewrite);
+            // One step per place: the run is told by place, and the pages
+            // show one step for each. A second conversion before the rewrite
+            // (kept in a profile whose rewrite is turned off, so that it
+            // comes back with it) or a repeated step does not run.
+            if stages.iter().any(|s: &StageRecord| s.position == position) {
+                continue;
+            }
             if kind == StageKind::Llm {
                 after_rewrite = true;
             }
@@ -329,6 +336,37 @@ mod tests {
         );
         assert_eq!(out.stages[4].detail["fixes"], 0);
         assert!(out.stages.iter().all(|s| s.ms.is_some()));
+    }
+
+    #[tokio::test]
+    async fn a_second_step_at_a_taken_place_does_not_run() {
+        let (tx, mut rx) = mpsc::channel(64);
+        // A profile whose rewrite is turned off keeps both conversions.
+        let p = Pipeline {
+            steps: vec![
+                Box::new(AsrStep::new(FakeAsr::ok("软件"))),
+                Box::new(OpenCcStep::new("s2tw", false).unwrap()),
+                Box::new(OpenCcStep::new("t2s", false).unwrap()),
+                Box::new(RulesStep),
+            ],
+        };
+        let out = p.run(audio(), &test_context(), &tx).await.unwrap();
+        let positions: Vec<u32> = out.stages.iter().map(|s| s.position).collect();
+        assert_eq!(positions, [3, 4, 7]);
+        assert_eq!(out.final_text, "軟件");
+        let started = collect(&mut rx)
+            .await
+            .into_iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    Event::StepStarted {
+                        step: StepName::OpenCc
+                    }
+                )
+            })
+            .count();
+        assert_eq!(started, 1);
     }
 
     #[tokio::test]

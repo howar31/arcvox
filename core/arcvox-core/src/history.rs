@@ -604,16 +604,20 @@ fn insert_stages(
     Ok(())
 }
 
-fn map_stage(r: &rusqlite::Row<'_>) -> rusqlite::Result<StageRecord> {
+/// A stage row; None for a kind this version does not know.
+fn map_stage(r: &rusqlite::Row<'_>) -> rusqlite::Result<Option<StageRecord>> {
     let kind: String = r.get(1)?;
+    let Some(kind) = StageKind::parse(&kind) else {
+        return Ok(None);
+    };
     let detail: String = r.get(4)?;
-    Ok(StageRecord {
+    Ok(Some(StageRecord {
         position: r.get::<_, i64>(0)? as u32,
-        kind: StageKind::parse(&kind).unwrap_or(StageKind::Record),
+        kind,
         text: r.get(2)?,
         ms: r.get::<_, Option<i64>>(3)?.map(|v| v as u64),
         detail: serde_json::from_str(&detail).unwrap_or(serde_json::Value::Null),
-    })
+    }))
 }
 
 pub fn now_unix() -> i64 {
@@ -1095,7 +1099,8 @@ impl HistoryStore {
     }
 
     /// `set_final`, and the insertion stage of the dictation's own run is
-    /// written (replacing an earlier one).
+    /// written (replacing an earlier one). A row deleted while the text was
+    /// being put in is passed over, as `set_final` passes it over.
     pub fn set_final_delivered(
         &self,
         id: HistoryId,
@@ -1104,10 +1109,13 @@ impl HistoryStore {
     ) -> Result<(), HistoryError> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
-        tx.execute(
+        let changed = tx.execute(
             "UPDATE utterances SET final_text = ?1, updated = ?3 WHERE id = ?2",
             params![text, id.0, now_ms()],
         )?;
+        if changed == 0 {
+            return Ok(());
+        }
         let position = StageKind::Insert.position(false);
         tx.execute(
             "DELETE FROM stages WHERE utterance_id = ?1 AND attempt_id IS NULL AND position = ?2",
@@ -1145,7 +1153,9 @@ impl HistoryStore {
              ORDER BY position, id",
         )?;
         let rows = stmt.query_map(params![id.0], map_stage)?;
-        let chosen = rows.collect::<Result<Vec<_>, _>>()?;
+        let chosen = rows
+            .filter_map(|r| r.transpose())
+            .collect::<Result<Vec<_>, _>>()?;
         if !chosen.is_empty() {
             return Ok(chosen);
         }
@@ -1154,7 +1164,9 @@ impl HistoryStore {
              WHERE utterance_id = ?1 AND attempt_id IS NULL ORDER BY position, id",
         )?;
         let rows = stmt.query_map(params![id.0], map_stage)?;
-        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        Ok(rows
+            .filter_map(|r| r.transpose())
+            .collect::<Result<Vec<_>, _>>()?)
     }
 
     /// The newest finished dictation made with a profile whose stages were
@@ -2271,6 +2283,45 @@ mod tests {
         assert_eq!(got[0].detail["method"], "paste");
         assert_eq!(got[0].detail["app_name"], "Slack");
         assert_eq!(s.get(id).unwrap().unwrap().final_text, "typed");
+    }
+
+    #[test]
+    fn record_final_passes_over_a_row_deleted_meanwhile() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let id = s.insert(new(100, None)).unwrap();
+        s.delete(id).unwrap();
+        let d = Delivery {
+            method: "paste".into(),
+            outcome: "inserted".into(),
+            app_name: None,
+        };
+        s.set_final_delivered(id, "typed", &d).unwrap();
+        let n: i64 = s
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM stages", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn a_stage_of_an_unknown_kind_is_left_out() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let mut u = new(100, None);
+        u.stages = vec![stage(3, StageKind::Asr, "a")];
+        let id = s.insert(u).unwrap();
+        s.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO stages (utterance_id, position, kind, detail) VALUES (?1, 10, 'later', '{}')",
+                params![id.0],
+            )
+            .unwrap();
+        let got = s.stages(id).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].kind, StageKind::Asr);
     }
 
     #[test]
