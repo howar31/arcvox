@@ -2,7 +2,7 @@
   import { onMount, untrack } from "svelte";
   import {
     deleteProfile, errorMessage, historyLast, listMicrophones, modelsInstalled, modelsManifestNow, onHistoryChanged, profilesAddPreset,
-    profilesPresets, setDefaultProfile, upsertProfile, type InstalledModel, type LastRun, type ManifestView, type PresetView, type Profile,
+    profilesPresets, resetProfile, setDefaultProfile, upsertProfile, type InstalledModel, type LastRun, type ManifestView, type PresetView, type Profile,
   } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { appliesDictionary, PUNCTUATION_CONFIGS, SCRIPT_CONFIGS, SCRIPT_GROUPS, scriptAt, scriptLabel, selectedProfile, withDictionary, withScriptAt, withScriptPunctuation, type ScriptPass } from "../../lib/flowEdit";
@@ -59,6 +59,7 @@
   let renaming = $state(false);
   let nameField: HTMLInputElement | undefined = $state();
   let confirmDelete = $state(false);
+  let confirmReset = $state(false);
   let adding = $state(false);
   let busy = $state(false);
   let presets = $state<PresetView[]>([]);
@@ -99,6 +100,8 @@
   const profiles = $derived([...(config.value?.profiles ?? [])].sort((a, b) => Number(b.is_default) - Number(a.is_default)));
   const source = $derived(selectedProfile(config.value, arg));
   const providers = $derived(config.value?.providers ?? []);
+  // Whether the factory engines are still configured: the reset puts them back only then.
+  const factoryEngines = $derived(providers.some((p) => p.id === "local-whisper") && providers.some((p) => p.id === "local-llama"));
   const asrChoices = $derived(providers.filter((p) => p.capabilities.transcribe));
   const llmChoices = $derived(providers.filter((p) => p.capabilities.chat));
   const installed = $derived({ ids: models ? new Set(models.map((m) => m.id)) : null, paths: new Set((models ?? []).map((m) => m.path)) });
@@ -249,6 +252,19 @@
     renaming = false;
   }
 
+  /** Puts the profile's settings back to the factory ones; unsaved edits are dropped with them. */
+  async function resetFactory() {
+    if (!source) return;
+    confirmReset = false;
+    saving = true;
+    try {
+      config.value = await resetProfile(source.id);
+      // The stored profile is the draft now.
+      synced = "";
+      toast.ok(t("flow.reset_done"));
+    } catch (e) { toast.error(errorMessage(e)); } finally { saving = false; }
+  }
+
   async function makeDefault() {
     if (!source) return;
     try {
@@ -329,6 +345,7 @@
     {/if}
     <span class="where">{applies(draft)}</span>
     {#if !renaming}<button type="button" class="btn quiet" onclick={startRename}>{t("flow.rename")}</button>{/if}
+    <button type="button" class="btn quiet" onclick={() => (confirmReset = true)} disabled={saving}>{t("flow.reset_factory")}</button>
     {#if !source.is_default}
       <button type="button" class="btn quiet" onclick={makeDefault} disabled={saving}>{t("profiles.make_default")}</button>
       <button type="button" class="btn quiet danger" onclick={() => (confirmDelete = true)} disabled={saving}>{t("profiles.delete")}</button>
@@ -379,7 +396,7 @@
         <div class="ttl"><b>{current.name}</b><span class:warn={current.warn && current.open} class:unknown={current.unknown}>{titleMeta}</span></div>
       {/if}
       {#if last !== undefined}
-        <LastPanel id={stage} stages={last?.stages ?? null} />
+        <LastPanel id={stage} stages={last?.stages ?? null} row={last?.row ?? null} />
       {/if}
 
       {#if stage === "capture"}
@@ -529,6 +546,14 @@
   {/snippet}
 </Modal>
 
+<Modal bind:open={confirmReset} title={t("flow.reset_title")}>
+  <p>{t("flow.reset_body", { name: source?.name ?? "" })}{factoryEngines ? t("flow.reset_engines") : t("flow.reset_engines_kept")}</p>
+  {#snippet actions()}
+    <button type="button" class="btn" onclick={() => (confirmReset = false)}>{t("common.cancel")}</button>
+    <button type="button" class="btn primary" onclick={resetFactory}>{t("flow.reset_factory")}</button>
+  {/snippet}
+</Modal>
+
 <Modal bind:open={confirmDelete} title={t("profiles.delete_title")}>
   <p>{t("profiles.delete_body", { name: source?.name ?? "" })}</p>
   {#snippet actions()}
@@ -546,9 +571,11 @@
 
   .gt { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 22px 4px 12px; font: 600 var(--text-sm)/1 var(--font); color: var(--ink-2); }
   .gt .r { font-weight: 400; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .split { display: grid; grid-template-columns: 236px minmax(0, 1fr); gap: 16px; align-items: start; }
+  /* The rail can only stick while its container is taller than it, so the split reaches the bottom of the
+     scroll area even when the selected stage's settings are short: it takes the page's bottom padding as its own. */
+  .split { display: grid; grid-template-columns: 236px minmax(0, 1fr); gap: 16px; align-items: start; min-height: calc(100vh - 28px); margin-bottom: -80px; }
   .railwrap { position: sticky; top: 28px; }
-  .right { display: flex; flex-direction: column; min-width: 0; }
+  .right { display: flex; flex-direction: column; min-width: 0; padding-bottom: 80px; }
   .right .ttl { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 2px 4px 10px; }
   .right .ttl b { font: 700 19px/1.3 var(--font-round); flex: none; }
   .right .ttl span { color: var(--ink-2); font-size: var(--text-sm); text-align: right; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

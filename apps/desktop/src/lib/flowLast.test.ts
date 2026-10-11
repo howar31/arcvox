@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import type { Profile, Stage, Utterance } from "./api";
-import { cellLine, changedCount, inputOf, promptLine, runHeadline, stageAt, stageOpen, summaryLine } from "./flowLast";
+import { cellLine, changedCount, changedStages, inputOf, insertLines, promptLine, recordLines, runHeadline, stageAt, stageName, stageOpen, summaryLine } from "./flowLast";
 import { setLanguage } from "./i18n";
 
 const profile: Profile = {
@@ -100,5 +100,26 @@ describe("flowLast", () => {
     expect(head).toMatch(/^Last dictation: \d\d:\d\d, Slack, 2\.6 s in all$/);
     const other = runHeadline({ ...row, app_name: null }, run, new Date(1_700_500_000 * 1000));
     expect(other).toMatch(/^Last dictation: \d+\/\d+ \d\d:\d\d, 2\.6 s in all$/);
+  });
+
+  it("lists the stages that changed the text or failed, leaving the rest out", () => {
+    expect(changedStages(run)).toEqual(["opencc1", "llm"]);
+    // The rewrite failed, so the later stages carried stage 4's text on unchanged.
+    const failed = run.map((s) => (s.position === 5 ? { ...s, text: null, detail: { error: "provider_timeout", message: "timed out" } } : s.position > 5 && s.text !== null ? { ...s, text: "這個版本測試過了沒有問題" } : s));
+    expect(changedStages(failed)).toEqual(["opencc1", "llm"]);
+    expect(changedStages([])).toEqual([]);
+    expect(stageName("opencc2")).toBe("Script conversion");
+  });
+
+  it("writes the insertion and record panels from the stage details and the row", () => {
+    expect(insertLines(run)).toEqual(["Paste at cursor", "put into Slack"]);
+    const shown = run.map((s) => (s.position === 8 ? { ...s, detail: { method: "type", outcome: "secure_input", app_name: "Terminal" } } : s));
+    expect(insertLines(shown)).toEqual(["Type at cursor", "shown on the panel, the field was a secure input"]);
+    expect(insertLines(run.filter((s) => s.position !== 8))).toEqual(["Not inserted"]);
+    const size = (n: number) => `${n} B`;
+    expect(recordLines(run, row, size)).toEqual(["history stored and counted", "recording 5.8 s, 1 B"]);
+    expect(recordLines(run, { ...row, has_audio: false, audio_ms: null, audio_bytes: null }, size)[1]).toBe("the recording's file is gone");
+    const noAudio = run.map((s) => (s.position === 9 ? { ...s, detail: { history: true, recording: false } } : s));
+    expect(recordLines(noAudio, row, size)[1]).toBe("no recording kept");
   });
 });

@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
-    chooseAttempt, clearHistory, deleteAttempt, historyAttempts, clearRecordings, deleteHistory, deleteRecording, errorMessage, formatBytes, historyStorage, listHistory, onHistoryChanged, openRecordingsDir, reprocessHistory, revealRecording, widgetCopy,
-    type Attempt, type HistoryStorage, type Utterance,
+    chooseAttempt, clearHistory, deleteAttempt, historyAttempts, historyStages, clearRecordings, deleteHistory, deleteRecording, errorMessage, formatBytes, historyStorage, listHistory, onHistoryChanged, openRecordingsDir, reprocessHistory, revealRecording, widgetCopy,
+    type Attempt, type HistoryStorage, type Stage, type Utterance,
   } from "../../lib/api";
   import { failureText } from "../../lib/failure";
   import { formatDateTime, formatDay, formatTime } from "../../lib/format";
@@ -21,6 +21,7 @@
   import { toast } from "../../lib/ui/toast.svelte";
   import PeriodPicker from "./history/PeriodPicker.svelte";
   import Player from "./history/Player.svelte";
+  import StageChanges from "./history/StageChanges.svelte";
 
   /** How long typing pauses before the search runs. */
   const SEARCH_DELAY_MS = 250;
@@ -60,6 +61,8 @@
   let chosen = $state<Record<number, string>>({});
   let busy = $state<Record<number, boolean>>({});
   let attempts = $state<Record<number, Attempt[]>>({});
+  // What each stage of the open row's current result did; empty for rows from before stages were kept.
+  let stages = $state<Record<number, Stage[]>>({});
   let fresh = $state<Record<number, number>>({});
   // The result whose delete button was pressed once; a second press within a few seconds deletes it.
   let confirming = $state<number | null>(null);
@@ -206,6 +209,9 @@
   async function loadAttempts(id: number) {
     try { attempts[id] = await historyAttempts(id); } catch (e) { toast.error(errorMessage(e)); }
   }
+  async function loadStages(id: number) {
+    try { stages[id] = await historyStages(id); } catch { stages[id] = []; }
+  }
   /** Processes the row's recording again. The result joins the row's results; a failed row takes it at once. */
   async function redo(u: Utterance) {
     busy[u.id] = true;
@@ -219,7 +225,7 @@
       toast.error(errorMessage(e));
     }
     delete busy[u.id];
-    await Promise.all([reload(), loadAttempts(u.id)]);
+    await Promise.all([reload(), loadAttempts(u.id), loadStages(u.id)]);
   }
   async function use(u: Utterance, a: Attempt) {
     try {
@@ -229,7 +235,7 @@
     } catch (e) {
       toast.error(errorMessage(e));
     }
-    await Promise.all([reload(), loadAttempts(u.id)]);
+    await Promise.all([reload(), loadAttempts(u.id), loadStages(u.id)]);
   }
   async function removeAttempt(u: Utterance, a: Attempt) {
     clearTimeout(confirmTimer);
@@ -240,7 +246,7 @@
     } catch (e) {
       toast.error(errorMessage(e));
     }
-    await Promise.all([reload(), loadAttempts(u.id)]);
+    await Promise.all([reload(), loadAttempts(u.id), loadStages(u.id)]);
   }
   /** When a result was made, for its line: the row's own time for the origin, "just now" for the one just made. */
   function attemptWhen(u: Utterance, a: Attempt): string {
@@ -258,6 +264,8 @@
       const row = rows?.find((u) => u.id === id);
       if (row?.redone) loadAttempts(id);
       else delete attempts[id];
+      if (row && row.error === null) loadStages(id);
+      else delete stages[id];
     }
   }
 
@@ -381,6 +389,10 @@
                 {@const raw = rawState(u)}
                 <div class="label">{t("history.raw_label")}{#if raw !== "changed"}<span class="same" class:kept={raw === "same"} class:bad={raw === "failed"}>{t(raw === "same" ? "history.raw_same" : raw === "failed" ? "history.not_rewritten" : "history.rewrite_off")}</span>{/if}</div>
                 <div class="raw">{u.raw_text.trim()}</div>
+              {/if}
+              {#if stages[u.id]?.length}
+                <div class="label">{t("history.stages")}</div>
+                <StageChanges stages={stages[u.id]} />
               {/if}
               {#if u.has_audio}
                 {@const failedRow = u.error !== null}

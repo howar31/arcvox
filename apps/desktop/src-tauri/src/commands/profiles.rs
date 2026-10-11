@@ -37,6 +37,18 @@ pub fn delete(engine: &Engine, id: &ProfileId) -> CmdResult<Config> {
     Ok((*next).clone())
 }
 
+/// Puts a profile's settings back to the factory ones; see
+/// `Profile::reset_to_factory` for what changes.
+pub fn reset(engine: &Engine, id: &ProfileId) -> CmdResult<Config> {
+    let next = engine.config().update(|c| {
+        let providers = c.providers.clone();
+        if let Some(p) = c.profiles.iter_mut().find(|p| &p.id == id) {
+            p.reset_to_factory(&providers);
+        }
+    })?;
+    Ok((*next).clone())
+}
+
 pub fn set_default(engine: &Engine, id: &ProfileId) -> CmdResult<Config> {
     let next = engine.config().update(|c| {
         for p in c.profiles.iter_mut() {
@@ -86,7 +98,7 @@ pub fn add_preset(engine: &Engine, preset_id: &str, name: &str) -> CmdResult<Con
     let taken: Vec<ProfileId> = current.profiles.iter().map(|p| p.id.clone()).collect();
     upsert(
         engine,
-        Profile::from_preset(preset, name.to_string(), base, &taken),
+        Profile::from_preset(preset, name.to_string(), base, &current.providers, &taken),
     )
 }
 
@@ -112,6 +124,11 @@ pub fn profiles_upsert(state: State<'_, AppState>, profile: Profile) -> CmdResul
 #[tauri::command]
 pub fn profiles_delete(state: State<'_, AppState>, id: ProfileId) -> CmdResult<Config> {
     delete(&engine(&state)?, &id)
+}
+
+#[tauri::command]
+pub fn profiles_reset(state: State<'_, AppState>, id: ProfileId) -> CmdResult<Config> {
+    reset(&engine(&state)?, &id)
 }
 
 #[tauri::command]
@@ -186,7 +203,8 @@ mod tests {
     fn presets_list_every_builtin_preset() {
         let views = preset_views();
         let ids: Vec<&str> = views.iter().map(|v| v.id.as_str()).collect();
-        assert_eq!(ids, ["mail", "chat", "code"]);
-        assert!(views.iter().all(|v| !v.app_ids.is_empty()));
+        assert_eq!(ids, ["standard", "mail", "chat", "code"]);
+        // Only the clean copy of the factory settings names no application.
+        assert!(views.iter().all(|v| v.id == "standard" || !v.app_ids.is_empty()));
     }
 }

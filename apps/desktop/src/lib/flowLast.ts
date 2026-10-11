@@ -127,3 +127,52 @@ export function runHeadline(row: Utterance, stages: Stage[], now: Date): string 
   const vars = { time: whenLabel(row.ts, now), secs: secs(total), app: row.app_name ?? "" };
   return row.app_name ? t("flow.last_head", vars) : t("flow.last_head_noapp", vars);
 }
+
+/** The stage's name as the pages show it. */
+export function stageName(id: StageId): string {
+  switch (id) {
+    case "capture": return t("home.stage.capture");
+    case "trim": return t("flow.stage.trim");
+    case "asr": return t("home.stage.asr");
+    case "opencc1":
+    case "opencc2": return t("flow.stage.opencc");
+    case "llm": return t("home.stage.llm");
+    case "rules": return t("flow.stage.rules");
+    case "insert": return t("flow.stage.insert");
+    case "record": return t("flow.stage.record");
+  }
+}
+
+/** The text stages after recognition that changed the text or failed, in order; the ones that passed it on unchanged are left out. */
+export function changedStages(stages: Stage[]): StageId[] {
+  return (["opencc1", "llm", "opencc2", "rules"] as StageId[]).filter((id) => {
+    const s = stageAt(stages, id);
+    if (!s) return false;
+    return s.text === null || s.text !== inputOf(stages, id);
+  });
+}
+
+/** The parts of the insertion panel's one line: the method used and what became of the text. */
+export function insertLines(stages: Stage[]): string[] {
+  const s = stageAt(stages, "insert");
+  if (!s) return [t("flow.cell.insert_none")];
+  const method = str(s.detail.method) ?? "paste";
+  const outcome = str(s.detail.outcome) ?? "inserted";
+  const known = ["inserted", "copied", "secure_input", "app_changed", "not_trusted", "clipboard_failed", "empty_text"];
+  return [
+    t(`home.output_${["paste", "type", "ax", "copy"].includes(method) ? method : "paste"}`),
+    t(`flow.panel.insert_outcome.${known.includes(outcome) ? outcome : "inserted"}`, { app: str(s.detail.app_name) ?? "" }).trim(),
+  ];
+}
+
+/** The parts of the record panel's one line: what was stored, with the recording's length and size when the row still has it. */
+export function recordLines(stages: Stage[], row: Utterance | null, size: (bytes: number) => string): string[] {
+  const s = stageAt(stages, "record");
+  if (!s) return [t("flow.cell.not_run")];
+  const kept = s.detail.recording !== false;
+  const audio = !kept ? t("flow.panel.record_audio_none")
+    : row?.has_audio && row.audio_ms !== null && row.audio_bytes !== null ? t("flow.panel.record_audio", { secs: secs(row.audio_ms), size: size(row.audio_bytes) })
+    : t("flow.panel.record_audio_gone");
+  return [t("flow.panel.record_history"), audio];
+}
+

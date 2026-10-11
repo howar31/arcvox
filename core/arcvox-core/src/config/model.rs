@@ -167,6 +167,10 @@ pub enum StepSpec {
     Rules,
 }
 
+/// The providers the factory profile names.
+pub const FACTORY_ASR: &str = "local-whisper";
+pub const FACTORY_LLM: &str = "local-llama";
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
@@ -279,27 +283,7 @@ impl Config {
                 hotwords: false,
             },
         ));
-        // The local pair is the default everywhere: the platform providers are
-        // created when available but stay optional (single-language dictation
-        // and a slower rewrite model on the platform side).
-        let asr = "local-whisper";
-        let llm = "local-llama";
-        let profile = Profile {
-            id: ProfileId("default".into()),
-            name: "Default".into(),
-            is_default: true,
-            matcher: Matcher::default(),
-            asr_provider: ProviderId(asr.into()),
-            llm_provider: Some(ProviderId(llm.into())),
-            language_hint: Some("zh-TW".into()),
-            prompt_addition: String::new(),
-            few_shot: Vec::new(),
-            steps: Self::default_steps(),
-            asr_dictionary_hint: true,
-            llm_dictionary_terms: true,
-            llm_window_title: true,
-            llm_short_fallback: true,
-        };
+        let profile = Self::factory_profile();
         Self {
             schema_version: SCHEMA_VERSION,
             general: General::default(),
@@ -332,6 +316,30 @@ impl Config {
         c.profiles[0].asr_provider = ProviderId("local-speaches".into());
         c.profiles[0].llm_provider = Some(ProviderId("local-ollama".into()));
         c
+    }
+
+    /// The profile a new installation starts with: the factory settings a
+    /// profile can be reset to. The local pair is the default everywhere;
+    /// the platform providers are created when available but stay optional
+    /// (single-language dictation and a slower rewrite model on the
+    /// platform side).
+    pub fn factory_profile() -> Profile {
+        Profile {
+            id: ProfileId("default".into()),
+            name: "Default".into(),
+            is_default: true,
+            matcher: Matcher::default(),
+            asr_provider: ProviderId(FACTORY_ASR.into()),
+            llm_provider: Some(ProviderId(FACTORY_LLM.into())),
+            language_hint: Some("zh-TW".into()),
+            prompt_addition: String::new(),
+            few_shot: Vec::new(),
+            steps: Self::default_steps(),
+            asr_dictionary_hint: true,
+            llm_dictionary_terms: true,
+            llm_window_title: true,
+            llm_short_fallback: true,
+        }
     }
 
     pub fn default_steps() -> Vec<StepSpec> {

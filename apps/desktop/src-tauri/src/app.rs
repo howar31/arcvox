@@ -164,6 +164,7 @@ pub fn run() {
             crate::commands::profiles::profiles_upsert,
             crate::commands::profiles::profiles_delete,
             crate::commands::profiles::profiles_set_default,
+            crate::commands::profiles::profiles_reset,
             crate::commands::profiles::profiles_presets,
             crate::commands::profiles::profiles_add_preset,
             crate::commands::dictionary::dictionary_set,

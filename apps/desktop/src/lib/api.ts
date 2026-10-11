@@ -110,6 +110,7 @@ export const probeProvider = (provider: ProviderConfig) => invoke<ProbeResult>("
 export const upsertProfile = (profile: Profile) => invoke<Config>("profiles_upsert", { profile });
 export const deleteProfile = (id: string) => invoke<Config>("profiles_delete", { id });
 export const setDefaultProfile = (id: string) => invoke<Config>("profiles_set_default", { id });
+export const resetProfile = (id: string) => invoke<Config>("profiles_reset", { id });
 export const setDictionary = (entries: DictionaryEntry[]) => invoke<Config>("dictionary_set", { entries });
 export const getPrompt = () => invoke<string>("prompt_get");
 export const setPrompt = (text: string) => invoke<void>("prompt_set", { text });
