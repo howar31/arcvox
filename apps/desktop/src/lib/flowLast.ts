@@ -67,7 +67,7 @@ export function cellLine(id: StageId, stages: Stage[] | null): string {
       const removed = num(d.removed_ms);
       return removed > 0 ? t("flow.cell.removed", { secs: secs(removed) }) : t("flow.cell.removed_none");
     }
-    case "asr": return t("flow.cell.asr", { secs: secs(num(s.ms)), chars: String(num(d.chars, s.text?.length ?? 0)) });
+    case "asr": return t("flow.cell.asr", { chars: String(num(d.chars, s.text?.length ?? 0)) });
     case "opencc1":
     case "opencc2": {
       if (s.text === null) return t("flow.cell.failed");
@@ -78,7 +78,7 @@ export function cellLine(id: StageId, stages: Stage[] | null): string {
       if (s.text === null) return t("flow.cell.failed");
       const from = inputOf(stages, "llm");
       const n = from === null ? 0 : changedCount(from, s.text);
-      return n > 0 ? t("flow.cell.llm", { secs: secs(num(s.ms)), n: String(n) }) : t("flow.cell.unchanged");
+      return n > 0 ? t("flow.cell.llm", { n: String(n) }) : t("flow.cell.unchanged");
     }
     case "rules": {
       if (s.text === null) return t("flow.cell.failed");
@@ -98,9 +98,24 @@ export function cellLine(id: StageId, stages: Stage[] | null): string {
   }
 }
 
-/** The head line of the "last run" panel for a stage; the rewrite tells what was sent and received. */
+/** A stage's time in the last run, as the rail's tag shows it; null for a stage that did not run or has no stored time. */
+export function cellTime(id: StageId, stages: Stage[] | null): string | null {
+  const s = stages ? stageAt(stages, id) : undefined;
+  return s?.ms == null ? null : timeLabel(s.ms);
+}
+
+/** A duration: seconds with one decimal from one second up, milliseconds below; a stage that took no whole millisecond is told as under one. */
+export function timeLabel(ms: number): string {
+  if (ms >= 1000) return t("flow.time_s", { secs: secs(ms) });
+  return ms < 1 ? t("flow.time_under_ms") : t("flow.time_ms", { ms: String(Math.round(ms)) });
+}
+
+/** The head line of the "last run" panel for a stage; recognition and the rewrite tell their time too. */
 export function summaryLine(id: StageId, stages: Stage[]): string {
   const s = stageAt(stages, id);
+  if (id === "asr" && s?.text != null) {
+    return t("flow.panel.asr", { secs: secs(num(s.ms)), chars: String(num(s.detail.chars, s.text.length)) });
+  }
   if (id === "llm" && s?.text != null) {
     return t("flow.panel.sent_received", { secs: secs(num(s.ms)), in: String(num(s.detail.in_chars)), out: String(num(s.detail.out_chars)) });
   }

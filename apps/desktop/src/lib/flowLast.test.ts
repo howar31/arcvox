@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import type { Profile, Stage, Utterance } from "./api";
-import { cellLine, changedCount, changedStages, inputOf, insertLines, promptLine, recordLines, runHeadline, stageAt, stageName, stageOpen, summaryLine } from "./flowLast";
+import { cellLine, cellTime, changedCount, changedStages, inputOf, insertLines, promptLine, recordLines, runHeadline, stageAt, stageName, stageOpen, summaryLine, timeLabel } from "./flowLast";
 import { setLanguage } from "./i18n";
 
 const profile: Profile = {
@@ -38,19 +38,34 @@ describe("flowLast", () => {
   it("skips a failed step when looking for the text the next one received", () => {
     const failed = run.map((s) => (s.position === 5 ? { ...s, text: null, detail: { error: "provider_timeout", message: "timed out" } } : s));
     expect(inputOf(failed, "opencc2")).toBe("這個版本測試過了沒有問題");
-    expect(cellLine("llm", failed)).toBe("Failed, text passed on as it was");
+    expect(cellLine("llm", failed)).toBe("Failed, passed on");
   });
 
   it("writes the third line of every cell from the last run", () => {
     expect(cellLine("capture", run)).toBe("6.8 s recorded");
     expect(cellLine("trim", run)).toBe("1.0 s removed");
-    expect(cellLine("asr", run)).toBe("1.2 s, 12 characters");
+    expect(cellLine("asr", run)).toBe("12 characters");
     expect(cellLine("opencc1", run)).toBe("Converted 2");
-    expect(cellLine("llm", run)).toBe("1.4 s, changed 2");
+    expect(cellLine("llm", run)).toBe("Changed 2");
     expect(cellLine("opencc2", run)).toBe("No change");
     expect(cellLine("rules", run)).toBe("No change");
     expect(cellLine("insert", run)).toBe("Pasted into Slack");
     expect(cellLine("record", run)).toBe("Stored");
+  });
+
+  it("tags the text stages with their time and leaves the others without one", () => {
+    expect(cellTime("asr", run)).toBe("1.2 s");
+    expect(cellTime("opencc1", run)).toBe("2 ms");
+    expect(cellTime("rules", run)).toBe("<1 ms");
+    expect(cellTime("capture", run)).toBeNull();
+    expect(cellTime("insert", run)).toBeNull();
+    expect(cellTime("llm", null)).toBeNull();
+    expect(cellTime("llm", run.filter((s) => s.position !== 5))).toBeNull();
+    const failed = run.map((s) => (s.position === 5 ? { ...s, text: null, ms: 20000 } : s));
+    expect(cellTime("llm", failed)).toBe("20.0 s");
+    expect(timeLabel(999)).toBe("999 ms");
+    expect(timeLabel(1000)).toBe("1.0 s");
+    expect(summaryLine("asr", run)).toBe("1.2 s, 12 characters");
   });
 
   it("tells the insertion without an application name when none was captured", () => {

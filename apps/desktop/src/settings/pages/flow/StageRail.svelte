@@ -9,6 +9,8 @@
     setting: string;
     /** What the stage did in the last run; "" before the first dictation. */
     line: string;
+    /** How long the stage took in the last run; null for a stage without a stored time. */
+    time: string | null;
     /** False when the profile does not run the stage: the cell is dimmed. */
     open: boolean;
     /** The setting names something missing (a model not downloaded, an engine gone). */
@@ -26,7 +28,8 @@
       <span class="t">
         <b>{c.name}</b>
         <span class="setting" class:warn={c.warn && c.open} class:unknown={c.unknown} title={c.setting}>{c.setting}</span>
-        <i>{c.line}</i>
+        <!-- The last-run line carries the stage's time, faint, at the cell's right; the name row stays whole. -->
+        <span class="last"><i>{c.line}</i>{#if c.time}<em class="time">{c.time}</em>{/if}</span>
       </span>
     </button>
   {/each}
@@ -52,6 +55,8 @@
   .blk.off.on .num { background: var(--accent); border: 0; color: var(--accent-ink); line-height: 26px; }
   .t { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
   .t b { font-weight: 600; font-size: 15px; line-height: 1.35; }
+  .last { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
+  .time { flex: none; font-style: normal; font-size: 11px; color: var(--ink-3); opacity: 0.75; white-space: nowrap; }
   .t .setting { color: var(--ink-2); font-size: var(--text-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .t .setting.warn { color: var(--warn); }
   .t .setting.unknown { color: var(--live); }

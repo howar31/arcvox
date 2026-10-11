@@ -6,7 +6,7 @@
   } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { appliesDictionary, PUNCTUATION_CONFIGS, SCRIPT_CONFIGS, SCRIPT_GROUPS, scriptAt, scriptLabel, selectedProfile, withDictionary, withScriptAt, withScriptPunctuation, type ScriptPass } from "../../lib/flowEdit";
-  import { cellLine, runHeadline, STAGE_IDS, stageOpen, type StageId } from "../../lib/flowLast";
+  import { cellLine, cellTime, runHeadline, STAGE_IDS, stageOpen, type StageId } from "../../lib/flowLast";
   import { guard } from "../../lib/guard.svelte";
   import { t } from "../../lib/i18n";
   import { isImeKey } from "../../lib/ime";
@@ -151,6 +151,10 @@
     const run = last?.stages ?? null;
     return Object.fromEntries(STAGE_IDS.map((id) => [id, cellLine(id, run)])) as Record<StageId, string>;
   });
+  const runTimes = $derived.by((): Record<StageId, string | null> => {
+    const run = last?.stages ?? null;
+    return Object.fromEntries(STAGE_IDS.map((id) => [id, cellTime(id, run)])) as Record<StageId, string | null>;
+  });
 
   // One cell per stage: the stage's name, its current setting, and what it did in the last dictation.
   const cells = $derived.by((): Cell[] => {
@@ -164,7 +168,7 @@
     const snippets = dict.filter((e) => e.term.includes("\n")).length;
     const rules = !appliesDictionary(draft) ? t("flow.rules_off") : dict.length === 0 ? t("flow.rules_meta_none") : t("flow.rules_meta", { aliases: String(aliases), snippets: String(snippets) });
     const cell = (id: StageId, name: string, setting: string, warn = false, unknown = false): Cell =>
-      ({ id, name, setting, line: runLines[id], open: stageOpen(id, draft!), warn, unknown });
+      ({ id, name, setting, line: runLines[id], time: runTimes[id], open: stageOpen(id, draft!), warn, unknown });
     return [
       cell("capture", t("home.stage.capture"), lines.mic.name, lines.mic.missing),
       cell("trim", t("flow.stage.trim"), t("flow.trim_meta")),
