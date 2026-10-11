@@ -107,6 +107,10 @@ pub trait Platform: Send + Sync {
     fn set_shortcut_capture(&self, _on: bool) -> bool {
         false
     }
+    /// Whether an Escape press would cancel a dictation now. While it
+    /// would, the press is kept from the application in front; otherwise
+    /// Escape reaches the application as any key does.
+    fn set_escape_cancels(&self, _on: bool) {}
     fn frontmost_app(&self) -> Option<FrontmostApp>;
     fn selected_text(&self, pid: i32) -> Option<String>;
     fn clipboard_text(&self) -> Option<String>;
@@ -159,6 +163,8 @@ pub mod fake {
         pub clipboard_failure: Mutex<bool>,
         pub monitor_tx: Mutex<Option<Sender<ModifierEvent>>>,
         pub calls: Mutex<Vec<String>>,
+        /// Every value `set_escape_cancels` was given, in order.
+        pub escape_cancels: Mutex<Vec<bool>>,
     }
 
     impl FakePlatform {
@@ -185,6 +191,9 @@ pub mod fake {
         fn start_modifier_monitor(&self, tx: Sender<ModifierEvent>) -> Result<(), PlatformError> {
             *self.monitor_tx.lock().unwrap() = Some(tx);
             Ok(())
+        }
+        fn set_escape_cancels(&self, on: bool) {
+            self.escape_cancels.lock().unwrap().push(on);
         }
         fn stop_modifier_monitor(&self) {
             self.record("stop_monitor".into());

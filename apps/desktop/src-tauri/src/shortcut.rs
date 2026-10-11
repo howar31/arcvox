@@ -401,6 +401,9 @@ pub struct Matcher {
     /// Keys whose key-down was swallowed, so their repeats and key-up are too.
     swallowed: BTreeSet<Key>,
     capture: Option<Capture>,
+    /// Escape cancels a dictation right now, so the press is kept from
+    /// the application in front; otherwise Escape is the application's.
+    escape_cancels: bool,
 }
 
 #[derive(Debug, Default)]
@@ -453,6 +456,12 @@ impl Matcher {
         self.capture.is_some()
     }
 
+    /// Whether an Escape press would cancel a dictation now. While it
+    /// does, the press and its release are swallowed.
+    pub fn set_escape_cancels(&mut self, on: bool) {
+        self.escape_cancels = on;
+    }
+
     /// The modifiers held now, all of them. Called whenever one changes.
     pub fn modifiers(&mut self, now: &[Key]) -> Vec<Out> {
         let now: BTreeSet<Key> = now.iter().copied().collect();
@@ -503,8 +512,11 @@ impl Matcher {
             };
         }
         if key.is_escape() {
+            if self.escape_cancels {
+                self.swallowed.insert(key);
+            }
             return Decision {
-                swallow: false,
+                swallow: self.escape_cancels,
                 out: vec![Out::Escape],
             };
         }
@@ -883,8 +895,46 @@ mod tests {
     }
 
     #[test]
-    fn escape_is_reported_and_never_swallowed() {
+    fn escape_is_reported_and_reaches_the_application_when_it_cancels_nothing() {
         let mut m = matcher(&[&["Fn"]]);
+        assert_eq!(
+            m.key_down(k("Escape"), false),
+            Decision {
+                swallow: false,
+                out: vec![Out::Escape]
+            }
+        );
+        assert_eq!(m.key_up(k("Escape")), Decision::default());
+    }
+
+    #[test]
+    fn escape_is_swallowed_with_its_release_while_it_cancels_a_dictation() {
+        let mut m = matcher(&[&["Fn"]]);
+        m.set_escape_cancels(true);
+        assert_eq!(
+            m.key_down(k("Escape"), false),
+            Decision {
+                swallow: true,
+                out: vec![Out::Escape]
+            }
+        );
+        // The dictation is cancelled by the press; the release is still
+        // kept from the application even after the state went back.
+        m.set_escape_cancels(false);
+        assert_eq!(
+            m.key_down(k("Escape"), true),
+            Decision {
+                swallow: true,
+                out: Vec::new()
+            }
+        );
+        assert_eq!(
+            m.key_up(k("Escape")),
+            Decision {
+                swallow: true,
+                out: Vec::new()
+            }
+        );
         assert_eq!(
             m.key_down(k("Escape"), false),
             Decision {

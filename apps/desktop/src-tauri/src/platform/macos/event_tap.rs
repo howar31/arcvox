@@ -292,6 +292,12 @@ impl TapState {
         *self.sink.lock().unwrap() = Some(sink);
     }
 
+    /// Whether Escape cancels a dictation now, so the press is kept from
+    /// the application in front.
+    pub fn set_escape_cancels(&self, on: bool) {
+        self.matcher.lock().unwrap().set_escape_cancels(on);
+    }
+
     pub fn set_capture(&self, on: bool) {
         *self.capture_seen.lock().unwrap() = Instant::now();
         let out = self.matcher.lock().unwrap().set_capture(on);

@@ -111,6 +111,8 @@ pub struct Controller {
     pending_settings: Option<ClientSettings>,
     recognizer: Recognizer,
     state: State,
+    /// The last value the platform was given for whether Escape cancels.
+    escape_cancels: bool,
     tx: Sender<ControllerMsg>,
 }
 
@@ -131,6 +133,7 @@ impl Controller {
             pending_settings: None,
             recognizer,
             state: State::Idle,
+            escape_cancels: false,
             tx,
         }
     }
@@ -150,14 +153,17 @@ impl Controller {
             // A panic in one step must not end this thread: nothing would
             // answer the shortcut any more and the widget would stay on
             // its last state.
-            let step = catch_unwind(AssertUnwindSafe(|| match msg {
-                Some(msg) => self.handle(msg),
-                None => {
-                    let gestures = self.recognizer.on_tick(Instant::now());
-                    for g in gestures {
-                        self.on_gesture(g);
+            let step = catch_unwind(AssertUnwindSafe(|| {
+                match msg {
+                    Some(msg) => self.handle(msg),
+                    None => {
+                        let gestures = self.recognizer.on_tick(Instant::now());
+                        for g in gestures {
+                            self.on_gesture(g);
+                        }
                     }
                 }
+                self.sync_escape();
             }));
             if let Err(panic) = step {
                 let detail = panic
@@ -199,6 +205,23 @@ impl Controller {
             false,
         ));
         self.go_idle();
+        self.sync_escape();
+    }
+
+    /// Tells the platform whether an Escape press would cancel a dictation
+    /// now, so the press is kept from the application in front only then.
+    /// Called after every step, so every path that changes the state or
+    /// the setting is covered.
+    fn sync_escape(&mut self) {
+        let cancels = match self.state {
+            State::Recording { .. } => true,
+            State::Processing { .. } => self.settings.hotkey.escape_cancels_processing,
+            State::Idle | State::Armed { .. } => false,
+        };
+        if cancels != self.escape_cancels {
+            self.escape_cancels = cancels;
+            self.deps.platform.set_escape_cancels(cancels);
+        }
     }
 
     fn handle(&mut self, msg: ControllerMsg) {
@@ -1671,6 +1694,58 @@ mod tests {
             .unwrap()
             .iter()
             .any(|m| m.msg == Msg::WidgetCancelled));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn escape_is_kept_from_the_application_only_while_it_would_cancel() {
+        let r = rig(fast_settings()).await;
+        mock_ok(&r, "x", "x").await;
+        assert!(r.platform.escape_cancels.lock().unwrap().is_empty());
+        r.modifier.send(fn_down()).unwrap();
+        wait_state(&r, UiState::Recording, "recording").await;
+        wait_for(
+            || r.platform.escape_cancels.lock().unwrap().last() == Some(&true),
+            "escape cancels while recording",
+        )
+        .await;
+        r.audio.silence(0.3);
+        r.modifier.send(key_down(KEY_ESCAPE)).unwrap();
+        wait_for(
+            || r.platform.escape_cancels.lock().unwrap().last() == Some(&false),
+            "escape no longer cancels after the cancel",
+        )
+        .await;
+        r.modifier.send(fn_up()).unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            *r.platform.escape_cancels.lock().unwrap(),
+            vec![true, false]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn escape_reaches_the_application_while_processing_when_set_so() {
+        let mut s = fast_settings();
+        s.hotkey.escape_cancels_processing = false;
+        let r = rig(s).await;
+        mock_ok(&r, "x", "y").await;
+        hold_and_speak(&r, 0.3).await;
+        wait_state(&r, UiState::Processing, "processing").await;
+        // Recording set it, the end of the recording took it back.
+        wait_for(
+            || r.platform.escape_cancels.lock().unwrap().last() == Some(&false),
+            "escape passes through while processing",
+        )
+        .await;
+        wait_for(
+            || r.platform.calls().contains(&"paste".to_string()),
+            "paste",
+        )
+        .await;
+        assert_eq!(
+            *r.platform.escape_cancels.lock().unwrap(),
+            vec![true, false]
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

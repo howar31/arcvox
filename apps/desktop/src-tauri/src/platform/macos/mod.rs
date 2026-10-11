@@ -81,6 +81,10 @@ impl Platform for MacPlatform {
         self.tap.set_sink(sink);
     }
 
+    fn set_escape_cancels(&self, on: bool) {
+        self.tap.set_escape_cancels(on);
+    }
+
     fn set_shortcut_capture(&self, on: bool) -> bool {
         if !self.tap.running() {
             return false;
