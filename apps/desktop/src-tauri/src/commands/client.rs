@@ -73,3 +73,15 @@ pub fn shortcut_check(keys: Vec<Key>, existing: Vec<Shortcut>) -> Option<Refusal
 pub fn shortcut_capture(state: State<'_, AppState>, on: bool) -> bool {
     state.platform.set_shortcut_capture(on)
 }
+
+/// Pauses dictation or resumes it, as the menu-bar menu's item does.
+#[tauri::command]
+pub fn pause_set(state: State<'_, AppState>, on: bool) {
+    crate::app::set_pause(&state, on);
+}
+
+/// Whether dictation is paused now; changes arrive as `dictation-paused`.
+#[tauri::command]
+pub fn pause_state(state: State<'_, AppState>) -> bool {
+    state.ui.is_paused()
+}

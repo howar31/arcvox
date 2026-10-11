@@ -111,6 +111,10 @@ pub trait Platform: Send + Sync {
     /// would, the press is kept from the application in front; otherwise
     /// Escape reaches the application as any key does.
     fn set_escape_cancels(&self, _on: bool) {}
+    /// Pauses the shortcuts without taking the monitor down: every key and
+    /// mouse button reaches the application in front until resumed, and a
+    /// shortcut held at that moment is released.
+    fn set_shortcuts_paused(&self, _on: bool) {}
     fn frontmost_app(&self) -> Option<FrontmostApp>;
     fn selected_text(&self, pid: i32) -> Option<String>;
     fn clipboard_text(&self) -> Option<String>;
@@ -194,6 +198,9 @@ pub mod fake {
         }
         fn set_escape_cancels(&self, on: bool) {
             self.escape_cancels.lock().unwrap().push(on);
+        }
+        fn set_shortcuts_paused(&self, on: bool) {
+            self.record(format!("shortcuts_paused:{on}"));
         }
         fn stop_modifier_monitor(&self) {
             self.record("stop_monitor".into());

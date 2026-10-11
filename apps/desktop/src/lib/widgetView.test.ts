@@ -130,7 +130,7 @@ describe("settings window line", () => {
   });
 
   it("has nothing to say when no dictation goes on", () => {
-    for (const state of ["idle", "placing", "moving", "no_accessibility", "engine_error"] as const) expect(dictationLabelKey(state)).toBeNull();
+    for (const state of ["idle", "placing", "moving", "no_accessibility", "paused", "engine_error"] as const) expect(dictationLabelKey(state)).toBeNull();
   });
 });
 

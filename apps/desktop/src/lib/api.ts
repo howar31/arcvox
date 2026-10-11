@@ -212,6 +212,9 @@ export const panelFit = (width: number | null, height: number | null) => invoke<
 export const shortcutCheck = (keys: string[], existing: string[][]) => invoke<string | null>("shortcut_check", { keys, existing });
 /** Starts or ends recording a new shortcut; false when keys cannot be recorded. */
 export const shortcutCapture = (on: boolean) => invoke<boolean>("shortcut_capture", { on });
+export const pauseSet = (on: boolean) => invoke<void>("pause_set", { on });
+export const pauseState = () => invoke<boolean>("pause_state");
+export function onDictationPaused(cb: (on: boolean) => void): Promise<UnlistenFn> { return listen<boolean>("dictation-paused", (e) => cb(e.payload)); }
 /** The keys held while a shortcut is recorded; `done` when the combination was let go, `cancelled` when recording ended without one. */
 export interface CapturePayload { keys: string[]; done: boolean; cancelled: boolean }
 export function onShortcutCapture(cb: (p: CapturePayload) => void): Promise<UnlistenFn> { return listen<CapturePayload>("shortcut-capture", (e) => cb(e.payload)); }
@@ -230,7 +233,7 @@ export function onConfigChanged(cb: (c: Config) => void): Promise<UnlistenFn> {
   return listen<Config>("config-changed", (e) => cb(e.payload));
 }
 
-export type WidgetState = "idle" | "recording" | "locked" | "processing" | "inserting" | "placing" | "moving" | "no_accessibility" | "engine_error";
+export type WidgetState = "idle" | "recording" | "locked" | "processing" | "inserting" | "placing" | "moving" | "no_accessibility" | "paused" | "engine_error";
 /** What the widget shows while no dictation goes on: nothing, the ring alone, or the whole widget with a label. */
 export type WidgetIdle = "hidden" | "ring" | "label";
 /** `faint`: a resting widget is shown faint without waiting, while its transparency is being chosen. */

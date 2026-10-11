@@ -79,6 +79,7 @@ pub fn tray_action(app: &tauri::AppHandle<Wry>, id: &str) {
         tray::ID_ABOUT => tray::open_settings(app, Some("about")),
         tray::ID_QUIT => app.exit(0),
         tray::ID_PLACE => state.ui.set_placing(!state.ui.is_placing()),
+        tray::ID_PAUSE => set_pause(&state, !state.ui.is_paused()),
         tray::ID_FIX => match state.ui.tray().state() {
             UiState::NoAccessibility => tray::open_settings(app, Some(tray::PERMISSIONS_PAGE)),
             _ => tray::open_settings(app, Some("engines")),
@@ -215,6 +216,8 @@ pub fn run() {
             crate::commands::client::client_update,
             crate::commands::client::shortcut_check,
             crate::commands::client::shortcut_capture,
+            crate::commands::client::pause_set,
+            crate::commands::client::pause_state,
             crate::commands::models::models_manifest,
             crate::commands::models::models_manifest_now,
             crate::commands::models::models_installed,
@@ -736,6 +739,34 @@ fn follow_trust(
 
 /// How long the trust goes unchecked when the system announces nothing.
 const TRUST_POLL: Duration = Duration::from_secs(1);
+
+/// Pauses dictation from the menu or the settings window, or resumes it:
+/// paused, the shortcuts do nothing and every key reaches the application
+/// in front, a dictation in progress is cancelled, the widget stays off
+/// the screen and idle shows as paused. The monitor stays installed; the
+/// trust alone takes it down. Not kept across a restart.
+pub fn set_pause(state: &AppState, on: bool) {
+    if state.ui.is_paused() == on {
+        return;
+    }
+    state.ui.set_paused(on);
+    state.platform.set_shortcuts_paused(on);
+    if on {
+        // A dictation in progress has lost the key that ends it.
+        let _ = state
+            .controller
+            .modifier_sender()
+            .send(ModifierEvent::KeyDown {
+                key_code: KEY_ESCAPE,
+                at: std::time::Instant::now(),
+            });
+    }
+    let engine_ready = state.engine.lock().unwrap().is_some();
+    let trusted = state.platform.accessibility_trusted(false);
+    if let Some(ui_state) = trust::state_for(trusted, engine_ready) {
+        state.ui.set_state(ui_state);
+    }
+}
 
 fn install_monitor(platform: &Arc<dyn Platform>, controller: &ControllerHandle) {
     if let Err(e) = platform.start_modifier_monitor(controller.modifier_sender()) {

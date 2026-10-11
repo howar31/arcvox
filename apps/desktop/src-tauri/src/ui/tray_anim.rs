@@ -19,6 +19,7 @@ use crate::dictation::ui::UiState;
 const SIDE: u32 = 36;
 
 const SHEET_IDLE: Image<'static> = tauri::include_image!("./icons/tray-idle.png");
+const SHEET_PAUSED: Image<'static> = tauri::include_image!("./icons/tray-paused.png");
 const SHEET_PROBLEM: Image<'static> = tauri::include_image!("./icons/tray-problem.png");
 const SHEET_START: Image<'static> = tauri::include_image!("./icons/tray-start.png");
 const SHEET_STOP: Image<'static> = tauri::include_image!("./icons/tray-stop.png");
@@ -31,6 +32,7 @@ const SHEET_FAILED: Image<'static> = tauri::include_image!("./icons/tray-failed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Sheet {
     Idle,
+    Paused,
     Problem,
     Start,
     Stop,
@@ -41,8 +43,9 @@ enum Sheet {
     Failed,
 }
 
-const SHEETS: [(Sheet, Image<'static>); 9] = [
+const SHEETS: [(Sheet, Image<'static>); 10] = [
     (Sheet::Idle, SHEET_IDLE),
+    (Sheet::Paused, SHEET_PAUSED),
     (Sheet::Problem, SHEET_PROBLEM),
     (Sheet::Start, SHEET_START),
     (Sheet::Stop, SHEET_STOP),
@@ -91,6 +94,8 @@ const OUTCOME_FOR: Duration = Duration::from_millis(1000);
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Goal {
     Rest,
+    /// The shortcuts are paused: the mark, faint.
+    Paused,
     Problem,
     Recording,
     Processing,
@@ -105,6 +110,7 @@ impl Goal {
             UiState::Recording | UiState::Locked => Goal::Recording,
             UiState::Processing | UiState::Inserting => Goal::Processing,
             UiState::NoAccessibility | UiState::EngineError => Goal::Problem,
+            UiState::Paused => Goal::Paused,
         }
     }
 
@@ -127,6 +133,7 @@ pub enum Outcome {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Phase {
     Rest,
+    Paused,
     Problem,
     /// The gap closing, frame by frame.
     Start(usize),
@@ -159,9 +166,13 @@ impl Phase {
                 Phase::Outcome(_) => self,
                 _ => Phase::Problem,
             },
+            Goal::Paused => match self {
+                Phase::Outcome(_) => self,
+                _ => Phase::Paused,
+            },
             Goal::Rest => match self {
                 Phase::Rest | Phase::Outcome(_) | Phase::Stop(_) => self,
-                Phase::Problem => Phase::Rest,
+                Phase::Problem | Phase::Paused => Phase::Rest,
                 _ if still => Phase::Rest,
                 _ => Phase::Stop(0),
             },
@@ -181,7 +192,7 @@ impl Phase {
     /// How long this frame stays, or `None` for a picture that stays as it is.
     pub fn wait(self, still: bool) -> Option<Duration> {
         match self {
-            Phase::Rest | Phase::Problem => None,
+            Phase::Rest | Phase::Paused | Phase::Problem => None,
             Phase::Start(_) | Phase::Stop(_) => Some(TICK),
             Phase::Recording(_) => (!still).then_some(BREATH),
             Phase::Processing(_) => (!still).then_some(TICK),
@@ -198,26 +209,30 @@ impl Phase {
                 Goal::Processing => Phase::Processing(0),
                 Goal::Rest => Phase::Stop(0),
                 Goal::Problem => Phase::Problem,
+                Goal::Paused => Phase::Paused,
             },
             Phase::Recording(i) => Phase::Recording((i + 1) % RECORDING_FRAMES),
             Phase::Processing(i) => Phase::Processing((i + 1) % PROCESSING_FRAMES),
             Phase::Outcome(_) => match goal {
                 Goal::Problem => Phase::Problem,
+                Goal::Paused => Phase::Paused,
                 _ if still => Phase::Rest,
                 _ => Phase::Stop(0),
             },
             Phase::Stop(i) if i + 1 < STOP_FRAMES => Phase::Stop(i + 1),
             Phase::Stop(_) => match goal {
                 Goal::Problem => Phase::Problem,
+                Goal::Paused => Phase::Paused,
                 _ => Phase::Rest,
             },
-            Phase::Rest | Phase::Problem => self,
+            Phase::Rest | Phase::Paused | Phase::Problem => self,
         }
     }
 
     pub fn image(self) -> Image<'static> {
         match self {
             Phase::Rest => frame(Sheet::Idle, 0),
+            Phase::Paused => frame(Sheet::Paused, 0),
             Phase::Problem => frame(Sheet::Problem, 0),
             Phase::Start(i) => frame(Sheet::Start, i),
             Phase::Recording(i) => frame(Sheet::Recording, i),
@@ -303,6 +318,20 @@ mod tests {
             Phase::Recording(2).with_outcome(Outcome::Failed, Goal::Recording),
             Phase::Recording(2)
         );
+    }
+
+    #[test]
+    fn a_pause_shows_at_once_and_rest_follows_it_without_motion() {
+        assert_eq!(Phase::Rest.toward(Goal::Paused, false), Phase::Paused);
+        assert_eq!(
+            Phase::Recording(3).toward(Goal::Paused, false),
+            Phase::Paused
+        );
+        assert_eq!(Phase::Paused.wait(false), None);
+        assert_eq!(Phase::Paused.toward(Goal::Rest, false), Phase::Rest);
+        let shown = Phase::Outcome(Outcome::Done);
+        assert_eq!(shown.toward(Goal::Paused, false), shown);
+        assert_eq!(shown.next(Goal::Paused, false), Phase::Paused);
     }
 
     #[test]

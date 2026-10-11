@@ -85,8 +85,12 @@ impl Platform for MacPlatform {
         self.tap.set_escape_cancels(on);
     }
 
+    fn set_shortcuts_paused(&self, on: bool) {
+        self.tap.set_paused(on);
+    }
+
     fn set_shortcut_capture(&self, on: bool) -> bool {
-        if !self.tap.running() {
+        if !self.tap.running() || self.tap.paused() {
             return false;
         }
         self.tap.set_capture(on);

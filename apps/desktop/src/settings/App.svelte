@@ -6,6 +6,7 @@
   import { client, config, defaults } from "../lib/store.svelte";
   import { go, NAV, navPage, parseRoute, routeHash, routeSection, SETTINGS_PAGES, shouldIntercept, type SettingsPage } from "../lib/route";
   import { guard } from "../lib/guard.svelte";
+  import { pause } from "../lib/pause.svelte";
   import Icon from "../lib/ui/Icon.svelte";
   import Mark from "../lib/ui/Mark.svelte";
   import Ring from "../lib/ui/Ring.svelte";
@@ -66,6 +67,8 @@
     // What loads after the page is first shown moves the section.
     setTimeout(() => find()?.scrollIntoView({ block: "start" }), 300);
   }
+
+  onMount(() => { pause.watch(); });
 
   onMount(() => {
     const onHash = () => {
@@ -144,6 +147,9 @@
         {#if config.error}
           <div class="banner" role="alert"><Ring tone="live" /><span>{t("common.engine_error", { detail: config.error })}</span></div>
         {/if}
+        {#if pause.value}
+          <div class="banner paused" role="status"><span>{t("common.paused")}</span><button type="button" class="btn" onclick={() => pause.resume().catch(() => {})}>{t("common.resume")}</button></div>
+        {/if}
         {#if route.page === "home"}<Home />
         {:else if section}{#key section}<General {section} />{/key}
         {:else if route.page === "about"}<About />
@@ -205,4 +211,5 @@
   .banner { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 22px; padding: 12px var(--row-x); border-radius: var(--radius-group); background: color-mix(in srgb, var(--live) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--live) 35%, transparent); }
   .quit-hint { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 80; padding: 14px 24px; border-radius: 14px; background: var(--pill-bg); color: var(--pill-ink); font-size: var(--text-lg); font-weight: 600; white-space: nowrap; box-shadow: var(--shadow); pointer-events: none; }
   .banner :global(.ring) { margin-top: 3px; }
+  .banner.paused { align-items: center; justify-content: space-between; background: color-mix(in srgb, var(--accent) 10%, var(--surface)); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
 </style>

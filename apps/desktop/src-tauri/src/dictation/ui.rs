@@ -13,6 +13,9 @@ pub enum UiState {
     Inserting,
     /// Accessibility permission missing; dictation disabled.
     NoAccessibility,
+    /// Dictation paused by the user: the shortcuts do nothing and every
+    /// key reaches the application in front until resumed.
+    Paused,
     /// The engine could not open; dictation disabled.
     EngineError,
 }

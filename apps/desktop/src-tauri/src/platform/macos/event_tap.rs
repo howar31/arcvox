@@ -236,6 +236,10 @@ pub struct TapState {
     /// Switched off on purpose (the trust went away); a disable reported
     /// by the system is then left alone instead of being undone.
     suspended: AtomicBool,
+    /// Paused by the user: the tap keeps running and passes everything on
+    /// untouched. Disabling the tap instead costs the first press after
+    /// the resume, which the system answers with a disabled-tap event.
+    paused: AtomicBool,
 }
 
 impl TapState {
@@ -249,6 +253,7 @@ impl TapState {
             port: AtomicPtr::new(std::ptr::null_mut()),
             running: AtomicBool::new(false),
             suspended: AtomicBool::new(false),
+            paused: AtomicBool::new(false),
         })
     }
 
@@ -266,6 +271,21 @@ impl TapState {
         self.modifiers.lock().unwrap().clear();
         let out = self.matcher.lock().unwrap().reset();
         self.dispatch(out, Instant::now());
+    }
+
+    /// Pauses or resumes the shortcuts; pausing releases a shortcut that
+    /// is down, so the application sees its end.
+    pub fn set_paused(&self, on: bool) {
+        self.paused.store(on, Ordering::SeqCst);
+        if on {
+            self.modifiers.lock().unwrap().clear();
+            let out = self.matcher.lock().unwrap().reset();
+            self.dispatch(out, Instant::now());
+        }
+    }
+
+    pub fn paused(&self) -> bool {
+        self.paused.load(Ordering::SeqCst)
     }
 
     /// Lets a suspended tap see events again.
@@ -368,6 +388,9 @@ impl TapState {
                 return false;
             }
             _ => {}
+        }
+        if self.paused.load(Ordering::SeqCst) {
+            return false;
         }
         if event.get_integer_value_field(EventField::EVENT_SOURCE_USER_DATA) == OWN_EVENT_MARK {
             return false;

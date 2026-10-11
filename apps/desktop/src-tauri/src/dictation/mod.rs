@@ -38,6 +38,9 @@ pub struct Deps {
 #[derive(Clone)]
 pub struct ControllerHandle {
     tx: Sender<ControllerMsg>,
+    /// One forwarder for every platform monitor installed over the life of
+    /// the process.
+    modifier: Sender<ModifierEvent>,
 }
 
 impl ControllerHandle {
@@ -48,7 +51,7 @@ impl ControllerHandle {
     /// A sender the platform monitor can use; a forwarding thread maps
     /// events into `ControllerMsg`.
     pub fn modifier_sender(&self) -> Sender<ModifierEvent> {
-        forward(self.tx.clone(), ControllerMsg::Modifier)
+        self.modifier.clone()
     }
 
     pub fn audio_sender(&self) -> Sender<AudioMsg> {
@@ -87,7 +90,10 @@ pub fn forward<T: Send + 'static>(
 /// failed to open; it can be supplied later with `set_engine`.
 pub fn spawn(deps: Deps, settings: ClientSettings, engine: Option<Engine>) -> ControllerHandle {
     let (tx, rx) = channel::<ControllerMsg>();
-    let handle = ControllerHandle { tx: tx.clone() };
+    let handle = ControllerHandle {
+        tx: tx.clone(),
+        modifier: forward(tx.clone(), ControllerMsg::Modifier),
+    };
     let mut controller = controller::Controller::new(deps, settings, engine, tx);
     thread::Builder::new()
         .name("arcvox-dictation".into())

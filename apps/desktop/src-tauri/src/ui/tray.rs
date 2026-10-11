@@ -31,6 +31,7 @@ pub const PERMISSIONS_PAGE: &str = "general@permissions";
 pub const ID_COPY_LAST: &str = "copy-last";
 pub const ID_HISTORY: &str = "history";
 pub const ID_STATISTICS: &str = "statistics";
+pub const ID_PAUSE: &str = "pause";
 pub const ID_SETTINGS: &str = "settings";
 pub const ID_ABOUT: &str = "about";
 pub const ID_QUIT: &str = "quit";
@@ -209,18 +210,21 @@ pub struct Tray<R: Runtime> {
     language: Mutex<Language>,
     idle: Mutex<WidgetIdle>,
     placing: Mutex<bool>,
+    paused: Mutex<bool>,
     notices: Mutex<Vec<Notice>>,
     profiles: Mutex<Vec<ProfileEntry>>,
 }
 
 /// The menu of the menu-bar icon; the widget opens the same one. What its
 /// items do is in `app::tray_action`.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn menu<R: Runtime>(
     app: &AppHandle<R>,
     language: Language,
     state: UiState,
     idle: WidgetIdle,
     placing: bool,
+    paused: bool,
     notices: &[Notice],
     profiles: &[ProfileEntry],
 ) -> tauri::Result<(Menu<R>, MenuItem<R>)> {
@@ -310,6 +314,16 @@ pub(super) fn menu<R: Runtime>(
         None::<&str>,
     )?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
+    // Dictation paused for a game or a presentation: ticked while it is,
+    // the shortcuts then do nothing and every key reaches the application.
+    menu.append(&CheckMenuItem::with_id(
+        app,
+        ID_PAUSE,
+        text(language, Msg::TrayPause),
+        true,
+        paused,
+        None::<&str>,
+    )?)?;
     // The default profile: ticked, picking another makes it the default; the
     // last item manages the profiles.
     let profiles_menu = Submenu::with_id(app, "profiles", text(language, Msg::TrayProfiles), true)?;
@@ -398,6 +412,7 @@ impl Tray<tauri::Wry> {
             UiState::Idle,
             WidgetIdle::default(),
             false,
+            false,
             &[],
             &[],
         )?;
@@ -421,6 +436,7 @@ impl Tray<tauri::Wry> {
             language: Mutex::new(language),
             idle: Mutex::new(WidgetIdle::default()),
             placing: Mutex::new(false),
+            paused: Mutex::new(false),
             notices: Mutex::new(Vec::new()),
             profiles: Mutex::new(Vec::new()),
         })
@@ -434,10 +450,11 @@ impl<R: Runtime> Tray<R> {
         let state = *self.last_state.lock().unwrap();
         let idle = *self.idle.lock().unwrap();
         let placing = *self.placing.lock().unwrap();
+        let paused = *self.paused.lock().unwrap();
         let notices = self.notices();
         let profiles = self.profiles.lock().unwrap().clone();
         let Ok((next, status)) = menu(
-            &self.app, language, state, idle, placing, &notices, &profiles,
+            &self.app, language, state, idle, placing, paused, &notices, &profiles,
         ) else {
             return;
         };
@@ -473,6 +490,12 @@ impl<R: Runtime> Tray<R> {
     /// Ticks the item that keeps the widget on screen to be positioned.
     pub fn set_placing(&self, placing: bool) {
         *self.placing.lock().unwrap() = placing;
+        self.rebuild();
+    }
+
+    /// Ticks the pause item while the shortcuts are paused.
+    pub fn set_paused(&self, paused: bool) {
+        *self.paused.lock().unwrap() = paused;
         self.rebuild();
     }
 
@@ -660,6 +683,7 @@ fn status_msg(state: UiState) -> Msg {
         UiState::Processing => Msg::TrayStatusProcessing,
         UiState::NoAccessibility => Msg::TrayStatusNoAccessibility,
         UiState::EngineError => Msg::TrayStatusEngineError,
+        UiState::Paused => Msg::TrayStatusPaused,
     }
 }
 
@@ -741,6 +765,16 @@ mod tests {
         assert_eq!(Goal::of(UiState::NoAccessibility, false), Goal::Problem);
         assert_eq!(Goal::of(UiState::EngineError, false), Goal::Problem);
         assert_eq!(Goal::of(UiState::Idle, false), Goal::Rest);
+    }
+
+    #[test]
+    fn a_pause_is_neither_rest_nor_a_problem() {
+        assert_eq!(Goal::of(UiState::Paused, false), Goal::Paused);
+        assert_eq!(Goal::of(UiState::Paused, true), Goal::Paused);
+        assert_ne!(Phase::Paused.image().rgba(), Phase::Rest.image().rgba());
+        assert_ne!(Phase::Paused.image().rgba(), Phase::Problem.image().rgba());
+        assert_eq!(fix_msg(UiState::Paused), None);
+        assert_eq!(status_msg(UiState::Paused), Msg::TrayStatusPaused);
     }
 
     #[test]

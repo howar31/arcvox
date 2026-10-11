@@ -3,6 +3,7 @@
   import { errorMessage, onShortcutCapture, shortcutCapture, shortcutCheck } from "../api";
   import { t } from "../i18n";
   import { keyLabel, shortcutLabel } from "../shortcut";
+  import { pause } from "../pause.svelte";
   import Icon from "./Icon.svelte";
 
   /** The recording shortcuts: a list that is edited by pressing the keys to add. */
@@ -41,6 +42,7 @@
   }
 
   onMount(() => {
+    pause.watch();
     const unlisten = onShortcutCapture((p) => {
       if (!capturing) return;
       if (p.cancelled) { capturing = false; held = []; return; }
@@ -76,10 +78,14 @@
       <button type="button" class="btn" onclick={stop}>{t("common.cancel")}</button>
     </span>
   {:else}
-    <button type="button" class="btn" onclick={start}><Icon name="plus" size={14} />{t("general.shortcut_add")}</button>
+    <button type="button" class="btn" disabled={pause.value} onclick={start}><Icon name="plus" size={14} />{t("general.shortcut_add")}</button>
   {/if}
 </div>
-<p class="refuse" role="alert">{refused}</p>
+{#if pause.value}
+  <p class="refuse note">{t("general.shortcut_paused")}</p>
+{:else}
+  <p class="refuse" role="alert">{refused}</p>
+{/if}
 
 <style>
   .keys { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; }
@@ -93,4 +99,5 @@
   .live { display: inline-flex; align-items: center; gap: 6px; }
   .capture .btn { height: 28px; }
   .refuse { margin: 10px 0 0; min-height: 20px; color: var(--live); font-size: var(--text-sm); }
+  .refuse.note { color: var(--ink-3); }
 </style>

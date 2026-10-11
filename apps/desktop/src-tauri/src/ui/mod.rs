@@ -123,6 +123,9 @@ pub struct TauriUi {
     /// True while the settings window keeps the widget visible so the user
     /// can position it.
     placing: AtomicBool,
+    /// The shortcuts are paused from the menu; `Idle` shows as `Paused`
+    /// and the widget stays off the screen until resumed.
+    paused: Arc<AtomicBool>,
     /// The widget is kept visible by a drag, not by the settings window.
     moving: AtomicBool,
     /// The message on the widget stays until dismissed or replaced.
@@ -173,6 +176,7 @@ impl TauriUi {
             dragging: Arc::new(AtomicBool::new(false)),
             hide_waiting: Arc::new(AtomicBool::new(false)),
             placing: AtomicBool::new(false),
+            paused: Arc::new(AtomicBool::new(false)),
             moving: AtomicBool::new(false),
             sticky: AtomicBool::new(false),
             transcript: Mutex::new(None),
@@ -305,13 +309,16 @@ impl TauriUi {
         let state = *self.state.lock().unwrap();
         let idle = self.idle();
         let placing = self.is_placing();
+        let paused = self.is_paused();
         let notices = self.tray.notices();
         let profiles = self.tray.profiles();
         let _ = self.app.run_on_main_thread(move || {
             let Some(window) = app.get_webview_window(widget::WINDOW) else {
                 return;
             };
-            match tray::menu(&app, language, state, idle, placing, &notices, &profiles) {
+            match tray::menu(
+                &app, language, state, idle, placing, paused, &notices, &profiles,
+            ) {
                 Ok((menu, _)) => {
                     if let Err(e) = menu.popup(window.as_ref().window()) {
                         tracing::warn!(error = %e, "widget menu not shown");
@@ -325,6 +332,21 @@ impl TauriUi {
     /// Whether the widget is kept on screen to be positioned.
     pub fn is_placing(&self) -> bool {
         self.placing.load(Ordering::SeqCst) && !self.moving.load(Ordering::SeqCst)
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::SeqCst)
+    }
+
+    /// Marks dictation paused or resumed; the state that follows is set by
+    /// the caller, and `Idle` reads as `Paused` while the pause lasts. The
+    /// settings window hears of it to show its banner.
+    pub fn set_paused(&self, paused: bool) {
+        self.paused.store(paused, Ordering::SeqCst);
+        self.tray.set_paused(paused);
+        let _ = self
+            .app
+            .emit_to(window_state::SETTINGS_WINDOW, "dictation-paused", paused);
     }
 
     fn emit_current_state(&self) {
@@ -411,6 +433,7 @@ impl TauriUi {
         let visible = self.visible.clone();
         let leaving = self.leaving.clone();
         let idle = self.idle.clone();
+        let paused = self.paused.clone();
         std::thread::spawn(move || {
             std::thread::sleep(delay);
             if generation.load(Ordering::SeqCst) == gen {
@@ -418,7 +441,7 @@ impl TauriUi {
                 if dragging.load(Ordering::SeqCst) {
                     hide_waiting.store(true, Ordering::SeqCst);
                 } else {
-                    leave(&app, &layout, &visible, &leaving, &idle);
+                    leave(&app, &layout, &visible, &leaving, &idle, &paused);
                 }
             }
         });
@@ -437,6 +460,7 @@ impl TauriUi {
             &self.visible,
             &self.leaving,
             &self.idle,
+            &self.paused,
         );
     }
 
@@ -679,6 +703,7 @@ impl TauriUi {
             UiState::Inserting => "inserting",
             UiState::NoAccessibility => "no_accessibility",
             UiState::EngineError => "engine_error",
+            UiState::Paused => "paused",
         }
     }
 }
@@ -720,6 +745,7 @@ fn leave(
     visible: &Arc<AtomicBool>,
     leaving: &Arc<AtomicU64>,
     idle: &Arc<Mutex<WidgetIdle>>,
+    paused: &Arc<AtomicBool>,
 ) {
     let token = leaving.fetch_add(1, Ordering::SeqCst) + 1;
     let wait = if visible.swap(false, Ordering::SeqCst) {
@@ -734,6 +760,7 @@ fn leave(
     let layout = layout.clone();
     let leaving = leaving.clone();
     let idle = idle.clone();
+    let paused = paused.clone();
     std::thread::spawn(move || {
         std::thread::sleep(wait);
         let target = app.clone();
@@ -741,7 +768,12 @@ fn leave(
             if leaving.load(Ordering::SeqCst) != token {
                 return;
             }
-            let idle = *idle.lock().unwrap();
+            // Paused: nothing can start, so the widget stays off the screen.
+            let idle = if paused.load(Ordering::SeqCst) {
+                WidgetIdle::Hidden
+            } else {
+                *idle.lock().unwrap()
+            };
             settle(&target, &layout, idle);
         });
     });
@@ -764,8 +796,15 @@ impl TauriUi {
 
 impl Ui for TauriUi {
     fn set_state(&self, state: UiState) {
+        // While the shortcuts are paused, idle is shown as paused, whichever
+        // path brings the app back to idle.
+        let state = if state == UiState::Idle && self.is_paused() {
+            UiState::Paused
+        } else {
+            state
+        };
         self.tray.set_state(state, self.language());
-        *self.state.lock().unwrap() = state;
+        let before = std::mem::replace(&mut *self.state.lock().unwrap(), state);
         let placing = self.placing.load(Ordering::SeqCst);
         if placing && matches!(state, UiState::Recording | UiState::Locked) {
             // A real dictation takes the place of a previewed state.
@@ -784,9 +823,15 @@ impl Ui for TauriUi {
             }
             // Stays as it is: visible, with its message if it has one.
             UiState::Idle if placing => {}
+            // Resumed: the widget takes its resting place at once.
+            UiState::Idle if before == UiState::Paused => self.hide_after(Duration::ZERO),
             UiState::Idle => {
                 let linger = self.linger.lock().unwrap().take();
                 self.hide_after(linger.unwrap_or(HIDE_AFTER_IDLE))
+            }
+            UiState::Paused => {
+                *self.linger.lock().unwrap() = None;
+                self.hide_after(Duration::ZERO)
             }
             UiState::NoAccessibility | UiState::EngineError => {}
         }
@@ -910,6 +955,7 @@ mod tests {
         }
         for state in [
             UiState::Idle,
+            UiState::Paused,
             UiState::NoAccessibility,
             UiState::EngineError,
         ] {
