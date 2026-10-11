@@ -128,7 +128,7 @@ mod tests {
     use crate::backup::read::inspect;
     use crate::backup::write::tests::{all, foreign, text_only, utt, wav, write, OCT, SEP};
     use crate::backup::write::write_tree;
-    use crate::history::{HistoryStore, TEST_DEVICE};
+    use crate::history::{HistoryStore, Outcome, Redo, StageKind, StageRecord, TEST_DEVICE};
     use std::path::PathBuf;
 
     /// A store that is another installation: its own rows carry `device`.
@@ -166,35 +166,47 @@ mod tests {
         rows
     }
 
+    fn stage(position: u32, text: &str) -> StageRecord {
+        StageRecord {
+            position,
+            kind: StageKind::Asr,
+            text: Some(text.into()),
+            ms: Some(5),
+            detail: serde_json::json!({ "chars": text.chars().count() }),
+        }
+    }
+
+    fn redo(text: &str, stages: Vec<StageRecord>) -> Outcome {
+        Outcome::Done {
+            redo: Redo {
+                profile_id: crate::types::ProfileId("mail".into()),
+                raw_text: "raw".into(),
+                final_text: text.into(),
+                degraded: false,
+                asr_ms: 1,
+                llm_ms: None,
+                dict_fixes: 0,
+                snippets: 0,
+                llm_changed: false,
+                stages,
+            },
+            asr_label: "Breeze".into(),
+            llm_label: None,
+        }
+    }
+
     #[test]
     fn a_tree_written_then_imported_into_an_empty_store_is_equal() {
         let tmp = tempfile::tempdir().unwrap();
         let a = store_of("dev-a", "Anna");
-        let one = a.insert(utt(SEP + 10, "one", None)).unwrap();
+        let mut first = utt(SEP + 10, "one", None);
+        first.stages = vec![stage(3, "own")];
+        let one = a.insert(first).unwrap();
         a.insert(utt(OCT + 10, "two", None)).unwrap();
         a.insert(utt(OCT + 4000, "three", None)).unwrap();
-        // A row processed again carries its results along.
-        a.record_attempt(
-            one,
-            &crate::history::Outcome::Done {
-                redo: crate::history::Redo {
-                    profile_id: crate::types::ProfileId("mail".into()),
-                    raw_text: "raw".into(),
-                    final_text: "one again".into(),
-                    degraded: false,
-                    asr_ms: 1,
-                    llm_ms: None,
-                    dict_fixes: 0,
-                    snippets: 0,
-                    llm_changed: false,
-                    stages: Vec::new(),
-                },
-                asr_label: "Breeze".into(),
-                llm_label: None,
-            },
-            true,
-        )
-        .unwrap();
+        // A row processed again carries its results and their stages along.
+        a.record_attempt(one, &redo("one again", vec![stage(3, "again")]), true)
+            .unwrap();
         write(&a, tmp.path(), text_only(), Path::new(""));
 
         let b = HistoryStore::open_in_memory().unwrap();
@@ -215,6 +227,12 @@ mod tests {
         assert!(attempts[0].chosen && !attempts[0].origin);
         assert_eq!(attempts[0].asr_label.as_deref(), Some("Breeze"));
         assert!(attempts[1].origin);
+        // The stages follow the chosen rerun here as they did there.
+        assert_eq!(b.stages(again.id).unwrap(), a.stages(one).unwrap());
+        assert_eq!(
+            b.stages(again.id).unwrap()[0].text.as_deref(),
+            Some("again")
+        );
         assert_eq!(b.stats(0, 0).unwrap().totals, a.stats(0, 0).unwrap().totals);
         let devices = b.devices().unwrap();
         assert_eq!(devices.len(), 2);
@@ -326,6 +344,53 @@ mod tests {
         let report = import(&b, tmp.path(), &["dev-a"], text_only(), Path::new(""));
         assert_eq!((report.added, report.updated, report.skipped), (0, 0, 1));
         assert_eq!(texts(&b)[0].1, "edited on a");
+    }
+
+    #[test]
+    fn an_updated_row_keeps_the_stages_of_its_reruns() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = store_of("dev-a", "Anna");
+        let mut first = utt(OCT, "first", None);
+        first.stages = vec![stage(3, "own")];
+        let id = a.insert(first).unwrap();
+        a.record_attempt(id, &redo("first again", vec![stage(3, "again")]), true)
+            .unwrap();
+        write(&a, tmp.path(), text_only(), Path::new(""));
+        let b = HistoryStore::open_in_memory().unwrap();
+        import(&b, tmp.path(), &["dev-a"], text_only(), Path::new(""));
+
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        a.set_final(id, "edited on a").unwrap();
+        let newer = tmp.path().join("newer");
+        write(&a, &newer, text_only(), Path::new(""));
+        let report = import(&b, &newer, &["dev-a"], text_only(), Path::new(""));
+        assert_eq!((report.added, report.updated), (0, 1));
+        let row = b.list_recent(10).unwrap().remove(0);
+        assert_eq!(row.final_text, "edited on a");
+        let stages = b.stages(row.id).unwrap();
+        assert_eq!(stages.len(), 1);
+        assert_eq!(stages[0].text.as_deref(), Some("again"));
+        assert_eq!(b.attempts(row.id).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_stage_of_a_kind_this_version_does_not_know_is_left_out() {
+        let tmp = tempfile::tempdir().unwrap();
+        hand_made(
+            tmp.path(),
+            "dev-x",
+            "dev-x",
+            &[
+                r#"{"origin_id":1,"ts":1790812800,"profile_id":"default","final_text":"t","stages":[{"position":3,"kind":"asr","text":"t"},{"position":10,"kind":"later"}]}"#,
+            ],
+        );
+        let b = HistoryStore::open_in_memory().unwrap();
+        let report = import(&b, tmp.path(), &["dev-x"], text_only(), Path::new(""));
+        assert_eq!((report.added, report.bad_lines), (1, 0));
+        let row = b.list_recent(10).unwrap().remove(0);
+        let stages = b.stages(row.id).unwrap();
+        assert_eq!(stages.len(), 1);
+        assert_eq!(stages[0].kind, StageKind::Asr);
     }
 
     #[test]

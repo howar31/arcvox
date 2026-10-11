@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-use crate::backup::format::{AttemptLine, DeviceMeta, HistoryLine, StatsLine};
+use crate::backup::format::{AttemptLine, DeviceMeta, HistoryLine, StageLine, StatsLine};
 use crate::stats::{self, Stats};
 use crate::types::{ErrorCode, HistoryId, ProfileId};
 
@@ -96,6 +96,31 @@ pub struct StageRecord {
     pub text: Option<String>,
     pub ms: Option<u64>,
     pub detail: serde_json::Value,
+}
+
+impl StageRecord {
+    /// The record as a records-file line.
+    pub(crate) fn to_line(&self) -> StageLine {
+        StageLine {
+            position: self.position,
+            kind: self.kind.name().to_string(),
+            text: self.text.clone(),
+            ms: self.ms,
+            detail: self.detail.clone(),
+        }
+    }
+
+    /// A records-file line as a record; None for a kind this version does
+    /// not know.
+    pub(crate) fn from_line(line: &StageLine) -> Option<Self> {
+        Some(StageRecord {
+            position: line.position,
+            kind: StageKind::parse(&line.kind)?,
+            text: line.text.clone(),
+            ms: line.ms,
+            detail: line.detail.clone(),
+        })
+    }
 }
 
 /// How the final text reached the user: the insertion stage, reported by
@@ -947,6 +972,7 @@ impl HistoryStore {
                     error_code: row.error_code.clone(),
                     origin: true,
                     chosen: !was_failed,
+                    stages: Vec::new(),
                 },
             )?;
         }
@@ -973,6 +999,7 @@ impl HistoryStore {
                 error_code: None,
                 origin: false,
                 chosen: false,
+                stages: Vec::new(),
             },
             Outcome::Failed {
                 profile_id,
@@ -995,6 +1022,7 @@ impl HistoryStore {
                 error_code: Some(code.name().to_string()),
                 origin: false,
                 chosen: false,
+                stages: Vec::new(),
             },
         };
         let attempt_id = insert_attempt(&tx, id.0, &line)?;
@@ -1243,6 +1271,7 @@ impl HistoryStore {
                 error_code: r.get(15)?,
                 audio: None,
                 attempts: Vec::new(),
+                stages: Vec::new(),
             };
             Ok((line, r.get::<_, Option<String>>(16)?, r.get::<_, i64>(17)?))
         })?;
@@ -1251,6 +1280,7 @@ impl HistoryStore {
             let (mut line, audio, id) = row?;
             let audio = audio.map(|name| resolve(&name, recordings_dir));
             line.attempts = attempt_lines(&conn, id)?;
+            line.stages = stage_lines(&conn, id, None)?;
             out.push((line, audio));
         }
         Ok(out)
@@ -1354,8 +1384,10 @@ impl HistoryStore {
                         ],
                     )?;
                     let new_id = tx.last_insert_rowid();
+                    insert_stage_lines(&tx, new_id, None, &l.stages)?;
                     for a in &l.attempts {
-                        insert_attempt(&tx, new_id, a)?;
+                        let attempt_id = insert_attempt(&tx, new_id, a)?;
+                        insert_stage_lines(&tx, new_id, Some(attempt_id), &a.stages)?;
                     }
                     merged.added += 1;
                     if l.ts < cutoff {
@@ -1387,9 +1419,14 @@ impl HistoryStore {
                                 id,
                             ],
                         )?;
+                        // The line is the newer state of the row: its
+                        // stages and results replace what is here.
+                        tx.execute("DELETE FROM stages WHERE utterance_id = ?1", params![id])?;
                         tx.execute("DELETE FROM attempts WHERE utterance_id = ?1", params![id])?;
+                        insert_stage_lines(&tx, id, None, &l.stages)?;
                         for a in &l.attempts {
-                            insert_attempt(&tx, id, a)?;
+                            let attempt_id = insert_attempt(&tx, id, a)?;
+                            insert_stage_lines(&tx, id, Some(attempt_id), &a.stages)?;
                         }
                         merged.updated += 1;
                     } else {
@@ -2067,33 +2104,68 @@ fn insert_attempt(tx: &Connection, utterance: i64, a: &AttemptLine) -> rusqlite:
     Ok(tx.last_insert_rowid())
 }
 
-/// The attempts of a row for a records file, oldest first.
+/// The attempts of a row for a records file, oldest first, each with the
+/// stages of its run.
 fn attempt_lines(conn: &Connection, utterance: i64) -> rusqlite::Result<Vec<AttemptLine>> {
     let mut stmt = conn.prepare(&format!(
         "{SELECT_ATTEMPT} WHERE utterance_id = ?1 ORDER BY ts, id"
     ))?;
-    let rows = stmt.query_map(params![utterance], |r| {
-        let a = map_attempt(r)?;
-        Ok(AttemptLine {
-            ts: a.ts,
-            profile_id: a.profile_id.0,
-            asr_label: a.asr_label,
-            llm_label: a.llm_label,
-            raw_text: a.raw_text,
-            final_text: a.final_text,
-            degraded: a.degraded,
-            asr_ms: a.asr_ms,
-            llm_ms: a.llm_ms,
-            dict_fixes: a.dict_fixes,
-            snippets: a.snippets,
-            llm_changed: a.llm_changed,
-            error: a.error,
-            error_code: a.error_code,
-            origin: a.origin,
-            chosen: a.chosen,
+    let attempts = stmt
+        .query_map(params![utterance], map_attempt)?
+        .collect::<Result<Vec<_>, _>>()?;
+    attempts
+        .into_iter()
+        .map(|a| {
+            Ok(AttemptLine {
+                ts: a.ts,
+                profile_id: a.profile_id.0,
+                asr_label: a.asr_label,
+                llm_label: a.llm_label,
+                raw_text: a.raw_text,
+                final_text: a.final_text,
+                degraded: a.degraded,
+                asr_ms: a.asr_ms,
+                llm_ms: a.llm_ms,
+                dict_fixes: a.dict_fixes,
+                snippets: a.snippets,
+                llm_changed: a.llm_changed,
+                error: a.error,
+                error_code: a.error_code,
+                origin: a.origin,
+                chosen: a.chosen,
+                stages: stage_lines(conn, utterance, Some(a.id.0))?,
+            })
         })
-    })?;
-    rows.collect()
+        .collect()
+}
+
+/// The stages of one run for a records file: the row's own run, or an
+/// attempt's.
+fn stage_lines(
+    conn: &Connection,
+    utterance: i64,
+    attempt: Option<i64>,
+) -> rusqlite::Result<Vec<StageLine>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT position, kind, text, ms, detail FROM stages
+         WHERE utterance_id = ?1 AND attempt_id IS ?2 ORDER BY position, id",
+    )?;
+    let rows = stmt.query_map(params![utterance, attempt], map_stage)?;
+    rows.filter_map(|r| r.transpose())
+        .map(|r| r.map(|s| s.to_line()))
+        .collect()
+}
+
+/// Writes the stages of a records-file line; a stage of a kind this version
+/// does not know is left out.
+fn insert_stage_lines(
+    conn: &Connection,
+    utterance: i64,
+    attempt: Option<i64>,
+    lines: &[StageLine],
+) -> rusqlite::Result<()> {
+    let stages: Vec<StageRecord> = lines.iter().filter_map(StageRecord::from_line).collect();
+    insert_stages(conn, utterance, attempt, &stages)
 }
 
 fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Utterance> {

@@ -76,6 +76,10 @@ pub struct HistoryLine {
     /// Every result the row had, oldest first; empty for a row never processed again.
     #[serde(default)]
     pub attempts: Vec<AttemptLine>,
+    /// What each stage of the row's own run did, in order; empty for a row
+    /// from before the stages were kept.
+    #[serde(default)]
+    pub stages: Vec<StageLine>,
 }
 
 /// One result of a row: what processing its recording gave, or how it
@@ -113,6 +117,23 @@ pub struct AttemptLine {
     pub origin: bool,
     #[serde(default)]
     pub chosen: bool,
+    /// What each stage of this result's run did, in order.
+    #[serde(default)]
+    pub stages: Vec<StageLine>,
+}
+
+/// What one stage did in one run. The kind is kept as a name, so a stage a
+/// later version adds reads and is left out, not refused.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StageLine {
+    pub position: u32,
+    pub kind: String,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub ms: Option<u64>,
+    #[serde(default)]
+    pub detail: serde_json::Value,
 }
 
 /// One statistics bucket: its key, when it last changed, and its counters
