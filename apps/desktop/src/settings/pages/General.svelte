@@ -218,6 +218,7 @@
     llmTimeout: ofGeneral("llm_timeout_secs", unit("common.seconds")),
     retry: ofGeneral("retry_count", unit("common.times")),
     idleUnload: ofGeneral("llm_idle_unload_secs", unit("common.seconds")),
+    preload: ofGeneral("llm_preload_on_record", onOff),
     method: ofClient("insertion.default", named("general.method_")),
     keepClipboard: ofClient("insertion.keep_on_clipboard", onOff),
   });
@@ -586,7 +587,7 @@
   {/if}
 {:else if section === "processing"}
   {#if general}
-    <Group title={t("general.processing")} onreset={together([resets.asrTimeout, resets.llmTimeout, resets.retry, resets.idleUnload])}>
+    <Group title={t("general.processing")} onreset={together([resets.asrTimeout, resets.llmTimeout, resets.retry, resets.preload, resets.idleUnload])}>
       <Row label={t("general.asr_timeout")} reset={resets.asrTimeout}>
         <NumberField bind:value={general.asr_timeout_secs} min={1} unit={t("common.seconds")} label={t("general.asr_timeout")} />
       </Row>
@@ -595,6 +596,9 @@
       </Row>
       <Row label={t("general.retry_count")} help={t("general.retry_count_help")} reset={resets.retry}>
         <NumberField bind:value={general.retry_count} min={0} max={5} unit={t("common.times")} label={t("general.retry_count")} />
+      </Row>
+      <Row label={t("general.llm_preload")} help={t(general.llm_preload_on_record ? "general.llm_preload_on" : "general.llm_preload_off")} reset={resets.preload}>
+        <Switch bind:checked={general.llm_preload_on_record} label={t("general.llm_preload")} />
       </Row>
       <Row label={t("general.llm_idle_unload")} help={t("general.llm_idle_unload_help")} reset={resets.idleUnload}>
         <NumberField bind:value={general.llm_idle_unload_secs} min={0} unit={t("common.seconds")} label={t("general.llm_idle_unload")} />

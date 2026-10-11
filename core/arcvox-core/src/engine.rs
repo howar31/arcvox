@@ -622,6 +622,9 @@ impl Engine {
         let config = self.inner.config.current();
         let profile =
             Arc::new(resolve(&config.profiles, &req.app, req.profile_override.as_ref()).clone());
+        if config.general.llm_preload_on_record {
+            self.inner.preload_llm(&config, &profile);
+        }
         let id = SessionId(uuid::Uuid::new_v4().to_string());
         let (events_tx, events_rx) = mpsc::channel(EVENT_BUFFER);
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -946,6 +949,30 @@ impl Inner {
 
     /// Arms a timer that unloads every cached LLM provider once the engine
     /// has been idle for `llm_idle_unload_secs`. Zero disables it.
+    /// Loads the profile's language model in the background while the
+    /// recording goes on, so the rewrite does not wait for it afterwards.
+    /// Failures are left to the session, which reports them when it needs
+    /// the provider.
+    fn preload_llm(
+        self: &Arc<Self>,
+        config: &crate::config::Config,
+        profile: &crate::config::Profile,
+    ) {
+        let Some(cfg) = profile
+            .llm_provider
+            .as_ref()
+            .and_then(|id| config.provider(id))
+        else {
+            return;
+        };
+        let Ok(p) = self.registry.llm(cfg, &config.general) else {
+            return;
+        };
+        self.runtime.spawn(async move {
+            let _ = p.load().await;
+        });
+    }
+
     fn schedule_idle_unload(self: &Arc<Self>) {
         let secs = self.config.current().general.llm_idle_unload_secs;
         if secs == 0 {
@@ -1880,6 +1907,33 @@ pub(crate) mod tests {
             tokio::task::yield_now().await;
         }
         assert_eq!(fake.unloads.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn llm_is_loaded_as_soon_as_a_recording_starts() {
+        let (fake, _tmp, e) = idle_rig().await;
+        let s = e.start_session(SessionRequest::default());
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(fake.loads.load(Ordering::SeqCst), 1);
+        s.cancel();
+        drain(&s).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn llm_is_not_preloaded_when_the_setting_is_off() {
+        let (fake, _tmp, e) = idle_rig().await;
+        e.config()
+            .update(|c| c.general.llm_preload_on_record = false)
+            .unwrap();
+        let s = e.start_session(SessionRequest::default());
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(fake.loads.load(Ordering::SeqCst), 0);
+        s.cancel();
+        drain(&s).await;
     }
 
     #[tokio::test(start_paused = true)]

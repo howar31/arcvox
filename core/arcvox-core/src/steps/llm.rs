@@ -200,6 +200,7 @@ pub(crate) mod fakes {
         pub calls: Mutex<Vec<Vec<ChatMessage>>>,
         /// The output limit each call asked for.
         pub limits: Mutex<Vec<Option<u32>>>,
+        pub loads: std::sync::atomic::AtomicUsize,
         pub unloads: std::sync::atomic::AtomicUsize,
         /// When set, `complete` sleeps this long before answering.
         pub delay: Option<Duration>,
@@ -211,6 +212,7 @@ pub(crate) mod fakes {
                 result: Ok(text.into()),
                 calls: Mutex::new(Vec::new()),
                 limits: Mutex::new(Vec::new()),
+                loads: std::sync::atomic::AtomicUsize::new(0),
                 unloads: std::sync::atomic::AtomicUsize::new(0),
                 delay: None,
             })
@@ -220,6 +222,7 @@ pub(crate) mod fakes {
                 result: Ok(text.into()),
                 calls: Mutex::new(Vec::new()),
                 limits: Mutex::new(Vec::new()),
+                loads: std::sync::atomic::AtomicUsize::new(0),
                 unloads: std::sync::atomic::AtomicUsize::new(0),
                 delay: Some(delay),
             })
@@ -229,6 +232,7 @@ pub(crate) mod fakes {
                 result: Err(ProviderError::new(code, "boom")),
                 calls: Mutex::new(Vec::new()),
                 limits: Mutex::new(Vec::new()),
+                loads: std::sync::atomic::AtomicUsize::new(0),
                 unloads: std::sync::atomic::AtomicUsize::new(0),
                 delay: None,
             })
@@ -248,6 +252,10 @@ pub(crate) mod fakes {
                 tokio::time::sleep(d).await;
             }
             self.result.clone()
+        }
+        async fn load(&self) -> Result<(), ProviderError> {
+            self.loads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
         }
         async fn unload(&self) {
             self.unloads

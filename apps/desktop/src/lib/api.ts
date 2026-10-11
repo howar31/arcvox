@@ -29,7 +29,7 @@ export interface DictionaryEntry { term: string; aliases: string[]; asr_hint: bo
 export interface General {
   history_retention_days: number; stage_retention_days: number; keep_recordings: boolean; recording_retention_days: number; context_limit_bytes: number;
   asr_timeout_secs: number; llm_timeout_secs: number; llm_temperature: number; llm_max_tokens: number | null;
-  llm_idle_unload_secs: number; retry_count: number; typing_chars_per_min: number;
+  llm_idle_unload_secs: number; llm_preload_on_record: boolean; retry_count: number; typing_chars_per_min: number;
   /** The folder recordings are kept in; null for the default one. Changed with `setRecordingsDir` only. */
   recordings_dir: string | null;
 }

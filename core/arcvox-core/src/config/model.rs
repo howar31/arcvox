@@ -50,6 +50,11 @@ pub struct General {
     /// `None` leaves the length to the model.
     pub llm_max_tokens: Option<u32>,
     pub llm_idle_unload_secs: u64,
+    /// Load the profile's language model in the background as soon as a
+    /// recording starts, so the load overlaps the speech instead of being
+    /// waited for after it; a cancelled recording then loaded it for
+    /// nothing.
+    pub llm_preload_on_record: bool,
     /// How many more times a request to an engine over the network is made
     /// after a connection error, a server error or a timeout.
     pub retry_count: u32,
@@ -72,6 +77,7 @@ impl Default for General {
             llm_temperature: 0.2,
             llm_max_tokens: Some(1024),
             llm_idle_unload_secs: 300,
+            llm_preload_on_record: true,
             retry_count: 1,
             typing_chars_per_min: crate::stats::TYPING_CHARS_PER_MIN,
             recordings_dir: None,
@@ -475,6 +481,7 @@ mod tests {
     #[test]
     fn general_defaults_idle_unload() {
         assert_eq!(General::default().llm_idle_unload_secs, 300);
+        assert!(General::default().llm_preload_on_record);
         let g: General = serde_json::from_str("{}").unwrap();
         assert_eq!(g.llm_idle_unload_secs, 300);
     }
