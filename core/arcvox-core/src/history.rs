@@ -256,6 +256,10 @@ pub struct Storage {
     pub rows: u64,
     pub recordings: u64,
     pub recording_bytes: u64,
+    /// The rows' own texts (recognised, rewritten, final).
+    pub text_bytes: u64,
+    /// Text and details kept for the stages of the rows.
+    pub stage_bytes: u64,
 }
 
 /// What moving the recordings to another folder did.
@@ -292,6 +296,8 @@ pub struct DeviceRow {
 pub struct PruneReport {
     pub rows_deleted: usize,
     pub recordings_deleted: usize,
+    /// Stage records dropped from rows that stay.
+    pub stages_deleted: usize,
 }
 
 /// Rows on one local day, as `YYYY-MM-DD`.
@@ -1719,16 +1725,43 @@ impl HistoryStore {
 
     /// Row count and the recordings of `recordings_dir` that exist.
     pub fn storage(&self, recordings_dir: &Path) -> Result<Storage, HistoryError> {
+        self.storage_in(None, None, recordings_dir)
+    }
+
+    /// What the rows from `since` up to but not including `until` (unix
+    /// seconds; None for no bound) take: their count, the recordings still
+    /// on disk with their size, and the bytes of their stage records.
+    pub fn storage_in(
+        &self,
+        since: Option<i64>,
+        until: Option<i64>,
+        recordings_dir: &Path,
+    ) -> Result<Storage, HistoryError> {
+        let (since, until) = bounds(since, until);
         let conn = self.conn.lock().unwrap();
-        let rows: i64 = conn.query_row("SELECT COUNT(*) FROM utterances", [], |r| r.get(0))?;
+        let (rows, text_bytes): (i64, i64) = conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(LENGTH(raw_text) + LENGTH(refined_text) + LENGTH(final_text)), 0)
+             FROM utterances WHERE ts >= ?1 AND ts < ?2",
+            params![since, until],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let stage_bytes: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(LENGTH(s.text)) + SUM(LENGTH(s.detail)), 0) FROM stages s
+             JOIN utterances u ON u.id = s.utterance_id WHERE u.ts >= ?1 AND u.ts < ?2",
+            params![since, until],
+            |r| r.get(0),
+        )?;
         let mut out = Storage {
             rows: rows as u64,
+            text_bytes: text_bytes as u64,
+            stage_bytes: stage_bytes as u64,
             ..Storage::default()
         };
-        let mut stmt =
-            conn.prepare("SELECT audio_path FROM utterances WHERE audio_path IS NOT NULL")?;
+        let mut stmt = conn.prepare(
+            "SELECT audio_path FROM utterances WHERE audio_path IS NOT NULL AND ts >= ?1 AND ts < ?2",
+        )?;
         let paths: Vec<String> = stmt
-            .query_map([], |r| r.get(0))?
+            .query_map(params![since, until], |r| r.get(0))?
             .collect::<Result<_, _>>()?;
         for name in paths {
             if let Ok(meta) = std::fs::metadata(resolve(&name, recordings_dir)) {
@@ -1737,6 +1770,59 @@ impl HistoryStore {
             }
         }
         Ok(out)
+    }
+
+    /// Removes the rows from `since` up to but not including `until`, with
+    /// their recordings inside `recordings_dir`. Returns how many rows went.
+    pub fn clear_range(
+        &self,
+        since: Option<i64>,
+        until: Option<i64>,
+        recordings_dir: &Path,
+    ) -> Result<usize, HistoryError> {
+        let (since, until) = bounds(since, until);
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id FROM utterances WHERE audio_path IS NOT NULL AND ts >= ?1 AND ts < ?2",
+        )?;
+        let ids: Vec<i64> = stmt
+            .query_map(params![since, until], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        drop(stmt);
+        for id in ids {
+            remove_recording(&conn, id, recordings_dir)?;
+        }
+        Ok(conn.execute(
+            "DELETE FROM utterances WHERE ts >= ?1 AND ts < ?2",
+            params![since, until],
+        )?)
+    }
+
+    /// Removes the recordings of the rows from `since` up to but not
+    /// including `until`; the rows keep their text. Returns how many files
+    /// went.
+    pub fn clear_recordings_in(
+        &self,
+        since: Option<i64>,
+        until: Option<i64>,
+        recordings_dir: &Path,
+    ) -> Result<usize, HistoryError> {
+        let (since, until) = bounds(since, until);
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id FROM utterances WHERE audio_path IS NOT NULL AND ts >= ?1 AND ts < ?2",
+        )?;
+        let ids: Vec<i64> = stmt
+            .query_map(params![since, until], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        drop(stmt);
+        let mut removed = 0;
+        for id in ids {
+            if remove_recording(&conn, id, recordings_dir)? {
+                removed += 1;
+            }
+        }
+        Ok(removed)
     }
 
     /// The recording of a row, when it has one inside `recordings_dir`.
@@ -1776,9 +1862,10 @@ impl HistoryStore {
         Ok(removed)
     }
 
-    /// Deletes rows older than `history_days` and recording files older than
+    /// Deletes rows older than `history_days`, recording files older than
     /// `recording_days` (the row keeps its text; `audio_path` is cleared
-    /// once the file is actually gone). A value of 0 keeps that kind forever.
+    /// once the file is actually gone) and the stage records of rows older
+    /// than `stage_days`. A value of 0 keeps that kind forever.
     /// Recording files in `recordings_dir` that no row refers to are removed
     /// once they are older than `recording_days`.
     ///
@@ -1794,6 +1881,7 @@ impl HistoryStore {
         &self,
         history_days: u32,
         recording_days: u32,
+        stage_days: u32,
         recordings_dir: &Path,
     ) -> Result<PruneReport, HistoryError> {
         let now = now_unix();
@@ -1804,8 +1892,18 @@ impl HistoryStore {
         };
         let history_cutoff = cutoff(history_days);
         let recording_cutoff = cutoff(recording_days);
+        let stage_cutoff = cutoff(stage_days);
         let conn = self.conn.lock().unwrap();
-        let mut report = PruneReport::default();
+        // The stages of a row that stays are dropped once they are older
+        // than `stage_days`; the row keeps its texts.
+        let stages_deleted = conn.execute(
+            "DELETE FROM stages WHERE utterance_id IN (SELECT id FROM utterances WHERE ts < ?1)",
+            params![stage_cutoff],
+        )?;
+        let mut report = PruneReport {
+            stages_deleted,
+            ..PruneReport::default()
+        };
 
         let mut stmt = conn.prepare(
             "SELECT id, audio_path FROM utterances WHERE audio_path IS NOT NULL AND ts < ?1",
@@ -1942,6 +2040,11 @@ fn sweep_unreferenced(
 /// Removes a row's recording file and clears the reference. True when a
 /// file was removed. A reference to a file that is already gone is cleared
 /// too; a file that cannot be removed keeps its reference.
+/// Open bounds as the widest values the `ts` comparisons accept.
+fn bounds(since: Option<i64>, until: Option<i64>) -> (i64, i64) {
+    (since.unwrap_or(i64::MIN), until.unwrap_or(i64::MAX))
+}
+
 fn remove_recording(
     conn: &Connection,
     id: i64,
@@ -2618,12 +2721,13 @@ mod tests {
             .insert(new(now - 10 * 86_400, Some(mid_wav.clone())))
             .unwrap();
         let fresh = s.insert(new(now, Some(outside.clone()))).unwrap();
-        let report = s.prune(90, 7, &rec).unwrap();
+        let report = s.prune(90, 7, 0, &rec).unwrap();
         assert_eq!(
             report,
             PruneReport {
                 rows_deleted: 1,
-                recordings_deleted: 2
+                recordings_deleted: 2,
+                stages_deleted: 0
             }
         );
         assert!(!old_wav.exists());
@@ -2639,6 +2743,82 @@ mod tests {
         );
         assert!(s.get(fresh).unwrap().is_some());
         assert_eq!(s.list_recent(10).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn prune_drops_old_stages_and_keeps_the_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rec = tmp.path().join("recordings");
+        let now = now_unix();
+        let s = HistoryStore::open_in_memory().unwrap();
+        let mut old = new(now - 100 * 86_400, None);
+        old.stages = vec![stage(3, StageKind::Asr, "old")];
+        let old = s.insert(old).unwrap();
+        let mut fresh = new(now, None);
+        fresh.stages = vec![stage(3, StageKind::Asr, "new")];
+        let fresh = s.insert(fresh).unwrap();
+        let report = s.prune(0, 0, 90, &rec).unwrap();
+        assert_eq!(
+            report,
+            PruneReport {
+                rows_deleted: 0,
+                recordings_deleted: 0,
+                stages_deleted: 1
+            }
+        );
+        assert!(s.get(old).unwrap().is_some());
+        assert!(s.stages(old).unwrap().is_empty());
+        assert_eq!(s.stages(fresh).unwrap().len(), 1);
+        // 0 keeps the stages as long as the row.
+        assert_eq!(s.prune(0, 0, 0, &rec).unwrap().stages_deleted, 0);
+    }
+
+    #[test]
+    fn storage_and_clearing_follow_a_time_range() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rec = tmp.path().join("recordings");
+        std::fs::create_dir_all(&rec).unwrap();
+        let a_wav = rec.join("a.wav");
+        let b_wav = rec.join("b.wav");
+        std::fs::write(&a_wav, b"xx").unwrap();
+        std::fs::write(&b_wav, b"xxxx").unwrap();
+        let s = HistoryStore::open_in_memory().unwrap();
+        let mut a = new(1000, Some(a_wav.clone()));
+        a.stages = vec![stage(3, StageKind::Asr, "abc")];
+        let a = s.insert(a).unwrap();
+        let b = s.insert(new(2000, Some(b_wav.clone()))).unwrap();
+        let c = s.insert(new(3000, None)).unwrap();
+
+        let all = s.storage(&rec).unwrap();
+        assert_eq!((all.rows, all.recordings, all.recording_bytes), (3, 2, 6));
+        assert!(all.stage_bytes > 0 && all.text_bytes > 0);
+        let part = s.storage_in(Some(1500), Some(3000), &rec).unwrap();
+        assert_eq!(
+            (
+                part.rows,
+                part.recordings,
+                part.recording_bytes,
+                part.stage_bytes
+            ),
+            (1, 1, 4, 0)
+        );
+        let open_end = s.storage_in(Some(2000), None, &rec).unwrap();
+        assert_eq!(open_end.rows, 2);
+
+        assert_eq!(
+            s.clear_recordings_in(Some(1500), Some(3000), &rec).unwrap(),
+            1
+        );
+        assert!(!b_wav.exists() && a_wav.exists());
+        assert_eq!(s.get(b).unwrap().unwrap().audio_path, None);
+
+        assert_eq!(s.clear_range(None, Some(1500), &rec).unwrap(), 1);
+        assert!(s.get(a).unwrap().is_none());
+        assert!(!a_wav.exists());
+        assert_eq!(s.stages(a).unwrap().len(), 0);
+        assert!(s.get(b).unwrap().is_some() && s.get(c).unwrap().is_some());
+        assert_eq!(s.clear_range(None, None, &rec).unwrap(), 2);
+        assert_eq!(s.storage(&rec).unwrap().rows, 0);
     }
 
     fn age(path: &Path, days: u64) {
@@ -2669,7 +2849,7 @@ mod tests {
         let s = HistoryStore::open_in_memory().unwrap();
         // The row is recent, so its (old) file is still referenced.
         s.insert(new(now_unix(), Some(kept.clone()))).unwrap();
-        let report = s.prune(90, 7, &rec).unwrap();
+        let report = s.prune(90, 7, 0, &rec).unwrap();
         assert_eq!(report.recordings_deleted, 1);
         assert!(!orphan_old.exists());
         assert!(orphan_new.exists());
@@ -2692,17 +2872,18 @@ mod tests {
         let id = s
             .insert(new(now_unix() - 4000 * 86_400, Some(wav.clone())))
             .unwrap();
-        assert_eq!(s.prune(0, 0, &rec).unwrap(), PruneReport::default());
+        assert_eq!(s.prune(0, 0, 0, &rec).unwrap(), PruneReport::default());
         assert!(wav.exists() && orphan.exists());
         assert_eq!(s.get(id).unwrap().unwrap().audio_path, Some(wav.clone()));
 
         // Rows forever, recordings for a week: the text stays, the file goes.
-        let report = s.prune(0, 7, &rec).unwrap();
+        let report = s.prune(0, 7, 0, &rec).unwrap();
         assert_eq!(
             report,
             PruneReport {
                 rows_deleted: 0,
-                recordings_deleted: 2
+                recordings_deleted: 2,
+                stages_deleted: 0
             }
         );
         assert!(s.get(id).unwrap().is_some());
@@ -2964,12 +3145,13 @@ mod tests {
         s.insert(new(ts, Some(old_wav.clone()))).unwrap();
         s.insert(new(ts, None)).unwrap();
 
-        let report = s.prune(90, 7, &rec).unwrap();
+        let report = s.prune(90, 7, 0, &rec).unwrap();
         assert_eq!(
             report,
             PruneReport {
                 rows_deleted: 3,
-                recordings_deleted: 1
+                recordings_deleted: 1,
+                stages_deleted: 0
             }
         );
         assert!(!old_wav.exists());
@@ -3438,7 +3620,9 @@ INSERT INTO stats_meta (key, value) VALUES ('backfilled', '1');
             Storage {
                 rows: 3,
                 recordings: 1,
-                recording_bytes: 100
+                recording_bytes: 100,
+                text_bytes: s.storage(dir.path()).unwrap().text_bytes,
+                stage_bytes: 0
             }
         );
         assert_eq!(s.recording_path(b, dir.path()).unwrap(), None);

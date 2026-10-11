@@ -37,6 +37,9 @@ pub struct FirstRunDefaults {
 #[serde(deny_unknown_fields, default)]
 pub struct General {
     pub history_retention_days: u32,
+    /// How long what each stage of a dictation did is kept; the row itself
+    /// follows `history_retention_days`. 0 keeps it as long as the row.
+    pub stage_retention_days: u32,
     pub keep_recordings: bool,
     pub recording_retention_days: u32,
     pub context_limit_bytes: usize,
@@ -59,9 +62,10 @@ pub struct General {
 impl Default for General {
     fn default() -> Self {
         Self {
-            history_retention_days: 90,
+            history_retention_days: 365,
+            stage_retention_days: 90,
             keep_recordings: false,
-            recording_retention_days: 7,
+            recording_retention_days: 30,
             context_limit_bytes: 4096,
             asr_timeout_secs: 30,
             llm_timeout_secs: 20,

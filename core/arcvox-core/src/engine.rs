@@ -261,6 +261,7 @@ impl Engine {
             h.prune(
                 general.history_retention_days,
                 general.recording_retention_days,
+                general.stage_retention_days,
                 &recordings,
             )
         })
@@ -312,6 +313,7 @@ impl Engine {
                     history.prune(
                         general.history_retention_days,
                         general.recording_retention_days,
+                        general.stage_retention_days,
                         &recordings,
                     )
                 })
@@ -320,6 +322,7 @@ impl Engine {
                     Ok(Ok(report)) => tracing::info!(
                         rows = report.rows_deleted,
                         recordings = report.recordings_deleted,
+                        stages = report.stages_deleted,
                         "retention applied"
                     ),
                     Ok(Err(e)) => tracing::warn!(error = %e, "retention failed"),
