@@ -71,7 +71,9 @@ pub fn tray_action(app: &tauri::AppHandle<Wry>, id: &str) {
         return;
     };
     match id {
-        tray::ID_SETTINGS => tray::open_settings(app, Some("general")),
+        // The window comes to the front as it is; only the other items pick a page.
+        tray::ID_SETTINGS => tray::open_settings(app, None),
+        tray::ID_PROFILES_MANAGE => tray::open_settings(app, Some("flow")),
         tray::ID_HISTORY => tray::open_settings(app, Some("history")),
         tray::ID_STATISTICS => tray::open_settings(app, Some("home")),
         tray::ID_ABOUT => tray::open_settings(app, Some("about")),
@@ -98,6 +100,16 @@ pub fn tray_action(app: &tauri::AppHandle<Wry>, id: &str) {
             }
         }
         other => {
+            // A profile picked in the menu becomes the default one.
+            if let Some(id) = tray::profile_of(other) {
+                let engine = state.engine.lock().unwrap().clone();
+                if let Some(e) = engine {
+                    if let Err(err) = crate::commands::profiles::set_default(&e, &id) {
+                        tracing::warn!(error = ?err, "the default profile could not be set from the menu");
+                    }
+                }
+                return;
+            }
             // What the widget shows while idle: kept, and applied at once.
             if let Some(idle) = tray::idle_of(other) {
                 let mut settings = ClientSettings::load(&state.dirs.config_dir);
@@ -601,11 +613,13 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         let app = app.clone();
         let (watched, models, ui) = (e.clone(), state_models.clone(), ui.clone());
         crate::problems::refresh(Some(&watched), &models, &ui);
+        ui.tray().set_profiles(tray_profiles(&e.config().current()));
         tauri::async_runtime::spawn(async move {
             while rx.changed().await.is_ok() {
                 backup.touch();
                 crate::problems::refresh(Some(&watched), &models, &ui);
                 let cfg = rx.borrow().clone();
+                ui.tray().set_profiles(tray_profiles(&cfg));
                 let _ = tauri::Emitter::emit_to(&app, "settings", "config-changed", (*cfg).clone());
             }
         });
@@ -620,6 +634,18 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
 
     follow_trust(app, platform, controller, ui, engine.is_some());
     Ok(())
+}
+
+/// The profiles as the menu-bar menu lists them.
+fn tray_profiles(cfg: &arcvox_core::config::model::Config) -> Vec<crate::ui::tray::ProfileEntry> {
+    cfg.profiles
+        .iter()
+        .map(|p| crate::ui::tray::ProfileEntry {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            is_default: p.is_default,
+        })
+        .collect()
 }
 
 /// The `client.json` override when it parses, else the built-in catalogue URL.

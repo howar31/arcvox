@@ -305,11 +305,12 @@ impl TauriUi {
         let idle = self.idle();
         let placing = self.is_placing();
         let notices = self.tray.notices();
+        let profiles = self.tray.profiles();
         let _ = self.app.run_on_main_thread(move || {
             let Some(window) = app.get_webview_window(widget::WINDOW) else {
                 return;
             };
-            match tray::menu(&app, language, state, idle, placing, &notices) {
+            match tray::menu(&app, language, state, idle, placing, &notices, &profiles) {
                 Ok((menu, _)) => {
                     if let Err(e) = menu.popup(window.as_ref().window()) {
                         tracing::warn!(error = %e, "widget menu not shown");

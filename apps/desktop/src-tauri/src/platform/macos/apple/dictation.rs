@@ -103,7 +103,7 @@ fn map_code(code: i32, label: &str) -> ProviderError {
             ErrorCode::NativeUnavailable,
             format!("{label}: dictation language not installed"),
         )
-        .with_hint("install the dictation language in Settings > Engines and models"),
+        .with_hint("install the dictation language in Settings > Engines"),
         2 => ProviderError::new(
             ErrorCode::NativeUnavailable,
             format!("{label}: this language is not supported by Apple dictation"),
@@ -191,7 +191,7 @@ mod tests {
         assert_eq!(e.code, ErrorCode::NativeUnavailable);
         assert_eq!(
             e.hint.as_deref(),
-            Some("install the dictation language in Settings > Engines and models")
+            Some("install the dictation language in Settings > Engines")
         );
         assert_eq!(map_code(2, "Apple").code, ErrorCode::NativeUnavailable);
         assert_eq!(map_code(3, "Apple").code, ErrorCode::NativeUnavailable);

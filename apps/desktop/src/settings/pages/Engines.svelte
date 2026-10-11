@@ -28,6 +28,7 @@
   import Tag from "../../lib/ui/Tag.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
   import EngineForm from "./EngineForm.svelte";
+  import General from "./General.svelte";
 
   let { arg }: { arg: string | null } = $props();
   const role = $derived<Role>(arg === "llm" ? "llm" : "asr");
@@ -249,6 +250,9 @@
     {/each}
   </Group>
 {/if}
+
+<!-- How the engines are run: timeouts, retries, unloading; saved with its own bar. -->
+<General section="processing" />
 
 <div class="foot">
   <p class="help">

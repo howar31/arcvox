@@ -33,7 +33,8 @@
   import type { SettingsPage } from "../../lib/route";
 
   /** Which part of the settings this page shows. The parts share one draft and one Save. */
-  let { section }: { section: SettingsPage } = $props();
+  /** A settings page, or "processing": the engine settings shown at the foot of the Engines page. */
+  let { section }: { section: SettingsPage | "processing" } = $props();
 
   let mics = $state<string[]>([]);
   let perms = $state<Permissions | null>(null);
@@ -341,7 +342,7 @@
   }
 </script>
 
-<PageHead title={t("nav." + section)} />
+{#if section !== "processing"}<PageHead title={t("nav." + section)} />{/if}
 
 {#snippet notAllowed()}<Tag tone="live">{t("general.permission_missing")}</Tag>{/snippet}
 {#snippet notAsked()}<Tag tone="warn">{t("general.permission_not_asked")}</Tag>{/snippet}
@@ -444,6 +445,15 @@
       </Row>
     {/if}
   </Group>
+
+  {#if general}
+    {#snippet typingHelp()}{t("general.typing_speed_help_before")}<PageLink page="home" label={t("nav.home")} />{t("general.typing_speed_help_after")}{/snippet}
+    <Group title={t("nav.home")} onreset={together([resets.typing])}>
+      <Row label={t("general.typing_speed")} help={typingHelp} reset={resets.typing}>
+        <NumberField bind:value={general.typing_chars_per_min} min={1} max={1000} unit={t("common.chars")} label={t("general.typing_speed")} />
+      </Row>
+    </Group>
+  {/if}
 {:else if section === "recording"}
   {#if draft}
     <Group title={t("general.hotkey")} onreset={together([resets.shortcuts, resets.hold, resets.doubleTap])}>
@@ -488,79 +498,6 @@
       </Fold>{/if}
     </Group>
   {/if}
-{:else if section === "data"}
-  {#if general}
-    {#snippet storageHelp()}{#if storage}{t("general.storage_rows", { n: storage.rows.toLocaleString(), size: formatBytes(storage.text_bytes) })}{t("home.list_sep")}{t("general.storage_stages", { size: formatBytes(storage.stage_bytes) })}{t("home.list_sep")}{t("general.storage_recordings", { n: storage.recordings.toLocaleString(), size: formatBytes(storage.recording_bytes) })}<br />{/if}{t("general.storage_clear_before")}<PageLink page="history" label={t("nav.history")} />{t("general.storage_clear_after")}{/snippet}
-    <Group title={t("general.history")} onreset={together([resets.historyDays, resets.stageDays, resets.keepRecordings, resets.recordingDays])}>
-      <Row label={t("general.history_retention")} help={t("general.retention_zero_help")} reset={resets.historyDays}>
-        <NumberField bind:value={general.history_retention_days} min={0} unit={t("common.days")} label={t("general.history_retention")} />
-      </Row>
-      <Row label={t("general.stage_retention")} help={t("general.stage_retention_help")} reset={resets.stageDays}>
-        <NumberField bind:value={general.stage_retention_days} min={0} unit={t("common.days")} label={t("general.stage_retention")} />
-      </Row>
-      <Row label={t("general.keep_recordings")} help={t("general.keep_recordings_help")} reset={resets.keepRecordings}>
-        <Switch bind:checked={general.keep_recordings} label={t("general.keep_recordings")} />
-      </Row>
-      {#if general.keep_recordings}<Fold>
-        <Row label={t("general.recording_retention")} help={t("general.retention_zero_help")} reset={resets.recordingDays}>
-          <NumberField bind:value={general.recording_retention_days} min={0} unit={t("common.days")} label={t("general.recording_retention")} />
-        </Row>
-      </Fold>{/if}
-      <!-- The folder matters only while recordings are kept; files already there follow the retention days. -->
-      {#if folder && general.keep_recordings}<Fold>
-        <div class="folder">
-          <div class="folder-head">
-            <span class="name">{t("general.recordings_dir")}</span>
-            <span class="folder-actions">
-              <button type="button" class="btn quiet" onclick={openFolder}>{t("general.recordings_dir_open")}</button>
-              <button type="button" class="btn quiet" disabled={moving || folder.is_default} onclick={() => moveRecordings(null)}>{t("general.recordings_dir_reset")}</button>
-              <button type="button" class="btn" disabled={moving} onclick={chooseFolder}>{t("general.recordings_dir_choose")}</button>
-            </span>
-          </div>
-          <small class="sub">{folder.is_default ? t("general.recordings_dir_default", { path: folder.path }) : folder.path}</small>
-        </div>
-      </Fold>{/if}
-      <Row label={t("general.storage")} help={storageHelp} />
-    </Group>
-
-    {#snippet typingHelp()}{t("general.typing_speed_help_before")}<PageLink page="home" label={t("nav.home")} />{t("general.typing_speed_help_after")}{/snippet}
-    {#snippet statsHelp()}{t("general.stats_help_before")}<PageLink page="home" label={t("nav.home")} />{t("general.stats_help_after")}{/snippet}
-    <Group title={t("nav.home")} onreset={together([resets.typing])}>
-      <Row label={t("general.typing_speed")} help={typingHelp} reset={resets.typing}>
-        <NumberField bind:value={general.typing_chars_per_min} min={1} max={1000} unit={t("common.chars")} label={t("general.typing_speed")} />
-      </Row>
-      <Row label={t("general.stats")} help={statsHelp}>
-        <button type="button" class="btn danger" onclick={() => (confirmStats = true)}>{t("general.stats_reset")}</button>
-      </Row>
-    </Group>
-  {/if}
-
-  {#if draft}
-    <Group title={t("general.context")} help={t("general.context_help")} onreset={together([resets.ctxApp, resets.ctxTitle, resets.ctxUrl, resets.ctxSelected, resets.ctxClipboard])}>
-      <Row label={t("general.ctx_app_name")} reset={resets.ctxApp}><Switch bind:checked={draft.context.app_name} label={t("general.ctx_app_name")} /></Row>
-      <Row label={t("general.ctx_window_title")} reset={resets.ctxTitle}><Switch bind:checked={draft.context.window_title} label={t("general.ctx_window_title")} /></Row>
-      <Row label={t("general.ctx_url")} reset={resets.ctxUrl}><Switch bind:checked={draft.context.url} label={t("general.ctx_url")} /></Row>
-      <Row label={t("general.ctx_selected_text")} reset={resets.ctxSelected}><Switch bind:checked={draft.context.selected_text} label={t("general.ctx_selected_text")} /></Row>
-      <Row label={t("general.ctx_clipboard")} help={t("general.ctx_clipboard_help")} reset={resets.ctxClipboard}><Switch bind:checked={draft.context.clipboard} label={t("general.ctx_clipboard")} /></Row>
-    </Group>
-  {/if}
-{:else}
-  {#if general}
-    <Group title={t("general.processing")} onreset={together([resets.asrTimeout, resets.llmTimeout, resets.retry, resets.idleUnload])}>
-      <Row label={t("general.asr_timeout")} reset={resets.asrTimeout}>
-        <NumberField bind:value={general.asr_timeout_secs} min={1} unit={t("common.seconds")} label={t("general.asr_timeout")} />
-      </Row>
-      <Row label={t("general.llm_timeout")} reset={resets.llmTimeout}>
-        <NumberField bind:value={general.llm_timeout_secs} min={1} unit={t("common.seconds")} label={t("general.llm_timeout")} />
-      </Row>
-      <Row label={t("general.retry_count")} help={t("general.retry_count_help")} reset={resets.retry}>
-        <NumberField bind:value={general.retry_count} min={0} max={5} unit={t("common.times")} label={t("general.retry_count")} />
-      </Row>
-      <Row label={t("general.llm_idle_unload")} help={t("general.llm_idle_unload_help")} reset={resets.idleUnload}>
-        <NumberField bind:value={general.llm_idle_unload_secs} min={0} unit={t("common.seconds")} label={t("general.llm_idle_unload")} />
-      </Row>
-    </Group>
-  {/if}
 
   {#if draft}
     <Group title={t("general.method")} onreset={together([resets.method, resets.keepClipboard])}>
@@ -593,6 +530,74 @@
       <AddPerApp onadd={addApp} bind:value={newApp} />
     </Group>
   {/if}
+{:else if section === "data"}
+  {#if general}
+    {#snippet statsHelp()}{t("general.stats_help_before")}<PageLink page="home" label={t("nav.home")} />{t("general.stats_help_after")}{/snippet}
+    {#snippet storageHelp()}{#if storage}{t("general.storage_rows", { n: storage.rows.toLocaleString(), size: formatBytes(storage.text_bytes) })}{t("home.list_sep")}{t("general.storage_stages", { size: formatBytes(storage.stage_bytes) })}{t("home.list_sep")}{t("general.storage_recordings", { n: storage.recordings.toLocaleString(), size: formatBytes(storage.recording_bytes) })}<br />{/if}{t("general.storage_clear_before")}<PageLink page="history" label={t("nav.history")} />{t("general.storage_clear_after")}{/snippet}
+    <Group title={t("general.history")} onreset={together([resets.historyDays, resets.stageDays, resets.keepRecordings, resets.recordingDays])}>
+      <Row label={t("general.history_retention")} help={t("general.retention_zero_help")} reset={resets.historyDays}>
+        <NumberField bind:value={general.history_retention_days} min={0} unit={t("common.days")} label={t("general.history_retention")} />
+      </Row>
+      <Row label={t("general.stage_retention")} help={t("general.stage_retention_help")} reset={resets.stageDays}>
+        <NumberField bind:value={general.stage_retention_days} min={0} unit={t("common.days")} label={t("general.stage_retention")} />
+      </Row>
+      <Row label={t("general.keep_recordings")} help={t("general.keep_recordings_help")} reset={resets.keepRecordings}>
+        <Switch bind:checked={general.keep_recordings} label={t("general.keep_recordings")} />
+      </Row>
+      {#if general.keep_recordings}<Fold>
+        <Row label={t("general.recording_retention")} help={t("general.retention_zero_help")} reset={resets.recordingDays}>
+          <NumberField bind:value={general.recording_retention_days} min={0} unit={t("common.days")} label={t("general.recording_retention")} />
+        </Row>
+      </Fold>{/if}
+      <!-- The folder matters only while recordings are kept; files already there follow the retention days. -->
+      {#if folder && general.keep_recordings}<Fold>
+        <div class="folder">
+          <div class="folder-head">
+            <span class="name">{t("general.recordings_dir")}</span>
+            <span class="folder-actions">
+              <button type="button" class="btn quiet" onclick={openFolder}>{t("general.recordings_dir_open")}</button>
+              <button type="button" class="btn quiet" disabled={moving || folder.is_default} onclick={() => moveRecordings(null)}>{t("general.recordings_dir_reset")}</button>
+              <button type="button" class="btn" disabled={moving} onclick={chooseFolder}>{t("general.recordings_dir_choose")}</button>
+            </span>
+          </div>
+          <small class="sub">{folder.is_default ? t("general.recordings_dir_default", { path: folder.path }) : folder.path}</small>
+        </div>
+      </Fold>{/if}
+      <Row label={t("general.storage")} help={storageHelp} />
+      <Row label={t("general.stats")} help={statsHelp}>
+        <button type="button" class="btn danger" onclick={() => (confirmStats = true)}>{t("general.stats_reset")}</button>
+      </Row>
+    </Group>
+
+  {/if}
+
+  {#if draft}
+    <Group title={t("general.context")} help={t("general.context_help")} onreset={together([resets.ctxApp, resets.ctxTitle, resets.ctxUrl, resets.ctxSelected, resets.ctxClipboard])}>
+      <Row label={t("general.ctx_app_name")} reset={resets.ctxApp}><Switch bind:checked={draft.context.app_name} label={t("general.ctx_app_name")} /></Row>
+      <Row label={t("general.ctx_window_title")} reset={resets.ctxTitle}><Switch bind:checked={draft.context.window_title} label={t("general.ctx_window_title")} /></Row>
+      <Row label={t("general.ctx_url")} reset={resets.ctxUrl}><Switch bind:checked={draft.context.url} label={t("general.ctx_url")} /></Row>
+      <Row label={t("general.ctx_selected_text")} reset={resets.ctxSelected}><Switch bind:checked={draft.context.selected_text} label={t("general.ctx_selected_text")} /></Row>
+      <Row label={t("general.ctx_clipboard")} help={t("general.ctx_clipboard_help")} reset={resets.ctxClipboard}><Switch bind:checked={draft.context.clipboard} label={t("general.ctx_clipboard")} /></Row>
+    </Group>
+  {/if}
+{:else if section === "processing"}
+  {#if general}
+    <Group title={t("general.processing")} onreset={together([resets.asrTimeout, resets.llmTimeout, resets.retry, resets.idleUnload])}>
+      <Row label={t("general.asr_timeout")} reset={resets.asrTimeout}>
+        <NumberField bind:value={general.asr_timeout_secs} min={1} unit={t("common.seconds")} label={t("general.asr_timeout")} />
+      </Row>
+      <Row label={t("general.llm_timeout")} reset={resets.llmTimeout}>
+        <NumberField bind:value={general.llm_timeout_secs} min={1} unit={t("common.seconds")} label={t("general.llm_timeout")} />
+      </Row>
+      <Row label={t("general.retry_count")} help={t("general.retry_count_help")} reset={resets.retry}>
+        <NumberField bind:value={general.retry_count} min={0} max={5} unit={t("common.times")} label={t("general.retry_count")} />
+      </Row>
+      <Row label={t("general.llm_idle_unload")} help={t("general.llm_idle_unload_help")} reset={resets.idleUnload}>
+        <NumberField bind:value={general.llm_idle_unload_secs} min={0} unit={t("common.seconds")} label={t("general.llm_idle_unload")} />
+      </Row>
+    </Group>
+  {/if}
+
 {/if}
 
 <SaveBar {dirty} {saving} message={problem} onsave={save} onrevert={reset} />

@@ -95,7 +95,7 @@ describe("panel", () => {
   });
   it("sends model and engine problems to the engines page without repeating the title", () => {
     const missing = panelView("idle", message({ key: "widget.model_missing", copyable: "x", code: "model_missing" }), "", null, false);
-    expect(missing?.body).toBe("請到設定的「引擎與模型」下載。");
+    expect(missing?.body).toBe("請到設定的「引擎」下載。");
     expect(missing?.actions).toEqual(["copy_detail", "open_engines"]);
     const engine = panelView("idle", message({ key: "widget.engine_unavailable" }), "", null, false);
     expect(engine).toEqual({ title: "引擎尚未就緒", body: undefined, detail: undefined, actions: ["open_engines"], close: false });

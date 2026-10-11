@@ -528,7 +528,7 @@
       {:else if stage === "insert"}
         <Group title={t("flow.stage.insert")}>
           <Row label={t("flow.insert_row")} help={t("flow.insert_help")}>
-            <button type="button" class="btn quiet" onclick={() => guard.request(() => go("advanced"))}>{t("flow.to_advanced")}</button>
+            <button type="button" class="btn quiet" onclick={() => guard.request(() => go("recording"))}>{t("flow.to_recording")}</button>
           </Row>
         </Group>
       {:else}

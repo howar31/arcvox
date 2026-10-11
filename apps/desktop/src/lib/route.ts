@@ -1,7 +1,7 @@
-export type Page = "home" | "history" | "flow" | "dictionary" | "prompt" | "engines" | "speed" | "general" | "recording" | "data" | "backup" | "advanced" | "about" | "licenses";
+export type Page = "home" | "history" | "flow" | "dictionary" | "prompt" | "engines" | "speed" | "general" | "recording" | "data" | "backup" | "about" | "licenses";
 
 /** The pages of settings: one set of settings shown in parts. */
-export const SETTINGS_PAGES = ["general", "recording", "data", "advanced"] as const;
+export const SETTINGS_PAGES = ["general", "recording", "data"] as const;
 export type SettingsPage = (typeof SETTINGS_PAGES)[number];
 
 /** The pages with a sidebar entry (and an icon of their own). */
@@ -11,7 +11,7 @@ export type NavPage = Exclude<Page, "speed" | "licenses">;
 export const NAV: { group: string | null; pages: NavPage[] }[] = [
   { group: null, pages: ["home", "history"] },
   { group: "nav.group.dictation", pages: ["flow", "engines", "prompt", "dictionary"] },
-  { group: "nav.group.settings", pages: ["general", "recording", "data", "backup", "advanced"] },
+  { group: "nav.group.settings", pages: ["general", "recording", "data", "backup"] },
   { group: null, pages: ["about"] },
 ];
 

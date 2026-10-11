@@ -2,6 +2,8 @@
 
 use std::sync::Mutex;
 
+use arcvox_core::types::ProfileId;
+
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
@@ -36,6 +38,26 @@ pub const ID_SETTINGS: &str = "settings";
 pub const ID_ABOUT: &str = "about";
 pub const ID_QUIT: &str = "quit";
 pub const ID_PLACE: &str = "widget-place";
+pub const ID_PROFILES_MANAGE: &str = "profiles-manage";
+const PROFILE_PREFIX: &str = "profile:";
+
+/// A profile as the menu lists it: picking one makes it the default.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileEntry {
+    pub id: ProfileId,
+    pub name: String,
+    pub is_default: bool,
+}
+
+fn profile_item_id(id: &ProfileId) -> String {
+    format!("{PROFILE_PREFIX}{}", id.0)
+}
+
+/// The profile an item of the profiles menu stands for.
+pub fn profile_of(id: &str) -> Option<ProfileId> {
+    id.strip_prefix(PROFILE_PREFIX)
+        .map(|rest| ProfileId(rest.to_string()))
+}
 
 /// The id of the item that chooses what the widget shows while idle.
 fn idle_id(idle: WidgetIdle) -> String {
@@ -189,6 +211,7 @@ pub struct Tray<R: Runtime> {
     idle: Mutex<WidgetIdle>,
     placing: Mutex<bool>,
     notices: Mutex<Vec<Notice>>,
+    profiles: Mutex<Vec<ProfileEntry>>,
 }
 
 /// The menu of the menu-bar icon; the widget opens the same one. What its
@@ -200,6 +223,7 @@ pub(super) fn menu<R: Runtime>(
     idle: WidgetIdle,
     placing: bool,
     notices: &[Notice],
+    profiles: &[ProfileEntry],
 ) -> tauri::Result<(Menu<R>, MenuItem<R>)> {
     // The first line names the app and the running version, so the version
     // can be read without opening the settings window.
@@ -264,7 +288,7 @@ pub(super) fn menu<R: Runtime>(
         )?)?;
     }
     menu.append(&PredefinedMenuItem::separator(app)?)?;
-    // The results of dictation: the latest one, or all of them.
+    // The results of dictation: the latest one, all of them, and their figures.
     menu.append(&MenuItem::with_id(
         app,
         ID_COPY_LAST,
@@ -279,10 +303,42 @@ pub(super) fn menu<R: Runtime>(
         true,
         None::<&str>,
     )?)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        ID_STATISTICS,
+        text(language, Msg::TrayStatistics),
+        true,
+        None::<&str>,
+    )?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
+    // The default profile: ticked, picking another makes it the default; the
+    // last item manages the profiles.
+    let profiles_menu = Submenu::with_id(app, "profiles", text(language, Msg::TrayProfiles), true)?;
+    for p in profiles {
+        profiles_menu.append(&CheckMenuItem::with_id(
+            app,
+            profile_item_id(&p.id),
+            &p.name,
+            true,
+            p.is_default,
+            None::<&str>,
+        )?)?;
+    }
+    if !profiles.is_empty() {
+        profiles_menu.append(&PredefinedMenuItem::separator(app)?)?;
+    }
+    profiles_menu.append(&MenuItem::with_id(
+        app,
+        ID_PROFILES_MANAGE,
+        text(language, Msg::TrayProfilesManage),
+        true,
+        None::<&str>,
+    )?)?;
+    menu.append(&profiles_menu)?;
     // The widget: kept on screen to be dragged into place (ticked while it is),
     // and what it shows while no dictation goes on (the choice in use is ticked).
-    menu.append(&CheckMenuItem::with_id(
+    let widget_menu = Submenu::with_id(app, "widget", text(language, Msg::TrayWidget), true)?;
+    widget_menu.append(&CheckMenuItem::with_id(
         app,
         ID_PLACE,
         text(language, Msg::TrayWidgetPlace),
@@ -290,14 +346,15 @@ pub(super) fn menu<R: Runtime>(
         placing,
         None::<&str>,
     )?)?;
-    let choices = Submenu::with_id(
+    widget_menu.append(&PredefinedMenuItem::separator(app)?)?;
+    widget_menu.append(&MenuItem::new(
         app,
-        "widget-idle",
         text(language, Msg::TrayWidgetIdle),
-        true,
-    )?;
+        false,
+        None::<&str>,
+    )?)?;
     for choice in WidgetIdle::ALL {
-        choices.append(&CheckMenuItem::with_id(
+        widget_menu.append(&CheckMenuItem::with_id(
             app,
             idle_id(choice),
             text(language, idle_msg(choice)),
@@ -306,13 +363,13 @@ pub(super) fn menu<R: Runtime>(
             None::<&str>,
         )?)?;
     }
-    menu.append(&choices)?;
+    menu.append(&widget_menu)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
-    // The windows.
+    // The app itself: about, settings (and, later, updates).
     menu.append(&MenuItem::with_id(
         app,
-        ID_STATISTICS,
-        text(language, Msg::TrayStatistics),
+        ID_ABOUT,
+        text(language, Msg::TrayAbout),
         true,
         None::<&str>,
     )?)?;
@@ -322,13 +379,6 @@ pub(super) fn menu<R: Runtime>(
         text(language, Msg::TraySettings),
         true,
         Some("CmdOrCtrl+,"),
-    )?)?;
-    menu.append(&MenuItem::with_id(
-        app,
-        ID_ABOUT,
-        text(language, Msg::TrayAbout),
-        true,
-        None::<&str>,
     )?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     menu.append(&MenuItem::with_id(
@@ -350,6 +400,7 @@ impl Tray<tauri::Wry> {
             WidgetIdle::default(),
             false,
             &[],
+            &[],
         )?;
         let icon = TrayIconBuilder::with_id("arcvox")
             .icon(ICON_IDLE)
@@ -368,6 +419,7 @@ impl Tray<tauri::Wry> {
             idle: Mutex::new(WidgetIdle::default()),
             placing: Mutex::new(false),
             notices: Mutex::new(Vec::new()),
+            profiles: Mutex::new(Vec::new()),
         })
     }
 }
@@ -380,7 +432,10 @@ impl<R: Runtime> Tray<R> {
         let idle = *self.idle.lock().unwrap();
         let placing = *self.placing.lock().unwrap();
         let notices = self.notices();
-        let Ok((next, status)) = menu(&self.app, language, state, idle, placing, &notices) else {
+        let profiles = self.profiles.lock().unwrap().clone();
+        let Ok((next, status)) = menu(
+            &self.app, language, state, idle, placing, &notices, &profiles,
+        ) else {
             return;
         };
         let _ = self.icon.set_menu(Some(next));
@@ -424,6 +479,15 @@ impl<R: Runtime> Tray<R> {
         self.rebuild();
     }
 
+    /// The profiles as the menu lists them; the menu is built again when
+    /// they changed.
+    pub fn set_profiles(&self, profiles: Vec<ProfileEntry>) {
+        let before = std::mem::replace(&mut *self.profiles.lock().unwrap(), profiles.clone());
+        if before != profiles {
+            self.rebuild();
+        }
+    }
+
     /// The problems that do not stop dictation, as they are now.
     pub fn set_notices(&self, notices: Vec<Notice>) {
         let before = std::mem::replace(&mut *self.notices.lock().unwrap(), notices.clone());
@@ -453,6 +517,11 @@ impl<R: Runtime> Tray<R> {
         all.extend(now);
         all.sort();
         self.set_notices(all);
+    }
+
+    /// The profiles as the menu lists them now.
+    pub fn profiles(&self) -> Vec<ProfileEntry> {
+        self.profiles.lock().unwrap().clone()
     }
 
     pub fn notices(&self) -> Vec<Notice> {
@@ -505,7 +574,6 @@ const SETTINGS_PAGES: &[&str] = &[
     "recording",
     "data",
     "backup",
-    "advanced",
     "providers",
     "profiles",
     "prompt",
