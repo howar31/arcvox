@@ -53,6 +53,13 @@ describe("flowLast", () => {
     expect(cellLine("record", run)).toBe("Stored");
   });
 
+  it("tells the insertion without an application name when none was captured", () => {
+    const noApp = run.map((s) => (s.position === 8 ? { ...s, detail: { method: "ax", outcome: "inserted" } } : s));
+    expect(cellLine("insert", noApp)).toBe("Filled in");
+    expect(insertLines(noApp)).toEqual(["Accessibility API", "put into the application"]);
+    expect(insertLines(run)[1]).toBe("put into Slack");
+  });
+
   it("leaves the cells empty before the first dictation and names stages that did not run", () => {
     expect(cellLine("llm", null)).toBe("");
     const noInsert = run.filter((s) => s.position !== 8 && s.position !== 5);

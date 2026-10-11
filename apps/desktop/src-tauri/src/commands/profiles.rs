@@ -205,6 +205,8 @@ mod tests {
         let ids: Vec<&str> = views.iter().map(|v| v.id.as_str()).collect();
         assert_eq!(ids, ["standard", "mail", "chat", "code"]);
         // Only the clean copy of the factory settings names no application.
-        assert!(views.iter().all(|v| v.id == "standard" || !v.app_ids.is_empty()));
+        assert!(views
+            .iter()
+            .all(|v| v.id == "standard" || !v.app_ids.is_empty()));
     }
 }

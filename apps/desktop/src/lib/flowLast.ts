@@ -86,8 +86,11 @@ export function cellLine(id: StageId, stages: Stage[] | null): string {
       return n > 0 ? t("flow.cell.fixes", { n: String(n) }) : t("flow.cell.unchanged");
     }
     case "insert": {
-      const outcome = str(d.outcome), method = str(d.method) ?? "paste";
-      if (outcome === "inserted") return t(`flow.cell.inserted.${method === "type" || method === "ax" ? method : "paste"}`, { app: str(d.app_name) ?? "" }).trim();
+      const outcome = str(d.outcome), method = str(d.method) ?? "paste", app = str(d.app_name);
+      if (outcome === "inserted") {
+        const how = method === "type" || method === "ax" ? method : "paste";
+        return app ? t(`flow.cell.inserted.${how}`, { app }) : t(`flow.cell.inserted_noapp.${how}`);
+      }
       if (outcome === "copied") return t("flow.cell.copied");
       return t("flow.cell.shown");
     }
@@ -159,9 +162,11 @@ export function insertLines(stages: Stage[]): string[] {
   const method = str(s.detail.method) ?? "paste";
   const outcome = str(s.detail.outcome) ?? "inserted";
   const known = ["inserted", "copied", "secure_input", "app_changed", "not_trusted", "clipboard_failed", "empty_text"];
+  const app = str(s.detail.app_name);
+  const what = known.includes(outcome) ? outcome : "inserted";
   return [
     t(`home.output_${["paste", "type", "ax", "copy"].includes(method) ? method : "paste"}`),
-    t(`flow.panel.insert_outcome.${known.includes(outcome) ? outcome : "inserted"}`, { app: str(s.detail.app_name) ?? "" }).trim(),
+    what === "inserted" && !app ? t("flow.panel.insert_outcome.inserted_noapp") : t(`flow.panel.insert_outcome.${what}`, { app: app ?? "" }),
   ];
 }
 

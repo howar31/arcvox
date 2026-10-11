@@ -45,8 +45,8 @@ export function scriptAt(profile: Profile, pass: ScriptPass): ScriptStep | null 
 
 /**
  * A copy with the configuration of one pass set: null removes that pass's step; a name sets it (keeping the
- * punctuation choice), or adds the step after speech recognition (pass 1) or after the rewrite (pass 2, at
- * the end when there is no rewrite).
+ * punctuation choice), or adds the step after speech recognition (pass 1) or after the rewrite (pass 2).
+ * Without a rewrite there is no second pass, so the profile comes back as it is.
  */
 export function withScriptAt(profile: Profile, pass: ScriptPass, config: string | null): Profile {
   const steps = copy(profile.steps);
@@ -59,7 +59,8 @@ export function withScriptAt(profile: Profile, pass: ScriptPass, config: string 
   const punctuation = was?.step === "opencc" ? (was.punctuation ?? false) : false;
   if (i >= 0) { steps[i] = { step: "opencc", config, punctuation }; return { ...profile, steps }; }
   const llm = steps.findIndex((s) => s.step === "llm");
-  const at = pass === 1 ? steps.findIndex((s) => s.step === "asr") + 1 : llm >= 0 ? llm + 1 : steps.length;
+  if (pass === 2 && llm < 0) return profile;
+  const at = pass === 1 ? steps.findIndex((s) => s.step === "asr") + 1 : llm + 1;
   steps.splice(at, 0, { step: "opencc", config, punctuation });
   return { ...profile, steps };
 }

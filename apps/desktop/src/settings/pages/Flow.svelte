@@ -6,7 +6,7 @@
   } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { appliesDictionary, PUNCTUATION_CONFIGS, SCRIPT_CONFIGS, SCRIPT_GROUPS, scriptAt, scriptLabel, selectedProfile, withDictionary, withScriptAt, withScriptPunctuation, type ScriptPass } from "../../lib/flowEdit";
-  import { cellLine, runHeadline, stageOpen, type StageId } from "../../lib/flowLast";
+  import { cellLine, runHeadline, STAGE_IDS, stageOpen, type StageId } from "../../lib/flowLast";
   import { guard } from "../../lib/guard.svelte";
   import { t } from "../../lib/i18n";
   import { isImeKey } from "../../lib/ime";
@@ -146,10 +146,15 @@
     };
   });
 
+  // What each stage did in the last dictation, computed when that run changes, not with every edit of the draft.
+  const runLines = $derived.by((): Record<StageId, string> => {
+    const run = last?.stages ?? null;
+    return Object.fromEntries(STAGE_IDS.map((id) => [id, cellLine(id, run)])) as Record<StageId, string>;
+  });
+
   // One cell per stage: the stage's name, its current setting, and what it did in the last dictation.
   const cells = $derived.by((): Cell[] => {
     if (!draft || !lines) return [];
-    const run = last?.stages ?? null;
     const passLabel = (pass: ScriptPass) => {
       const script = scriptAt(draft!, pass);
       return script ? scriptLabel(script.config) : t("flow.script_none");
@@ -159,7 +164,7 @@
     const snippets = dict.filter((e) => e.term.includes("\n")).length;
     const rules = !appliesDictionary(draft) ? t("flow.rules_off") : dict.length === 0 ? t("flow.rules_meta_none") : t("flow.rules_meta", { aliases: String(aliases), snippets: String(snippets) });
     const cell = (id: StageId, name: string, setting: string, warn = false, unknown = false): Cell =>
-      ({ id, name, setting, line: cellLine(id, run), open: stageOpen(id, draft!), warn, unknown });
+      ({ id, name, setting, line: runLines[id], open: stageOpen(id, draft!), warn, unknown });
     return [
       cell("capture", t("home.stage.capture"), lines.mic.name, lines.mic.missing),
       cell("trim", t("flow.stage.trim"), t("flow.trim_meta")),
@@ -483,11 +488,13 @@
       {:else if stage === "opencc1" || stage === "opencc2"}
         {@const pass: ScriptPass = stage === "opencc1" ? 1 : 2}
         {@const script = scriptAt(draft, pass)}
+        {@const noRewrite = pass === 2 && !stageOpen("llm", draft)}
         <Group title={t("flow.stage.opencc")}>
-          <Row label={t("flow.script")} help={t(pass === 1 ? "flow.script_help" : "flow.script_help2")}>
+          <Row label={t("flow.script")} help={t(pass === 1 ? "flow.script_help" : noRewrite ? "flow.script_help2_off" : "flow.script_help2")}>
             <!-- Sixteen fixed conversions: a list, grouped by the script they produce. A configuration set
-                 outside this page is listed by its name and kept until another choice is made. -->
-            <select class="field wide" value={script?.config ?? ""} aria-label={t("flow.script")} onchange={(e) => (draft = withScriptAt(snapshot(), pass, e.currentTarget.value || null))}>
+                 outside this page is listed by its name and kept until another choice is made. The second
+                 pass follows the rewrite; without one it cannot be set. -->
+            <select class="field wide" value={script?.config ?? ""} aria-label={t("flow.script")} disabled={noRewrite} onchange={(e) => (draft = withScriptAt(snapshot(), pass, e.currentTarget.value || null))}>
               <option value="">{t("flow.script_none")}</option>
               {#each SCRIPT_GROUPS as g (g.id)}
                 <optgroup label={t(`flow.script_group.${g.id}`)}>

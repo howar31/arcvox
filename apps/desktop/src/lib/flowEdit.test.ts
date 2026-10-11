@@ -26,8 +26,10 @@ describe("flowEdit", () => {
     expect(kinds(noSecond)).toEqual(["asr", "opencc", "llm", "rules"]);
     expect(scriptAt(noSecond, 2)).toBeNull();
     expect(kinds(withScriptAt(noFirst, 1, "t2jp"))).toEqual(["asr", "opencc", "llm", "opencc", "rules"]);
+    // Without a rewrite there is no second pass to set.
     const noLlm: Profile = { ...base, steps: [{ step: "asr" }, { step: "rules" }] };
-    expect(kinds(withScriptAt(noLlm, 2, "s2hk"))).toEqual(["asr", "rules", "opencc"]);
+    expect(kinds(withScriptAt(noLlm, 2, "s2hk"))).toEqual(["asr", "rules"]);
+    expect(kinds(withScriptAt(noLlm, 1, "s2hk"))).toEqual(["asr", "opencc", "rules"]);
     expect(scriptAt(noLlm, 2)).toBeNull();
     expect(convertsScript(noLlm)).toBe(false);
   });
