@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
-    chooseAttempt, clearHistory, deleteAttempt, historyAttempts, historyStages, clearRecordings, deleteHistory, deleteRecording, errorMessage, formatBytes, historyStorage, listHistory, onHistoryChanged, openRecordingsDir, reprocessHistory, revealRecording, widgetCopy,
+    chooseAttempt, clearHistory, clearHistoryRange, clearRecordingsRange, deleteAttempt, historyAttempts, historyStages, clearRecordings, deleteHistory, deleteRecording, errorMessage, formatBytes, historyStorage, listHistory, onHistoryChanged, openRecordingsDir, reprocessHistory, revealRecording, widgetCopy,
     type Attempt, type HistoryStorage, type Stage, type Utterance,
   } from "../../lib/api";
   import { failureText } from "../../lib/failure";
@@ -17,6 +17,8 @@
   import Modal from "../../lib/ui/Modal.svelte";
   import PageHead from "../../lib/ui/PageHead.svelte";
   import Segmented from "../../lib/ui/Segmented.svelte";
+  import Fold from "../../lib/ui/Fold.svelte";
+  import PageLink from "../../lib/ui/PageLink.svelte";
   import Tag from "../../lib/ui/Tag.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
   import PeriodPicker from "./history/PeriodPicker.svelte";
@@ -32,6 +34,8 @@
   let now = $state(new Date());
   let confirmClear = $state(false);
   let confirmRecordings = $state(false);
+  let confirmPeriod = $state(false);
+  let confirmPeriodRecordings = $state(false);
   // Set when the list could not be read and nothing has been shown yet.
   let failed = $state(false);
   let query = $state("");
@@ -44,6 +48,9 @@
   let loadingMore = $state(false);
   let exhausted = $state(false);
   let sentinel = $state<HTMLElement | null>(null);
+  // The line just above the filters; once it scrolls out, the filters are stuck and drawn as a toolbar.
+  let edge = $state<HTMLElement | null>(null);
+  let stuck = $state(false);
   // The page's scroll container (the shell's main area) and whether it is scrolled far enough for the
   // back-to-top button.
   let scroller: HTMLElement | null = null;
@@ -72,6 +79,15 @@
     confirming = a.id;
     confirmTimer = setTimeout(() => { if (confirming === a.id) confirming = null; }, 4000);
   }
+  // The same for a row's delete buttons: the row and which of the two was pressed once.
+  let sure = $state<{ id: number; what: "row" | "recording" } | null>(null);
+  let sureTimer: ReturnType<typeof setTimeout> | undefined;
+  function askSure(id: number, what: "row" | "recording") {
+    clearTimeout(sureTimer);
+    sure = { id, what };
+    sureTimer = setTimeout(() => { if (sure?.id === id && sure.what === what) sure = null; }, 4000);
+  }
+  const isSure = (id: number, what: "row" | "recording") => sure?.id === id && sure.what === what;
 
   function window_() {
     return periodRange(period, new Date());
@@ -89,7 +105,9 @@
       if (rows === null) failed = true;
       toast.error(errorMessage(e));
     }
-    historyStorage().then((s) => { storage = s; }).catch(() => { storage = null; });
+    // The figures of the time window shown: all rows, or the chosen period's.
+    const w = window_();
+    historyStorage(w.since, w.until).then((s) => { storage = s; }).catch(() => { storage = null; });
   }
   /** Starts over with one page: the filter changed. */
   function reset() {
@@ -126,7 +144,10 @@
     const onFocus = () => { reload(); };
     window.addEventListener("focus", onFocus);
     scroller = host?.closest<HTMLElement>(".main") ?? null;
-    const onScroll = () => { scrolled = (scroller?.scrollTop ?? 0) > TOP_BUTTON_AFTER_PX; };
+    const onScroll = () => {
+      scrolled = (scroller?.scrollTop ?? 0) > TOP_BUTTON_AFTER_PX;
+      stuck = !!edge && !!scroller && edge.getBoundingClientRect().top < scroller.getBoundingClientRect().top + 28;
+    };
     scroller?.addEventListener("scroll", onScroll, { passive: true });
     // A dictation that ended while the page is shown. The row of a dictation still being
     // finished is not listed yet, so the list is read a moment later.
@@ -166,9 +187,9 @@
   const retention = $derived.by(() => {
     const g = config.value?.general;
     if (!g) return undefined;
-    return g.keep_recordings
-      ? t("history.retention", { days: String(g.history_retention_days), rec: String(g.recording_retention_days) })
-      : t("history.retention_no_rec", { days: String(g.history_retention_days) });
+    const days = (n: number, zero: string) => (n > 0 ? t("history.retention_days", { n: String(n) }) : t(zero));
+    const vars = { days: days(g.history_retention_days, "history.retention_forever"), stages: days(g.stage_retention_days, "history.retention_same"), rec: days(g.recording_retention_days, "history.retention_forever") };
+    return g.keep_recordings ? t("history.retention", vars) : t("history.retention_no_rec", vars);
   });
 
   /** The profile's name; for a profile that no longer exists, its id and a deleted marker. */
@@ -273,11 +294,15 @@
     try { await widgetCopy(text); toast.ok(t("home.copied")); } catch (e) { toast.error(errorMessage(e)); }
   }
   async function remove(id: number) {
+    clearTimeout(sureTimer);
+    sure = null;
     try { await deleteHistory(id); } catch (e) { toast.error(errorMessage(e)); }
     if (open === id) open = null;
     await reload();
   }
   async function removeRecording(id: number) {
+    clearTimeout(sureTimer);
+    sure = null;
     try { await deleteRecording(id); toast.ok(t("history.recording_deleted")); } catch (e) { toast.error(errorMessage(e)); }
     await reload();
   }
@@ -308,14 +333,35 @@
     }
     await reload();
   }
+  /** Removes the rows of the chosen period with their recordings. */
+  async function clearPeriod() {
+    confirmPeriod = false;
+    const w = window_();
+    try {
+      const n = await clearHistoryRange(w.since, w.until);
+      toast.ok(t("history.period_cleared", { n: String(n) }));
+    } catch (e) {
+      toast.error(errorMessage(e));
+    }
+    await reset();
+  }
+  /** Removes the recordings of the chosen period; the rows stay. */
+  async function clearPeriodRecordings() {
+    confirmPeriodRecordings = false;
+    const w = window_();
+    try {
+      const n = await clearRecordingsRange(w.since, w.until);
+      toast.ok(t("history.recordings_cleared", { n: String(n) }));
+    } catch (e) {
+      toast.error(errorMessage(e));
+    }
+    await reload();
+  }
 </script>
 
 <div class="host" bind:this={host}></div>
-<PageHead title={t("nav.history")} description={retention}>
-  {#snippet actions()}
-    <button type="button" class="btn danger" disabled={!storage?.rows} onclick={() => (confirmClear = true)}>{t("history.clear_all")}</button>
-  {/snippet}
-</PageHead>
+{#snippet retentionLine()}{retention}{t("history.retention_edit_before")}<PageLink page="data" label={t("nav.data")} />{t("history.retention_edit_after")}{/snippet}
+<PageHead title={t("nav.history")} description={retention === undefined ? undefined : retentionLine} />
 
 {#if failed}
   <Group>
@@ -324,17 +370,25 @@
     </Empty>
   </Group>
 {:else if rows !== null}
+  <!-- The figures and the clearing actions follow the period: all rows, or the chosen period's. -->
   {#if storage}
     <div class="summary">
+      {#if windowed}<span class="lead">{t("history.summary.period")}</span>{/if}
       <span>{t("history.summary.rows", { n: storage.rows.toLocaleString() })}</span>
-      <span>{t("history.summary.recordings", { n: storage.recordings.toLocaleString() })}</span>
-      {#if storage.recordings > 0}<span>{t("history.summary.size", { size: formatBytes(storage.recording_bytes) })}</span>{/if}
+      <span>{storage.recordings > 0 ? t("history.summary.recordings_size", { n: storage.recordings.toLocaleString(), size: formatBytes(storage.recording_bytes) }) : t("history.summary.recordings", { n: "0" })}</span>
       <span class="grow"></span>
-      <button type="button" class="btn quiet" onclick={openFolder}>{t("general.recordings_dir_open")}</button>
-      {#if storage.recordings > 0}<button type="button" class="btn quiet" onclick={() => (confirmRecordings = true)}>{t("history.clear_recordings")}</button>{/if}
+      {#if windowed}
+        {#if storage.recordings > 0}<button type="button" class="btn quiet danger" onclick={() => (confirmPeriodRecordings = true)}>{t("history.clear_period_recordings")}</button>{/if}
+        <button type="button" class="btn quiet danger" disabled={!storage.rows} onclick={() => (confirmPeriod = true)}>{t("history.clear_period")}</button>
+      {:else}
+        <button type="button" class="btn quiet" onclick={openFolder}>{t("general.recordings_dir_open")}</button>
+        {#if storage.recordings > 0}<button type="button" class="btn quiet danger" onclick={() => (confirmRecordings = true)}>{t("history.clear_recordings")}</button>{/if}
+        <button type="button" class="btn quiet danger" disabled={!storage.rows} onclick={() => (confirmClear = true)}>{t("history.clear_all")}</button>
+      {/if}
     </div>
   {/if}
-  <div class="tools">
+  <div class="edge" bind:this={edge}></div>
+  <div class="tools" class:stuck>
     <label class="search">
       <Icon name="search" />
       <input
@@ -375,7 +429,7 @@
               <button type="button" class="btn quiet icon-btn" aria-label={t("widget.copy")} title={t("widget.copy")} disabled={u.error !== null} onclick={() => copy(u.final_text)}><Icon name="copy" /></button>
             </span>
           </div>
-          {#if open === u.id}
+          {#if open === u.id}<Fold>
             <div class="detail">
               {#if u.error !== null}
                 <div class="label">{t("history.error_label")}</div>
@@ -458,12 +512,21 @@
                 </span>
                 {#if u.has_audio}
                   <button type="button" class="btn quiet" onclick={() => reveal(u.id)}>{t("history.reveal")}</button>
-                  <button type="button" class="btn quiet danger" onclick={() => removeRecording(u.id)}>{t("history.delete_recording")}</button>
+                  {#if isSure(u.id, "recording")}
+                    <button type="button" class="btn danger" onclick={() => removeRecording(u.id)}>{t("history.delete_recording_confirm")}</button>
+                  {:else}
+                    <button type="button" class="btn quiet danger" onclick={() => askSure(u.id, "recording")}>{t("history.delete_recording")}</button>
+                  {/if}
                 {/if}
-                <button type="button" class="btn quiet danger" onclick={() => remove(u.id)}>{t("history.delete_row")}</button>
+                <!-- A first press asks; the second within a few seconds deletes, as for a result. -->
+                {#if isSure(u.id, "row")}
+                  <button type="button" class="btn danger" onclick={() => remove(u.id)}>{t("history.delete_row_confirm")}</button>
+                {:else}
+                  <button type="button" class="btn quiet danger" onclick={() => askSure(u.id, "row")}>{t("history.delete_row")}</button>
+                {/if}
               </div>
             </div>
-          {/if}
+          </Fold>{/if}
         </div>
       {/each}
     </Group>
@@ -495,6 +558,22 @@
   {/snippet}
 </Modal>
 
+<Modal bind:open={confirmPeriod} title={t("history.clear_period_title")}>
+  <p>{t("history.clear_period_body", { n: (storage?.rows ?? 0).toLocaleString() })}</p>
+  {#snippet actions()}
+    <button type="button" class="btn" onclick={() => (confirmPeriod = false)}>{t("common.cancel")}</button>
+    <button type="button" class="btn danger" onclick={clearPeriod}>{t("history.clear_period")}</button>
+  {/snippet}
+</Modal>
+
+<Modal bind:open={confirmPeriodRecordings} title={t("history.clear_period_recordings_title")}>
+  <p>{t("history.clear_period_recordings_body", { n: (storage?.recordings ?? 0).toLocaleString() })}</p>
+  {#snippet actions()}
+    <button type="button" class="btn" onclick={() => (confirmPeriodRecordings = false)}>{t("common.cancel")}</button>
+    <button type="button" class="btn danger" onclick={clearPeriodRecordings}>{t("history.clear_period_recordings")}</button>
+  {/snippet}
+</Modal>
+
 <Modal bind:open={confirmRecordings} title={t("history.clear_recordings_title")}>
   <p>{t("history.clear_recordings_body")}</p>
   {#snippet actions()}
@@ -506,8 +585,14 @@
 <style>
   .summary { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 26px; white-space: nowrap; min-height: 58px; padding: 10px var(--row-x); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-group); font-size: var(--text-control); color: var(--ink-2); font-variant-numeric: tabular-nums; }
   .summary .grow { flex: 1; }
+  .summary .lead { color: var(--ink); font-weight: 600; margin-right: -14px; }
   .summary .btn { margin-right: -8px; }
-  .tools { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+  /* The filters stay in view while the list scrolls. Once stuck they are a toolbar: it reaches the top of
+     the window over the drag band, the rows pass beneath it blurred, and a hairline closes its lower edge. */
+  .edge { height: 1px; margin-top: 13px; }
+  .tools { position: sticky; top: 28px; z-index: 3; display: flex; align-items: center; gap: 12px; margin: 0 calc(-1 * var(--page-x)); padding: 6px var(--page-x) 10px; }
+  .tools.stuck { background: color-mix(in srgb, var(--page) 82%, transparent); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); border-bottom: 1px solid var(--line); }
+  .tools.stuck::before { content: ""; position: absolute; left: 0; right: 0; bottom: 100%; height: 28px; background: inherit; -webkit-backdrop-filter: inherit; backdrop-filter: inherit; }
   .search { flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px; height: var(--control); padding: 0 12px; border-radius: var(--radius); border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink-3); cursor: text; }
   .search:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
   .search input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; background: none; color: var(--ink); outline: none; -webkit-appearance: none; appearance: none; }

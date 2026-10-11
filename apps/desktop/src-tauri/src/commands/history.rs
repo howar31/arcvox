@@ -360,6 +360,8 @@ pub struct StorageDto {
     pub rows: u64,
     pub recordings: u64,
     pub recording_bytes: u64,
+    pub text_bytes: u64,
+    pub stage_bytes: u64,
 }
 
 /// Rows per local day, for the period picker's calendar.
@@ -389,14 +391,43 @@ pub fn history_hours(
 }
 
 #[tauri::command]
-pub fn history_storage(state: State<'_, AppState>) -> CmdResult<StorageDto> {
+pub fn history_storage(
+    state: State<'_, AppState>,
+    since: Option<i64>,
+    until: Option<i64>,
+) -> CmdResult<StorageDto> {
     let e = engine(&state)?;
-    let s = e.history().storage(&e.recordings_dir())?;
+    let s = e.history().storage_in(since, until, &e.recordings_dir())?;
     Ok(StorageDto {
         rows: s.rows,
         recordings: s.recordings,
         recording_bytes: s.recording_bytes,
+        text_bytes: s.text_bytes,
+        stage_bytes: s.stage_bytes,
     })
+}
+
+/// Removes the rows between `since` and `until` with their recordings.
+#[tauri::command]
+pub fn history_clear_range(
+    state: State<'_, AppState>,
+    since: Option<i64>,
+    until: Option<i64>,
+) -> CmdResult<usize> {
+    let e = engine(&state)?;
+    Ok(e.history().clear_range(since, until, &e.recordings_dir())?)
+}
+
+/// Removes the recordings of the rows between `since` and `until`.
+#[tauri::command]
+pub fn history_clear_recordings_range(
+    state: State<'_, AppState>,
+    since: Option<i64>,
+    until: Option<i64>,
+) -> CmdResult<usize> {
+    let e = engine(&state)?;
+    Ok(e.history()
+        .clear_recordings_in(since, until, &e.recordings_dir())?)
 }
 
 /// The folder recordings are kept in.

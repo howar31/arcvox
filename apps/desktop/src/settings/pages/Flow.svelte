@@ -15,6 +15,7 @@
   import { engineLine, micLine, outputLine, type StageLine } from "../../lib/stages";
   import { client, config } from "../../lib/store.svelte";
   import Chip from "../../lib/ui/Chip.svelte";
+  import Fold from "../../lib/ui/Fold.svelte";
   import Group from "../../lib/ui/Group.svelte";
   import Icon from "../../lib/ui/Icon.svelte";
   import Modal from "../../lib/ui/Modal.svelte";
@@ -383,13 +384,13 @@
         <input type="text" class="add-input" bind:value={newUrl} placeholder={t("profiles.url_placeholder")} aria-label={t("profiles.urls")} onkeydown={(e) => { if (e.key === "Enter" && !isImeKey(e)) addUrl(); }} />
         <button type="button" class="btn" disabled={!newUrl.trim()} onclick={addUrl}><Icon name="plus" size={14} />{t("common.add")}</button>
       </Row>
-      {#if draft.matcher.url_patterns.length}
+      {#if draft.matcher.url_patterns.length}<Fold>
         <Row>
           <div class="chips">
             {#each draft.matcher.url_patterns as u, i (i)}<Chip onremove={() => draft!.matcher.url_patterns.splice(i, 1)}>{u}</Chip>{/each}
           </div>
         </Row>
-      {/if}
+      </Fold>{/if}
     </Group>
   {/if}
 
@@ -455,7 +456,7 @@
         {#if lines.llm.missing}
           <p class="missing"><span>{t("flow.model_missing")}</span><button type="button" class="btn" onclick={() => guard.request(() => go("engines", "llm"))}>{t("flow.to_download")}</button></p>
         {/if}
-        {#if draft.llm_provider !== null}
+        {#if draft.llm_provider !== null}<Fold>
           <div class="bar"><h2>{t("profiles.prompt_addition")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("prompt"))}>{t("flow.see_prompt")}</button></div>
           <textarea rows="4" bind:value={draft.prompt_addition} aria-label={t("profiles.prompt_addition")}></textarea>
           <p class="help">{t("profiles.prompt_help")}</p>
@@ -488,7 +489,7 @@
               <Switch bind:checked={draft.llm_short_fallback} label={t("flow.llm_short")} />
             </Row>
           </Group>
-        {/if}
+        </Fold>{/if}
       {:else if stage === "opencc1" || stage === "opencc2"}
         {@const pass: ScriptPass = stage === "opencc1" ? 1 : 2}
         {@const script = scriptAt(draft, pass)}
@@ -508,11 +509,11 @@
               {#if script && !SCRIPT_CONFIGS.includes(script.config)}<option value={script.config}>{script.config}</option>{/if}
             </select>
           </Row>
-          {#if script && PUNCTUATION_CONFIGS.includes(script.config)}
+          {#if script && PUNCTUATION_CONFIGS.includes(script.config)}<Fold>
             <Row label={t("flow.script_punct")} help={t("flow.script_punct_help")}>
               <Switch bind:checked={() => script.punctuation, (v) => (draft = withScriptPunctuation(snapshot(), pass, v))} label={t("flow.script_punct")} />
             </Row>
-          {/if}
+          </Fold>{/if}
           <Row label={t("flow.opencc_engine")}>
             {#snippet help()}{t("flow.opencc_engine_before")}<PageLink page="about" label={t("nav.about")} />{t("flow.opencc_engine_after")}{/snippet}
           </Row>

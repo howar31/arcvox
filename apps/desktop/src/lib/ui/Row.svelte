@@ -44,7 +44,7 @@
 
 <style>
   .item { display: flex; align-items: center; gap: 16px; min-height: var(--row-min); padding: var(--row-y) var(--row-x); width: 100%; }
-  .item + :global(.item) { border-top: 1px solid var(--line); }
+  .item + :global(.item), :global(.fold) + .item, :global(.item + .fold) > .item:first-child, :global(.fold + .fold) > .item:first-child { border-top: 1px solid var(--line); }
   .label { display: block; flex: 1; min-width: 0; }
   .text { display: block; font-weight: 600; }
   .text.tagged { display: flex; align-items: center; gap: 8px; }

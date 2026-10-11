@@ -14,11 +14,14 @@
 </script>
 
 <section class="section" class:untitled={!title} data-section={section}>
-  {#if title && actions}
-    <div class="top"><h2>{title}</h2><div class="actions">{@render actions()}</div></div>
-  {:else if title && onreset}
-    <div class="top"><h2>{title}</h2><button type="button" class="reset" data-tip={t("common.reset_group")} onclick={onreset}>{t("common.reset_default")}</button></div>
-  {:else if title}<h2>{title}</h2>{/if}
+  <!-- One title row whether or not it carries actions or the reset: the title's margins are the same
+       either way, so the group does not move when the reset appears. -->
+  {#if title}
+    <div class="top">
+      <h2>{title}</h2>
+      {#if actions}<div class="actions">{@render actions()}</div>{:else if onreset}<button type="button" class="reset" data-tip={t("common.reset_group")} onclick={onreset}>{t("common.reset_default")}</button>{/if}
+    </div>
+  {/if}
   <div class="group">{@render children()}</div>
   {#if help}<p class="help">{help}</p>{/if}
 </section>

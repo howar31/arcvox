@@ -196,7 +196,8 @@
   .nav.on :global(.icon) { opacity: 1; }
   .version { margin-top: auto; padding: 16px; font-size: 11.5px; font-weight: 500; color: var(--ink-3); white-space: nowrap; }
   /* Positioned: absolutely placed descendants (visually hidden labels) stay inside the scroll area. */
-  .main { position: relative; overflow-x: hidden; overflow-y: auto; min-width: 0; }
+  /* No scroll anchoring: a fold opening below the view must not drag the view along with it. */
+  .main { position: relative; overflow-x: hidden; overflow-y: auto; overflow-anchor: none; min-width: 0; }
   /* Centered once the window is wider than the content; pages can lay themselves out by this width. */
   .page { padding: var(--page-top) var(--page-x) 80px; --page-max: 880px; max-width: var(--page-max); min-height: 100%; margin: 0 auto; container-type: inline-size; }
   /* Pages that show data use more of a wide window than pages of settings. */

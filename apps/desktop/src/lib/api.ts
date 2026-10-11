@@ -27,7 +27,7 @@ export interface Profile {
 }
 export interface DictionaryEntry { term: string; aliases: string[]; asr_hint: boolean }
 export interface General {
-  history_retention_days: number; keep_recordings: boolean; recording_retention_days: number; context_limit_bytes: number;
+  history_retention_days: number; stage_retention_days: number; keep_recordings: boolean; recording_retention_days: number; context_limit_bytes: number;
   asr_timeout_secs: number; llm_timeout_secs: number; llm_temperature: number; llm_max_tokens: number | null;
   llm_idle_unload_secs: number; retry_count: number; typing_chars_per_min: number;
   /** The folder recordings are kept in; null for the default one. Changed with `setRecordingsDir` only. */
@@ -133,8 +133,13 @@ export const deleteRecording = (id: number) => invoke<void>("history_delete_reco
 /** Deletes every recording and returns how many files were removed. */
 export const clearRecordings = () => invoke<number>("history_clear_recordings");
 export const revealRecording = (id: number) => invoke<void>("history_reveal_recording", { id });
-export interface HistoryStorage { rows: number; recordings: number; recording_bytes: number }
-export const historyStorage = () => invoke<HistoryStorage>("history_storage");
+export interface HistoryStorage { rows: number; recordings: number; recording_bytes: number; text_bytes: number; stage_bytes: number }
+/** What the rows take: all of them, or those from `since` up to `until` (unix seconds). */
+export const historyStorage = (since: number | null = null, until: number | null = null) => invoke<HistoryStorage>("history_storage", { since, until });
+/** Removes the rows in the range with their recordings; returns how many rows went. */
+export const clearHistoryRange = (since: number | null, until: number | null) => invoke<number>("history_clear_range", { since, until });
+/** Removes the recordings of the rows in the range; returns how many files went. */
+export const clearRecordingsRange = (since: number | null, until: number | null) => invoke<number>("history_clear_recordings_range", { since, until });
 /** Rows per local day (`day` is YYYY-MM-DD), days without rows left out. */
 export interface DayCount { day: string; count: number }
 export const historyDays = (tzOffsetSecs: number, withAudio = false) => invoke<DayCount[]>("history_days", { tzOffsetSecs, withAudio });

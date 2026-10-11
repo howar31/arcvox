@@ -193,6 +193,8 @@ pub fn run() {
             crate::commands::stats::stats_reset,
             crate::commands::history::history_delete,
             crate::commands::history::history_clear,
+            crate::commands::history::history_clear_range,
+            crate::commands::history::history_clear_recordings_range,
             crate::commands::secrets::secrets_set,
             crate::commands::secrets::secrets_has,
             crate::commands::secrets::secrets_delete,

@@ -3,6 +3,7 @@
   import { formatBytes, type Stage, type Utterance } from "../../../lib/api";
   import { cellLine, inputOf, insertLines, promptLine, recordLines, stageAt, summaryLine, type StageId } from "../../../lib/flowLast";
   import { t } from "../../../lib/i18n";
+  import Fold from "../../../lib/ui/Fold.svelte";
   import Icon from "../../../lib/ui/Icon.svelte";
   import TextDiff from "../../../lib/ui/TextDiff.svelte";
 
@@ -36,7 +37,7 @@
     {:else}
       <div class="head"><b>{t("flow.last")}</b><span>{head}</span></div>
     {/if}
-    {#if stage && textual && open}
+    {#if stage && textual && open}<Fold>
       <div class="body">
         {#if stage.text === null}
           <p class="failed">{t("flow.panel.failed", { message })}</p>
@@ -48,7 +49,7 @@
           {#if id === "llm"}<p class="meta">{promptLine(stage)}</p>{/if}
         {/if}
       </div>
-    {:else if !stage}
+    </Fold>{:else if !stage}
       <p class="none">{cellLine(id, stages)}</p>
     {/if}
   {/if}

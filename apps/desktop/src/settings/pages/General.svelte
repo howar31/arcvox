@@ -2,7 +2,7 @@
   import { onMount, untrack } from "svelte";
   import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
-  import { clearRecordings, errorMessage, formatBytes, historyStorage, openRecordingsDir, recordingsDir, resetStats, setRecordingsDir, type RecordingsDir, listDisplays, listMicrophones, onWidgetPlacing, onWidgetPreviewScene, widgetIsPlacing, widgetPreview, openPrivacyPane, permissions, requestAccessibility, requestMicrophone, updateGeneral, widgetPlacing, widgetResetPosition, type ClientSettings, type DisplayName, type General, type HistoryStorage, type InsertMethod, type Permissions } from "../../lib/api";
+  import { errorMessage, formatBytes, historyStorage, openRecordingsDir, recordingsDir, resetStats, setRecordingsDir, type RecordingsDir, listDisplays, listMicrophones, onWidgetPlacing, onWidgetPreviewScene, widgetIsPlacing, widgetPreview, openPrivacyPane, permissions, requestAccessibility, requestMicrophone, updateGeneral, widgetPlacing, widgetResetPosition, type ClientSettings, type DisplayName, type General, type HistoryStorage, type InsertMethod, type Permissions } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { t } from "../../lib/i18n";
   import { client, config, defaults } from "../../lib/store.svelte";
@@ -11,6 +11,7 @@
   import { guard } from "../../lib/guard.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
   import PageHead from "../../lib/ui/PageHead.svelte";
+  import Fold from "../../lib/ui/Fold.svelte";
   import Group from "../../lib/ui/Group.svelte";
   import Row from "../../lib/ui/Row.svelte";
   import Ring from "../../lib/ui/Ring.svelte";
@@ -139,9 +140,8 @@
     try { perms = await permissions(); } catch { perms = null; }
   }
 
-  // Recordings on disk, and the two confirmations of this group.
+  // What the history takes on disk, and the confirmation of the statistics reset.
   let storage = $state<HistoryStorage | null>(null);
-  let confirmRecordings = $state(false);
   let confirmStats = $state(false);
   const loadStorage = () => historyStorage().then((s) => { storage = s; }).catch(() => { storage = null; });
 
@@ -168,14 +168,6 @@
 
   async function openFolder() {
     try { await openRecordingsDir(); } catch (e) { toast.error(errorMessage(e)); }
-  }
-  async function clearAllRecordings() {
-    confirmRecordings = false;
-    try {
-      const n = await clearRecordings();
-      toast.ok(t("history.recordings_cleared", { n: String(n) }));
-    } catch (e) { toast.error(errorMessage(e)); }
-    loadStorage();
   }
   async function resetStatistics() {
     confirmStats = false;
@@ -211,6 +203,7 @@
     autoStop: ofClient("auto_stop.enabled", onOff),
     autoStopSecs: ofClient("auto_stop.silence_secs", unit("common.seconds")),
     historyDays: ofGeneral("history_retention_days", unit("common.days")),
+    stageDays: ofGeneral("stage_retention_days", unit("common.days")),
     keepRecordings: ofGeneral("keep_recordings", onOff),
     recordingDays: ofGeneral("recording_retention_days", unit("common.days")),
     typing: ofGeneral("typing_chars_per_min", unit("common.chars")),
@@ -268,6 +261,7 @@
     ]));
     if (general) bad.push(...invalidFields([
       { key: "general.history_retention", value: general.history_retention_days, min: 0, integer: true },
+      { key: "general.stage_retention", value: general.stage_retention_days, min: 0, integer: true },
       { key: "general.recording_retention", value: general.recording_retention_days, min: 0, integer: true },
       { key: "general.typing_speed", value: general.typing_chars_per_min, min: 1, max: 1000, integer: true },
       { key: "general.asr_timeout", value: general.asr_timeout_secs, min: 1, integer: true },
@@ -426,11 +420,11 @@
       <Row label={t("general.widget_idle")} help={t("general.widget_idle_help")} reset={resets.idle}>
         <Segmented options={idles} bind:value={draft.widget_idle} label={t("general.widget_idle")} />
       </Row>
-      {#if draft.widget_idle !== "hidden"}
+      {#if draft.widget_idle !== "hidden"}<Fold>
         <Row label={t("general.widget_fade")} help={t("general.widget_fade_help")} reset={resets.fade}>
           <Switch bind:checked={draft.widget_fade.enabled} label={t("general.widget_fade")} />
         </Row>
-        {#if draft.widget_fade.enabled}
+        {#if draft.widget_fade.enabled}<Fold>
           <Row label={t("general.widget_fade_after")} reset={resets.fadeAfter}>
             <span class="range">
               <input type="range" min="1" max="60" step="1" bind:value={draft.widget_fade.after_secs} oninput={() => { sliding = true; }} onchange={() => { sliding = false; }} aria-label={t("general.widget_fade_after")} />
@@ -443,8 +437,8 @@
               <output>{draft.widget_fade.transparency}%</output>
             </span>
           </Row>
-        {/if}
-      {/if}
+        </Fold>{/if}
+      </Fold>{/if}
       <Row label={t("general.show_transcript")} help={t("general.show_transcript_help")} reset={resets.transcript}>
         <Switch bind:checked={draft.show_transcript} label={t("general.show_transcript")} />
       </Row>
@@ -487,23 +481,33 @@
       <Row label={t("general.auto_stop")} help={t("general.auto_stop_help")} reset={resets.autoStop}>
         <Switch bind:checked={draft.auto_stop.enabled} label={t("general.auto_stop")} />
       </Row>
-      {#if draft.auto_stop.enabled}
+      {#if draft.auto_stop.enabled}<Fold>
         <Row label={t("general.auto_stop_secs")} reset={resets.autoStopSecs}>
           <NumberField bind:value={draft.auto_stop.silence_secs} min={1} max={30} unit={t("common.seconds")} label={t("general.auto_stop_secs")} />
         </Row>
-      {/if}
+      </Fold>{/if}
     </Group>
   {/if}
 {:else if section === "data"}
   {#if general}
-    <Group title={t("general.history")} onreset={together([resets.historyDays, resets.keepRecordings, resets.recordingDays])}>
+    {#snippet storageHelp()}{#if storage}{t("general.storage_rows", { n: storage.rows.toLocaleString(), size: formatBytes(storage.text_bytes) })}{t("home.list_sep")}{t("general.storage_stages", { size: formatBytes(storage.stage_bytes) })}{t("home.list_sep")}{t("general.storage_recordings", { n: storage.recordings.toLocaleString(), size: formatBytes(storage.recording_bytes) })}<br />{/if}{t("general.storage_clear_before")}<PageLink page="history" label={t("nav.history")} />{t("general.storage_clear_after")}{/snippet}
+    <Group title={t("general.history")} onreset={together([resets.historyDays, resets.stageDays, resets.keepRecordings, resets.recordingDays])}>
       <Row label={t("general.history_retention")} help={t("general.retention_zero_help")} reset={resets.historyDays}>
         <NumberField bind:value={general.history_retention_days} min={0} unit={t("common.days")} label={t("general.history_retention")} />
+      </Row>
+      <Row label={t("general.stage_retention")} help={t("general.stage_retention_help")} reset={resets.stageDays}>
+        <NumberField bind:value={general.stage_retention_days} min={0} unit={t("common.days")} label={t("general.stage_retention")} />
       </Row>
       <Row label={t("general.keep_recordings")} help={t("general.keep_recordings_help")} reset={resets.keepRecordings}>
         <Switch bind:checked={general.keep_recordings} label={t("general.keep_recordings")} />
       </Row>
-      {#if folder}
+      {#if general.keep_recordings}<Fold>
+        <Row label={t("general.recording_retention")} help={t("general.retention_zero_help")} reset={resets.recordingDays}>
+          <NumberField bind:value={general.recording_retention_days} min={0} unit={t("common.days")} label={t("general.recording_retention")} />
+        </Row>
+      </Fold>{/if}
+      <!-- The folder matters only while recordings are kept; files already there follow the retention days. -->
+      {#if folder && general.keep_recordings}<Fold>
         <div class="folder">
           <div class="folder-head">
             <span class="name">{t("general.recordings_dir")}</span>
@@ -515,13 +519,8 @@
           </div>
           <small class="sub">{folder.is_default ? t("general.recordings_dir_default", { path: folder.path }) : folder.path}</small>
         </div>
-      {/if}
-      <Row label={t("general.recording_retention")} help={t("general.retention_zero_help")} reset={resets.recordingDays}>
-        <NumberField bind:value={general.recording_retention_days} min={0} unit={t("common.days")} label={t("general.recording_retention")} />
-      </Row>
-      <Row label={t("general.recordings_usage")} help={storage ? t("general.recordings_usage_value", { n: storage.recordings.toLocaleString(), size: formatBytes(storage.recording_bytes) }) : undefined}>
-        <button type="button" class="btn danger" disabled={!storage?.recordings} onclick={() => (confirmRecordings = true)}>{t("history.clear_recordings")}</button>
-      </Row>
+      </Fold>{/if}
+      <Row label={t("general.storage")} help={storageHelp} />
     </Group>
 
     {#snippet typingHelp()}{t("general.typing_speed_help_before")}<PageLink page="home" label={t("nav.home")} />{t("general.typing_speed_help_after")}{/snippet}
@@ -597,14 +596,6 @@
 {/if}
 
 <SaveBar {dirty} {saving} message={problem} onsave={save} onrevert={reset} />
-
-<Modal bind:open={confirmRecordings} title={t("history.clear_recordings_title")}>
-  <p>{t("history.clear_recordings_body")}</p>
-  {#snippet actions()}
-    <button type="button" class="btn" onclick={() => (confirmRecordings = false)}>{t("common.cancel")}</button>
-    <button type="button" class="btn danger" onclick={clearAllRecordings}>{t("history.clear_recordings")}</button>
-  {/snippet}
-</Modal>
 
 <Modal bind:open={confirmStats} title={t("general.stats_reset_title")}>
   <p>{t("general.stats_reset_body")}</p>
