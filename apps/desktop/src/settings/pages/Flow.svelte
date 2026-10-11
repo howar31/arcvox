@@ -327,12 +327,45 @@
     {/if}
   </div>
 
+  {#if source.is_default}
+    <Group title={t("profiles.applies")}>
+      <Row label={t("profiles.everywhere")} help={t("flow.default_statement")} />
+    </Group>
+  {:else}
+    <Group title={t("profiles.applies")}>
+      <Row label={t("profiles.apps_label")}>
+        <div class="chips end-chips">
+          {#each draft.matcher.app_ids as id, i (i)}
+            <Chip onremove={() => draft!.matcher.app_ids.splice(i, 1)}><span title={id}>{appName(id)}</span></Chip>
+          {:else}
+            <span class="sub">{t("profiles.no_apps")}</span>
+          {/each}
+        </div>
+      </Row>
+      <AddPerApp onadd={addApp} bind:value={newApp} />
+    </Group>
+    <Group>
+      <Row label={t("profiles.urls")} help={t("profiles.urls_help")}>
+        <input type="text" class="add-input" bind:value={newUrl} placeholder={t("profiles.url_placeholder")} aria-label={t("profiles.urls")} onkeydown={(e) => { if (e.key === "Enter" && !isImeKey(e)) addUrl(); }} />
+        <button type="button" class="btn" disabled={!newUrl.trim()} onclick={addUrl}><Icon name="plus" size={14} />{t("common.add")}</button>
+      </Row>
+      {#if draft.matcher.url_patterns.length}
+        <Row>
+          <div class="chips">
+            {#each draft.matcher.url_patterns as u, i (i)}<Chip onremove={() => draft!.matcher.url_patterns.splice(i, 1)}>{u}</Chip>{/each}
+          </div>
+        </Row>
+      {/if}
+    </Group>
+  {/if}
+
   <div class="gt">
     <span>{t("flow.stages")}</span>
     {#if last}<span class="r">{runHeadline(last.row, last.stages, new Date())}</span>{/if}
   </div>
   <div class="split">
-    <StageRail {cells} selected={stage} onpick={(id) => (stage = id)} label={t("flow.stages")} />
+    <!-- The rail stays in view while the right column scrolls; at the window's minimum height it fits whole. -->
+    <div class="railwrap"><StageRail {cells} selected={stage} onpick={(id) => (stage = id)} label={t("flow.stages")} /></div>
     <div class="right">
       {#if current}
         <div class="ttl"><b>{current.name}</b><span class:warn={current.warn && current.open} class:unknown={current.unknown}>{titleMeta}</span></div>
@@ -463,38 +496,6 @@
     </div>
   </div>
 
-  {#if source.is_default}
-    <Group title={t("profiles.applies")}>
-      <Row label={t("profiles.everywhere")} help={t("flow.default_statement")} />
-    </Group>
-  {:else}
-    <Group title={t("profiles.applies")}>
-      <Row label={t("profiles.apps_label")}>
-        <div class="chips end-chips">
-          {#each draft.matcher.app_ids as id, i (i)}
-            <Chip onremove={() => draft!.matcher.app_ids.splice(i, 1)}><span title={id}>{appName(id)}</span></Chip>
-          {:else}
-            <span class="sub">{t("profiles.no_apps")}</span>
-          {/each}
-        </div>
-      </Row>
-      <AddPerApp onadd={addApp} bind:value={newApp} />
-    </Group>
-    <Group>
-      <Row label={t("profiles.urls")} help={t("profiles.urls_help")}>
-        <input type="text" class="add-input" bind:value={newUrl} placeholder={t("profiles.url_placeholder")} aria-label={t("profiles.urls")} onkeydown={(e) => { if (e.key === "Enter" && !isImeKey(e)) addUrl(); }} />
-        <button type="button" class="btn" disabled={!newUrl.trim()} onclick={addUrl}><Icon name="plus" size={14} />{t("common.add")}</button>
-      </Row>
-      {#if draft.matcher.url_patterns.length}
-        <Row>
-          <div class="chips">
-            {#each draft.matcher.url_patterns as u, i (i)}<Chip onremove={() => draft!.matcher.url_patterns.splice(i, 1)}>{u}</Chip>{/each}
-          </div>
-        </Row>
-      {/if}
-    </Group>
-  {/if}
-
   <SaveBar {dirty} {saving} message={problem} onsave={save} onrevert={revert} />
 {/if}
 
@@ -530,6 +531,7 @@
   .gt { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 22px 4px 12px; font: 600 var(--text-sm)/1 var(--font); color: var(--ink-2); }
   .gt .r { font-weight: 400; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .split { display: grid; grid-template-columns: 236px minmax(0, 1fr); gap: 16px; align-items: start; }
+  .railwrap { position: sticky; top: 28px; }
   .right { display: flex; flex-direction: column; min-width: 0; }
   .right .ttl { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 2px 4px 10px; }
   .right .ttl b { font: 700 19px/1.3 var(--font-round); flex: none; }

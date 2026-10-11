@@ -36,7 +36,7 @@
   .rail { --sel: color-mix(in srgb, var(--accent) 10%, var(--surface)); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-group); overflow: visible; }
   :global(:root[data-theme="dark"]) .rail { --sel: color-mix(in srgb, var(--accent) 16%, var(--surface)); }
   @media (prefers-color-scheme: dark) { :global(:root:not([data-theme="light"])) .rail { --sel: color-mix(in srgb, var(--accent) 16%, var(--surface)); } }
-  .blk { position: relative; display: grid; grid-template-columns: 26px 1fr; gap: 10px; align-items: start; width: 100%; padding: 12px 12px 12px 14px; border: 0; border-top: 1px solid var(--line); background: none; text-align: left; cursor: default; min-width: 0; }
+  .blk { position: relative; display: grid; grid-template-columns: 26px 1fr; gap: 10px; align-items: start; width: 100%; padding: 9px 12px 9px 14px; border: 0; border-top: 1px solid var(--line); background: none; text-align: left; cursor: default; min-width: 0; }
   .blk:first-child { border-top: 0; border-radius: var(--radius-group) var(--radius-group) 0 0; }
   .blk:last-child { border-radius: 0 0 var(--radius-group) var(--radius-group); }
   .blk:hover { background: color-mix(in srgb, var(--sunken) 60%, transparent); }
