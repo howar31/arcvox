@@ -5,6 +5,7 @@ pub mod app_menu;
 pub mod placement;
 pub mod preview;
 pub mod tray;
+pub mod tray_anim;
 pub mod widget;
 pub mod window_state;
 
@@ -18,7 +19,7 @@ use tauri::menu::ContextMenu;
 use tauri::{AppHandle, Emitter, Manager, Wry};
 
 use crate::dictation::ui::{MessageKind, Ui, UiMessage, UiState};
-use crate::i18n::Language;
+use crate::i18n::{Language, Msg};
 use crate::settings::{WidgetFade, WidgetIdle};
 use app_menu::AppMenu;
 use preview::{Look, Sample, Scene};
@@ -683,6 +684,13 @@ impl TauriUi {
 }
 
 /// Whether the state belongs to a dictation in progress.
+/// The text exists but is not in the application, or is not what the
+/// processing should have made of it. Mirrors the widget's rule.
+fn needs_attention(message: &UiMessage) -> bool {
+    matches!(message.msg, Msg::WidgetDegraded | Msg::WidgetRecordFailed)
+        || (message.kind == MessageKind::Info && message.copyable.is_some())
+}
+
 fn is_session(state: UiState) -> bool {
     matches!(
         state,
@@ -810,10 +818,12 @@ impl Ui for TauriUi {
     }
 
     fn inserted(&self) {
+        self.tray.outcome(tray_anim::Outcome::Done);
         self.emit("widget-inserted", ());
     }
 
     fn copied(&self) {
+        self.tray.outcome(tray_anim::Outcome::Done);
         self.emit("widget-copied", ());
     }
 
@@ -834,6 +844,14 @@ impl Ui for TauriUi {
         let copyable = message.copyable.is_some();
         let sticky = message.sticky;
         let notice = message.is_notice();
+        // The menu-bar image tells the outcome the way the widget's ring does: a notice shows nothing.
+        if !notice {
+            self.tray.outcome(if needs_attention(&message) {
+                tray_anim::Outcome::Attention
+            } else {
+                tray_anim::Outcome::Failed
+            });
+        }
         // The message takes the panel, after the change of the text when
         // there is one to show.
         *self.linger.lock().unwrap() = None;

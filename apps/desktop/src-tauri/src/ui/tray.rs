@@ -1,10 +1,10 @@
 //! Menu-bar icon and menu.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Instant;
 
 use arcvox_core::types::ProfileId;
 
-use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -14,10 +14,7 @@ use crate::i18n::{text, Language, Msg};
 use crate::identity;
 use crate::settings::WidgetIdle;
 
-const ICON_IDLE: Image<'static> = tauri::include_image!("./icons/tray-idle.png");
-const ICON_RECORDING: Image<'static> = tauri::include_image!("./icons/tray-recording.png");
-const ICON_PROCESSING: Image<'static> = tauri::include_image!("./icons/tray-processing.png");
-const ICON_PROBLEM: Image<'static> = tauri::include_image!("./icons/tray-problem.png");
+use super::tray_anim::{Goal, Outcome, Phase};
 
 pub const ID_APP: &str = "app";
 pub const ID_STATUS: &str = "status";
@@ -201,7 +198,9 @@ fn problem_pages(state: UiState, notices: &[Notice]) -> Vec<&'static str> {
 
 pub struct Tray<R: Runtime> {
     app: AppHandle<R>,
-    icon: TrayIcon<R>,
+    icon: Arc<TrayIcon<R>>,
+    /// The image's motion; a thread turns its frames while a phase runs.
+    motion: Arc<Motion>,
     /// The status line of the menu now shown; replaced with every new menu.
     status: Mutex<MenuItem<R>>,
     /// What the menu was last built from: a change of language or state
@@ -403,16 +402,20 @@ impl Tray<tauri::Wry> {
             &[],
         )?;
         let icon = TrayIconBuilder::with_id("arcvox")
-            .icon(ICON_IDLE)
+            .icon(Phase::Rest.image())
             .icon_as_template(true)
             .menu(&first)
             .show_menu_on_left_click(true)
             .tooltip(identity::name(app.package_info()))
             .on_menu_event(|app, event| crate::app::tray_action(app, event.id().as_ref()))
             .build(app)?;
+        let icon = Arc::new(icon);
+        let motion = Arc::new(Motion::default());
+        Motion::run(Arc::clone(&motion), Arc::clone(&icon));
         Ok(Self {
             app: app.clone(),
             icon,
+            motion,
             status: Mutex::new(status),
             last_state: Mutex::new(UiState::Idle),
             language: Mutex::new(language),
@@ -530,10 +533,19 @@ impl<R: Runtime> Tray<R> {
 
     fn show_icon(&self, state: UiState) {
         let noticed = !self.notices.lock().unwrap().is_empty();
-        let _ = self.icon.set_icon(Some(status_icon(state, noticed)));
-        // Replacing the image resets the template flag on macOS; restore it so
-        // the icon follows the menu bar's light or dark appearance.
-        let _ = self.icon.set_icon_as_template(true);
+        let goal = Goal::of(state, noticed);
+        let still = reduce_motion();
+        self.motion.drive(&self.icon, |m| {
+            m.goal = goal;
+            m.still = still;
+            m.phase.toward(goal, still)
+        });
+    }
+
+    /// Shows how the dictation ended for a moment, before the image rests.
+    pub fn outcome(&self, outcome: Outcome) {
+        self.motion
+            .drive(&self.icon, |m| m.phase.with_outcome(outcome, m.goal));
     }
 
     /// The state the status line shows.
@@ -542,15 +554,102 @@ impl<R: Runtime> Tray<R> {
     }
 }
 
-/// `noticed`: something needs attention although dictation works. It shows
-/// while nothing is being recorded or processed.
-fn status_icon(state: UiState, noticed: bool) -> Image<'static> {
-    match state {
-        UiState::Idle | UiState::Inserting if noticed => ICON_PROBLEM,
-        UiState::Idle | UiState::Inserting => ICON_IDLE,
-        UiState::Recording | UiState::Locked => ICON_RECORDING,
-        UiState::Processing => ICON_PROCESSING,
-        UiState::NoAccessibility | UiState::EngineError => ICON_PROBLEM,
+/// The system asks for reduced motion: the image jumps between still pictures.
+fn reduce_motion() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        crate::platform::macos::reduce_motion()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+/// The phase the image is in, what it moves towards, and when its frame is due.
+struct MotionState {
+    phase: Phase,
+    goal: Goal,
+    still: bool,
+    due: Option<Instant>,
+}
+
+/// The image's motion. A change of state or an outcome sets the phase at
+/// once; the thread shows the frames that follow at their times.
+struct Motion {
+    state: Mutex<MotionState>,
+    wake: Condvar,
+}
+
+impl Default for Motion {
+    fn default() -> Self {
+        Self {
+            state: Mutex::new(MotionState {
+                phase: Phase::Rest,
+                goal: Goal::Rest,
+                still: false,
+                due: None,
+            }),
+            wake: Condvar::new(),
+        }
+    }
+}
+
+fn show<R: Runtime>(icon: &TrayIcon<R>, phase: Phase) {
+    // The image and its template flag go in one step: set apart, the image
+    // is drawn once without the flag and the frames flicker.
+    let _ = icon.set_icon_with_as_template(Some(phase.image()), true);
+}
+
+impl Motion {
+    /// Applies a change and shows the new phase when it is another one.
+    fn drive<R: Runtime>(
+        &self,
+        icon: &TrayIcon<R>,
+        change: impl FnOnce(&mut MotionState) -> Phase,
+    ) {
+        let mut m = self.state.lock().unwrap();
+        let next = change(&mut m);
+        if next == m.phase {
+            return;
+        }
+        m.phase = next;
+        m.due = next.wait(m.still).map(|wait| Instant::now() + wait);
+        show(icon, next);
+        self.wake.notify_one();
+    }
+
+    /// Turns the frames for the life of the process.
+    fn run<R: Runtime>(motion: Arc<Self>, icon: Arc<TrayIcon<R>>) {
+        std::thread::Builder::new()
+            .name("tray-motion".into())
+            .spawn(move || loop {
+                let next = {
+                    let mut m = motion.state.lock().unwrap();
+                    loop {
+                        match m.due {
+                            None => m = motion.wake.wait(m).unwrap(),
+                            Some(due) => {
+                                let now = Instant::now();
+                                if due <= now {
+                                    break;
+                                }
+                                m = motion.wake.wait_timeout(m, due - now).unwrap().0;
+                            }
+                        }
+                    }
+                    let next = m.phase.next(m.goal, m.still);
+                    m.phase = next;
+                    // Counted from the time this frame was due, not from
+                    // now: the frames keep their pace whatever the main
+                    // thread's delay in drawing them.
+                    let due = m.due.unwrap_or_else(Instant::now);
+                    m.due = next.wait(m.still).map(|wait| due + wait);
+                    next
+                };
+                show(&icon, next);
+            })
+            .expect("tray motion thread");
     }
 }
 
@@ -638,31 +737,24 @@ mod tests {
 
     #[test]
     fn a_problem_shows_in_the_icon_itself() {
-        assert_ne!(
-            status_icon(UiState::NoAccessibility, false).rgba(),
-            status_icon(UiState::Idle, false).rgba()
-        );
-        assert_eq!(
-            status_icon(UiState::EngineError, false).rgba(),
-            status_icon(UiState::NoAccessibility, false).rgba()
-        );
-        assert_eq!(
-            status_icon(UiState::Inserting, false).rgba(),
-            status_icon(UiState::Idle, false).rgba()
-        );
+        assert_ne!(Phase::Problem.image().rgba(), Phase::Rest.image().rgba());
+        assert_eq!(Goal::of(UiState::NoAccessibility, false), Goal::Problem);
+        assert_eq!(Goal::of(UiState::EngineError, false), Goal::Problem);
+        assert_eq!(Goal::of(UiState::Idle, false), Goal::Rest);
     }
 
     #[test]
     fn a_problem_that_leaves_dictation_working_shows_while_idle() {
-        let problem = status_icon(UiState::NoAccessibility, false);
-        assert_eq!(status_icon(UiState::Idle, true).rgba(), problem.rgba());
-        assert_eq!(status_icon(UiState::Inserting, true).rgba(), problem.rgba());
-        // A dictation in progress keeps its own icon.
-        for state in [UiState::Recording, UiState::Locked, UiState::Processing] {
-            assert_eq!(
-                status_icon(state, true).rgba(),
-                status_icon(state, false).rgba()
-            );
+        assert_eq!(Goal::of(UiState::Idle, true), Goal::Problem);
+        // A dictation in progress keeps its own motion; the text going in is part of it.
+        for state in [
+            UiState::Recording,
+            UiState::Locked,
+            UiState::Processing,
+            UiState::Inserting,
+        ] {
+            assert_eq!(Goal::of(state, true), Goal::of(state, false));
+            assert_ne!(Goal::of(state, true), Goal::Problem);
         }
     }
 

@@ -23,6 +23,11 @@ use crate::platform::{
 };
 use crate::shortcut::Shortcut;
 
+/// Whether the system asks for reduced motion.
+pub fn reduce_motion() -> bool {
+    objc2_app_kit::NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion()
+}
+
 pub struct MacPlatform {
     tap: Arc<event_tap::TapState>,
 }
