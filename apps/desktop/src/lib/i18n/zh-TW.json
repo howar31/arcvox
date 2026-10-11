@@ -1028,5 +1028,15 @@
   "flow.llm_title": "送出前景視窗的標題",
   "flow.llm_title_help": "讓模型知道你在哪個應用程式裡說話。",
   "flow.llm_short": "輸出太短就退回原文",
-  "flow.llm_short_help": "短於原文的一半時視為失敗，改用辨識結果。"
+  "flow.llm_short_help": "短於原文的一半時視為失敗，改用辨識結果。",
+  "flow.manage_profiles": "管理情境…",
+  "flow.manage_title": "管理情境",
+  "flow.manage_selected": "已選 {count} 個",
+  "flow.manage_none_selected": "勾選要一起刪除的情境。",
+  "flow.manage_delete_selected": "刪除所選",
+  "flow.manage_delete_title": "刪除 {count} 個情境？",
+  "flow.manage_delete_body": "{names}。用這些情境的應用程式會改用預設情境。歷史紀錄不受影響。",
+  "flow.manage_deleted": "已刪除 {count} 個情境",
+  "flow.manage_done": "完成",
+  "flow.manage_default_locked": "預設情境不能刪除。"
 }

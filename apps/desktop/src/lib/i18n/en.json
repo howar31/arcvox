@@ -1028,5 +1028,15 @@
   "flow.llm_title": "Send the front window's title",
   "flow.llm_title_help": "So the model knows which application you are speaking in.",
   "flow.llm_short": "Fall back when the output is too short",
-  "flow.llm_short_help": "Shorter than half the input counts as a failure and the recognised text is used."
+  "flow.llm_short_help": "Shorter than half the input counts as a failure and the recognised text is used.",
+  "flow.manage_profiles": "Manage profiles…",
+  "flow.manage_title": "Manage profiles",
+  "flow.manage_selected": "{count} selected",
+  "flow.manage_none_selected": "Tick the profiles to delete together.",
+  "flow.manage_delete_selected": "Delete selected",
+  "flow.manage_delete_title": "Delete {count} profiles?",
+  "flow.manage_delete_body": "{names}. Applications that used them fall back to the default profile. The history is not affected.",
+  "flow.manage_deleted": "{count} profiles deleted",
+  "flow.manage_done": "Done",
+  "flow.manage_default_locked": "The default profile cannot be deleted."
 }

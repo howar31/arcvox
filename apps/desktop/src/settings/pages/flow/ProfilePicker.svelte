@@ -6,13 +6,17 @@
   import Tag from "../../../lib/ui/Tag.svelte";
 
   /** The profile being edited, as a button that opens the list of all profiles. */
-  let { profiles, current, name, applies, onpick }: {
+  let { profiles, current, name, applies, onpick, onmanage, onadd }: {
     profiles: Profile[];
     current: string;
     /** The name shown for the current profile, which may be an unsaved edit. */
     name: string;
     applies: (p: Profile) => string;
     onpick: (id: string) => void;
+    /** Opens the list where several profiles are managed at once. */
+    onmanage: () => void;
+    /** Opens the choice of a blank profile or a preset. */
+    onadd: () => void;
   } = $props();
 
   // The list gets a search field from this many profiles on.
@@ -100,6 +104,13 @@
           <p class="none">{t("flow.no_match")}</p>
         {/each}
       </div>
+      <div class="foot">
+        <span>{t("flow.count", { count: String(profiles.length) })}</span>
+        <span class="acts">
+          <button type="button" class="btn quiet" onclick={() => { hide(); onadd(); }}><Icon name="plus" size={14} />{t("flow.add")}</button>
+          <button type="button" class="btn quiet" onclick={() => { hide(); onmanage(); }}>{t("flow.manage_profiles")}</button>
+        </span>
+      </div>
     </div>
   {/if}
 </div>
@@ -122,4 +133,6 @@
   .line { display: flex; align-items: center; gap: 8px; }
   .where { display: block; color: var(--ink-2); font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .none { margin: 0; padding: 12px; color: var(--ink-2); font-size: var(--text-sm); }
+  .foot .acts { display: flex; gap: 2px; }
+  .foot { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px -6px -6px; padding: 4px 6px 4px 14px; border-top: 1px solid var(--line); background: var(--sunken); border-radius: 0 0 14px 14px; color: var(--ink-2); font-size: var(--text-sm); }
 </style>

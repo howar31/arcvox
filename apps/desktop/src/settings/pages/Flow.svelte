@@ -27,6 +27,7 @@
   import AddPerApp from "./AddPerApp.svelte";
   import EnginePicker from "./flow/EnginePicker.svelte";
   import LastPanel from "./flow/LastPanel.svelte";
+  import ManageProfiles from "./flow/ManageProfiles.svelte";
   import ProfilePicker from "./flow/ProfilePicker.svelte";
   import StageRail, { type Cell } from "./flow/StageRail.svelte";
 
@@ -37,6 +38,7 @@
   const LANG_KEYS: Record<string, string> = { "zh-TW": "profiles.lang.zh_tw", en: "profiles.lang.en", ja: "profiles.lang.ja" };
 
   let stage = $state<StageId>("asr");
+  let managing = $state(false);
   // The profile's newest dictation with its stages: undefined while it is being read, null when there is none.
   let last = $state<LastRun | null | undefined>(undefined);
   let lastFor = "";
@@ -306,8 +308,12 @@
 
 {#if config.value && draft && source && lines}
   <div class="pick">
-    <ProfilePicker {profiles} current={source.id} name={draft.name.trim() || source.name} {applies} onpick={(id) => guard.request(() => go("flow", id))} />
-    <button type="button" class="btn add" onclick={() => guard.request(() => { revert(); adding = true; })}><Icon name="plus" size={14} />{t("flow.add")}</button>
+    <ProfilePicker
+      {profiles} current={source.id} name={draft.name.trim() || source.name} {applies}
+      onpick={(id) => guard.request(() => go("flow", id))}
+      onadd={() => guard.request(() => { revert(); adding = true; })}
+      onmanage={() => guard.request(() => (managing = true))}
+    />
   </div>
 
   <div class="who">
@@ -499,6 +505,8 @@
   <SaveBar {dirty} {saving} message={problem} onsave={save} onrevert={revert} />
 {/if}
 
+<ManageProfiles bind:open={managing} {profiles} {applies} />
+
 <Modal bind:open={adding} title={t("flow.add")}>
   <div class="choices" class:busy inert={busy} aria-busy={busy}>
     <Row label={t("profiles.blank")} help={t("profiles.blank.desc")} onclick={() => create(null)} />
@@ -522,7 +530,6 @@
 
 <style>
   .pick { display: flex; align-items: center; gap: 10px; }
-  .pick .add { height: 44px; border-radius: 12px; flex: none; }
   .who { display: flex; align-items: center; gap: 10px; min-height: var(--control); margin: 12px 4px 12px; }
   .name-field { width: 240px; flex: none; }
   .where { flex: 1; min-width: 0; color: var(--ink-2); font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
