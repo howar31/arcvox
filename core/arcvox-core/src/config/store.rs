@@ -387,7 +387,7 @@ mod tests {
             .steps
             .iter()
             .filter_map(|s| match s {
-                StepSpec::OpenCc { config } => Some(config.as_str()),
+                StepSpec::OpenCc { config, .. } => Some(config.as_str()),
                 _ => None,
             })
             .collect();

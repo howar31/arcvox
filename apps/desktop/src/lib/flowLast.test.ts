@@ -78,6 +78,9 @@ describe("flowLast", () => {
     expect(stageOpen("rules", bare)).toBe(false);
     expect(stageOpen("capture", bare)).toBe(true);
     expect(stageOpen("opencc2", { ...profile, steps: [{ step: "asr" }, { step: "opencc", config: "s2tw" }, { step: "llm" }] })).toBe(false);
+    const onlySecond: Profile = { ...profile, steps: [{ step: "asr" }, { step: "llm" }, { step: "opencc", config: "s2tw" }] };
+    expect(stageOpen("opencc1", onlySecond)).toBe(false);
+    expect(stageOpen("opencc2", onlySecond)).toBe(true);
   });
 
   it("counts a run of removed or added units as one change", () => {

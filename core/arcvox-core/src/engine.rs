@@ -765,7 +765,7 @@ impl Engine {
                     // A rerun starts from the kept recording: nothing to
                     // trim, nothing inserted.
                     stages: std::iter::once(StageRecord {
-                        position: StageKind::Capture.position(0),
+                        position: StageKind::Capture.position(false),
                         kind: StageKind::Capture,
                         text: None,
                         ms: None,
@@ -773,7 +773,7 @@ impl Engine {
                     })
                     .chain(out.stages.iter().cloned())
                     .chain(std::iter::once(StageRecord {
-                        position: StageKind::Record.position(0),
+                        position: StageKind::Record.position(false),
                         kind: StageKind::Record,
                         text: None,
                         ms: None,
@@ -1461,14 +1461,14 @@ async fn run_session(
     let kept_ms = clip_ms(&clip).unwrap_or(0);
     let mut stages = vec![
         StageRecord {
-            position: StageKind::Capture.position(0),
+            position: StageKind::Capture.position(false),
             kind: StageKind::Capture,
             text: None,
             ms: None,
             detail: serde_json::json!({ "duration_ms": recorded_ms }),
         },
         StageRecord {
-            position: StageKind::Trim.position(0),
+            position: StageKind::Trim.position(false),
             kind: StageKind::Trim,
             text: None,
             ms: None,
@@ -1477,7 +1477,7 @@ async fn run_session(
     ];
     stages.extend(outcome.stages);
     stages.push(StageRecord {
-        position: StageKind::Record.position(0),
+        position: StageKind::Record.position(false),
         kind: StageKind::Record,
         text: None,
         ms: None,

@@ -1,5 +1,5 @@
 import type { InsertMethod, ManifestView, Profile, ProviderConfig } from "./api";
-import { scriptChoice } from "./flowEdit";
+import { scriptAt, scriptLabel } from "./flowEdit";
 import { t } from "./i18n";
 import { modelDescription } from "./labels";
 import { engineMeta } from "./profileEdit";
@@ -37,12 +37,8 @@ export function engineLine(providers: ProviderConfig[], id: string | null, insta
 
 /** The output stage; `method` is the default insertion method. */
 export function outputLine(profile: Profile, method: InsertMethod = "paste"): StageLine {
-  const script = scriptChoice(profile);
-  const meta =
-    script === "tw" ? t("home.output_opencc")
-    : script === "twp" ? t("home.output_opencc_twp")
-    : script === "none" ? t("home.output_plain")
-    : t("home.output_opencc_other", { config: script.other });
+  const script = scriptAt(profile, 1);
+  const meta = script ? scriptLabel(script.config) : t("home.output_plain");
   return { name: t("home.output_" + method), meta, known: true, missing: false };
 }
 

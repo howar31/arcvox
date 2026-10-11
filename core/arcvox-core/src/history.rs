@@ -37,19 +37,18 @@ pub enum StageKind {
 }
 
 impl StageKind {
-    /// The stage's place in the fixed order. `nth` counts earlier stages of
-    /// the same kind in the run: the second script conversion sits after
-    /// the rewrite.
-    pub fn position(self, nth: u32) -> u32 {
+    /// The stage's place in the fixed order. A script conversion is stage
+    /// 4 before the rewrite and stage 6 after it.
+    pub fn position(self, after_rewrite: bool) -> u32 {
         match self {
             StageKind::Capture => 1,
             StageKind::Trim => 2,
             StageKind::Asr => 3,
             StageKind::OpenCc => {
-                if nth == 0 {
-                    4
-                } else {
+                if after_rewrite {
                     6
+                } else {
+                    4
                 }
             }
             StageKind::Llm => 5,
@@ -1109,7 +1108,7 @@ impl HistoryStore {
             "UPDATE utterances SET final_text = ?1, updated = ?3 WHERE id = ?2",
             params![text, id.0, now_ms()],
         )?;
-        let position = StageKind::Insert.position(0);
+        let position = StageKind::Insert.position(false);
         tx.execute(
             "DELETE FROM stages WHERE utterance_id = ?1 AND attempt_id IS NULL AND position = ?2",
             params![id.0, position as i64],

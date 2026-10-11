@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Config, Profile } from "./api";
-import { appliesDictionary, convertsScript, scriptChoice, selectedProfile, withDictionary, withScript } from "./flowEdit";
+import { appliesDictionary, convertsScript, SCRIPT_CONFIGS, scriptAt, scriptLabel, selectedProfile, withDictionary, withScriptAt, withScriptPunctuation } from "./flowEdit";
 
 const base: Profile = {
   id: "default", name: "Default", is_default: true, matcher: { app_ids: [], url_patterns: [] },
@@ -10,27 +10,41 @@ const base: Profile = {
 const kinds = (p: Profile) => p.steps.map((s) => s.step);
 
 describe("flowEdit", () => {
-  it("turns script conversion off by removing every such step and on by adding one after recognition and one after the rewrite", () => {
-    const off = withScript(base, "none");
-    expect(kinds(off)).toEqual(["asr", "llm", "rules"]);
-    expect(convertsScript(off)).toBe(false);
-    const on = withScript(off, "tw");
-    expect(kinds(on)).toEqual(["asr", "opencc", "llm", "opencc", "rules"]);
-    expect(on.steps[1]).toEqual({ step: "opencc", config: "s2tw" });
-    expect(on.steps[3]).toEqual({ step: "opencc", config: "s2tw" });
-    const noLlm: Profile = { ...off, steps: [{ step: "asr" }, { step: "rules" }] };
-    expect(kinds(withScript(noLlm, "twp"))).toEqual(["asr", "opencc", "rules"]);
+  it("reads and sets each conversion pass on its own", () => {
+    expect(scriptAt(base, 1)).toEqual({ config: "s2tw", punctuation: false });
+    expect(scriptAt(base, 2)).toEqual({ config: "s2tw", punctuation: false });
+    const second = withScriptAt(base, 2, "s2twp");
+    expect(kinds(second)).toEqual(["asr", "opencc", "llm", "opencc", "rules"]);
+    expect(second.steps[1]).toEqual({ step: "opencc", config: "s2tw" });
+    expect(second.steps[3]).toEqual({ step: "opencc", config: "s2twp", punctuation: false });
+    expect(scriptAt(second, 2)?.config).toBe("s2twp");
+    const noFirst = withScriptAt(base, 1, null);
+    expect(kinds(noFirst)).toEqual(["asr", "llm", "opencc", "rules"]);
+    expect(scriptAt(noFirst, 1)).toBeNull();
+    expect(scriptAt(noFirst, 2)?.config).toBe("s2tw");
+    const noSecond = withScriptAt(base, 2, null);
+    expect(kinds(noSecond)).toEqual(["asr", "opencc", "llm", "rules"]);
+    expect(scriptAt(noSecond, 2)).toBeNull();
+    expect(kinds(withScriptAt(noFirst, 1, "t2jp"))).toEqual(["asr", "opencc", "llm", "opencc", "rules"]);
+    const noLlm: Profile = { ...base, steps: [{ step: "asr" }, { step: "rules" }] };
+    expect(kinds(withScriptAt(noLlm, 2, "s2hk"))).toEqual(["asr", "rules", "opencc"]);
+    expect(scriptAt(noLlm, 2)).toBeNull();
+    expect(convertsScript(noLlm)).toBe(false);
   });
 
-  it("names the conversion a profile applies and changes it on every conversion step", () => {
-    expect(scriptChoice(base)).toBe("tw");
-    expect(scriptChoice(withScript(base, "none"))).toBe("none");
-    const twp = withScript(base, "twp");
-    expect(scriptChoice(twp)).toBe("twp");
-    expect(twp.steps.filter((s) => s.step === "opencc").map((s) => s.config)).toEqual(["s2twp", "s2twp"]);
-    const hk: Profile = { ...base, steps: [{ step: "asr" }, { step: "opencc", config: "s2hk" }] };
-    expect(scriptChoice(hk)).toEqual({ other: "s2hk" });
-    expect(scriptChoice(withScript(hk, "tw"))).toBe("tw");
+  it("keeps and sets the punctuation choice of a pass", () => {
+    const on = withScriptPunctuation(base, 1, true);
+    expect(scriptAt(on, 1)).toEqual({ config: "s2tw", punctuation: true });
+    expect(scriptAt(on, 2)?.punctuation).toBe(false);
+    expect(scriptAt(withScriptAt(on, 1, "s2hk"), 1)).toEqual({ config: "s2hk", punctuation: true });
+    expect(withScriptPunctuation(withScriptAt(base, 1, null), 1, true)).toEqual(withScriptAt(base, 1, null));
+  });
+
+  it("names every configuration the core accepts and shows an unknown one by its name", () => {
+    expect(SCRIPT_CONFIGS).toHaveLength(16);
+    expect(new Set(SCRIPT_CONFIGS).size).toBe(16);
+    expect(scriptLabel("s2tw")).not.toBe("s2tw");
+    expect(scriptLabel("x2y")).toBe("x2y");
   });
 
   it("turns the dictionary off and on at the end", () => {
@@ -41,7 +55,7 @@ describe("flowEdit", () => {
   });
 
   it("does not change the profile it was given", () => {
-    withScript(base, "none");
+    withScriptAt(base, 1, null);
     withDictionary(base, false);
     expect(base.steps).toHaveLength(5);
   });
@@ -55,4 +69,5 @@ describe("flowEdit", () => {
     expect(selectedProfile({ profiles: [other] } as unknown as Config, null)?.id).toBe("mail");
     expect(selectedProfile(null, null)).toBeNull();
   });
+
 });

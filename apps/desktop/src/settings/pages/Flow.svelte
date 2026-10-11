@@ -5,7 +5,7 @@
     profilesPresets, setDefaultProfile, upsertProfile, type InstalledModel, type LastRun, type ManifestView, type PresetView, type Profile,
   } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
-  import { appliesDictionary, scriptChoice, selectedProfile, withDictionary, withScript } from "../../lib/flowEdit";
+  import { appliesDictionary, PUNCTUATION_CONFIGS, SCRIPT_CONFIGS, SCRIPT_GROUPS, scriptAt, scriptLabel, selectedProfile, withDictionary, withScriptAt, withScriptPunctuation, type ScriptPass } from "../../lib/flowEdit";
   import { cellLine, runHeadline, stageOpen, type StageId } from "../../lib/flowLast";
   import { guard } from "../../lib/guard.svelte";
   import { t } from "../../lib/i18n";
@@ -19,9 +19,9 @@
   import Icon from "../../lib/ui/Icon.svelte";
   import Modal from "../../lib/ui/Modal.svelte";
   import PageHead from "../../lib/ui/PageHead.svelte";
+  import PageLink from "../../lib/ui/PageLink.svelte";
   import Row from "../../lib/ui/Row.svelte";
   import SaveBar from "../../lib/ui/SaveBar.svelte";
-  import Segmented from "../../lib/ui/Segmented.svelte";
   import Switch from "../../lib/ui/Switch.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
   import AddPerApp from "./AddPerApp.svelte";
@@ -147,8 +147,10 @@
   const cells = $derived.by((): Cell[] => {
     if (!draft || !lines) return [];
     const run = last?.stages ?? null;
-    const script = scriptChoice(draft);
-    const scriptLabel = script === "tw" ? t("flow.script_tw") : script === "twp" ? t("flow.script_twp") : script === "none" ? t("flow.script_none") : script.other;
+    const passLabel = (pass: ScriptPass) => {
+      const script = scriptAt(draft!, pass);
+      return script ? scriptLabel(script.config) : t("flow.script_none");
+    };
     const dict = config.value?.dictionary ?? [];
     const aliases = dict.reduce((n, e) => n + e.aliases.length, 0);
     const snippets = dict.filter((e) => e.term.includes("\n")).length;
@@ -159,9 +161,9 @@
       cell("capture", t("home.stage.capture"), lines.mic.name, lines.mic.missing),
       cell("trim", t("flow.stage.trim"), t("flow.trim_meta")),
       cell("asr", t("home.stage.asr"), lines.asr.name, lines.asr.missing, !lines.asr.known),
-      cell("opencc1", t("flow.stage.opencc"), scriptLabel),
+      cell("opencc1", t("flow.stage.opencc"), passLabel(1)),
       cell("llm", t("home.stage.llm"), lines.llm.name, lines.llm.missing, !lines.llm.known),
-      cell("opencc2", t("flow.stage.opencc"), stageOpen("opencc2", draft) ? t("flow.opencc_same") : scriptLabel),
+      cell("opencc2", t("flow.stage.opencc"), passLabel(2)),
       cell("rules", t("flow.stage.rules"), rules),
       cell("insert", t("flow.stage.insert"), lines.out.name),
       cell("record", t("flow.stage.record"), t("flow.record_meta")),
@@ -462,23 +464,30 @@
           </Group>
         {/if}
       {:else if stage === "opencc1" || stage === "opencc2"}
-        <Group title={t("flow.stage.opencc")} help={stage === "opencc2" ? t("flow.opencc_same") : undefined}>
-          {@const script = scriptChoice(draft)}
-          <Row label={t("flow.script")} help={t("flow.script_help")} />
-          <!-- The choice sits under its label: four names side by side need the whole width of the column.
-               A configuration set outside this page is shown by its name and kept until another choice is made. -->
-          <div class="ctl">
-            <Segmented
-              options={[
-                { value: "tw", label: t("flow.script_tw") },
-                { value: "twp", label: t("flow.script_twp") },
-                ...(typeof script === "object" ? [{ value: "other", label: script.other }] : []),
-                { value: "none", label: t("flow.script_none") },
-              ]}
-              bind:value={() => (typeof script === "object" ? "other" : script), (v) => { if (v !== "other") draft = withScript(snapshot(), v); }}
-              label={t("flow.script")}
-            />
-          </div>
+        {@const pass: ScriptPass = stage === "opencc1" ? 1 : 2}
+        {@const script = scriptAt(draft, pass)}
+        <Group title={t("flow.stage.opencc")}>
+          <Row label={t("flow.script")} help={t(pass === 1 ? "flow.script_help" : "flow.script_help2")}>
+            <!-- Sixteen fixed conversions: a list, grouped by the script they produce. A configuration set
+                 outside this page is listed by its name and kept until another choice is made. -->
+            <select class="field wide" value={script?.config ?? ""} aria-label={t("flow.script")} onchange={(e) => (draft = withScriptAt(snapshot(), pass, e.currentTarget.value || null))}>
+              <option value="">{t("flow.script_none")}</option>
+              {#each SCRIPT_GROUPS as g (g.id)}
+                <optgroup label={t(`flow.script_group.${g.id}`)}>
+                  {#each g.configs as c (c)}<option value={c}>{scriptLabel(c)}</option>{/each}
+                </optgroup>
+              {/each}
+              {#if script && !SCRIPT_CONFIGS.includes(script.config)}<option value={script.config}>{script.config}</option>{/if}
+            </select>
+          </Row>
+          {#if script && PUNCTUATION_CONFIGS.includes(script.config)}
+            <Row label={t("flow.script_punct")} help={t("flow.script_punct_help")}>
+              <Switch bind:checked={() => script.punctuation, (v) => (draft = withScriptPunctuation(snapshot(), pass, v))} label={t("flow.script_punct")} />
+            </Row>
+          {/if}
+          <Row label={t("flow.opencc_engine")}>
+            {#snippet help()}{t("flow.opencc_engine_before")}<PageLink page="about" label={t("nav.about")} />{t("flow.opencc_engine_after")}{/snippet}
+          </Row>
         </Group>
       {:else if stage === "rules"}
         <Group title={t("flow.stage.rules")}>
@@ -547,13 +556,13 @@
   .right .ttl span.unknown { color: var(--live); }
   /* The first group under the panel keeps the page's usual distance; the panel sits right under the title. */
   .right :global(.section:first-of-type h2) { margin-top: var(--gap-group); }
-  .ctl { padding: 0 var(--row-x) var(--row-y); margin-top: -6px; }
 
   .bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: var(--gap-group) 4px 12px; min-height: 20px; }
   .missing { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 4px 0; color: var(--warn); font-size: var(--text-sm); }
   .bar h2 { margin: 0; font: 600 var(--text-sm)/1 var(--font); color: var(--ink-2); }
   .bar .btn { margin: -10px -8px -10px 0; }
   .field { width: 240px; flex: none; }
+  .field.wide { width: 300px; }
   textarea { display: block; }
   .pair-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
   .arrow { flex: none; color: var(--ink-3); }

@@ -4,6 +4,7 @@
 import type { Profile, Stage, Utterance } from "./api";
 import { formatShortDate, formatTime } from "./format";
 import { t } from "./i18n";
+import { scriptAt } from "./flowEdit";
 import { diff } from "./textDiff";
 
 /** The nine stages in order; the two script conversions are told apart by their place. */
@@ -33,8 +34,8 @@ export function stageOpen(id: StageId, profile: Profile): boolean {
   const kinds = profile.steps.map((s) => s.step);
   switch (id) {
     case "llm": return profile.llm_provider !== null && kinds.includes("llm");
-    case "opencc1": return kinds.includes("opencc");
-    case "opencc2": return kinds.filter((k) => k === "opencc").length >= 2;
+    case "opencc1": return scriptAt(profile, 1) !== null;
+    case "opencc2": return scriptAt(profile, 2) !== null;
     case "rules": return kinds.includes("rules");
     default: return true;
   }

@@ -241,6 +241,7 @@ mod tests {
             StepSpec::Asr,
             StepSpec::OpenCc {
                 config: "s2twp".into(),
+                punctuation: false,
             },
         ];
         assert_eq!(validate(&c), Ok(()));

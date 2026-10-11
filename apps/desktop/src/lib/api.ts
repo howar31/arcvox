@@ -14,7 +14,7 @@ export interface ProviderConfig {
   extra_headers: Record<string, string>; model_path: string | null; native_id: string | null;
   model_id: string | null; runtime: Runtime | null;
 }
-export type StepSpec = { step: "asr" } | { step: "opencc"; config: string } | { step: "llm" } | { step: "rules" };
+export type StepSpec = { step: "asr" } | { step: "opencc"; config: string; punctuation?: boolean } | { step: "llm" } | { step: "rules" };
 export interface Example { raw: string; refined: string }
 export interface Matcher { app_ids: string[]; url_patterns: string[] }
 export interface Profile {

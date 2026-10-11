@@ -158,6 +158,10 @@ pub enum StepSpec {
         /// OpenCC config name, for example `s2tw` (characters only) or
         /// `s2twp` (characters and Taiwan phrasing).
         config: String,
+        /// Quotation marks follow the script too (Simplified and
+        /// Traditional punctuation differ); ignored by the regional configs.
+        #[serde(default)]
+        punctuation: bool,
     },
     Llm,
     Rules,
@@ -335,10 +339,12 @@ impl Config {
             StepSpec::Asr,
             StepSpec::OpenCc {
                 config: "s2tw".into(),
+                punctuation: false,
             },
             StepSpec::Llm,
             StepSpec::OpenCc {
                 config: "s2tw".into(),
+                punctuation: false,
             },
             StepSpec::Rules,
         ]
@@ -468,7 +474,7 @@ mod tests {
         assert_eq!(json[0], serde_json::json!({"step":"asr"}));
         assert_eq!(
             json[1],
-            serde_json::json!({"step":"opencc","config":"s2tw"})
+            serde_json::json!({"step":"opencc","config":"s2tw","punctuation":false})
         );
         assert_eq!(json[2], serde_json::json!({"step":"llm"}));
         assert_eq!(json[4], serde_json::json!({"step":"rules"}));

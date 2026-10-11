@@ -1,5 +1,6 @@
-//! Simplified to Traditional conversion: characters only (`s2tw`, the
-//! default) or characters and Taiwan phrasing (`s2twp`).
+//! Chinese script conversion with the OpenCC dictionaries: every
+//! configuration the engine offers (Simplified, Traditional, Taiwan, Hong
+//! Kong and Japanese forms, with or without phrasing), `s2tw` by default.
 //! Pure Rust via opencc-fmmseg; no C dependency.
 
 use async_trait::async_trait;
@@ -7,12 +8,21 @@ use async_trait::async_trait;
 use crate::steps::{PipelineContext, Step, StepError, StepInput, StepOutput};
 use crate::types::{ErrorCode, StepName};
 
-const SUPPORTED: &[&str] = &[
-    "s2t", "s2tw", "s2twp", "t2s", "tw2s", "tw2sp", "s2hk", "hk2s", "t2tw", "tw2t",
+/// Every configuration the engine offers, in the order the client lists them.
+pub const SUPPORTED: &[&str] = &[
+    "s2tw", "s2twp", "t2tw", "t2twp", "s2hk", "t2hk", "s2t", "tw2t", "tw2tp", "hk2t", "jp2t",
+    "t2s", "tw2s", "tw2sp", "hk2s", "t2jp",
+];
+
+/// The configurations whose punctuation parameter the engine reads: the
+/// regional ones ignore it.
+pub const WITH_PUNCTUATION: &[&str] = &[
+    "s2t", "s2tw", "s2twp", "s2hk", "t2s", "tw2s", "tw2sp", "hk2s",
 ];
 
 pub struct OpenCcStep {
     config: String,
+    punctuation: bool,
     engine: opencc_fmmseg::OpenCC,
 }
 
@@ -28,7 +38,7 @@ impl std::fmt::Debug for OpenCcStep {
 }
 
 impl OpenCcStep {
-    pub fn new(config: &str) -> Result<Self, StepError> {
+    pub fn new(config: &str, punctuation: bool) -> Result<Self, StepError> {
         if !SUPPORTED.contains(&config) {
             return Err(StepError::fatal(
                 ErrorCode::InvalidConfig,
@@ -37,12 +47,13 @@ impl OpenCcStep {
         }
         Ok(Self {
             config: config.to_string(),
+            punctuation: punctuation && WITH_PUNCTUATION.contains(&config),
             engine: opencc_fmmseg::OpenCC::new(),
         })
     }
 
     pub fn convert(&self, text: &str) -> String {
-        self.engine.convert(text, &self.config, false)
+        self.engine.convert(text, &self.config, self.punctuation)
     }
 }
 
@@ -57,6 +68,7 @@ impl Step for OpenCcStep {
         Ok(StepOutput {
             detail: serde_json::json!({
                 "config": self.config,
+                "punctuation": self.punctuation,
                 "changed_chars": changed_chars(&input.text, &text),
             }),
             text,
@@ -86,7 +98,7 @@ mod tests {
 
     #[test]
     fn s2twp_converts_characters_and_taiwan_phrasing() {
-        let step = OpenCcStep::new("s2twp").unwrap();
+        let step = OpenCcStep::new("s2twp", false).unwrap();
         assert_eq!(step.convert("汉字"), "漢字");
         // Taiwan phrasing: 软件 -> 軟體, 信息 -> 資訊.
         assert_eq!(step.convert("软件信息"), "軟體資訊");
@@ -94,7 +106,7 @@ mod tests {
 
     #[test]
     fn traditional_input_is_unchanged() {
-        let step = OpenCcStep::new("s2twp").unwrap();
+        let step = OpenCcStep::new("s2twp", false).unwrap();
         assert_eq!(
             step.convert("臺灣正體中文，English and 日本語。"),
             "臺灣正體中文，English and 日本語。"
@@ -102,15 +114,43 @@ mod tests {
     }
 
     #[test]
+    fn every_engine_configuration_is_accepted() {
+        for c in SUPPORTED {
+            OpenCcStep::new(c, false).unwrap();
+        }
+        assert_eq!(
+            OpenCcStep::new("t2jp", false).unwrap().convert("臺灣"),
+            "台湾"
+        );
+        assert_eq!(
+            OpenCcStep::new("t2hk", false).unwrap().convert("衛生"),
+            "衞生"
+        );
+    }
+
+    #[test]
+    fn punctuation_follows_the_script_only_where_the_engine_reads_it() {
+        assert_eq!(
+            OpenCcStep::new("s2tw", true).unwrap().convert("“你好”"),
+            "「你好」"
+        );
+        assert_eq!(
+            OpenCcStep::new("s2tw", false).unwrap().convert("“你好”"),
+            "“你好”"
+        );
+        assert!(!OpenCcStep::new("t2hk", true).unwrap().punctuation);
+    }
+
+    #[test]
     fn unknown_config_is_rejected() {
-        let err = OpenCcStep::new("nope").unwrap_err();
+        let err = OpenCcStep::new("nope", false).unwrap_err();
         assert_eq!(err.code, ErrorCode::InvalidConfig);
         assert!(!err.recoverable);
     }
 
     #[tokio::test]
     async fn runs_as_step() {
-        let step = OpenCcStep::new("s2twp").unwrap();
+        let step = OpenCcStep::new("s2twp", false).unwrap();
         let out = step
             .run(
                 StepInput {

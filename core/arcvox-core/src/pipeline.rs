@@ -62,7 +62,10 @@ impl Pipeline {
                     })?;
                     Box::new(AsrStep::new(provider))
                 }
-                StepSpec::OpenCc { config: name } => Box::new(OpenCcStep::new(name)?),
+                StepSpec::OpenCc {
+                    config,
+                    punctuation,
+                } => Box::new(OpenCcStep::new(config, *punctuation)?),
                 StepSpec::Llm => {
                     let id = profile.llm_provider.as_ref().ok_or_else(|| {
                         StepError::fatal(ErrorCode::InvalidConfig, "llm step without llm_provider")
@@ -132,7 +135,8 @@ impl Pipeline {
         let mut snippets = 0u32;
         let mut llm_changed = false;
         let mut stages = Vec::with_capacity(self.steps.len());
-        let mut conversions = 0u32;
+        // A conversion before the rewrite is stage 4, one after it stage 6.
+        let mut after_rewrite = false;
 
         for step in &self.steps {
             let name = step.name();
@@ -145,9 +149,9 @@ impl Pipeline {
                 StepName::Llm => StageKind::Llm,
                 StepName::Rules => StageKind::Rules,
             };
-            let position = kind.position(conversions);
-            if kind == StageKind::OpenCc {
-                conversions += 1;
+            let position = kind.position(after_rewrite);
+            if kind == StageKind::Llm {
+                after_rewrite = true;
             }
             let _ = events.send(Event::StepStarted { step: name }).await;
             let started = Instant::now();
@@ -271,9 +275,9 @@ mod tests {
         Pipeline {
             steps: vec![
                 Box::new(AsrStep::new(asr)),
-                Box::new(OpenCcStep::new("s2twp").unwrap()),
+                Box::new(OpenCcStep::new("s2twp", false).unwrap()),
                 Box::new(LlmStep::new(llm)),
-                Box::new(OpenCcStep::new("s2twp").unwrap()),
+                Box::new(OpenCcStep::new("s2twp", false).unwrap()),
                 Box::new(RulesStep),
             ],
         }
@@ -325,6 +329,21 @@ mod tests {
         );
         assert_eq!(out.stages[4].detail["fixes"], 0);
         assert!(out.stages.iter().all(|s| s.ms.is_some()));
+    }
+
+    #[tokio::test]
+    async fn a_conversion_after_the_rewrite_alone_is_stage_six() {
+        let (tx, _rx) = mpsc::channel(64);
+        let p = Pipeline {
+            steps: vec![
+                Box::new(AsrStep::new(FakeAsr::ok("软件"))),
+                Box::new(LlmStep::new(FakeLlm::ok("软件"))),
+                Box::new(OpenCcStep::new("s2tw", false).unwrap()),
+            ],
+        };
+        let out = p.run(audio(), &test_context(), &tx).await.unwrap();
+        let positions: Vec<u32> = out.stages.iter().map(|s| s.position).collect();
+        assert_eq!(positions, [3, 5, 6]);
     }
 
     #[tokio::test]
@@ -588,6 +607,7 @@ mod tests {
             StepSpec::Asr,
             StepSpec::OpenCc {
                 config: "bogus".into(),
+                punctuation: false,
             },
         ];
         let err = Pipeline::build(&config, &profile, &registry).err().unwrap();
