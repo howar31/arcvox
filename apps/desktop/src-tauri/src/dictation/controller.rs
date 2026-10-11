@@ -269,7 +269,12 @@ impl Controller {
             }
             ModifierEvent::KeyDown { key_code, .. } => Input::KeyDown { key_code },
         };
-        let gestures = self.recognizer.on_input(input, now);
+        let mut gestures = self.recognizer.on_input(input, now);
+        // While a hands-free recording runs, a short press can only end it,
+        // so it does not wait out the double-tap window.
+        if matches!(self.state, State::Recording { locked: true, .. }) {
+            gestures.extend(self.recognizer.tap_now());
+        }
         for g in gestures {
             self.on_gesture(g);
         }
@@ -328,8 +333,11 @@ impl Controller {
         match g {
             Gesture::HoldStart => self.start_recording(false),
             Gesture::DoubleTap => self.start_recording(true),
-            Gesture::HoldEnd => {
-                if matches!(self.state, State::Recording { .. }) {
+            Gesture::HoldEnd { keyed } => {
+                // A hold that served a key combination does not end a
+                // hands-free recording; push-to-talk ends on release either way.
+                let locked = matches!(self.state, State::Recording { locked: true, .. });
+                if matches!(self.state, State::Recording { .. }) && !(locked && keyed) {
                     self.finish_recording();
                 }
             }
@@ -355,6 +363,22 @@ impl Controller {
                 other => self.state = other,
             },
             Gesture::Abort => match std::mem::replace(&mut self.state, State::Idle) {
+                // The shortcut with another key is a key combination for the
+                // application; a hands-free recording goes on through it.
+                // Escape has already been handled by `cancel_active`.
+                State::Recording {
+                    locked: true,
+                    session,
+                    capture,
+                    captured,
+                } => {
+                    self.state = State::Recording {
+                        locked: true,
+                        session,
+                        capture,
+                        captured,
+                    };
+                }
                 State::Armed { capture } => {
                     capture.stop();
                     self.settle_idle();
@@ -556,18 +580,30 @@ impl Controller {
         }
     }
 
+    /// Escape stops the dictation and keeps what it had produced as a
+    /// cancelled row of the history, so it can be taken up again from
+    /// there; a recording without speech is a slip and leaves nothing.
+    /// Whether a dictation already being processed is cancelled too is a
+    /// setting: Escape reaches the application as well.
     fn cancel_active(&mut self) {
         match std::mem::replace(&mut self.state, State::Idle) {
             State::Recording {
                 session, capture, ..
             } => {
-                capture.stop();
-                session.cancel();
+                let (samples, sent) = capture.stop();
+                let mut vad = (self.deps.vad_factory)();
+                match vad::trim(&samples, vad.as_mut()) {
+                    None => session.cancel(),
+                    Some(range) => {
+                        session.push_audio(&samples[sent..]);
+                        session.cancel_keep(Some(range));
+                    }
+                }
                 self.deps.ui.message(UiMessage::info(Msg::WidgetCancelled));
                 self.go_idle();
             }
-            State::Processing { session, .. } => {
-                session.cancel();
+            State::Processing { session, .. } if self.settings.hotkey.escape_cancels_processing => {
+                session.cancel_keep(None);
                 self.deps.ui.message(UiMessage::info(Msg::WidgetCancelled));
                 self.go_idle();
             }
@@ -1452,6 +1488,104 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn locked_mode_finishes_as_soon_as_the_tap_is_released() {
+        let mut s = fast_settings();
+        s.hotkey.double_tap_window_ms = 3000;
+        let r = rig(s).await;
+        mock_ok(&r, "一", "一").await;
+        r.modifier.send(fn_down()).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        r.modifier.send(fn_up()).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        r.modifier.send(fn_down()).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        r.modifier.send(fn_up()).unwrap();
+        wait_state(&r, UiState::Locked, "locked").await;
+        r.audio.speech(0.5);
+        r.modifier.send(fn_down()).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let released = Instant::now();
+        r.modifier.send(fn_up()).unwrap();
+        wait_state(&r, UiState::Processing, "processing").await;
+        // Well inside the window: the release itself ended the recording.
+        assert!(released.elapsed() < Duration::from_millis(1000));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_key_with_the_shortcut_does_not_end_a_locked_recording() {
+        let r = rig(fast_settings()).await;
+        mock_ok(&r, "一", "一").await;
+        r.modifier.send(fn_down()).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        r.modifier.send(fn_up()).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        r.modifier.send(fn_down()).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        r.modifier.send(fn_up()).unwrap();
+        wait_state(&r, UiState::Locked, "locked").await;
+        r.audio.speech(0.3);
+        // fn plus F1 within the hold threshold.
+        r.modifier.send(fn_down()).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        r.modifier.send(key_down(122)).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        r.modifier.send(fn_up()).unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(!r
+            .ui
+            .messages
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|m| m.msg == Msg::WidgetCancelled));
+        assert_eq!(r.ui.states.lock().unwrap().last(), Some(&UiState::Locked));
+        assert!(r.platform.calls().is_empty());
+        r.audio.speech(0.3);
+        // A tap on its own still ends it.
+        r.modifier.send(fn_down()).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        r.modifier.send(fn_up()).unwrap();
+        wait_for(
+            || r.platform.calls().contains(&"paste".to_string()),
+            "paste",
+        )
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_long_hold_with_a_key_does_not_end_a_locked_recording() {
+        let r = rig(fast_settings()).await;
+        mock_ok(&r, "一", "一").await;
+        r.modifier.send(fn_down()).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        r.modifier.send(fn_up()).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        r.modifier.send(fn_down()).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        r.modifier.send(fn_up()).unwrap();
+        wait_state(&r, UiState::Locked, "locked").await;
+        r.audio.speech(0.3);
+        // fn held past the threshold, then F1, then released.
+        r.modifier.send(fn_down()).unwrap();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        r.modifier.send(key_down(122)).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        r.modifier.send(fn_up()).unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert_eq!(r.ui.states.lock().unwrap().last(), Some(&UiState::Locked));
+        assert!(r.platform.calls().is_empty());
+        // A plain long press still ends it.
+        r.modifier.send(fn_down()).unwrap();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        r.modifier.send(fn_up()).unwrap();
+        wait_for(
+            || r.platform.calls().contains(&"paste".to_string()),
+            "paste",
+        )
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn locked_mode_finishes_on_a_long_press() {
         let r = rig(fast_settings()).await;
         mock_ok(&r, "一", "一").await;
@@ -1499,13 +1633,119 @@ mod tests {
         assert_eq!(*r.audio.stops.lock().unwrap(), 1);
     }
 
+    /// The rows of the history once one is there: a cancelled dictation's
+    /// row is written after the widget was told.
+    async fn wait_rows(r: &Rig) -> Vec<arcvox_core::history::Utterance> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let rows = r.engine.history().list_recent(10).unwrap();
+            if rows
+                .iter()
+                .any(|u| u.error_code.as_deref() != Some("interrupted"))
+            {
+                return rows;
+            }
+            assert!(Instant::now() < deadline, "no row after the cancel");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn escape_cancels_recording_and_processing() {
+    async fn escape_during_processing_leaves_the_dictation_alone_when_set_so() {
+        let mut s = fast_settings();
+        s.hotkey.escape_cancels_processing = false;
+        let r = rig(s).await;
+        mock_ok(&r, "x", "y").await;
+        hold_and_speak(&r, 0.3).await;
+        wait_state(&r, UiState::Processing, "processing").await;
+        r.modifier.send(key_down(KEY_ESCAPE)).unwrap();
+        wait_for(
+            || r.platform.calls().contains(&"paste".to_string()),
+            "paste",
+        )
+        .await;
+        assert!(!r
+            .ui
+            .messages
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|m| m.msg == Msg::WidgetCancelled));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn escape_during_processing_keeps_a_cancelled_row() {
+        let r = rig(fast_settings()).await;
+        // A slow rewrite, so the cancel lands while it runs.
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"text": "原文"})))
+            .mount(&r.asr)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"choices":[{"message":{"content": "整理後"}}]}))
+                    .set_delay(Duration::from_millis(1500)),
+            )
+            .mount(&r.llm)
+            .await;
+        hold_and_speak(&r, 0.3).await;
+        wait_state(&r, UiState::Processing, "processing").await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        r.modifier.send(key_down(KEY_ESCAPE)).unwrap();
+        wait_for(
+            || {
+                r.ui.messages
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|m| m.msg == Msg::WidgetCancelled)
+            },
+            "cancelled",
+        )
+        .await;
+        let rows = wait_rows(&r).await;
+        assert_eq!(rows[0].error_code.as_deref(), Some("cancelled"));
+        assert_eq!(rows[0].raw_text, "原文");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(r.platform.calls().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn escape_while_recording_keeps_what_was_said() {
+        let r = rig(fast_settings()).await;
+        r.modifier.send(fn_down()).unwrap();
+        wait_state(&r, UiState::Recording, "recording").await;
+        speak_and_wait(&r, 1.0).await;
+        r.modifier.send(key_down(KEY_ESCAPE)).unwrap();
+        wait_for(
+            || {
+                r.ui.messages
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|m| m.msg == Msg::WidgetCancelled)
+            },
+            "cancelled",
+        )
+        .await;
+        r.modifier.send(fn_up()).unwrap();
+        let rows = wait_rows(&r).await;
+        assert_eq!(rows[0].error_code.as_deref(), Some("cancelled"));
+        assert_eq!(rows[0].final_text, "");
+        assert!(rows[0].audio_ms.unwrap_or(0) > 0);
+        assert!(r.asr.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn escape_cancels_a_recording() {
         let r = rig(fast_settings()).await;
         mock_ok(&r, "x", "x").await;
         r.modifier.send(fn_down()).unwrap();
         wait_state(&r, UiState::Recording, "recording").await;
-        r.audio.speech(0.3);
+        r.audio.silence(0.3);
         r.modifier.send(key_down(KEY_ESCAPE)).unwrap();
         wait_for(
             || {

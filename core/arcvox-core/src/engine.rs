@@ -659,9 +659,11 @@ impl Engine {
             flags,
             on_cancel_done: {
                 let inner = self.inner.clone();
-                Arc::new(move || {
+                Arc::new(move |keep: bool| {
                     inner.schedule_idle_unload();
-                    inner.discard_held(wav_path.clone());
+                    if !keep {
+                        inner.discard_held(wav_path.clone());
+                    }
                 })
             },
         }
@@ -740,6 +742,7 @@ impl Engine {
                 base_prompt: self.inner.config.base_prompt().unwrap_or_else(|_| {
                     crate::config::base_prompt::DEFAULT_BASE_PROMPT.to_string()
                 }),
+                recognised: Default::default(),
                 general: config.general.clone(),
             };
         // Nobody listens to the step events of a rerun.
@@ -1050,10 +1053,12 @@ async fn start_journal(
         ts: crate::history::now_unix(),
         profile_id: profile.id.clone(),
         app_name: req.app.app_name.clone(),
-        audio_path: path.to_path_buf(),
+        audio_path: Some(path.to_path_buf()),
         audio_ms: None,
         code: ErrorCode::Interrupted,
         error: INTERRUPTED.into(),
+        raw_text: String::new(),
+        final_text: String::new(),
     };
     inner.in_flight.lock().unwrap().insert(path.to_path_buf());
     let history = inner.history.clone();
@@ -1127,10 +1132,12 @@ async fn hold(
         ts: crate::history::now_unix(),
         profile_id: profile.id.clone(),
         app_name: req.app.app_name.clone(),
-        audio_path: path.to_path_buf(),
+        audio_path: Some(path.to_path_buf()),
         audio_ms: clip_ms(&clip),
         code: ErrorCode::Interrupted,
         error: INTERRUPTED.into(),
+        raw_text: String::new(),
+        final_text: String::new(),
     };
     inner.in_flight.lock().unwrap().insert(path.to_path_buf());
     let history = inner.history.clone();
@@ -1144,8 +1151,9 @@ async fn hold(
         let id = history.insert_failed(row).inspect_err(|_| {
             let _ = std::fs::remove_file(&p);
         })?;
-        // A cancel that came while this ran found nothing to remove.
-        if flags.cancelled.load(Ordering::SeqCst) {
+        // A cancel that came while this ran found nothing to remove; a
+        // kept cancel takes the row over.
+        if flags.cancelled.load(Ordering::SeqCst) && !flags.keep.load(Ordering::SeqCst) {
             let _ = history.delete(id);
             let _ = std::fs::remove_file(&p);
             return Ok(None);
@@ -1195,9 +1203,9 @@ async fn drop_held(inner: &Arc<Inner>, id: HistoryId, path: &Path) {
     .await;
 }
 
-/// Keeps the recording of a dictation that failed, with a history row that
-/// says why, so it can be processed again. Only when recordings are kept;
-/// silence and a cancelled dictation leave nothing. `held` is the row that
+/// Keeps a dictation that failed as a history row that says why, with its
+/// recording when recordings are kept, so it can be processed again.
+/// Silence and a discarded cancel leave nothing. `held` is the row that
 /// already keeps the recording.
 #[allow(clippy::too_many_arguments)]
 async fn keep_failed(
@@ -1212,7 +1220,7 @@ async fn keep_failed(
     path: &Path,
 ) {
     let nothing_to_keep = matches!(err.code, ErrorCode::NoSpeech | ErrorCode::NoAudio)
-        || flags.cancelled.load(Ordering::SeqCst);
+        || (flags.cancelled.load(Ordering::SeqCst) && !flags.keep.load(Ordering::SeqCst));
     if let Some(id) = held {
         if nothing_to_keep {
             drop_held(inner, id, path).await;
@@ -1227,32 +1235,122 @@ async fn keep_failed(
         }
         return;
     }
-    if !config.general.keep_recordings || nothing_to_keep {
+    if nothing_to_keep {
         return;
     }
-    let path = path.to_path_buf();
-    let bytes = encode_wav_pcm16(clip);
     let failed = crate::history::FailedUtterance {
         ts: crate::history::now_unix(),
         profile_id: profile.id.clone(),
         app_name: req.app.app_name.clone(),
-        audio_path: path.clone(),
+        audio_path: config.general.keep_recordings.then(|| path.to_path_buf()),
         audio_ms: clip_ms(clip),
         code: err.code,
         error: failure_text(err),
+        raw_text: String::new(),
+        final_text: String::new(),
     };
+    if !insert_with_recording(inner, failed, clip, false).await {
+        tracing::warn!(path = %path.display(), "the failed dictation could not be kept");
+    }
+}
+
+/// Writes a row without a result, and its recording first when the row
+/// names one and `written` says the file is not there yet. True when the
+/// row is in; a recording that could not be written leaves a row without.
+async fn insert_with_recording(
+    inner: &Arc<Inner>,
+    mut row: crate::history::FailedUtterance,
+    clip: &AudioClip,
+    written: bool,
+) -> bool {
+    let bytes = (row.audio_path.is_some() && !written).then(|| encode_wav_pcm16(clip));
     let history = inner.history.clone();
-    let shown = path.clone();
     let stored = tokio::task::spawn_blocking(move || {
-        std::fs::write(&path, bytes)?;
-        history.insert_failed(failed).inspect_err(|_| {
-            let _ = std::fs::remove_file(&path);
-        })
+        if let (Some(path), Some(bytes)) = (row.audio_path.clone(), bytes) {
+            if let Err(e) = std::fs::write(&path, bytes) {
+                tracing::warn!(path = %path.display(), error = %e, "the recording could not be written");
+                row.audio_path = None;
+            }
+        }
+        history.insert_failed(row)
     })
     .await;
-    if !matches!(stored, Ok(Ok(_))) {
-        tracing::warn!(path = %shown.display(), "the failed dictation could not be kept");
+    matches!(stored, Ok(Ok(_)))
+}
+
+/// The row of a dictation that was cancelled and kept: the row that held
+/// the recording takes the cancel over, else a new one is written, with
+/// the recording when recordings are kept (`written` says the file is
+/// there already). A clip too short to hold speech leaves nothing.
+#[allow(clippy::too_many_arguments)]
+async fn store_cancelled(
+    inner: &Arc<Inner>,
+    profile: &crate::config::Profile,
+    req: &SessionRequest,
+    clip: &AudioClip,
+    held: Option<HistoryId>,
+    path: &Path,
+    texts: (&str, &str),
+    trimmed: bool,
+    written: bool,
+) {
+    if clip.duration_secs() < MIN_UTTERANCE_SECS {
+        if let Some(id) = held {
+            drop_held(inner, id, path).await;
+        }
+        return;
     }
+    if let Some(id) = held {
+        if trimmed {
+            replace_held(inner, id, path, clip).await;
+        }
+        let history = inner.history.clone();
+        let (raw, fin) = (texts.0.to_string(), texts.1.to_string());
+        let audio_ms = clip_ms(clip);
+        let marked =
+            tokio::task::spawn_blocking(move || history.set_cancelled(id, &raw, &fin, audio_ms))
+                .await;
+        if !matches!(marked, Ok(Ok(()))) {
+            tracing::warn!(path = %path.display(), "the cancelled dictation could not be marked");
+        }
+        return;
+    }
+    let row = crate::history::FailedUtterance {
+        ts: crate::history::now_unix(),
+        profile_id: profile.id.clone(),
+        app_name: req.app.app_name.clone(),
+        audio_path: (inner.config.current().general.keep_recordings || written)
+            .then(|| path.to_path_buf()),
+        audio_ms: clip_ms(clip),
+        code: ErrorCode::Cancelled,
+        error: crate::history::CANCELLED.into(),
+        raw_text: texts.0.into(),
+        final_text: texts.1.into(),
+    };
+    if !insert_with_recording(inner, row, clip, written).await {
+        tracing::warn!(path = %path.display(), "the cancelled dictation could not be kept");
+    }
+}
+
+/// The part of the recording that is processed and kept: `range` when
+/// there is one. True when it is less than the whole.
+fn cut(mut samples: Vec<f32>, range: Option<std::ops::Range<usize>>) -> (AudioClip, bool) {
+    let mut trimmed = false;
+    if let Some(range) = range {
+        let end = range.end.min(samples.len());
+        let start = range.start.min(end);
+        if (start, end) != (0, samples.len()) {
+            samples = samples[start..end].to_vec();
+            trimmed = true;
+        }
+    }
+    (
+        AudioClip {
+            samples,
+            sample_rate: SAMPLE_RATE,
+        },
+        trimmed,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1296,9 +1394,32 @@ async fn run_session(
             }
             Some(SessionCmd::Finish(range)) => break range,
             None => {
-                // Ended without `finish`. A cancel removes what was kept;
-                // a session that was dropped leaves the row and its
-                // recording, to be processed again from the history.
+                // Ended without `finish`. A kept cancel writes what was
+                // recorded as a cancelled row; a plain cancel removes what
+                // was kept; a session that was dropped leaves the row and
+                // its recording, to be processed again from the history.
+                if flags.keep.load(Ordering::SeqCst) {
+                    let range = flags.keep_range.lock().unwrap().take();
+                    settle_journal(&inner, &mut journal, &mut held, &wav_path).await;
+                    if held.is_none() {
+                        held = hold(&inner, &profile, &req, &audio, &wav_path, &flags).await;
+                    }
+                    let samples = std::mem::take(&mut *audio.lock().unwrap());
+                    let (clip, trimmed) = cut(samples, range);
+                    store_cancelled(
+                        &inner,
+                        &profile,
+                        &req,
+                        &clip,
+                        held,
+                        &wav_path,
+                        ("", ""),
+                        trimmed,
+                        false,
+                    )
+                    .await;
+                    return;
+                }
                 if let Some(j) = journal.take() {
                     j.close().await;
                 }
@@ -1313,21 +1434,9 @@ async fn run_session(
         held = hold(&inner, &profile, &req, &audio, &wav_path, &flags).await;
     }
 
-    let mut samples = std::mem::take(&mut *audio.lock().unwrap());
+    let samples = std::mem::take(&mut *audio.lock().unwrap());
     let recorded_ms = samples.len() as u64 * 1000 / SAMPLE_RATE as u64;
-    let mut trimmed = false;
-    if let Some(range) = range {
-        let end = range.end.min(samples.len());
-        let start = range.start.min(end);
-        if (start, end) != (0, samples.len()) {
-            samples = samples[start..end].to_vec();
-            trimmed = true;
-        }
-    }
-    let clip = AudioClip {
-        samples,
-        sample_rate: SAMPLE_RATE,
-    };
+    let (clip, trimmed) = cut(samples, range);
     if clip.duration_secs() < MIN_UTTERANCE_SECS {
         if let Some(id) = held {
             drop_held(&inner, id, &wav_path).await;
@@ -1366,6 +1475,7 @@ async fn run_session(
         dictionary: Arc::new(config.dictionary.clone()),
         base_prompt,
         general: config.general.clone(),
+        recognised: Default::default(),
     };
 
     let pipeline = match Pipeline::build(&config, &profile, &inner.registry) {
@@ -1392,7 +1502,22 @@ async fn run_session(
     };
 
     let clip = Arc::new(clip);
-    let outcome = match pipeline.run(clip.clone(), &ctx, &tx).await {
+    // A kept cancel stops the run here, with the transcript when the
+    // recognition was done; a plain cancel aborts the whole task.
+    let mut run = Box::pin(pipeline.run(clip.clone(), &ctx, &tx));
+    let ran = tokio::select! {
+        r = &mut run => r,
+        _ = flags.cancel.notified() => {
+            // Dropped first: a rewrite under way stops at once.
+            drop(run);
+            let raw = ctx.recognised.lock().unwrap().clone().unwrap_or_default();
+            tracing::info!(session = %session_id, recognised = !raw.is_empty(), "cancelled while processing");
+            store_cancelled(&inner, &profile, &req, &clip, held, &wav_path, (&raw, ""), false, false)
+                .await;
+            return;
+        }
+    };
+    let outcome = match ran {
         Ok(o) => o,
         Err(err) => {
             tracing::warn!(session = %session_id, code = ?err.code, error = %err.message, "session failed");
@@ -1419,6 +1544,13 @@ async fn run_session(
     );
     flags.tail_started.store(true, Ordering::SeqCst);
     if flags.cancelled.load(Ordering::SeqCst) {
+        if flags.keep.load(Ordering::SeqCst) {
+            let texts = (outcome.raw_text.as_str(), outcome.final_text.as_str());
+            store_cancelled(
+                &inner, &profile, &req, &clip, held, &wav_path, texts, false, false,
+            )
+            .await;
+        }
         return;
     }
 
@@ -1453,7 +1585,21 @@ async fn run_session(
     // cancelled, undo the WAV write above instead of leaving an orphan
     // recording for a cancelled session.
     if flags.cancelled.load(Ordering::SeqCst) {
-        if let Some(p) = &written_here {
+        if flags.keep.load(Ordering::SeqCst) {
+            let texts = (outcome.raw_text.as_str(), outcome.final_text.as_str());
+            store_cancelled(
+                &inner,
+                &profile,
+                &req,
+                &clip,
+                held,
+                &wav_path,
+                texts,
+                false,
+                written_here.is_some(),
+            )
+            .await;
+        } else if let Some(p) = &written_here {
             let _ = std::fs::remove_file(p);
         }
         return;
@@ -1486,6 +1632,8 @@ async fn run_session(
         ms: None,
         detail: serde_json::json!({ "history": true, "recording": audio_path.is_some() }),
     });
+    // For a kept cancel that lands while the row is being written.
+    let texts = (outcome.raw_text.clone(), outcome.final_text.clone());
     let new = NewUtterance {
         ts: crate::history::now_unix(),
         profile_id: profile.id.clone(),
@@ -1538,7 +1686,21 @@ async fn run_session(
     // The insert can fail before it asks; the claim is then still open.
     let won = claimed.unwrap_or_else(|| !flags.done_sent.swap(true, Ordering::SeqCst));
     if !won {
-        if let Some(p) = &written_here {
+        if flags.keep.load(Ordering::SeqCst) {
+            let texts = (texts.0.as_str(), texts.1.as_str());
+            store_cancelled(
+                &inner,
+                &profile,
+                &req,
+                &clip,
+                held,
+                &wav_path,
+                texts,
+                false,
+                written_here.is_some(),
+            )
+            .await;
+        } else if let Some(p) = &written_here {
             let _ = std::fs::remove_file(p);
         }
         tracing::info!(session = %session_id, "cancelled before the result was stored");
@@ -2227,7 +2389,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn a_failed_dictation_leaves_nothing_when_recordings_are_not_kept() {
+    async fn a_failed_dictation_leaves_a_row_without_a_recording_when_recordings_are_not_kept() {
         let r = rig(false).await;
         Mock::given(method("POST"))
             .and(path("/v1/audio/transcriptions"))
@@ -2238,12 +2400,165 @@ pub(crate) mod tests {
         s.push_audio(&one_second());
         s.finish();
         drain(&s).await;
-        assert!(r.engine.history().list_recent(10).unwrap().is_empty());
-        let id = HistoryId(1);
+        let rows = r.engine.history().list_recent(10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].error_code.as_deref(), Some("provider_error"));
+        assert!(rows[0].audio_path.is_none());
+        assert_eq!(rows[0].audio_ms, Some(1000));
+        // Without a recording there is nothing to process again.
         assert!(matches!(
-            r.engine.reprocess(id, None).await,
-            Err(ReprocessError::NoRow)
+            r.engine.reprocess(rows[0].id, None).await,
+            Err(ReprocessError::NoRecording)
         ));
+        assert_eq!(r.engine.history().stats(0, 0).unwrap().totals.count, 0);
+    }
+
+    /// The rows of the history once `n` are there, within a few seconds:
+    /// a kept cancel writes its row after `Done`.
+    async fn rows_after_cancel(r: &Rig, n: usize) -> Vec<crate::history::Utterance> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let rows = r.engine.history().list_recent(10).unwrap();
+            if rows.len() >= n
+                && rows
+                    .iter()
+                    .all(|u| u.error_code.as_deref() != Some("interrupted"))
+            {
+                return rows;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no row after the cancel"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_kept_cancel_while_recording_leaves_a_cancelled_row_with_the_recording() {
+        let r = rig(true).await;
+        let s = r.engine.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        s.push_audio(&one_second());
+        // The second half holds the speech.
+        s.cancel_keep(Some(16_000..32_000));
+        let events = drain(&s).await;
+        assert!(matches!(
+            events.last(),
+            Some(Event::Done {
+                history_id: None,
+                ..
+            })
+        ));
+        let rows = rows_after_cancel(&r, 1).await;
+        let row = &rows[0];
+        assert_eq!(row.error_code.as_deref(), Some("cancelled"));
+        assert_eq!(row.audio_ms, Some(1000));
+        assert_eq!(row.final_text, "");
+        let path = row.audio_path.clone().expect("recording kept");
+        assert!(path.exists());
+        assert_eq!(r.engine.history().stats(0, 0).unwrap().totals.count, 0);
+        // It can be processed again from there.
+        mock_ok(&r, "原文", "整理後").await;
+        let done = r.engine.reprocess(row.id, None).await.unwrap();
+        assert!(done.chosen);
+        let row = r.engine.history().get(row.id).unwrap().unwrap();
+        assert_eq!((row.error, row.final_text.as_str()), (None, "整理後"));
+    }
+
+    #[tokio::test]
+    async fn a_kept_cancel_while_recording_leaves_a_row_without_a_recording_when_not_kept() {
+        let r = rig(false).await;
+        let s = r.engine.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        s.cancel_keep(None);
+        drain(&s).await;
+        let rows = rows_after_cancel(&r, 1).await;
+        assert_eq!(rows[0].error_code.as_deref(), Some("cancelled"));
+        assert!(rows[0].audio_path.is_none());
+        assert_eq!(rows[0].audio_ms, Some(1000));
+    }
+
+    #[tokio::test]
+    async fn a_kept_cancel_of_a_recording_too_short_to_hold_speech_leaves_nothing() {
+        let r = rig(true).await;
+        let s = r.engine.start_session(SessionRequest::default());
+        s.push_audio(&one_second()[..1600]);
+        s.cancel_keep(None);
+        drain(&s).await;
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(r.engine.history().list_recent(10).unwrap().is_empty());
+        assert!(std::fs::read_dir(r.engine.recordings_dir())
+            .map(|d| d.count() == 0)
+            .unwrap_or(true));
+    }
+
+    #[tokio::test]
+    async fn a_kept_cancel_while_the_rewrite_runs_keeps_the_transcript() {
+        let r = rig(true).await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"text": "原文"})))
+            .mount(&r.asr)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"choices":[{"message":{"content": "整理後"}}]}))
+                    .set_delay(std::time::Duration::from_millis(800)),
+            )
+            .mount(&r.llm)
+            .await;
+        let s = r.engine.start_session(SessionRequest::default());
+        let mut stream = s.events();
+        s.push_audio(&one_second());
+        s.finish();
+        while let Some(e) = stream.next().await {
+            if matches!(e, Event::Transcript { is_final: true, .. }) {
+                break;
+            }
+        }
+        s.cancel_keep(None);
+        let rows = rows_after_cancel(&r, 1).await;
+        let row = &rows[0];
+        assert_eq!(row.error_code.as_deref(), Some("cancelled"));
+        assert_eq!(row.raw_text, "原文");
+        assert_eq!(row.final_text, "");
+        assert!(row.audio_path.is_some());
+        // The rewrite was not waited for.
+        assert!(r.llm.received_requests().await.unwrap().len() <= 1);
+        drop(stream);
+        drop(s);
+    }
+
+    #[tokio::test]
+    async fn a_kept_cancel_during_the_tail_keeps_the_whole_result_as_cancelled() {
+        let r = rig(true).await;
+        mock_ok(&r, "原文", "整理後").await;
+        r.engine.inner.tail_delay_ms.store(300, Ordering::SeqCst);
+        let s = r.engine.start_session(SessionRequest::default());
+        let mut stream = s.events();
+        s.push_audio(&one_second());
+        s.finish();
+        while let Some(e) = stream.next().await {
+            if matches!(e, Event::Refined { .. }) {
+                break;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        s.cancel_keep(None);
+        drop(stream);
+        drop(s);
+        let rows = rows_after_cancel(&r, 1).await;
+        let row = &rows[0];
+        assert_eq!(row.error_code.as_deref(), Some("cancelled"));
+        assert_eq!(
+            (row.raw_text.as_str(), row.final_text.as_str()),
+            ("原文", "整理後")
+        );
+        assert!(row.audio_path.is_some());
+        assert_eq!(r.engine.history().stats(0, 0).unwrap().totals.count, 0);
     }
 
     #[tokio::test]

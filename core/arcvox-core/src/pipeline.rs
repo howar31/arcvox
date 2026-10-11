@@ -181,6 +181,7 @@ impl Pipeline {
                             asr_ms = elapsed;
                             raw_text = out.text.clone();
                             language = out.language.clone();
+                            *ctx.recognised.lock().unwrap() = Some(out.text.clone());
                             let _ = events
                                 .send(Event::Transcript {
                                     text: out.text.clone(),

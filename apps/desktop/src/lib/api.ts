@@ -66,7 +66,7 @@ export type InsertMethod = "paste" | "type" | "ax" | "copy";
 export interface ClientSettings {
   schema_version: number;
   /** `shortcuts`: the key combinations and mouse buttons that start a recording, each a list of key names. */
-  hotkey: { hold_threshold_ms: number; double_tap_window_ms: number; shortcuts: string[][] };
+  hotkey: { hold_threshold_ms: number; double_tap_window_ms: number; escape_cancels_processing: boolean; shortcuts: string[][] };
   microphone: string;
   context: { app_name: boolean; window_title: boolean; url: boolean; selected_text: boolean; clipboard: boolean };
   insertion: { default: InsertMethod; keep_on_clipboard: boolean; per_app: Record<string, InsertMethod> };

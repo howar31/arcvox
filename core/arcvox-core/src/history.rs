@@ -222,16 +222,23 @@ pub enum Outcome {
     },
 }
 
-/// A dictation that failed after it was recorded.
+/// What the row of a cancelled dictation says.
+pub const CANCELLED: &str = "cancelled";
+
+/// A dictation that failed, or was cancelled, after it was recorded. Its
+/// recording is kept only when recordings are kept; the text is what the
+/// stages had produced when it was cancelled, else empty.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FailedUtterance {
     pub ts: i64,
     pub profile_id: ProfileId,
     pub app_name: Option<String>,
-    pub audio_path: PathBuf,
+    pub audio_path: Option<PathBuf>,
     pub audio_ms: Option<u64>,
     pub code: ErrorCode,
     pub error: String,
+    pub raw_text: String,
+    pub final_text: String,
 }
 
 /// What processing a row's recording again produced.
@@ -824,26 +831,53 @@ impl HistoryStore {
         }
     }
 
-    /// Stores a failed dictation so its recording can be processed again.
-    /// It has no text and is not counted in the statistics.
+    /// Stores a failed or cancelled dictation so its recording, when there
+    /// is one, can be processed again. It is not counted in the statistics.
     pub fn insert_failed(&self, u: FailedUtterance) -> Result<HistoryId, HistoryError> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO utterances (ts, profile_id, app_name, raw_text, refined_text, final_text, audio_path, audio_ms, error, error_code, device_id, updated)
-             VALUES (?1, ?2, ?3, '', '', '', ?4, ?5, ?6, ?7, ?8, ?9)",
+             VALUES (?1, ?2, ?3, ?10, ?11, ?11, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 u.ts,
                 u.profile_id.0,
                 u.app_name,
-                name_of(&u.audio_path),
+                u.audio_path.as_deref().and_then(name_of),
                 u.audio_ms.map(|v| v as i64),
                 u.error,
                 u.code.name(),
                 self.device_id,
                 now_ms(),
+                u.raw_text,
+                u.final_text,
             ],
         )?;
         Ok(HistoryId(own_last_row(&conn)?))
+    }
+
+    /// Marks the row that kept a recording as cancelled, with the text its
+    /// stages had produced by then. A row that has a result is left alone.
+    pub fn set_cancelled(
+        &self,
+        id: HistoryId,
+        raw_text: &str,
+        final_text: &str,
+        audio_ms: Option<u64>,
+    ) -> Result<(), HistoryError> {
+        self.conn.lock().unwrap().execute(
+            "UPDATE utterances SET error = ?1, error_code = ?2, raw_text = ?3, refined_text = ?4, final_text = ?4,
+             audio_ms = COALESCE(?5, audio_ms), updated = ?6 WHERE id = ?7 AND error IS NOT NULL",
+            params![
+                CANCELLED,
+                ErrorCode::Cancelled.name(),
+                raw_text,
+                final_text,
+                audio_ms.map(|v| v as i64),
+                now_ms(),
+                id.0,
+            ],
+        )?;
+        Ok(())
     }
 
     /// Replaces why a failed row failed, after another attempt failed too.
@@ -2562,10 +2596,12 @@ mod tests {
             ts: 400,
             profile_id: ProfileId("default".into()),
             app_name: None,
-            audio_path: PathBuf::from("x.wav"),
+            audio_path: Some(PathBuf::from("x.wav")),
             audio_ms: None,
             code: ErrorCode::ProviderTimeout,
             error: "timeout".into(),
+            raw_text: String::new(),
+            final_text: String::new(),
         })
         .unwrap();
         let got = s
@@ -2911,10 +2947,12 @@ mod tests {
                 ts: 7200,
                 profile_id: ProfileId("default".into()),
                 app_name: Some("Notes".into()),
-                audio_path: PathBuf::from("/rec/a.wav"),
+                audio_path: Some(PathBuf::from("/rec/a.wav")),
                 audio_ms: Some(4000),
                 code: ErrorCode::ProviderTimeout,
                 error: "timed out".into(),
+                raw_text: String::new(),
+                final_text: String::new(),
             })
             .unwrap();
         let row = s.get(id).unwrap().unwrap();
@@ -3063,10 +3101,12 @@ mod tests {
                 ts: 100,
                 profile_id: ProfileId("default".into()),
                 app_name: None,
-                audio_path: PathBuf::from("/tmp/x.wav"),
+                audio_path: Some(PathBuf::from("/tmp/x.wav")),
                 audio_ms: Some(1000),
                 code: ErrorCode::ProviderError,
                 error: "down".into(),
+                raw_text: String::new(),
+                final_text: String::new(),
             })
             .unwrap();
         let again = s
@@ -3316,10 +3356,12 @@ INSERT INTO stats_meta (key, value) VALUES ('backfilled', '1');
                 ts: 5,
                 profile_id: ProfileId("default".into()),
                 app_name: None,
-                audio_path: PathBuf::from("/r/a.wav"),
+                audio_path: Some(PathBuf::from("/r/a.wav")),
                 audio_ms: None,
                 code: ErrorCode::ProviderError,
                 error: "x".into(),
+                raw_text: String::new(),
+                final_text: String::new(),
             })
             .unwrap();
         let (device, origin, updated) = meta(&s, failed);
@@ -3336,10 +3378,12 @@ INSERT INTO stats_meta (key, value) VALUES ('backfilled', '1');
                 ts: 5,
                 profile_id: ProfileId("default".into()),
                 app_name: None,
-                audio_path: PathBuf::from("/r/a.wav"),
+                audio_path: Some(PathBuf::from("/r/a.wav")),
                 audio_ms: None,
                 code: ErrorCode::ProviderError,
                 error: "x".into(),
+                raw_text: String::new(),
+                final_text: String::new(),
             })
             .unwrap();
         let reset = |id: HistoryId| {
@@ -3693,10 +3737,12 @@ INSERT INTO stats_meta (key, value) VALUES ('backfilled', '1');
             ts: 100,
             profile_id: ProfileId("default".into()),
             app_name: None,
-            audio_path: path.to_path_buf(),
+            audio_path: Some(path.to_path_buf()),
             audio_ms: Some(2000),
             code: ErrorCode::Interrupted,
             error: "the dictation did not finish".into(),
+            raw_text: String::new(),
+            final_text: String::new(),
         }
     }
 

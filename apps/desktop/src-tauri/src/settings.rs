@@ -152,6 +152,9 @@ pub struct StatsCard {
 pub struct HotkeySettings {
     pub hold_threshold_ms: u64,
     pub double_tap_window_ms: u64,
+    /// Escape also cancels a dictation that is being processed, not only
+    /// one being recorded.
+    pub escape_cancels_processing: bool,
     /// The key combinations and mouse buttons that start a recording.
     #[serde(deserialize_with = "crate::shortcut::lenient")]
     pub shortcuts: Vec<Shortcut>,
@@ -343,6 +346,7 @@ impl Default for HotkeySettings {
         Self {
             hold_threshold_ms: 250,
             double_tap_window_ms: 350,
+            escape_cancels_processing: true,
             shortcuts: vec![Shortcut::fn_key()],
         }
     }

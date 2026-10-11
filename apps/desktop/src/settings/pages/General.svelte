@@ -199,6 +199,7 @@
     shortcuts: ofClient("hotkey.shortcuts", (v) => (v as string[][]).map(shortcutLabel).join(", ")),
     hold: ofClient("hotkey.hold_threshold_ms", unit("common.ms")),
     doubleTap: ofClient("hotkey.double_tap_window_ms", unit("common.ms")),
+    escape: ofClient("hotkey.escape_cancels_processing", onOff),
     mic: ofClient("microphone", () => t("general.mic_builtin")),
     maxUtterance: ofClient("max_utterance_secs", unit("common.seconds")),
     autoStop: ofClient("auto_stop.enabled", onOff),
@@ -422,7 +423,7 @@
         <Segmented options={idles} bind:value={draft.widget_idle} label={t("general.widget_idle")} />
       </Row>
       {#if draft.widget_idle !== "hidden"}<Fold>
-        <Row label={t("general.widget_fade")} help={t("general.widget_fade_help")} reset={resets.fade}>
+        <Row label={t("general.widget_fade")} help={t(draft.widget_fade.enabled ? "general.widget_fade_help" : "general.widget_fade_off")} reset={resets.fade}>
           <Switch bind:checked={draft.widget_fade.enabled} label={t("general.widget_fade")} />
         </Row>
         {#if draft.widget_fade.enabled}<Fold>
@@ -440,7 +441,7 @@
           </Row>
         </Fold>{/if}
       </Fold>{/if}
-      <Row label={t("general.show_transcript")} help={t("general.show_transcript_help")} reset={resets.transcript}>
+      <Row label={t("general.show_transcript")} help={t(draft.show_transcript ? "general.show_transcript_help" : "general.show_transcript_off")} reset={resets.transcript}>
         <Switch bind:checked={draft.show_transcript} label={t("general.show_transcript")} />
       </Row>
     {/if}
@@ -456,7 +457,7 @@
   {/if}
 {:else if section === "recording"}
   {#if draft}
-    <Group title={t("general.hotkey")} onreset={together([resets.shortcuts, resets.hold, resets.doubleTap])}>
+    <Group title={t("general.hotkey")} onreset={together([resets.shortcuts, resets.hold, resets.doubleTap, resets.escape])}>
       <div class="shortcuts">
         <div class="shortcuts-head">
           <span class="name">{t("general.shortcuts")}</span>
@@ -470,6 +471,9 @@
       </Row>
       <Row label={t("general.double_tap_window")} reset={resets.doubleTap}>
         <NumberField bind:value={draft.hotkey.double_tap_window_ms} min={150} max={1000} unit={t("common.ms")} label={t("general.double_tap_window")} />
+      </Row>
+      <Row label={t("general.escape_processing")} help={t(draft.hotkey.escape_cancels_processing ? "general.escape_processing_on" : "general.escape_processing_off")} reset={resets.escape}>
+        <Switch bind:checked={draft.hotkey.escape_cancels_processing} label={t("general.escape_processing")} />
       </Row>
     </Group>
 
@@ -488,7 +492,7 @@
       <Row label={t("general.max_utterance")} reset={resets.maxUtterance}>
         <NumberField bind:value={draft.max_utterance_secs} min={10} max={1800} unit={t("common.seconds")} label={t("general.max_utterance")} />
       </Row>
-      <Row label={t("general.auto_stop")} help={t("general.auto_stop_help")} reset={resets.autoStop}>
+      <Row label={t("general.auto_stop")} help={t(draft.auto_stop.enabled ? "general.auto_stop_on" : "general.auto_stop_off")} reset={resets.autoStop}>
         <Switch bind:checked={draft.auto_stop.enabled} label={t("general.auto_stop")} />
       </Row>
       {#if draft.auto_stop.enabled}<Fold>
@@ -509,7 +513,7 @@
         <small class="sub">{t("general.method_default_help")}</small>
         <Choices options={methods} bind:value={draft.insertion.default} label={t("general.method_default")} />
       </div>
-      <Row label={t("general.keep_on_clipboard")} help={t("general.keep_on_clipboard_help")} reset={resets.keepClipboard}>
+      <Row label={t("general.keep_on_clipboard")} help={t(draft.insertion.keep_on_clipboard ? "general.keep_on_clipboard_on" : "general.keep_on_clipboard_off")} reset={resets.keepClipboard}>
         <Switch bind:checked={draft.insertion.keep_on_clipboard} label={t("general.keep_on_clipboard")} />
       </Row>
     </Group>
@@ -541,7 +545,7 @@
       <Row label={t("general.stage_retention")} help={t("general.stage_retention_help")} reset={resets.stageDays}>
         <NumberField bind:value={general.stage_retention_days} min={0} unit={t("common.days")} label={t("general.stage_retention")} />
       </Row>
-      <Row label={t("general.keep_recordings")} help={t("general.keep_recordings_help")} reset={resets.keepRecordings}>
+      <Row label={t("general.keep_recordings")} help={t(general.keep_recordings ? "general.keep_recordings_on" : "general.keep_recordings_off")} reset={resets.keepRecordings}>
         <Switch bind:checked={general.keep_recordings} label={t("general.keep_recordings")} />
       </Row>
       {#if general.keep_recordings}<Fold>

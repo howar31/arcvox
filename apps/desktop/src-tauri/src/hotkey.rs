@@ -25,8 +25,9 @@ pub enum Input {
 pub enum Gesture {
     /// fn held past the threshold: start push-to-talk recording.
     HoldStart,
-    /// fn released after a `HoldStart`.
-    HoldEnd,
+    /// fn released after a `HoldStart`. `keyed`: other keys were pressed
+    /// during the hold, so it served a key combination as well.
+    HoldEnd { keyed: bool },
     /// A short press (below the threshold), not part of a double tap.
     Tap,
     /// Two short presses within the window.
@@ -43,8 +44,11 @@ enum State {
     Pending {
         since: Instant,
     },
-    /// `HoldStart` emitted; waiting for fn up.
-    Holding,
+    /// `HoldStart` emitted; waiting for fn up. `keyed`: another key was
+    /// pressed meanwhile.
+    Holding {
+        keyed: bool,
+    },
     /// One tap seen; a second within the window is a double tap.
     TapWait {
         until: Instant,
@@ -114,8 +118,8 @@ impl Recognizer {
                     State::Pending { .. } => State::TapWait {
                         until: now + self.double_tap,
                     },
-                    State::Holding => {
-                        out.push(Gesture::HoldEnd);
+                    State::Holding { keyed } => {
+                        out.push(Gesture::HoldEnd { keyed });
                         State::Idle
                     }
                     State::Aborted | State::Idle | State::TapWait { .. } => State::Idle,
@@ -126,8 +130,10 @@ impl Recognizer {
                     match self.state {
                         // Once the hold is on, other keys go to the
                         // application and the recording goes on.
-                        State::Holding if input != Input::Escape => {}
-                        State::Pending { .. } | State::Holding => {
+                        State::Holding { .. } if input != Input::Escape => {
+                            self.state = State::Holding { keyed: true };
+                        }
+                        State::Pending { .. } | State::Holding { .. } => {
                             out.push(Gesture::Abort);
                             self.state = State::Aborted;
                         }
@@ -141,11 +147,23 @@ impl Recognizer {
         out
     }
 
+    /// Ends a short press as a tap right away instead of waiting for the
+    /// double-tap window, for a state in which a second tap means nothing.
+    pub fn tap_now(&mut self) -> Option<Gesture> {
+        match self.state {
+            State::TapWait { .. } => {
+                self.state = State::Idle;
+                Some(Gesture::Tap)
+            }
+            _ => None,
+        }
+    }
+
     pub fn on_tick(&mut self, now: Instant) -> Vec<Gesture> {
         let mut out = Vec::new();
         match self.state {
             State::Pending { since } if now >= since + self.hold => {
-                self.state = State::Holding;
+                self.state = State::Holding { keyed: false };
                 out.push(Gesture::HoldStart);
             }
             State::TapWait { until } if now >= until => {
@@ -180,7 +198,7 @@ mod tests {
         assert_eq!(r.next_deadline(), None);
         assert_eq!(
             r.on_input(Input::TriggerUp, ms(t0, 900)),
-            vec![Gesture::HoldEnd]
+            vec![Gesture::HoldEnd { keyed: false }]
         );
         assert!(!r.fn_is_down());
     }
@@ -191,8 +209,25 @@ mod tests {
         r.on_input(Input::TriggerDown, t0);
         assert_eq!(
             r.on_input(Input::TriggerUp, ms(t0, 600)),
-            vec![Gesture::HoldStart, Gesture::HoldEnd]
+            vec![Gesture::HoldStart, Gesture::HoldEnd { keyed: false }]
         );
+    }
+
+    #[test]
+    fn a_waiting_tap_can_be_ended_at_once() {
+        let (mut r, t0) = rec();
+        assert!(r.tap_now().is_none());
+        r.on_input(Input::TriggerDown, t0);
+        assert!(r.tap_now().is_none());
+        assert!(r.on_input(Input::TriggerUp, ms(t0, 50)).is_empty());
+        assert_eq!(r.tap_now(), Some(Gesture::Tap));
+        assert_eq!(r.next_deadline(), None);
+        assert!(r.on_tick(ms(t0, 1000)).is_empty());
+        // The next press starts over: it is not the second half of a double tap.
+        assert!(r.on_input(Input::TriggerDown, ms(t0, 100)).is_empty());
+        assert!(r.on_input(Input::TriggerUp, ms(t0, 150)).is_empty());
+        assert!(r.on_tick(ms(t0, 200)).is_empty());
+        assert_eq!(r.on_tick(ms(t0, 2000)), vec![Gesture::Tap]);
     }
 
     #[test]
@@ -256,7 +291,7 @@ mod tests {
             .is_empty());
         assert_eq!(
             r.on_input(Input::TriggerUp, ms(t0, 900)),
-            vec![Gesture::HoldEnd]
+            vec![Gesture::HoldEnd { keyed: true }]
         );
     }
 
@@ -292,7 +327,7 @@ mod tests {
         assert!(r.fn_is_down());
         assert_eq!(
             r.on_input(Input::TriggerUp, ms(t0, 900)),
-            vec![Gesture::HoldEnd]
+            vec![Gesture::HoldEnd { keyed: false }]
         );
 
         let (mut r, t0) = rec();
@@ -312,7 +347,7 @@ mod tests {
         assert!(r.on_input(Input::TriggerDown, ms(t0, 10)).is_empty());
         assert!(r
             .on_input(Input::TriggerUp, ms(t0, 1000))
-            .contains(&Gesture::HoldEnd));
+            .contains(&Gesture::HoldEnd { keyed: false }));
         assert!(r.on_input(Input::TriggerUp, ms(t0, 1010)).is_empty());
     }
 }

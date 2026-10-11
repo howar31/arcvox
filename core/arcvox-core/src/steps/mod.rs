@@ -72,6 +72,9 @@ pub struct PipelineContext {
     pub dictionary: Arc<Vec<DictionaryEntry>>,
     pub base_prompt: String,
     pub general: General,
+    /// The transcript once the speech recognition step is done, for a run
+    /// that is cut short after it.
+    pub recognised: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 #[async_trait]
@@ -89,5 +92,6 @@ pub(crate) fn test_context() -> PipelineContext {
         dictionary: Arc::new(Vec::new()),
         base_prompt: crate::config::base_prompt::DEFAULT_BASE_PROMPT.to_string(),
         general: General::default(),
+        recognised: Default::default(),
     }
 }

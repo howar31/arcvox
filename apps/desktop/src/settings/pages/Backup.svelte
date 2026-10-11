@@ -188,10 +188,10 @@
     <Row label={t("backup.items")} help={itemsSummary(backup.categories)}>
       <button type="button" class="btn" onclick={() => recordDialogs?.openItems()}>{t("backup.items_change")}</button>
     </Row>
-    <Row label={t("backup.auto")} help={t("backup.auto_help")}>
+    <Row label={t("backup.auto")} help={t(backup.auto ? "backup.auto_help" : "backup.auto_off")}>
       <Switch checked={backup.auto} disabled={!backup.folder} label={t("backup.auto")} onchange={(on) => saveBackup({ auto: on })} />
     </Row>
-    <Row label={t("backup.recreate")} help={t("backup.recreate_help")}>
+    <Row label={t("backup.recreate")} help={t(backup.recreate ? "backup.recreate_on" : "backup.recreate_off")}>
       <Switch checked={backup.recreate} disabled={!backup.folder || !backup.auto} label={t("backup.recreate")} onchange={(on) => saveBackup({ recreate: on }).then(() => { if (on && folder === "missing") updateNow(); })} />
     </Row>
     {#if backup.folder}

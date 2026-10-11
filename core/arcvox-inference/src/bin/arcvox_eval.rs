@@ -500,6 +500,7 @@ fn build(
         dictionary: Arc::new(config.dictionary.clone()),
         base_prompt: base_prompt.to_string(),
         general: config.general.clone(),
+        recognised: Default::default(),
     };
     Ok((pipeline, ctx))
 }

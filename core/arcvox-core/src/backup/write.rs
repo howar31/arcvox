@@ -498,10 +498,12 @@ pub(crate) mod tests {
             ts: OCT,
             profile_id: ProfileId("default".into()),
             app_name: None,
-            audio_path: PathBuf::from("/r/a.wav"),
+            audio_path: Some(PathBuf::from("/r/a.wav")),
             audio_ms: None,
             code: ErrorCode::Interrupted,
             error: "did not finish".into(),
+            raw_text: String::new(),
+            final_text: String::new(),
         })
         .unwrap();
         assert_eq!(write(&s, tmp.path(), text_only(), Path::new("")).rows, 0);

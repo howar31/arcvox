@@ -407,16 +407,17 @@
     <Group title={dayTitle(g.key)}>
       {#each g.rows as u (u.id)}
         {@const who = profileOf(u.profile_id)}
+        {@const shown = u.error === null ? u.final_text : u.error_code === "cancelled" ? u.final_text || u.raw_text : ""}
         <div class="entry" class:open={open === u.id}>
           <div class="line">
             <button type="button" class="main" aria-expanded={open === u.id} onclick={() => toggle(u.id)}>
               <span class="time" title={formatDateTime(u.ts)}>{formatTime(u.ts)}</span>
               <span class="body">
-                <span class="final" class:none={u.error !== null}>{u.error !== null ? t("history.failed") : u.final_text}</span>
+                <span class="final" class:none={shown === ""}>{shown !== "" ? shown : u.error_code === "cancelled" ? t("history.cancelled") : t("history.failed")}</span>
                 <span class="meta">
                   {#if u.app_name}<span>{u.app_name}</span>{/if}
                   {#if u.profile_id}<span>{who.name}{#if who.deleted}<span class="deleted">{t("history.deleted_profile")}</span>{/if}</span>{/if}
-                  {#if u.error !== null}<Tag tone="live">{t("history.failed_tag")}</Tag>{/if}
+                  {#if u.error_code === "cancelled"}<Tag>{t("history.cancelled_tag")}</Tag>{:else if u.error !== null}<Tag tone="live">{t("history.failed_tag")}</Tag>{/if}
                   {#if u.degraded}<Tag tone="warn">{t("history.not_rewritten")}</Tag>{/if}
                   {#if redoneTag(u.redone)}<Tag tone="accent">{redoneTag(u.redone)}</Tag>{/if}
                 </span>
@@ -426,12 +427,17 @@
               {#if u.has_audio}
                 <button type="button" class="play" aria-label={t("history.play")} onclick={() => toggle(u.id, true)}><Icon name="play" size={12} /><span class="num">{clipLength(u.audio_ms ?? 0)}</span></button>
               {/if}
-              <button type="button" class="btn quiet icon-btn" aria-label={t("widget.copy")} title={t("widget.copy")} disabled={u.error !== null} onclick={() => copy(u.final_text)}><Icon name="copy" /></button>
+              <button type="button" class="btn quiet icon-btn" aria-label={t("widget.copy")} title={t("widget.copy")} disabled={shown === ""} onclick={() => copy(shown)}><Icon name="copy" /></button>
             </span>
           </div>
           {#if open === u.id}<Fold>
             <div class="detail">
-              {#if u.error !== null}
+              {#if u.error_code === "cancelled"}
+                {#if u.raw_text.trim() !== ""}
+                  <div class="label">{t("history.raw_label")}</div>
+                  <div class="raw">{u.raw_text.trim()}</div>
+                {/if}
+              {:else if u.error !== null}
                 <div class="label">{t("history.error_label")}</div>
                 {@const reason = failureText(u.error_code, u.error)}
                 <div class="problem">{reason}</div>
