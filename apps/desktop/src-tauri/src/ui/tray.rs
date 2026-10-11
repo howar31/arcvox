@@ -613,7 +613,11 @@ pub fn open_settings<R: Runtime>(app: &AppHandle<R>, page: Option<&str>) {
     // Activation policy and window calls must run on the main thread.
     let _ = app.run_on_main_thread(move || {
         #[cfg(target_os = "macos")]
-        let _ = handle.set_activation_policy(tauri::ActivationPolicy::Regular);
+        {
+            let _ = handle.set_activation_policy(tauri::ActivationPolicy::Regular);
+            // The Dock tile is new, so it starts from the bundle's icon.
+            crate::platform::macos::dock_icon::apply();
+        }
         if let Some(w) = handle.get_webview_window("settings") {
             if let Some(p) = page {
                 // The same hash again announces nothing by itself, and the

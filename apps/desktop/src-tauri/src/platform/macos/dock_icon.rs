@@ -23,7 +23,10 @@ fn dark() -> bool {
         .is_some_and(|style| style.to_string() == "Dark")
 }
 
-fn apply() {
+/// Sets the icon for the current appearance. The Dock takes the image only
+/// while the app has a Dock tile, so the caller that switches the app to the
+/// regular activation policy sets it again.
+pub fn apply() {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
