@@ -15,7 +15,7 @@ async-trait = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "stream"] }
 url = { version = "2", features = ["serde"] }
 dirs = "6"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
 hound = "3"
 uuid = { version = "1", features = ["v4"] }
 tempfile = "3"

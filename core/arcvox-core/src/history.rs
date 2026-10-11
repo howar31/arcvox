@@ -687,6 +687,16 @@ impl HistoryStore {
         Self::upgraded(conn, recordings_dir, device)
     }
 
+    /// Calls `f` after every change written to the store, whichever
+    /// method wrote it, on the thread that wrote it. Reads never call it.
+    /// `f` must not use the store: the write still holds it.
+    pub fn watch(&self, f: impl Fn() + Send + Sync + 'static) {
+        self.conn.lock().unwrap().commit_hook(Some(move || {
+            f();
+            false
+        }));
+    }
+
     /// The folder the rows' recordings are reported under from now on.
     pub fn set_recordings_dir(&self, dir: &Path) {
         *self.recordings_dir.lock().unwrap() = dir.to_path_buf();
@@ -2409,6 +2419,26 @@ mod tests {
             asr_label: "asr".into(),
             llm_label: None,
         }
+    }
+
+    #[test]
+    fn a_watcher_is_called_once_per_write_and_never_for_a_read() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let s = HistoryStore::open_in_memory().unwrap();
+        let count = std::sync::Arc::new(AtomicUsize::new(0));
+        let seen = count.clone();
+        s.watch(move || {
+            seen.fetch_add(1, Ordering::SeqCst);
+        });
+        let id = s.insert(new(100, None)).unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        s.get(id).unwrap();
+        s.list_recent(10).unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        s.set_final(id, "x").unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+        s.delete(id).unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 3);
     }
 
     #[test]

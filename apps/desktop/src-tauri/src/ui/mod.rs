@@ -747,6 +747,21 @@ fn leave(
     });
 }
 
+impl TauriUi {
+    /// The stored dictations changed, whichever way (a dictation ended or
+    /// was cancelled, a row was edited, deleted, cleared or imported):
+    /// the settings window reads again and the backup folder follows.
+    /// Wired to the history store's watcher at start-up.
+    pub fn history_changed(&self) {
+        if let Some(state) = self.app.try_state::<crate::app::AppState>() {
+            state.backup.touch();
+        }
+        let _ = self
+            .app
+            .emit_to(window_state::SETTINGS_WINDOW, "history-changed", ());
+    }
+}
+
 impl Ui for TauriUi {
     fn set_state(&self, state: UiState) {
         self.tray.set_state(state, self.language());
@@ -775,19 +790,6 @@ impl Ui for TauriUi {
             }
             UiState::NoAccessibility | UiState::EngineError => {}
         }
-        if state == UiState::Idle {
-            self.history_changed();
-        }
-    }
-
-    fn history_changed(&self) {
-        // The backup folder follows the history.
-        if let Some(state) = self.app.try_state::<crate::app::AppState>() {
-            state.backup.touch();
-        }
-        let _ = self
-            .app
-            .emit_to(window_state::SETTINGS_WINDOW, "history-changed", ());
     }
 
     fn level(&self, rms: f32) {

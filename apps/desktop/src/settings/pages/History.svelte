@@ -27,7 +27,6 @@
 
   /** How long typing pauses before the search runs. */
   const SEARCH_DELAY_MS = 250;
-  const CHANGE_DELAY_MS = 400;
 
   let rows = $state<Utterance[] | null>(null);
   let storage = $state<HistoryStorage | null>(null);
@@ -109,6 +108,29 @@
     const w = window_();
     historyStorage(w.since, w.until).then((s) => { storage = s; }).catch(() => { storage = null; });
   }
+  let reading = false;
+  let again = false;
+  async function onChanged() {
+    if (reading) { again = true; return; }
+    reading = true;
+    try {
+      do {
+        again = false;
+        await reload();
+        if (open !== null) await loadOpen(open);
+      } while (again);
+    } finally {
+      reading = false;
+    }
+  }
+  /** The details of the open row, as `toggle` reads them when it opens. */
+  async function loadOpen(id: number) {
+    const row = rows?.find((u) => u.id === id);
+    if (row?.redone) await loadAttempts(id);
+    else delete attempts[id];
+    if (row && row.error === null) await loadStages(id);
+    else delete stages[id];
+  }
   /** Starts over with one page: the filter changed. */
   function reset() {
     want = PAGE_SIZE;
@@ -149,14 +171,11 @@
       stuck = !!edge && !!scroller && edge.getBoundingClientRect().top < scroller.getBoundingClientRect().top + 28;
     };
     scroller?.addEventListener("scroll", onScroll, { passive: true });
-    // A dictation that ended while the page is shown. The row of a dictation still being
-    // finished is not listed yet, so the list is read a moment later.
+    // The store announces every change written to it, also this page's own actions.
+    // Changes that land while the list is being read are read once more at the end.
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    onHistoryChanged(() => {
-      clearTimeout(timer);
-      timer = setTimeout(reload, CHANGE_DELAY_MS);
-    }).then((u) => { if (disposed) u(); else unlisten = u; });
+    onHistoryChanged(onChanged).then((u) => { if (disposed) u(); else unlisten = u; });
     return () => { disposed = true; unlisten?.(); window.removeEventListener("focus", onFocus); scroller?.removeEventListener("scroll", onScroll); clearTimeout(timer); };
   });
   function toTop() {
@@ -246,7 +265,6 @@
       toast.error(errorMessage(e));
     }
     delete busy[u.id];
-    await Promise.all([reload(), loadAttempts(u.id), loadStages(u.id)]);
   }
   async function use(u: Utterance, a: Attempt) {
     try {
@@ -256,7 +274,6 @@
     } catch (e) {
       toast.error(errorMessage(e));
     }
-    await Promise.all([reload(), loadAttempts(u.id), loadStages(u.id)]);
   }
   async function removeAttempt(u: Utterance, a: Attempt) {
     clearTimeout(confirmTimer);
@@ -267,7 +284,6 @@
     } catch (e) {
       toast.error(errorMessage(e));
     }
-    await Promise.all([reload(), loadAttempts(u.id), loadStages(u.id)]);
   }
   /** When a result was made, for its line: the row's own time for the origin, "just now" for the one just made. */
   function attemptWhen(u: Utterance, a: Attempt): string {
@@ -296,15 +312,13 @@
   async function remove(id: number) {
     clearTimeout(sureTimer);
     sure = null;
-    try { await deleteHistory(id); } catch (e) { toast.error(errorMessage(e)); }
     if (open === id) open = null;
-    await reload();
+    try { await deleteHistory(id); } catch (e) { toast.error(errorMessage(e)); }
   }
   async function removeRecording(id: number) {
     clearTimeout(sureTimer);
     sure = null;
     try { await deleteRecording(id); toast.ok(t("history.recording_deleted")); } catch (e) { toast.error(errorMessage(e)); }
-    await reload();
   }
   async function openFolder() {
     try { await openRecordingsDir(); } catch (e) { toast.error(errorMessage(e)); }
@@ -321,7 +335,6 @@
       toast.error(errorMessage(e));
     }
     open = null;
-    await reload();
   }
   async function clearAllRecordings() {
     confirmRecordings = false;
@@ -331,19 +344,19 @@
     } catch (e) {
       toast.error(errorMessage(e));
     }
-    await reload();
   }
-  /** Removes the rows of the chosen period with their recordings. */
+  /** Removes the rows of the chosen period with their recordings; the list starts over with one page. */
   async function clearPeriod() {
     confirmPeriod = false;
     const w = window_();
+    want = PAGE_SIZE;
+    exhausted = false;
     try {
       const n = await clearHistoryRange(w.since, w.until);
       toast.ok(t("history.period_cleared", { n: String(n) }));
     } catch (e) {
       toast.error(errorMessage(e));
     }
-    await reset();
   }
   /** Removes the recordings of the chosen period; the rows stay. */
   async function clearPeriodRecordings() {
@@ -355,7 +368,6 @@
     } catch (e) {
       toast.error(errorMessage(e));
     }
-    await reload();
   }
 </script>
 

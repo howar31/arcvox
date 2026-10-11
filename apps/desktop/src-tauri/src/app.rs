@@ -535,6 +535,12 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let backup = backup_auto(&app, engine.clone(), &dirs, &version, runtime.clone());
+    // Every change written to the history, by a dictation or by a command,
+    // is announced from the store itself.
+    if let Some(e) = &engine {
+        let ui = ui.clone();
+        e.history().watch(move || ui.history_changed());
+    }
     {
         let (ui, app) = (ui.clone(), app.clone());
         backup.on_folder(Box::new(move |state| {

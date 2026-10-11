@@ -15,7 +15,6 @@ use super::client::apply_client;
 use super::{engine, CmdError, CmdResult};
 use crate::app::AppState;
 use crate::backup_auto::BackupStatus;
-use crate::dictation::ui::Ui;
 use crate::settings::{BackupCategories, ClientSettings};
 
 /// What a settings file says about itself, for the import dialog.
@@ -300,7 +299,6 @@ pub async fn backup_import(
     let report = engine(&state)?
         .backup_import(&source(path, folder), devices, categories.into())
         .await?;
-    state.ui.history_changed();
     Ok(report)
 }
 
@@ -385,7 +383,6 @@ pub async fn device_rename(state: State<'_, AppState>, id: String, name: String)
 #[tauri::command]
 pub async fn device_remove(state: State<'_, AppState>, id: String) -> CmdResult<usize> {
     let removed = engine(&state)?.remove_device(&id).await?;
-    state.ui.history_changed();
     Ok(removed)
 }
 

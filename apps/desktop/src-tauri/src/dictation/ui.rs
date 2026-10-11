@@ -115,8 +115,6 @@ pub trait Ui: Send + Sync {
     fn inserted(&self);
     /// The text was put on the clipboard in place of an insertion.
     fn copied(&self);
-    /// The stored dictations changed: a dictation ended or its final text was recorded.
-    fn history_changed(&self) {}
 }
 
 #[cfg(test)]
