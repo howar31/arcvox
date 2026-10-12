@@ -180,8 +180,8 @@ pub enum StepSpec {
 /// The providers the factory profile names.
 pub const FACTORY_ASR: &str = "local-whisper";
 pub const FACTORY_LLM: &str = "local-llama";
-/// The preset that is a copy of the factory profile.
-pub const STANDARD_PRESET: &str = "standard";
+/// The preset that is a copy of the factory profile: the everyday style.
+pub const FACTORY_PRESET: &str = "casual";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -351,7 +351,7 @@ impl Config {
             prompt_addition: String::new(),
             few_shot: Vec::new(),
             steps: Self::default_steps(),
-            preset: Some(STANDARD_PRESET.into()),
+            preset: Some(FACTORY_PRESET.into()),
             asr_dictionary_hint: true,
             llm_dictionary_terms: true,
             llm_window_title: true,
