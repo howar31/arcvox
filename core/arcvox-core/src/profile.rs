@@ -1,7 +1,9 @@
 //! Picks the profile for a session: explicit override, then first matcher
 //! hit, then the default profile.
 
-use crate::config::{Config, Matcher, Profile, ProviderConfig, FACTORY_ASR, FACTORY_LLM};
+use crate::config::{
+    Config, Matcher, Profile, ProviderConfig, FACTORY_ASR, FACTORY_LLM, STANDARD_PRESET,
+};
 use crate::types::{AppInfo, ProfileId};
 
 pub fn resolve<'a>(
@@ -96,6 +98,17 @@ pub fn presets() -> &'static [ProfilePreset] {
     &PRESETS
 }
 
+pub fn preset(id: &str) -> Option<&'static ProfilePreset> {
+    PRESETS.iter().find(|p| p.id == id)
+}
+
+/// The preset a reset of `profile` returns to: the one it was made from,
+/// else the standard one. None when the profile names a preset that no
+/// longer exists.
+pub fn reset_target(profile: &Profile) -> Option<&'static ProfilePreset> {
+    preset(profile.preset.as_deref().unwrap_or(STANDARD_PRESET))
+}
+
 impl Profile {
     /// Builds a profile from a preset, reusing the provider pair, language
     /// hint, steps and switches of `base` (the factory profile's for a
@@ -135,6 +148,7 @@ impl Profile {
             prompt_addition: preset.prompt_addition.to_string(),
             few_shot: vec![],
             steps: base.steps.clone(),
+            preset: Some(preset.id.to_string()),
             asr_dictionary_hint: base.asr_dictionary_hint,
             llm_dictionary_terms: base.llm_dictionary_terms,
             llm_window_title: base.llm_window_title,
@@ -142,21 +156,27 @@ impl Profile {
         }
     }
 
-    /// Puts the profile's settings back to the factory profile's: the
-    /// steps, the switches, the language hint, the prompt addition and the
-    /// examples. The id, the name, whether it is the default and where it
-    /// applies stay. The providers go back to the factory pair only while
-    /// both are still configured; returns whether they did.
-    pub fn reset_to_factory(&mut self, providers: &[ProviderConfig]) -> bool {
+    /// Puts the profile's settings back to those of `preset`: the factory
+    /// profile's steps, switches, language hint and examples, and the
+    /// preset's prompt addition. The id, the name, whether it is the default
+    /// and where it applies stay; the profile records the preset. The
+    /// providers go back to the factory pair only while both are still
+    /// configured; returns whether they did.
+    pub fn reset_to_preset(
+        &mut self,
+        preset: &ProfilePreset,
+        providers: &[ProviderConfig],
+    ) -> bool {
         let factory = Config::factory_profile();
         self.steps = factory.steps;
         self.language_hint = factory.language_hint;
-        self.prompt_addition = factory.prompt_addition;
+        self.prompt_addition = preset.prompt_addition.to_string();
         self.few_shot = factory.few_shot;
         self.asr_dictionary_hint = factory.asr_dictionary_hint;
         self.llm_dictionary_terms = factory.llm_dictionary_terms;
         self.llm_window_title = factory.llm_window_title;
         self.llm_short_fallback = factory.llm_short_fallback;
+        self.preset = Some(preset.id.to_string());
         let engines = factory_providers_present(providers);
         if engines {
             self.asr_provider = factory.asr_provider;
@@ -248,7 +268,7 @@ mod tests {
     }
 
     fn preset(id: &str) -> &'static ProfilePreset {
-        presets().iter().find(|p| p.id == id).unwrap()
+        super::preset(id).unwrap()
     }
 
     #[test]
@@ -263,6 +283,7 @@ mod tests {
         assert_eq!(p.id, ProfileId("standard".into()));
         assert!(!p.is_default);
         assert!(p.matcher.app_ids.is_empty());
+        assert_eq!(p.preset.as_deref(), Some("standard"));
         assert_eq!(p.prompt_addition, "");
         assert_eq!(p.steps, factory.steps);
         assert!(p.llm_window_title);
@@ -281,7 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn reset_to_factory_keeps_identity_and_restores_engines_only_when_present() {
+    fn reset_to_preset_keeps_identity_and_restores_engines_only_when_present() {
         let c = Config::first_run();
         let mut p = c.profiles[0].clone();
         p.id = ProfileId("mail".into());
@@ -293,13 +314,15 @@ mod tests {
         p.llm_short_fallback = false;
         p.steps = vec![crate::config::StepSpec::Asr];
         p.asr_provider = crate::types::ProviderId("other".into());
-        assert!(p.reset_to_factory(&c.providers));
+        p.preset = None;
+        assert!(p.reset_to_preset(preset("mail"), &c.providers));
         let factory = Config::factory_profile();
         assert_eq!(p.id, ProfileId("mail".into()));
         assert_eq!(p.name, "郵件");
         assert!(!p.is_default);
         assert_eq!(p.matcher.app_ids, ["com.apple.mail"]);
-        assert_eq!(p.prompt_addition, "");
+        assert_eq!(p.prompt_addition, preset("mail").prompt_addition);
+        assert_eq!(p.preset.as_deref(), Some("mail"));
         assert_eq!(p.language_hint, factory.language_hint);
         assert!(p.llm_short_fallback);
         assert_eq!(p.steps, factory.steps);
@@ -312,8 +335,21 @@ mod tests {
             .filter(|x| x.id.0 != FACTORY_LLM)
             .cloned()
             .collect();
-        assert!(!q.reset_to_factory(&few));
+        assert!(!q.reset_to_preset(preset("standard"), &few));
         assert_eq!(q.asr_provider, crate::types::ProviderId("other".into()));
+        assert_eq!(q.prompt_addition, "");
+    }
+
+    #[test]
+    fn a_reset_returns_to_the_recorded_preset_else_the_standard_one() {
+        let mut p = Config::first_run().profiles.remove(0);
+        assert_eq!(reset_target(&p).map(|x| x.id), Some("standard"));
+        p.preset = None;
+        assert_eq!(reset_target(&p).map(|x| x.id), Some("standard"));
+        p.preset = Some("chat".into());
+        assert_eq!(reset_target(&p).map(|x| x.id), Some("chat"));
+        p.preset = Some("retired".into());
+        assert!(reset_target(&p).is_none());
     }
 
     #[test]
@@ -334,6 +370,7 @@ mod tests {
         );
         assert!(p.matcher.url_patterns.is_empty());
         assert!(p.few_shot.is_empty());
+        assert_eq!(p.preset.as_deref(), Some("mail"));
         let fresh = Profile::from_preset(preset("mail"), "x".into(), &base, &[], &[]);
         assert_eq!(fresh.id, ProfileId("mail".into()));
     }

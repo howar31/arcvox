@@ -74,7 +74,7 @@
 </script>
 
 {#if saved !== null}
-  <PageHead title={t("nav.prompt")} description={t("prompt.note")}>
+  <PageHead title={t("nav.prompt")} description={t("prompt.note")} crumb={{ label: t("nav.flow"), page: "flow" }}>
     {#snippet actions()}
       {#if restorable}<button type="button" class="btn" disabled={saving} onclick={() => (confirmRestore = true)}>{t("prompt.restore")}</button>{/if}
     {/snippet}

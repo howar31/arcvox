@@ -1,5 +1,5 @@
 use arcvox_core::config::{Config, Profile};
-use arcvox_core::profile::presets;
+use arcvox_core::profile::{preset, presets, reset_target};
 use arcvox_core::types::ProfileId;
 use arcvox_core::Engine;
 use serde::Serialize;
@@ -37,13 +37,34 @@ pub fn delete(engine: &Engine, id: &ProfileId) -> CmdResult<Config> {
     Ok((*next).clone())
 }
 
-/// Puts a profile's settings back to the factory ones; see
-/// `Profile::reset_to_factory` for what changes.
-pub fn reset(engine: &Engine, id: &ProfileId) -> CmdResult<Config> {
+fn unknown_preset(preset_id: &str) -> CmdError {
+    CmdError::with(
+        "unknown_preset",
+        format!("unknown preset {preset_id}"),
+        &[("preset", preset_id.to_string())],
+    )
+}
+
+/// Puts a profile's settings back to those of a preset: `preset_id` when
+/// given (the page offers the standard one when the profile's own preset is
+/// gone), else the preset the profile was made from; see
+/// `Profile::reset_to_preset` for what changes.
+pub fn reset(engine: &Engine, id: &ProfileId, preset_id: Option<&str>) -> CmdResult<Config> {
+    let current = engine.config().current();
+    let profile = current
+        .profiles
+        .iter()
+        .find(|p| &p.id == id)
+        .ok_or_else(|| CmdError::new("unknown_profile", format!("unknown profile {}", id.0)))?;
+    let target = match preset_id {
+        Some(pid) => preset(pid).ok_or_else(|| unknown_preset(pid))?,
+        None => reset_target(profile)
+            .ok_or_else(|| unknown_preset(profile.preset.as_deref().unwrap_or("")))?,
+    };
     let next = engine.config().update(|c| {
         let providers = c.providers.clone();
         if let Some(p) = c.profiles.iter_mut().find(|p| &p.id == id) {
-            p.reset_to_factory(&providers);
+            p.reset_to_preset(target, &providers);
         }
     })?;
     Ok((*next).clone())
@@ -82,13 +103,7 @@ pub fn add_preset(engine: &Engine, preset_id: &str, name: &str) -> CmdResult<Con
     let preset = presets()
         .iter()
         .find(|p| p.id == preset_id)
-        .ok_or_else(|| {
-            CmdError::with(
-                "unknown_preset",
-                format!("unknown preset {preset_id}"),
-                &[("preset", preset_id.to_string())],
-            )
-        })?;
+        .ok_or_else(|| unknown_preset(preset_id))?;
     let current = engine.config().current();
     let base = current
         .profiles
@@ -127,8 +142,12 @@ pub fn profiles_delete(state: State<'_, AppState>, id: ProfileId) -> CmdResult<C
 }
 
 #[tauri::command]
-pub fn profiles_reset(state: State<'_, AppState>, id: ProfileId) -> CmdResult<Config> {
-    reset(&engine(&state)?, &id)
+pub fn profiles_reset(
+    state: State<'_, AppState>,
+    id: ProfileId,
+    preset: Option<String>,
+) -> CmdResult<Config> {
+    reset(&engine(&state)?, &id, preset.as_deref())
 }
 
 #[tauri::command]
@@ -197,6 +216,45 @@ mod tests {
         let c = add_preset(&e, "mail", "郵件 2").unwrap();
         assert_eq!(c.profiles.len(), 3);
         assert!(add_preset(&e, "nope", "x").is_err());
+    }
+
+    #[tokio::test]
+    async fn reset_returns_to_the_profile_preset_or_the_one_named() {
+        let (_t, e) = engine().await;
+        let c = add_preset(&e, "chat", "聊天").unwrap();
+        let mut chat = c
+            .profiles
+            .iter()
+            .find(|p| p.id.0 == "chat")
+            .unwrap()
+            .clone();
+        chat.prompt_addition = "tuned".into();
+        chat.llm_window_title = false;
+        upsert(&e, chat).unwrap();
+        let c = reset(&e, &ProfileId("chat".into()), None).unwrap();
+        let chat = c.profiles.iter().find(|p| p.id.0 == "chat").unwrap();
+        assert_eq!(
+            chat.prompt_addition,
+            preset("chat").unwrap().prompt_addition
+        );
+        assert!(chat.llm_window_title);
+        // A profile whose preset is gone is refused unless a preset is named.
+        let mut gone = chat.clone();
+        gone.preset = Some("retired".into());
+        upsert(&e, gone).unwrap();
+        let err = reset(&e, &ProfileId("chat".into()), None).unwrap_err();
+        assert_eq!(err.code, Some("unknown_preset"));
+        let c = reset(&e, &ProfileId("chat".into()), Some("standard")).unwrap();
+        let chat = c.profiles.iter().find(|p| p.id.0 == "chat").unwrap();
+        assert_eq!(chat.prompt_addition, "");
+        assert_eq!(chat.preset.as_deref(), Some("standard"));
+        assert_eq!(chat.name, "聊天");
+        assert_eq!(
+            reset(&e, &ProfileId("chat".into()), Some("nope"))
+                .unwrap_err()
+                .code,
+            Some("unknown_preset")
+        );
     }
 
     #[test]

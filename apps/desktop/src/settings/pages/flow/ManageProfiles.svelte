@@ -1,7 +1,7 @@
 <script lang="ts">
-  /** Every profile in one list: tick several and delete them together; rename, make default or delete one in its row. */
+  /** Every profile in one list: tick several and delete them together; rename, reset, make default or delete one in its row. */
   import { tick } from "svelte";
-  import { deleteProfile, errorMessage, setDefaultProfile, upsertProfile, type Profile } from "../../../lib/api";
+  import { deleteProfile, errorMessage, resetProfile, setDefaultProfile, upsertProfile, type PresetView, type Profile } from "../../../lib/api";
   import { t } from "../../../lib/i18n";
   import { isImeKey } from "../../../lib/ime";
   import { config } from "../../../lib/store.svelte";
@@ -9,25 +9,36 @@
   import Tag from "../../../lib/ui/Tag.svelte";
   import { toast } from "../../../lib/ui/toast.svelte";
 
-  let { open = $bindable(false), profiles, applies }: {
+  let { open = $bindable(false), profiles, applies, presets, factoryEngines }: {
     open?: boolean;
     profiles: Profile[];
     applies: (p: Profile) => string;
+    /** The built-in presets of this version; a profile whose preset is missing is offered the standard one. */
+    presets: PresetView[];
+    /** Whether the local engine pair is configured, so a reset puts it back. */
+    factoryEngines: boolean;
   } = $props();
 
   let selected = $state<string[]>([]);
   // The ids about to be deleted once the user confirms; empty when nothing is asked.
   let confirming = $state<string[]>([]);
   let renaming = $state<string | null>(null);
+  // The profile about to be reset once the user confirms.
+  let resetting = $state<string | null>(null);
   let newName = $state("");
   let nameField: HTMLInputElement | undefined = $state();
   let busy = $state(false);
 
   const byId = (id: string) => profiles.find((p) => p.id === id);
   const names = $derived(confirming.map((id) => byId(id)?.name ?? id).join(t("home.list_sep")));
+  // The reset goes back to the profile's own preset when this version still has it, else it offers the standard one.
+  const resetTarget = $derived(resetting ? byId(resetting) : undefined);
+  const resetPreset = $derived(resetTarget?.preset ?? "standard");
+  const resetKnown = $derived(presets.some((x) => x.id === resetPreset));
+  const presetName = (id: string) => t(`profiles.preset.${id}`);
 
   $effect(() => {
-    if (!open) { selected = []; confirming = []; renaming = null; }
+    if (!open) { selected = []; confirming = []; resetting = null; renaming = null; }
   });
 
   function toggle(p: Profile) {
@@ -62,6 +73,19 @@
     } catch (e) { toast.error(errorMessage(e)); } finally { busy = false; }
   }
 
+  /** Puts the profile's settings back to its preset, or to the standard one when its own is gone. */
+  async function reset() {
+    const p = resetTarget;
+    const toStandard = !resetKnown;
+    resetting = null;
+    if (!p) return;
+    busy = true;
+    try {
+      config.value = await resetProfile(p.id, toStandard ? "standard" : undefined);
+      toast.ok(t("flow.reset_done", { preset: presetName(toStandard ? "standard" : resetPreset) }));
+    } catch (e) { toast.error(errorMessage(e)); } finally { busy = false; }
+  }
+
   async function remove() {
     const ids = confirming;
     confirming = [];
@@ -81,8 +105,10 @@
   }
 </script>
 
-<Modal bind:open title={confirming.length ? t("flow.manage_delete_title", { count: String(confirming.length) }) : t("flow.manage_title")} beforeclose={() => { if (confirming.length) { confirming = []; return false; } return !busy; }}>
-  {#if confirming.length}
+<Modal bind:open title={resetTarget ? (resetKnown ? t("flow.reset_title", { name: resetTarget.name }) : t("flow.reset_missing_title", { name: resetTarget.name })) : confirming.length ? t("flow.manage_delete_title", { count: String(confirming.length) }) : t("flow.manage_title")} beforeclose={() => { if (resetting) { resetting = null; return false; } if (confirming.length) { confirming = []; return false; } return !busy; }}>
+  {#if resetTarget}
+    <p class="ask">{resetKnown ? t("flow.reset_body", { preset: presetName(resetPreset) }) : t("flow.reset_missing_body")}{factoryEngines ? t("flow.reset_engines") : t("flow.reset_engines_kept")}</p>
+  {:else if confirming.length}
     <p class="ask">{t("flow.manage_delete_body", { names })}</p>
   {:else}
     <div class="list" class:busy inert={busy} aria-busy={busy}>
@@ -106,6 +132,7 @@
           </div>
           <div class="acts">
             <button type="button" class="btn quiet sm" onclick={() => startRename(p)}>{t("flow.rename")}</button>
+            <button type="button" class="btn quiet sm" onclick={() => (resetting = p.id)}>{t("flow.reset")}</button>
             {#if !p.is_default}
               <button type="button" class="btn quiet sm" onclick={() => makeDefault(p)}>{t("profiles.make_default")}</button>
               <button type="button" class="btn quiet sm danger" onclick={() => (confirming = [p.id])}>{t("profiles.delete")}</button>
@@ -116,7 +143,10 @@
     </div>
   {/if}
   {#snippet actions()}
-    {#if confirming.length}
+    {#if resetTarget}
+      <button type="button" class="btn" onclick={() => (resetting = null)}>{t("common.cancel")}</button>
+      <button type="button" class="btn primary" onclick={reset}>{resetKnown ? t("flow.reset") : t("flow.reset_to_standard")}</button>
+    {:else if confirming.length}
       <button type="button" class="btn" onclick={() => (confirming = [])}>{t("common.cancel")}</button>
       <button type="button" class="btn danger" onclick={remove}>{t("profiles.delete")}</button>
     {:else}

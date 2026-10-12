@@ -180,6 +180,8 @@ pub enum StepSpec {
 /// The providers the factory profile names.
 pub const FACTORY_ASR: &str = "local-whisper";
 pub const FACTORY_LLM: &str = "local-llama";
+/// The preset that is a copy of the factory profile.
+pub const STANDARD_PRESET: &str = "standard";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -200,6 +202,10 @@ pub struct Profile {
     #[serde(default)]
     pub few_shot: Vec<Example>,
     pub steps: Vec<StepSpec>,
+    /// The built-in preset the profile was made from, which a reset returns
+    /// it to. None for profiles from before presets were recorded.
+    #[serde(default)]
+    pub preset: Option<String>,
     /// The dictionary's hinted terms are given to the recognition engine.
     #[serde(default = "default_true")]
     pub asr_dictionary_hint: bool,
@@ -345,6 +351,7 @@ impl Config {
             prompt_addition: String::new(),
             few_shot: Vec::new(),
             steps: Self::default_steps(),
+            preset: Some(STANDARD_PRESET.into()),
             asr_dictionary_hint: true,
             llm_dictionary_terms: true,
             llm_window_title: true,
