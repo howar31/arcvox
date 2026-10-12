@@ -30,6 +30,20 @@
       "min_ram_gb": 8
     },
     {
+      "id": "breeze-asr-26-q5_0",
+      "runtime": "whisper",
+      "role": "asr",
+      "label": "Breeze-ASR-26 Taigi (q5_0)",
+      "description": "Taiwanese Hokkien (Taigi) speech written as Mandarin characters; Mandarin is recognised as well. No Japanese.",
+      "languages": ["nan-TW", "zh-TW"],
+      "url": "https://huggingface.co/weemed/Breeze-ASR-26-GGML/resolve/16b8f9a257a99e0d21baa2667f3ffdc881b8e445/breeze-q5_0.bin",
+      "sha256": "60f25e3a21feca12ec082e6d36f08f94455d9900d6343f7fcb2906f71cc7c449",
+      "size_bytes": 1080732108,
+      "license": "Apache-2.0",
+      "recommended": false,
+      "min_ram_gb": 8
+    },
+    {
       "id": "gemma-3-4b-it-q4_k_m",
       "runtime": "llama",
       "role": "llm",
