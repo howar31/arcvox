@@ -201,19 +201,19 @@ mod tests {
     async fn add_preset_creates_a_profile_with_the_default_pair() {
         let (_t, e) = engine().await;
         let base = e.config().current().profiles[0].clone();
-        let c = add_preset(&e, "mail", "郵件").unwrap();
+        let c = add_preset(&e, "formal", "正式").unwrap();
         let mail = c
             .profiles
             .iter()
-            .find(|p| p.id == ProfileId("mail".into()))
+            .find(|p| p.id == ProfileId("formal".into()))
             .unwrap();
-        assert_eq!(mail.name, "郵件");
+        assert_eq!(mail.name, "正式");
         assert!(!mail.is_default);
         assert_eq!(mail.asr_provider, base.asr_provider);
         assert_eq!(mail.llm_provider, base.llm_provider);
         assert!(!mail.matcher.app_ids.is_empty());
         // A second copy gets a free id instead of replacing the first.
-        let c = add_preset(&e, "mail", "郵件 2").unwrap();
+        let c = add_preset(&e, "formal", "正式 2").unwrap();
         assert_eq!(c.profiles.len(), 3);
         assert!(add_preset(&e, "nope", "x").is_err());
     }
@@ -221,36 +221,36 @@ mod tests {
     #[tokio::test]
     async fn reset_returns_to_the_profile_preset_or_the_one_named() {
         let (_t, e) = engine().await;
-        let c = add_preset(&e, "chat", "聊天").unwrap();
+        let c = add_preset(&e, "verbatim", "逐字").unwrap();
         let mut chat = c
             .profiles
             .iter()
-            .find(|p| p.id.0 == "chat")
+            .find(|p| p.id.0 == "verbatim")
             .unwrap()
             .clone();
         chat.prompt_addition = "tuned".into();
         chat.llm_window_title = false;
         upsert(&e, chat).unwrap();
-        let c = reset(&e, &ProfileId("chat".into()), None).unwrap();
-        let chat = c.profiles.iter().find(|p| p.id.0 == "chat").unwrap();
+        let c = reset(&e, &ProfileId("verbatim".into()), None).unwrap();
+        let chat = c.profiles.iter().find(|p| p.id.0 == "verbatim").unwrap();
         assert_eq!(
             chat.prompt_addition,
-            preset("chat").unwrap().prompt_addition
+            preset("verbatim").unwrap().prompt_addition
         );
         assert!(chat.llm_window_title);
         // A profile whose preset is gone is refused unless a preset is named.
         let mut gone = chat.clone();
         gone.preset = Some("retired".into());
         upsert(&e, gone).unwrap();
-        let err = reset(&e, &ProfileId("chat".into()), None).unwrap_err();
+        let err = reset(&e, &ProfileId("verbatim".into()), None).unwrap_err();
         assert_eq!(err.code, Some("unknown_preset"));
-        let c = reset(&e, &ProfileId("chat".into()), Some("standard")).unwrap();
-        let chat = c.profiles.iter().find(|p| p.id.0 == "chat").unwrap();
+        let c = reset(&e, &ProfileId("verbatim".into()), Some("casual")).unwrap();
+        let chat = c.profiles.iter().find(|p| p.id.0 == "verbatim").unwrap();
         assert_eq!(chat.prompt_addition, "");
-        assert_eq!(chat.preset.as_deref(), Some("standard"));
-        assert_eq!(chat.name, "聊天");
+        assert_eq!(chat.preset.as_deref(), Some("casual"));
+        assert_eq!(chat.name, "逐字");
         assert_eq!(
-            reset(&e, &ProfileId("chat".into()), Some("nope"))
+            reset(&e, &ProfileId("verbatim".into()), Some("nope"))
                 .unwrap_err()
                 .code,
             Some("unknown_preset")
@@ -261,10 +261,10 @@ mod tests {
     fn presets_list_every_builtin_preset() {
         let views = preset_views();
         let ids: Vec<&str> = views.iter().map(|v| v.id.as_str()).collect();
-        assert_eq!(ids, ["standard", "mail", "chat", "code"]);
+        assert_eq!(ids, ["casual", "formal", "verbatim"]);
         // Only the clean copy of the factory settings names no application.
         assert!(views
             .iter()
-            .all(|v| v.id == "standard" || !v.app_ids.is_empty()));
+            .all(|v| v.id != "formal" || !v.app_ids.is_empty()));
     }
 }

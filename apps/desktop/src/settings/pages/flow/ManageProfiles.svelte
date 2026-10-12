@@ -13,7 +13,7 @@
     open?: boolean;
     profiles: Profile[];
     applies: (p: Profile) => string;
-    /** The built-in presets of this version; a profile whose preset is missing is offered the standard one. */
+    /** The built-in presets of this version; a profile whose preset is missing is offered the casual one. */
     presets: PresetView[];
     /** Whether the local engine pair is configured, so a reset puts it back. */
     factoryEngines: boolean;
@@ -31,9 +31,9 @@
 
   const byId = (id: string) => profiles.find((p) => p.id === id);
   const names = $derived(confirming.map((id) => byId(id)?.name ?? id).join(t("home.list_sep")));
-  // The reset goes back to the profile's own preset when this version still has it, else it offers the standard one.
+  // The reset goes back to the profile's own preset when this version still has it, else it offers the casual one.
   const resetTarget = $derived(resetting ? byId(resetting) : undefined);
-  const resetPreset = $derived(resetTarget?.preset ?? "standard");
+  const resetPreset = $derived(resetTarget?.preset ?? "casual");
   const resetKnown = $derived(presets.some((x) => x.id === resetPreset));
   const presetName = (id: string) => t(`profiles.preset.${id}`);
 
@@ -73,16 +73,16 @@
     } catch (e) { toast.error(errorMessage(e)); } finally { busy = false; }
   }
 
-  /** Puts the profile's settings back to its preset, or to the standard one when its own is gone. */
+  /** Puts the profile's settings back to its preset, or to the casual one when its own is gone. */
   async function reset() {
     const p = resetTarget;
-    const toStandard = !resetKnown;
+    const toCasual = !resetKnown;
     resetting = null;
     if (!p) return;
     busy = true;
     try {
-      config.value = await resetProfile(p.id, toStandard ? "standard" : undefined);
-      toast.ok(t("flow.reset_done", { preset: presetName(toStandard ? "standard" : resetPreset) }));
+      config.value = await resetProfile(p.id, toCasual ? "casual" : undefined);
+      toast.ok(t("flow.reset_done", { preset: presetName(toCasual ? "casual" : resetPreset) }));
     } catch (e) { toast.error(errorMessage(e)); } finally { busy = false; }
   }
 
@@ -145,7 +145,7 @@
   {#snippet actions()}
     {#if resetTarget}
       <button type="button" class="btn" onclick={() => (resetting = null)}>{t("common.cancel")}</button>
-      <button type="button" class="btn primary" onclick={reset}>{resetKnown ? t("flow.reset") : t("flow.reset_to_standard")}</button>
+      <button type="button" class="btn primary" onclick={reset}>{resetKnown ? t("flow.reset") : t("flow.reset_to_casual")}</button>
     {:else if confirming.length}
       <button type="button" class="btn" onclick={() => (confirming = [])}>{t("common.cancel")}</button>
       <button type="button" class="btn danger" onclick={remove}>{t("profiles.delete")}</button>
