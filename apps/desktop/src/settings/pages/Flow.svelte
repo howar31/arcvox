@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount, untrack } from "svelte";
   import {
-    deleteProfile, errorMessage, historyLast, listMicrophones, modelsInstalled, modelsManifestNow, onHistoryChanged, profilesAddPreset,
-    profilesPresets, resetProfile, setDefaultProfile, upsertProfile, type InstalledModel, type LastRun, type ManifestView, type PresetView, type Profile,
+    errorMessage, historyLast, listMicrophones, modelsInstalled, modelsManifestNow, onHistoryChanged, profilesAddPreset,
+    profilesPresets, upsertProfile, type InstalledModel, type LastRun, type ManifestView, type PresetView, type Profile,
   } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { appliesDictionary, PUNCTUATION_CONFIGS, SCRIPT_CONFIGS, SCRIPT_GROUPS, scriptAt, scriptLabel, selectedProfile, withDictionary, withScriptAt, withScriptPunctuation, type ScriptPass } from "../../lib/flowEdit";
@@ -57,10 +57,6 @@
   let syncedId = "";
   let saving = $state(false);
   let problem = $state<string | undefined>(undefined);
-  let renaming = $state(false);
-  let nameField: HTMLInputElement | undefined = $state();
-  let confirmDelete = $state(false);
-  let confirmReset = $state(false);
   let adding = $state(false);
   let busy = $state(false);
   let presets = $state<PresetView[]>([]);
@@ -116,7 +112,7 @@
       if (draft === null || id !== syncedId || comparable(draft) === synced) {
         draft = structuredClone($state.snapshot(source)) as Profile;
         synced = next;
-        if (id !== syncedId) { newApp = ""; newUrl = ""; newRaw = ""; newRefined = ""; renaming = false; }
+        if (id !== syncedId) { newApp = ""; newUrl = ""; newRaw = ""; newRefined = ""; }
         syncedId = id;
       }
     });
@@ -247,7 +243,6 @@
       config.value = await upsertProfile(next);
       // The draft now equals what is stored.
       synced = comparable(next);
-      renaming = false;
     } catch (e) {
       toast.error(errorMessage(e));
     } finally {
@@ -259,48 +254,6 @@
     draft = structuredClone($state.snapshot(source)) as Profile;
     synced = comparable(source);
     newApp = ""; newUrl = ""; newRaw = ""; newRefined = "";
-    renaming = false;
-  }
-
-  /** Puts the profile's settings back to the factory ones; unsaved edits are dropped with them. */
-  async function resetFactory() {
-    if (!source) return;
-    confirmReset = false;
-    saving = true;
-    try {
-      config.value = await resetProfile(source.id);
-      // The stored profile is the draft now.
-      synced = "";
-      toast.ok(t("flow.reset_done"));
-    } catch (e) { toast.error(errorMessage(e)); } finally { saving = false; }
-  }
-
-  async function makeDefault() {
-    if (!source) return;
-    try {
-      config.value = await setDefaultProfile(source.id);
-      if (draft) draft.is_default = true;
-      toast.ok(t("profiles.made_default"));
-    } catch (e) { toast.error(errorMessage(e)); }
-  }
-  async function remove() {
-    if (!source) return;
-    confirmDelete = false;
-    saving = true;
-    try {
-      config.value = await deleteProfile(source.id);
-      // The page is not asked about the edits of a profile that is gone.
-      guard.set(false);
-      toast.ok(t("profiles.deleted"));
-      go("flow");
-    } catch (e) { toast.error(errorMessage(e)); } finally { saving = false; }
-  }
-
-  async function startRename() {
-    renaming = true;
-    await Promise.resolve();
-    nameField?.focus();
-    nameField?.select();
   }
 
   /** Adds a profile (blank, or from a preset) and shows it. */
@@ -342,24 +295,6 @@
       onadd={() => guard.request(() => { revert(); adding = true; })}
       onmanage={() => guard.request(() => (managing = true))}
     />
-  </div>
-
-  <div class="who">
-    {#if renaming}
-      <input
-        type="text" class="name-field" bind:this={nameField} bind:value={draft.name} aria-label={t("profiles.name")} placeholder={t("profiles.new_title")}
-        aria-invalid={problem && !draft.name.trim() ? "true" : undefined}
-        onkeydown={(e) => { if (e.key === "Enter" && !isImeKey(e)) renaming = false; else if (e.key === "Escape") { draft!.name = source.name; renaming = false; e.stopPropagation(); } }}
-        onblur={() => { if (draft?.name.trim()) renaming = false; }}
-      />
-    {/if}
-    <span class="where">{applies(draft)}</span>
-    {#if !renaming}<button type="button" class="btn quiet" onclick={startRename}>{t("flow.rename")}</button>{/if}
-    <button type="button" class="btn quiet" onclick={() => (confirmReset = true)} disabled={saving}>{t("flow.reset_factory")}</button>
-    {#if !source.is_default}
-      <button type="button" class="btn quiet" onclick={makeDefault} disabled={saving}>{t("profiles.make_default")}</button>
-      <button type="button" class="btn quiet danger" onclick={() => (confirmDelete = true)} disabled={saving}>{t("profiles.delete")}</button>
-    {/if}
   </div>
 
   {#if source.is_default}
@@ -543,7 +478,7 @@
   <SaveBar {dirty} {saving} message={problem} onsave={save} onrevert={revert} />
 {/if}
 
-<ManageProfiles bind:open={managing} {profiles} {applies} />
+<ManageProfiles bind:open={managing} {profiles} {applies} {presets} {factoryEngines} />
 
 <Modal bind:open={adding} title={t("flow.add")}>
   <div class="choices" class:busy inert={busy} aria-busy={busy}>
@@ -558,28 +493,9 @@
   {/snippet}
 </Modal>
 
-<Modal bind:open={confirmReset} title={t("flow.reset_title")}>
-  <p>{t("flow.reset_body", { name: source?.name ?? "" })}{factoryEngines ? t("flow.reset_engines") : t("flow.reset_engines_kept")}</p>
-  {#snippet actions()}
-    <button type="button" class="btn" onclick={() => (confirmReset = false)}>{t("common.cancel")}</button>
-    <button type="button" class="btn primary" onclick={resetFactory}>{t("flow.reset_factory")}</button>
-  {/snippet}
-</Modal>
-
-<Modal bind:open={confirmDelete} title={t("profiles.delete_title")}>
-  <p>{t("profiles.delete_body", { name: source?.name ?? "" })}</p>
-  {#snippet actions()}
-    <button type="button" class="btn" onclick={() => (confirmDelete = false)}>{t("common.cancel")}</button>
-    <button type="button" class="btn danger" onclick={remove}>{t("profiles.delete")}</button>
-  {/snippet}
-</Modal>
 
 <style>
   .pick { display: flex; align-items: center; gap: 10px; }
-  .who { display: flex; align-items: center; gap: 10px; min-height: var(--control); margin: 12px 4px 12px; }
-  .name-field { width: 240px; flex: none; }
-  .where { flex: 1; min-width: 0; color: var(--ink-2); font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .who .btn:last-child { margin-right: -8px; }
 
   .gt { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 22px 4px 12px; font: 600 var(--text-sm)/1 var(--font); color: var(--ink-2); }
   .gt .r { font-weight: 400; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

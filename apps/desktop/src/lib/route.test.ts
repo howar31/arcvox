@@ -58,8 +58,14 @@ test("an argument round-trips through the hash", () => {
 test("the navigation lists every page once", () => {
   const pages = NAV.flatMap((g) => g.pages);
   expect(new Set(pages).size).toBe(pages.length);
-  expect(NAV.map((g) => g.pages)).toEqual([["home", "history"], ["flow", "engines", "prompt", "dictionary"], ["general", "recording", "data", "backup"], ["about"]]);
+  expect(NAV.map((g) => g.pages)).toEqual([["home", "history"], ["flow", "engines", "dictionary"], ["general", "recording", "data", "backup"], ["about"]]);
   expect(NAV.map((g) => g.group)).toEqual([null, "nav.group.dictation", "nav.group.settings", null]);
+});
+
+test("the base prompt has no sidebar entry and counts as the profiles page there", () => {
+  expect(NAV.flatMap((g) => g.pages)).not.toContain("prompt");
+  expect(parseRoute("#prompt")).toEqual({ page: "prompt", arg: null });
+  expect(navPage("prompt")).toBe("flow");
 });
 
 test("the speed test has no sidebar entry and counts as the engines page there", () => {

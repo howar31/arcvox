@@ -20,6 +20,8 @@ export interface Matcher { app_ids: string[]; url_patterns: string[] }
 export interface Profile {
   id: string; name: string; is_default: boolean; matcher: Matcher; asr_provider: string; llm_provider: string | null;
   language_hint: string | null; prompt_addition: string; few_shot: Example[]; steps: StepSpec[];
+  /** The built-in preset the profile was made from; a reset returns to it. */
+  preset: string | null;
   /** The dictionary's hinted terms are given to the recognition engine. */
   asr_dictionary_hint: boolean;
   /** What the rewrite model is told besides the utterance, and whether a much shorter rewrite is refused. */
@@ -110,7 +112,8 @@ export const probeProvider = (provider: ProviderConfig) => invoke<ProbeResult>("
 export const upsertProfile = (profile: Profile) => invoke<Config>("profiles_upsert", { profile });
 export const deleteProfile = (id: string) => invoke<Config>("profiles_delete", { id });
 export const setDefaultProfile = (id: string) => invoke<Config>("profiles_set_default", { id });
-export const resetProfile = (id: string) => invoke<Config>("profiles_reset", { id });
+/** Resets to the profile's own preset, or to `preset` when given (the standard one, when its own is gone). */
+export const resetProfile = (id: string, preset?: string) => invoke<Config>("profiles_reset", { id, preset: preset ?? null });
 export const setDictionary = (entries: DictionaryEntry[]) => invoke<Config>("dictionary_set", { entries });
 export const getPrompt = () => invoke<string>("prompt_get");
 export const setPrompt = (text: string) => invoke<void>("prompt_set", { text });
