@@ -76,7 +76,7 @@ static PRESETS: [ProfilePreset; 4] = [
         tuned: true,
         language_hint: Some("zh-TW"),
         app_ids: &[],
-        prompt_addition: "",
+        prompt_addition: "這是聊天訊息的寫法：輸出的最後一個字之後不加句號，整段以最後一個字或問號結束；中間句子之間的句號照常。",
     },
     ProfilePreset {
         id: "formal",
@@ -257,11 +257,16 @@ mod tests {
         let ids: Vec<&str> = presets().iter().map(|p| p.id).collect();
         assert_eq!(ids, ["casual", "formal", "verbatim", "blank"]);
         for p in presets() {
-            if p.id == "casual" || p.id == "blank" {
-                assert!(p.app_ids.is_empty());
-                assert!(p.prompt_addition.is_empty());
+            if p.id == "blank" {
+                assert!(
+                    p.prompt_addition.is_empty(),
+                    "the untuned template has no style"
+                );
             } else {
                 assert!(!p.prompt_addition.trim().is_empty());
+            }
+            if p.id == "casual" || p.id == "blank" {
+                assert!(p.app_ids.is_empty());
             }
             assert_eq!(p.asr, None, "every template follows the default");
             assert_eq!(p.llm, None);
@@ -277,6 +282,14 @@ mod tests {
 
     fn preset(id: &str) -> &'static ProfilePreset {
         super::preset(id).unwrap()
+    }
+
+    #[test]
+    fn the_casual_style_drops_the_last_full_stop_and_keeps_question_marks() {
+        let style = preset("casual").prompt_addition;
+        assert!(style.contains("最後一個字之後不加句號"), "{style}");
+        assert!(style.contains("問號"), "{style}");
+        assert!(style.contains("中間句子之間的句號照常"), "{style}");
     }
 
     #[test]
