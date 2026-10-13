@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { defaultPrompt, errorMessage, getPrompt, restorePrompt, setPrompt } from "../../lib/api";
   import { guard } from "../../lib/guard.svelte";
+  import { lineDiff } from "../../lib/lineDiff";
   import { t } from "../../lib/i18n";
   import Modal from "../../lib/ui/Modal.svelte";
   import PageHead from "../../lib/ui/PageHead.svelte";
@@ -84,8 +85,18 @@
 
   <SaveBar {dirty} {saving} canSave={loaded} message={loaded ? undefined : t("prompt.not_loaded")} onsave={save} onrevert={() => (text = saved ?? "")} />
 
-  <Modal bind:open={confirmRestore} title={t("prompt.restore_title")}>
+  <Modal bind:open={confirmRestore} title={t("prompt.restore_title")} size="lg">
     <p>{t("prompt.restore_body")}</p>
+    {#if standard === null}
+      <p class="muted">{t("prompt.default_unknown")}</p>
+    {:else}
+      <p class="legend"><span class="sw del"></span>{t("prompt.diff_current")}<span class="sw ins"></span>{t("prompt.diff_default")}</p>
+      <div class="lines">
+        {#each lineDiff(text, standard) as l, i (i)}
+          <div class="ln {l.kind}">{l.text || " "}</div>
+        {/each}
+      </div>
+    {/if}
     {#snippet actions()}
       <button type="button" class="btn" onclick={() => (confirmRestore = false)}>{t("common.cancel")}</button>
       <button type="button" class="btn primary" onclick={restore}>{t("prompt.restore")}</button>
@@ -96,4 +107,13 @@
 <style>
   /* Fills the window below the heading, and keeps a usable height in a short window. */
   .editor { display: block; height: max(220px, calc(100vh - 262px)); margin-top: 16px; }
+  .muted { color: var(--ink-2); }
+  .legend { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: var(--text-xs); color: var(--ink-2); }
+  .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; }
+  .sw.del { background: color-mix(in srgb, var(--live) 24%, transparent); }
+  .sw.ins { background: color-mix(in srgb, var(--ok) 26%, transparent); }
+  .lines { max-height: 50vh; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 0; font-size: var(--text-sm); line-height: 1.6; }
+  .ln { padding: 0 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .ln.del { background: color-mix(in srgb, var(--live) 12%, transparent); color: var(--ink-2); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--live) 60%, transparent); }
+  .ln.ins { background: color-mix(in srgb, var(--ok) 14%, transparent); }
 </style>

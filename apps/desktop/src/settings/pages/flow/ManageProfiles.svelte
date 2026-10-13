@@ -103,7 +103,7 @@
   }
 </script>
 
-<Modal bind:open title={resetTarget ? (resetKnown ? t("flow.reset_title", { name: resetTarget.name }) : t("flow.reset_missing_title", { name: resetTarget.name })) : confirming.length ? t("flow.manage_delete_title", { count: String(confirming.length) }) : t("flow.manage_title")} beforeclose={() => { if (resetting) { resetting = null; return false; } if (confirming.length) { confirming = []; return false; } return !busy; }}>
+<Modal bind:open size="lg" title={resetTarget ? (resetKnown ? t("flow.reset_title", { name: resetTarget.name }) : t("flow.reset_missing_title", { name: resetTarget.name })) : confirming.length ? t("flow.manage_delete_title", { count: String(confirming.length) }) : t("flow.manage_title")} beforeclose={() => { if (resetting) { resetting = null; return false; } if (confirming.length) { confirming = []; return false; } return !busy; }}>
   {#if resetTarget}
     <p class="ask">{resetKnown ? t("flow.reset_body", { preset: presetName(resetPreset) }) : t("flow.reset_missing_body")}</p>
   {:else if confirming.length}
@@ -124,7 +124,7 @@
                 onblur={finishRename}
               />
             {:else}
-              <span class="line"><span class="label">{p.name}</span>{#if p.is_default}<Tag tone="accent">{t("profiles.default")}</Tag>{/if}</span>
+              <span class="line"><span class="label">{p.name}</span>{#if p.is_default}<Tag tone="accent">{t("profiles.default")}</Tag>{/if}{#if p.preset}{#if presets.some((x) => x.id === p.preset)}<Tag title={t("flow.manage_preset_hint", { preset: presetName(p.preset) })}>{presetName(p.preset)}</Tag>{:else}<Tag tone="warn" title={t("flow.reset_missing_body")}>{t("flow.manage_preset_gone")}</Tag>{/if}{/if}</span>
             {/if}
             <span class="where">{applies(p)}</span>
           </div>
