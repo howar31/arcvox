@@ -760,6 +760,7 @@ impl Engine {
                     crate::config::base_prompt::DEFAULT_BASE_PROMPT.to_string()
                 }),
                 recognised: Default::default(),
+                asr_sample: None,
                 general: config.general.clone(),
             };
         // Nobody listens to the step events of a rerun.
@@ -1549,6 +1550,7 @@ async fn run_session(
         base_prompt,
         general: config.general.clone(),
         recognised: Default::default(),
+        asr_sample: None,
     };
 
     let engines = inner.resolve_engines(&config, &profile);

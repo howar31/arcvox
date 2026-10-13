@@ -75,6 +75,10 @@ pub struct PipelineContext {
     /// The transcript once the speech recognition step is done, for a run
     /// that is cut short after it.
     pub recognised: Arc<std::sync::Mutex<Option<String>>>,
+    /// A sample of writing given to the speech engine as if it were the
+    /// transcript before this one, so the engine writes in its style
+    /// (script, punctuation, spacing); placed before the dictionary terms.
+    pub asr_sample: Option<String>,
 }
 
 #[async_trait]
@@ -93,5 +97,6 @@ pub(crate) fn test_context() -> PipelineContext {
         base_prompt: crate::config::base_prompt::DEFAULT_BASE_PROMPT.to_string(),
         general: General::default(),
         recognised: Default::default(),
+        asr_sample: None,
     }
 }

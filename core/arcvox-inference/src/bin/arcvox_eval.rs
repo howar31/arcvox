@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
+use arcvox_core::config::ProviderConfig;
 use arcvox_core::config::{ConfigStore, Profile};
 use arcvox_core::dictionary::asr_hint;
 use arcvox_core::eval::{
@@ -18,11 +19,11 @@ use arcvox_core::eval::{
     Totals,
 };
 use arcvox_core::history::HistoryStore;
-use arcvox_core::models::ModelStore;
+use arcvox_core::models::{Manifest, ModelRole, ModelStore};
 use arcvox_core::pipeline::Pipeline;
 use arcvox_core::providers::registry::ProviderRegistry;
 use arcvox_core::providers::AsrHint;
-use arcvox_core::steps::asr::ASR_HINT_BUDGET_BYTES;
+use arcvox_core::steps::asr::{asr_prompt, ASR_HINT_BUDGET_BYTES};
 use arcvox_core::steps::PipelineContext;
 use arcvox_core::types::{Context, ProviderId};
 use arcvox_core::{DataDir, MemorySecretStore};
@@ -40,18 +41,32 @@ arcvox-eval <command> [options]
            guessed (short, long, mixed, correction). Edit both texts.
   run      --data <name|dir> --set <set.tsv> --out <run.json> --stage asr|llm|full
            [--asr id,id] [--llm id,id] [--profile id] [--base-prompt file]
-           [--style file] [--name text]
-           asr: every recording through each ASR provider, scored against `spoken`.
+           [--style file] [--asr-sample file] [--name text]
+           asr: every recording through each ASR provider, scored against `spoken`;
+                --asr also takes the id of an installed catalogue model that has
+                no engine yet (an engine is made for the run only).
            llm: `spoken` through the profile's steps after ASR with each LLM
                 provider, scored against `final`.
            full: every recording through the whole profile, scored against `final`.
+  fetch    --data <name|dir> --model <catalogue id>
+           Downloads a catalogue model into the installation's models folder,
+           the one place the app reads them from (the only thing written).
+  slice    --set <set.tsv> --out <slice.tsv> [--limit 120]
+           A fixed subset for quick runs: every category covered in turn
+           (question, list, digits, english, correction, plain, short, long),
+           the same rows every time for the same set.
   summary  <run.json> [--worst 10]
+           Scores overall and per category; punctuation and spacing by kind
+           as written-too-many / left-out counts.
   compare  <before.json> <after.json> [--limit 20]
+           Words and punctuation tallied apart, overall and per category;
+           the changed items worst first.
 
   --data names the application whose data to read (default \"Arcvox\") or a
   folder laid out like a custom data directory. Nothing in it is written.
   --base-prompt and --style try a base prompt and a profile writing style
-  from files in place of the installed ones.
+  from files in place of the installed ones; --asr-sample gives the speech
+  engine a sample of writing, placed before the dictionary terms.
 ";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -141,6 +156,7 @@ async fn dispatch(args: Args) -> Result<(), String> {
     match args.command.as_str() {
         "export" => export(&args),
         "run" => run(&args).await,
+        "fetch" => fetch(&args).await,
         "slice" => slice(&args),
         "summary" => summary(&args),
         "compare" => compare_runs(&args),
@@ -307,6 +323,10 @@ async fn run(args: &Args) -> Result<(), String> {
         .map(|p| std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}")))
         .transpose()?;
     let profile = with_style(profile, style.as_deref());
+    let asr_sample = args
+        .flag("asr-sample")
+        .map(|p| std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}")))
+        .transpose()?;
 
     let client = reqwest::Client::new();
     let models = Arc::new(ModelStore::new(
@@ -332,6 +352,10 @@ async fn run(args: &Args) -> Result<(), String> {
             "writing style: {}",
             args.flag("style").unwrap_or("the profile's")
         ),
+        format!(
+            "speech sample: {}",
+            args.flag("asr-sample").unwrap_or("none")
+        ),
         format!("set: {} ({} rows)", args.required("set")?, rows.len()),
     ];
     let mut items: Vec<ItemResult> = Vec::new();
@@ -355,12 +379,25 @@ async fn run(args: &Args) -> Result<(), String> {
             notes.push(format!("asr providers: {}", ids.join(", ")));
             let hint = AsrHint {
                 language: profile.language_hint.clone(),
-                prompt: asr_hint(&config.dictionary, ASR_HINT_BUDGET_BYTES),
+                prompt: asr_prompt(
+                    asr_sample.as_deref(),
+                    asr_hint(&config.dictionary, ASR_HINT_BUDGET_BYTES),
+                ),
             };
+            let manifest = Manifest::parse(BUNDLED_MANIFEST).map_err(|e| e.to_string())?;
             for id in &ids {
-                let cfg = config
-                    .provider(&ProviderId(id.clone()))
-                    .ok_or_else(|| format!("no provider `{id}`"))?;
+                // A catalogue model without an engine gets one for this run only.
+                let made = config.provider(&ProviderId(id.clone())).is_none().then(|| {
+                    manifest
+                        .get(id)
+                        .filter(|e| e.role == ModelRole::Asr)
+                        .map(|e| ProviderConfig::embedded(id, &e.label, e.runtime, id))
+                });
+                let cfg = match made {
+                    Some(Some(ref cfg)) => cfg,
+                    Some(None) => return Err(format!("no provider or catalogue model `{id}`")),
+                    None => config.provider(&ProviderId(id.clone())).unwrap(),
+                };
                 let provider = registry
                     .asr(cfg, &config.general)
                     .map_err(|e| format!("{id}: {}", e.message))?;
@@ -407,7 +444,13 @@ async fn run(args: &Args) -> Result<(), String> {
             for id in &ids {
                 let mut prof = profile.clone();
                 prof.llm_provider = Some(ProviderId(id.clone()));
-                let (pipeline, ctx) = build(&config, prof, &registry, &base_prompt)?;
+                let (pipeline, ctx) = build(
+                    &config,
+                    prof,
+                    &registry,
+                    &base_prompt,
+                    asr_sample.as_deref(),
+                )?;
                 for (n, row) in rows.iter().enumerate() {
                     progress(n, rows.len(), id, &row.id);
                     let tx = closed_events();
@@ -454,7 +497,13 @@ async fn run(args: &Args) -> Result<(), String> {
                     .unwrap_or("none")
             );
             notes.push(format!("pipeline: {label}"));
-            let (pipeline, ctx) = build(&config, prof, &registry, &base_prompt)?;
+            let (pipeline, ctx) = build(
+                &config,
+                prof,
+                &registry,
+                &base_prompt,
+                asr_sample.as_deref(),
+            )?;
             for (n, row) in rows.iter().enumerate() {
                 progress(n, rows.len(), &label, &row.id);
                 let result = match load_clip(&row.audio) {
@@ -521,6 +570,7 @@ fn build(
     profile: Profile,
     registry: &ProviderRegistry,
     base_prompt: &str,
+    asr_sample: Option<&str>,
 ) -> Result<(Pipeline, PipelineContext), String> {
     let engines = config.resolve_engines(&profile, |cfg| registry.ready(cfg));
     let pipeline = Pipeline::build(config, &profile, &engines, registry).map_err(|e| e.message)?;
@@ -531,6 +581,7 @@ fn build(
         base_prompt: base_prompt.to_string(),
         general: config.general.clone(),
         recognised: Default::default(),
+        asr_sample: asr_sample.map(str::to_string),
     };
     Ok((pipeline, ctx))
 }
@@ -815,6 +866,15 @@ fn change_head(ch: &Change) -> String {
         ch.punctuation_delta(),
         ch.categories.join(", ")
     )
+}
+
+async fn fetch(args: &Args) -> Result<(), String> {
+    let dirs = data_dir(args)?;
+    let id = args.required("model")?;
+    let models = ModelStore::new(&dirs, reqwest::Client::new(), BUNDLED_MANIFEST, None);
+    let m = models.download(id).await.map_err(|e| e.to_string())?;
+    println!("{} is at {}", m.id, m.path.display());
+    Ok(())
 }
 
 fn slice(args: &Args) -> Result<(), String> {

@@ -12,6 +12,16 @@ use crate::types::{ErrorCode, StepName};
 /// Byte budget for the hotword prompt sent to Whisper-style servers.
 pub const ASR_HINT_BUDGET_BYTES: usize = 600;
 
+/// The text given to the speech engine as the transcript before this one:
+/// the sample of writing, then the dictionary terms.
+pub fn asr_prompt(sample: Option<&str>, terms: Option<String>) -> Option<String> {
+    match (sample.map(str::trim), terms) {
+        (Some(sample), Some(terms)) if !sample.is_empty() => Some(format!("{sample} {terms}")),
+        (Some(sample), None) if !sample.is_empty() => Some(sample.to_string()),
+        (_, terms) => terms,
+    }
+}
+
 pub struct AsrStep {
     provider: Arc<dyn AsrProvider>,
 }
@@ -43,13 +53,14 @@ impl Step for AsrStep {
         let audio = input.audio.ok_or_else(|| {
             StepError::fatal(ErrorCode::Internal, "asr step called without audio")
         })?;
+        let terms = ctx
+            .profile
+            .asr_dictionary_hint
+            .then(|| asr_hint(&ctx.dictionary, ASR_HINT_BUDGET_BYTES))
+            .flatten();
         let hint = AsrHint {
             language: ctx.profile.language_hint.clone(),
-            prompt: ctx
-                .profile
-                .asr_dictionary_hint
-                .then(|| asr_hint(&ctx.dictionary, ASR_HINT_BUDGET_BYTES))
-                .flatten(),
+            prompt: asr_prompt(ctx.asr_sample.as_deref(), terms),
         };
         let t = self
             .provider
@@ -152,6 +163,49 @@ mod tests {
         let hints = fake.hints.lock().unwrap();
         assert_eq!(hints[0].language.as_deref(), Some("zh-TW"));
         assert_eq!(hints[0].prompt.as_deref(), Some("Arcvox"));
+    }
+
+    #[tokio::test]
+    async fn a_sample_transcript_goes_before_the_dictionary_terms() {
+        let fake = FakeAsr::ok("原文");
+        let mut ctx = test_context();
+        ctx.dictionary = Arc::new(vec![DictionaryEntry {
+            term: "Arcvox".into(),
+            aliases: vec![],
+            asr_hint: true,
+        }]);
+        ctx.asr_sample = Some("好，第 2 點可以嗎？".into());
+        AsrStep::new(fake.clone())
+            .run(
+                StepInput {
+                    text: String::new(),
+                    audio: Some(audio()),
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            fake.hints.lock().unwrap()[0].prompt.as_deref(),
+            Some("好，第 2 點可以嗎？ Arcvox")
+        );
+        // Without dictionary terms the sample stands alone; without a sample
+        // nothing changes.
+        ctx.dictionary = Arc::new(vec![]);
+        AsrStep::new(fake.clone())
+            .run(
+                StepInput {
+                    text: String::new(),
+                    audio: Some(audio()),
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            fake.hints.lock().unwrap()[1].prompt.as_deref(),
+            Some("好，第 2 點可以嗎？")
+        );
     }
 
     #[tokio::test]
