@@ -13,8 +13,9 @@ use std::time::Instant;
 use arcvox_core::config::{ConfigStore, Profile};
 use arcvox_core::dictionary::asr_hint;
 use arcvox_core::eval::{
-    compare, diff, guess_tags, parse_seed_tsv, pick_spread, seed_tsv, summarize, Cer, DiffOp,
-    ItemResult, Report, SeedRow, Stage, Summary,
+    categories, compare, diff, guess_tags, parse_seed_tsv, pick_slice, pick_spread, seed_tsv,
+    summarize, Cer, Change, DiffOp, ItemResult, Marks, Report, SeedRow, Stage, Summary, Tally,
+    Totals,
 };
 use arcvox_core::history::HistoryStore;
 use arcvox_core::models::ModelStore;
@@ -137,6 +138,7 @@ async fn dispatch(args: Args) -> Result<(), String> {
     match args.command.as_str() {
         "export" => export(&args),
         "run" => run(&args).await,
+        "slice" => slice(&args),
         "summary" => summary(&args),
         "compare" => compare_runs(&args),
         "help" | "--help" | "-h" => {
@@ -562,19 +564,54 @@ fn print_summary_row(s: &Summary) {
         s.provider,
         s.items,
         s.failed,
-        pct(s.text),
-        pct(s.punctuation),
+        pct(s.total.text),
+        pct(s.total.punctuation),
         avg
     );
-    for (tag, c) in &s.by_tag {
-        println!(
-            "       {:<28} {:>5} {:>6} {:>8}",
-            format!("  {tag}"),
-            "",
-            "",
-            pct(*c)
-        );
+    println!("  marks (extra/missing): {}", marks_line(&s.total.marks));
+    println!(
+        "  {:<12} {:>5} {:>8} {:>8}  {}",
+        "category",
+        "items",
+        "words",
+        "punct",
+        Marks::KINDS
+            .iter()
+            .map(|k| format!("{k:>9}"))
+            .collect::<String>()
+    );
+    for (cat, t) in &s.by_category {
+        println!("  {}", category_line(cat, t));
     }
+}
+
+/// `stop 460/0  question 3/135 ...`: written too many / left out per kind.
+fn marks_line(m: &Marks) -> String {
+    Marks::KINDS
+        .iter()
+        .zip(m.each())
+        .map(|(k, c)| format!("{k} {}/{}", c.extra, c.missing))
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
+fn category_line(cat: &str, t: &Totals) -> String {
+    format!(
+        "{:<12} {:>5} {:>8} {:>8}  {}",
+        cat,
+        t.items,
+        pct(t.text),
+        pct(t.punctuation),
+        t.marks
+            .each()
+            .iter()
+            .map(|c| format!("{:>9}", format!("{}/{}", c.extra, c.missing)))
+            .collect::<String>()
+    )
+}
+
+fn tally(t: Tally) -> String {
+    format!("+{} -{} ={}", t.improved, t.worse, t.same)
 }
 
 fn stage_name(s: Stage) -> &'static str {
@@ -654,56 +691,149 @@ fn compare_runs(args: &Args) -> Result<(), String> {
         })
         .transpose()?
         .unwrap_or(20);
+    let c = compare(&before, &after);
+    println!("A: {}\nB: {}\n", before.name, after.name);
     println!(
         "{:<6} {:<28} {:>8} {:>8} {:>8} {:>8}",
         "stage", "provider", "words A", "words B", "punct A", "punct B"
     );
-    let sa = summarize(&before);
-    let sb = summarize(&after);
-    for x in &sa {
-        if let Some(y) = sb
+    for x in &c.before {
+        let Some(y) = c
+            .after
             .iter()
             .find(|y| y.stage == x.stage && y.provider == x.provider)
+        else {
+            continue;
+        };
+        println!(
+            "{:<6} {:<28} {:>8} {:>8} {:>8} {:>8}",
+            stage_name(x.stage),
+            x.provider,
+            pct(x.total.text),
+            pct(y.total.text),
+            pct(x.total.punctuation),
+            pct(y.total.punctuation)
+        );
+        println!("  marks (extra/missing)");
+        for ((kind, ma), mb) in Marks::KINDS
+            .iter()
+            .zip(x.total.marks.each())
+            .zip(y.total.marks.each())
         {
             println!(
-                "{:<6} {:<28} {:>8} {:>8} {:>8} {:>8}",
-                stage_name(x.stage),
-                x.provider,
-                pct(x.text),
-                pct(y.text),
-                pct(x.punctuation),
-                pct(y.punctuation)
+                "    {:<9} {:>9} {:>9}",
+                kind,
+                format!("{}/{}", ma.extra, ma.missing),
+                format!("{}/{}", mb.extra, mb.missing)
+            );
+        }
+        println!(
+            "  {:<12} {:>5} {:>8} {:>8} {:>14} {:>8} {:>8} {:>14}",
+            "category", "items", "words A", "words B", "w +/-/=", "punct A", "punct B", "p +/-/="
+        );
+        for (cat, ta) in &x.by_category {
+            let tb = y
+                .by_category
+                .iter()
+                .find(|(n, _)| n == cat)
+                .map(|(_, t)| *t)
+                .unwrap_or_default();
+            let (tw, tp) = c
+                .by_category
+                .iter()
+                .find(|(n, _, _)| n == cat)
+                .map(|(_, w, p)| (*w, *p))
+                .unwrap_or_default();
+            println!(
+                "  {:<12} {:>5} {:>8} {:>8} {:>14} {:>8} {:>8} {:>14}",
+                cat,
+                ta.items,
+                pct(ta.text),
+                pct(tb.text),
+                tally(tw),
+                pct(ta.punctuation),
+                pct(tb.punctuation),
+                tally(tp)
             );
         }
     }
-    let c = compare(&before, &after);
     println!(
-        "\nimproved {}, worse {}, same {}, unmatched {}",
-        c.improved.len(),
-        c.worse.len(),
-        c.same,
+        "\nwords {}   punctuation {}   unmatched {}",
+        tally(c.words),
+        tally(c.punctuation),
         c.unmatched
     );
-    for (title, list) in [("worse", &c.worse), ("improved", &c.improved)] {
-        if list.is_empty() {
-            continue;
-        }
-        println!("\n{title}:");
-        for ch in list.iter().take(limit) {
-            println!(
-                "\n[{} {} {}] {} -> {} errors",
-                ch.id,
-                stage_name(ch.stage),
-                ch.provider,
-                ch.before.errors,
-                ch.after.errors
-            );
+    if !c.changed.is_empty() {
+        println!("\nchanged, worst first:");
+        for ch in c.changed.iter().take(limit) {
+            println!("\n{}", change_head(ch));
             println!("  A: {}", ch.before_output.replace('\n', "\\n"));
             println!("  B: {}", ch.after_output.replace('\n', "\\n"));
         }
-        if list.len() > limit {
-            println!("  ... and {} more", list.len() - limit);
+        if c.changed.len() > limit {
+            println!("  ... and {} more", c.changed.len() - limit);
         }
+    }
+    Ok(())
+}
+
+/// `[12 llm gemma] words +2 punct -1 (question, english)`
+fn change_head(ch: &Change) -> String {
+    format!(
+        "[{} {} {}] words {:+} punct {:+} ({})",
+        ch.id,
+        stage_name(ch.stage),
+        ch.provider,
+        ch.words_delta(),
+        ch.punctuation_delta(),
+        ch.categories.join(", ")
+    )
+}
+
+fn slice(args: &Args) -> Result<(), String> {
+    let rows = load_set(args)?;
+    let out = PathBuf::from(args.required("out")?);
+    let limit: usize = args
+        .flag("limit")
+        .map(|v| {
+            v.parse()
+                .map_err(|_| "--limit must be a number".to_string())
+        })
+        .transpose()?
+        .unwrap_or(120);
+    let picked = pick_slice(&rows, limit);
+    if let Some(parent) = out.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&out, seed_tsv(&picked)).map_err(|e| e.to_string())?;
+    println!(
+        "{} of {} rows written to {}",
+        picked.len(),
+        rows.len(),
+        out.display()
+    );
+    let mut counts: Vec<(String, usize, usize)> = Vec::new();
+    for (set, idx) in [(&rows, 1usize), (&picked, 2usize)] {
+        for r in set {
+            for cat in categories(&r.final_text, &r.tags) {
+                let e = match counts.iter_mut().find(|(n, _, _)| *n == cat) {
+                    Some(e) => e,
+                    None => {
+                        counts.push((cat, 0, 0));
+                        counts.last_mut().unwrap()
+                    }
+                };
+                if idx == 1 {
+                    e.1 += 1;
+                } else {
+                    e.2 += 1;
+                }
+            }
+        }
+    }
+    println!("{:<12} {:>5} {:>5}", "category", "set", "slice");
+    for (cat, all, part) in counts {
+        println!("{cat:<12} {all:>5} {part:>5}");
     }
     Ok(())
 }
@@ -742,5 +872,59 @@ mod tests {
             "明天十{+一+}點開會"
         );
         assert_eq!(render_diff("不對是十一點", "是十一點"), "[-不對-]是十一點");
+    }
+    #[test]
+    fn marks_line_and_category_line_show_extra_over_missing_per_kind() {
+        let mut t = Totals {
+            items: 3,
+            ..Totals::default()
+        };
+        t.marks.stop.extra = 2;
+        t.marks.space.missing = 5;
+        assert_eq!(
+            marks_line(&t.marks),
+            "stop 2/0  question 0/0  inner 0/0  quote 0/0  other 0/0  space 0/5"
+        );
+        let line = category_line("question", &t);
+        assert!(line.starts_with("question         3"), "{line}");
+        assert!(line.ends_with("      0/5"), "{line}");
+    }
+
+    #[test]
+    fn change_head_names_both_deltas_and_the_categories() {
+        let before = ItemResult::scored(
+            "7",
+            Stage::Llm,
+            "gemma",
+            &["short".into()],
+            "好嗎？",
+            Ok("好嗎。".into()),
+            1,
+        );
+        let after = ItemResult::scored(
+            "7",
+            Stage::Llm,
+            "gemma",
+            &["short".into()],
+            "好嗎？",
+            Ok("好嗎？".into()),
+            1,
+        );
+        let ch = Change {
+            id: "7".into(),
+            stage: Stage::Llm,
+            provider: "gemma".into(),
+            categories: categories("好嗎？", &["short".into()]),
+            before: before.text,
+            after: after.text,
+            before_punctuation: before.punctuation,
+            after_punctuation: after.punctuation,
+            before_output: before.output,
+            after_output: after.output,
+        };
+        assert_eq!(
+            change_head(&ch),
+            "[7 llm gemma] words +0 punct -1 (question, short)"
+        );
     }
 }
