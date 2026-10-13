@@ -321,9 +321,10 @@ impl Engine {
         }
         if has("general") {
             let mut general = serde_json::to_value(&config.general).expect("general serializes");
-            // The folder of the recordings is a place on this machine.
+            // The folders of the recordings and the models are places on this machine.
             if let Some(map) = general.as_object_mut() {
                 map.remove("recordings_dir");
+                map.remove("models_dir");
             }
             out.insert(
                 "general".to_string(),
@@ -377,8 +378,10 @@ impl Engine {
             }
             if let Some(v) = picked.general {
                 let recordings_dir = c.general.recordings_dir.take();
+                let models_dir = c.general.models_dir.take();
                 c.general = General {
                     recordings_dir,
+                    models_dir,
                     ..v
                 };
             }

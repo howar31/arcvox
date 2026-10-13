@@ -2,9 +2,9 @@
 //! hit, then the default profile.
 
 use crate::config::{
-    Config, Matcher, Profile, ProviderConfig, FACTORY_ASR, FACTORY_LLM, FACTORY_PRESET,
+    Config, Matcher, Profile, FACTORY_PRESET, MODEL_ID_DEFAULT_ASR, MODEL_ID_DEFAULT_LLM,
 };
-use crate::types::{AppInfo, ProfileId};
+use crate::types::{AppInfo, ProfileId, ProviderId};
 
 pub fn resolve<'a>(
     profiles: &'a [Profile],
@@ -44,35 +44,57 @@ fn matches(profile: &Profile, app: &AppInfo) -> bool {
     false
 }
 
-/// A built-in starting point for a per-app profile.
+/// A built-in profile template: a whole profile as shipped, from the
+/// engines to the applications it is used in. A new profile is a copy of
+/// one, and a reset makes a profile a copy of its own again. The engines
+/// named here are ones the app makes (a catalogue model's, a platform
+/// service's), so they can be created when missing.
 #[derive(Debug, Clone, Copy)]
 pub struct ProfilePreset {
     pub id: &'static str,
+    pub asr: &'static str,
+    pub llm: Option<&'static str>,
+    pub language_hint: Option<&'static str>,
     pub app_ids: &'static [&'static str],
     pub prompt_addition: &'static str,
-    /// Takes the factory profile's settings instead of the default
-    /// profile's: a clean copy of how a new installation starts.
-    pub factory: bool,
 }
 
-static PRESETS: [ProfilePreset; 3] = [
+/// The order the templates are offered in: the tuned ones, then the
+/// untuned one for those who start from nothing.
+static PRESETS: [ProfilePreset; 4] = [
     ProfilePreset {
         id: "casual",
+        asr: MODEL_ID_DEFAULT_ASR,
+        llm: Some(MODEL_ID_DEFAULT_LLM),
+        language_hint: Some("zh-TW"),
         app_ids: &[],
         prompt_addition: "",
-        factory: true,
     },
     ProfilePreset {
         id: "formal",
+        asr: MODEL_ID_DEFAULT_ASR,
+        llm: Some(MODEL_ID_DEFAULT_LLM),
+        language_hint: Some("zh-TW"),
         app_ids: &["com.apple.mail", "com.microsoft.Outlook"],
         prompt_addition: "這是正式的書面文字。使用完整句子與書面用語，句尾加句點，依語意分段；稱呼與結尾問候語依原稿保留，不自行增加。",
-        factory: false,
     },
     ProfilePreset {
         id: "verbatim",
+        asr: MODEL_ID_DEFAULT_ASR,
+        llm: Some(MODEL_ID_DEFAULT_LLM),
+        language_hint: Some("zh-TW"),
         app_ids: &[],
         prompt_addition: "逐字記錄：每個字都照原稿保留，不吸收自我修正、不刪語助詞與重複、不改用詞、不翻譯；只加入標點與分段。",
-        factory: false,
+    },
+    // Every option at its untuned default: where the other templates start
+    // from, for a user who wants to tune everything alone.
+    ProfilePreset {
+        id: "blank",
+        asr: MODEL_ID_DEFAULT_ASR,
+        llm: Some(MODEL_ID_DEFAULT_LLM),
+        language_hint: Some("zh-TW"),
+        app_ids: &[],
+        prompt_addition: "",
     },
 ];
 
@@ -92,86 +114,57 @@ pub fn reset_target(profile: &Profile) -> Option<&'static ProfilePreset> {
 }
 
 impl Profile {
-    /// Builds a profile from a preset, reusing the provider pair, language
-    /// hint, steps and switches of `base` (the factory profile's for a
-    /// factory preset, with `base`'s providers when the factory ones are
-    /// gone). The id gets a numeric suffix while taken.
-    pub fn from_preset(
-        preset: &ProfilePreset,
-        name: String,
-        base: &Profile,
-        providers: &[ProviderConfig],
-        taken: &[ProfileId],
-    ) -> Profile {
-        let factory = Config::factory_profile();
-        let mut source = if preset.factory { &factory } else { base }.clone();
-        if preset.factory && !factory_providers_present(providers) {
-            source.asr_provider = base.asr_provider.clone();
-            source.llm_provider = base.llm_provider.clone();
-        }
-        let base = &source;
+    /// A copy of the template under a new id (the preset's, with a numeric
+    /// suffix while taken) and `name`.
+    pub fn from_preset(preset: &ProfilePreset, name: String, taken: &[ProfileId]) -> Profile {
         let mut id = ProfileId(preset.id.to_string());
         let mut n = 2;
         while taken.contains(&id) {
             id = ProfileId(format!("{}-{n}", preset.id));
             n += 1;
         }
-        Profile {
+        let mut p = Profile {
             id,
             name,
             is_default: false,
-            matcher: Matcher {
-                app_ids: preset.app_ids.iter().map(|a| a.to_string()).collect(),
-                url_patterns: vec![],
-            },
-            asr_provider: base.asr_provider.clone(),
-            llm_provider: base.llm_provider.clone(),
-            language_hint: base.language_hint.clone(),
-            prompt_addition: preset.prompt_addition.to_string(),
+            matcher: Matcher::default(),
+            asr_provider: ProviderId(String::new()),
+            llm_provider: None,
+            language_hint: None,
+            prompt_addition: String::new(),
             few_shot: vec![],
-            steps: base.steps.clone(),
-            preset: Some(preset.id.to_string()),
-            asr_dictionary_hint: base.asr_dictionary_hint,
-            llm_dictionary_terms: base.llm_dictionary_terms,
-            llm_window_title: base.llm_window_title,
-            llm_short_fallback: base.llm_short_fallback,
-        }
+            steps: vec![],
+            preset: None,
+            asr_dictionary_hint: true,
+            llm_dictionary_terms: true,
+            llm_window_title: true,
+            llm_short_fallback: true,
+        };
+        p.reset_to_preset(preset);
+        p
     }
 
-    /// Puts the profile's settings back to those of `preset`: the factory
-    /// profile's steps, switches, language hint and examples, and the
-    /// preset's prompt addition. The id, the name, whether it is the default
-    /// and where it applies stay; the profile records the preset. The
-    /// providers go back to the factory pair only while both are still
-    /// configured; returns whether they did.
-    pub fn reset_to_preset(
-        &mut self,
-        preset: &ProfilePreset,
-        providers: &[ProviderConfig],
-    ) -> bool {
-        let factory = Config::factory_profile();
-        self.steps = factory.steps;
-        self.language_hint = factory.language_hint;
+    /// Makes the profile a copy of the template again: the engines, the
+    /// applications it is used in, the language, the steps, the switches,
+    /// the writing style and the examples. Only the id, the name and
+    /// whether it is the default stay; the profile records the preset.
+    pub fn reset_to_preset(&mut self, preset: &ProfilePreset) {
+        self.matcher = Matcher {
+            app_ids: preset.app_ids.iter().map(|a| a.to_string()).collect(),
+            url_patterns: vec![],
+        };
+        self.asr_provider = ProviderId(preset.asr.to_string());
+        self.llm_provider = preset.llm.map(|id| ProviderId(id.to_string()));
+        self.language_hint = preset.language_hint.map(str::to_string);
         self.prompt_addition = preset.prompt_addition.to_string();
-        self.few_shot = factory.few_shot;
-        self.asr_dictionary_hint = factory.asr_dictionary_hint;
-        self.llm_dictionary_terms = factory.llm_dictionary_terms;
-        self.llm_window_title = factory.llm_window_title;
-        self.llm_short_fallback = factory.llm_short_fallback;
+        self.few_shot = vec![];
+        self.steps = Config::default_steps();
+        self.asr_dictionary_hint = true;
+        self.llm_dictionary_terms = true;
+        self.llm_window_title = true;
+        self.llm_short_fallback = true;
         self.preset = Some(preset.id.to_string());
-        let engines = factory_providers_present(providers);
-        if engines {
-            self.asr_provider = factory.asr_provider;
-            self.llm_provider = factory.llm_provider;
-        }
-        engines
     }
-}
-
-/// Whether the two providers the factory profile names are configured.
-pub fn factory_providers_present(providers: &[ProviderConfig]) -> bool {
-    let has = |id: &str| providers.iter().any(|p| p.id.0 == id);
-    has(FACTORY_ASR) && has(FACTORY_LLM)
 }
 
 #[cfg(test)]
@@ -237,14 +230,15 @@ mod tests {
     #[test]
     fn presets_have_unique_ids_and_apps() {
         let ids: Vec<&str> = presets().iter().map(|p| p.id).collect();
-        assert_eq!(ids, ["casual", "formal", "verbatim"]);
+        assert_eq!(ids, ["casual", "formal", "verbatim", "blank"]);
         for p in presets() {
-            if p.factory {
+            if p.id == "casual" || p.id == "blank" {
                 assert!(p.app_ids.is_empty());
                 assert!(p.prompt_addition.is_empty());
             } else {
                 assert!(!p.prompt_addition.trim().is_empty());
             }
+            assert!(!p.asr.is_empty());
         }
         assert!(!preset("formal").app_ids.is_empty());
         assert!(preset("verbatim").app_ids.is_empty());
@@ -255,72 +249,56 @@ mod tests {
     }
 
     #[test]
-    fn the_casual_preset_is_a_copy_of_the_factory_profile() {
-        let c = Config::first_run();
-        let mut base = c.profiles[0].clone();
-        base.prompt_addition = "tuned".into();
-        base.llm_window_title = false;
-        base.steps = vec![crate::config::StepSpec::Asr];
-        let p = Profile::from_preset(preset("casual"), "休閒".into(), &base, &c.providers, &[]);
-        let factory = Config::factory_profile();
-        assert_eq!(p.id, ProfileId("casual".into()));
-        assert!(!p.is_default);
-        assert!(p.matcher.app_ids.is_empty());
-        assert_eq!(p.preset.as_deref(), Some("casual"));
-        assert_eq!(p.prompt_addition, "");
-        assert_eq!(p.steps, factory.steps);
-        assert!(p.llm_window_title);
-        assert_eq!(p.asr_provider, factory.asr_provider);
-        // Without the factory providers the copy keeps the default profile's.
-        let mut base2 = base.clone();
-        base2.asr_provider = crate::types::ProviderId("other".into());
-        let few: Vec<_> = c
-            .providers
-            .iter()
-            .filter(|x| x.id.0 != FACTORY_ASR)
-            .cloned()
-            .collect();
-        let q = Profile::from_preset(preset("casual"), "休閒".into(), &base2, &few, &[]);
-        assert_eq!(q.asr_provider, base2.asr_provider);
+    fn the_factory_profile_is_the_casual_template() {
+        let d = Config::factory_profile();
+        let c = Profile::from_preset(preset("casual"), "x".into(), &[]);
+        assert_eq!(d.asr_provider, c.asr_provider);
+        assert_eq!(d.llm_provider, c.llm_provider);
+        assert_eq!(d.steps, c.steps);
+        assert_eq!(d.prompt_addition, c.prompt_addition);
+        assert_eq!(d.preset.as_deref(), Some("casual"));
+        assert!(d.is_default);
+        // The untuned template is offered last.
+        assert_eq!(presets().last().map(|p| p.id), Some("blank"));
     }
 
     #[test]
-    fn reset_to_preset_keeps_identity_and_restores_engines_only_when_present() {
+    fn reset_to_preset_keeps_only_the_identity() {
         let c = Config::first_run();
         let mut p = c.profiles[0].clone();
         p.id = ProfileId("mail".into());
         p.name = "郵件".into();
         p.is_default = false;
-        p.matcher.app_ids = vec!["com.apple.mail".into()];
+        p.matcher.app_ids = vec!["com.tinyspeck.slackmacgap".into()];
+        p.matcher.url_patterns = vec!["example.com".into()];
         p.prompt_addition = "tuned".into();
         p.language_hint = None;
         p.llm_short_fallback = false;
         p.steps = vec![crate::config::StepSpec::Asr];
-        p.asr_provider = crate::types::ProviderId("other".into());
+        p.asr_provider = ProviderId("other".into());
+        p.llm_provider = None;
+        p.few_shot = vec![crate::config::Example {
+            raw: "a".into(),
+            refined: "b".into(),
+        }];
         p.preset = None;
-        assert!(p.reset_to_preset(preset("formal"), &c.providers));
-        let factory = Config::factory_profile();
+        p.reset_to_preset(preset("formal"));
         assert_eq!(p.id, ProfileId("mail".into()));
         assert_eq!(p.name, "郵件");
         assert!(!p.is_default);
-        assert_eq!(p.matcher.app_ids, ["com.apple.mail"]);
+        assert_eq!(
+            p.matcher.app_ids,
+            ["com.apple.mail", "com.microsoft.Outlook"]
+        );
+        assert!(p.matcher.url_patterns.is_empty());
         assert_eq!(p.prompt_addition, preset("formal").prompt_addition);
         assert_eq!(p.preset.as_deref(), Some("formal"));
-        assert_eq!(p.language_hint, factory.language_hint);
+        assert_eq!(p.language_hint.as_deref(), Some("zh-TW"));
         assert!(p.llm_short_fallback);
-        assert_eq!(p.steps, factory.steps);
-        assert_eq!(p.asr_provider, factory.asr_provider);
-        let mut q = p.clone();
-        q.asr_provider = crate::types::ProviderId("other".into());
-        let few: Vec<_> = c
-            .providers
-            .iter()
-            .filter(|x| x.id.0 != FACTORY_LLM)
-            .cloned()
-            .collect();
-        assert!(!q.reset_to_preset(preset("casual"), &few));
-        assert_eq!(q.asr_provider, crate::types::ProviderId("other".into()));
-        assert_eq!(q.prompt_addition, "");
+        assert_eq!(p.steps, Config::default_steps());
+        assert_eq!(p.asr_provider.0, MODEL_ID_DEFAULT_ASR);
+        assert_eq!(p.llm_provider.as_ref().unwrap().0, MODEL_ID_DEFAULT_LLM);
+        assert!(p.few_shot.is_empty());
     }
 
     #[test]
@@ -336,17 +314,15 @@ mod tests {
     }
 
     #[test]
-    fn from_preset_copies_the_base_pair_and_suffixes_taken_ids() {
-        let base = Config::first_run().profiles.remove(0);
+    fn from_preset_is_a_whole_copy_and_suffixes_taken_ids() {
         let taken = vec![ProfileId("mail".into()), ProfileId("mail-2".into())];
-        let p = Profile::from_preset(preset("formal"), "郵件".into(), &base, &[], &taken);
+        let p = Profile::from_preset(preset("formal"), "郵件".into(), &taken);
         assert_eq!(p.id, ProfileId("formal".into()));
         assert_eq!(p.name, "郵件");
         assert!(!p.is_default);
-        assert_eq!(p.asr_provider, base.asr_provider);
-        assert_eq!(p.llm_provider, base.llm_provider);
-        assert_eq!(p.language_hint, base.language_hint);
-        assert_eq!(p.steps, base.steps);
+        assert_eq!(p.asr_provider.0, MODEL_ID_DEFAULT_ASR);
+        assert_eq!(p.language_hint.as_deref(), Some("zh-TW"));
+        assert_eq!(p.steps, Config::default_steps());
         assert_eq!(
             p.matcher.app_ids,
             ["com.apple.mail", "com.microsoft.Outlook"]
@@ -355,7 +331,10 @@ mod tests {
         assert!(p.few_shot.is_empty());
         assert_eq!(p.preset.as_deref(), Some("formal"));
         let taken = vec![ProfileId("formal".into()), ProfileId("formal-2".into())];
-        let third = Profile::from_preset(preset("formal"), "x".into(), &base, &[], &taken);
+        let third = Profile::from_preset(preset("formal"), "x".into(), &taken);
         assert_eq!(third.id, ProfileId("formal-3".into()));
+        let blank = Profile::from_preset(preset("blank"), "空白".into(), &[]);
+        assert_eq!(blank.prompt_addition, "");
+        assert!(blank.matcher.app_ids.is_empty());
     }
 }

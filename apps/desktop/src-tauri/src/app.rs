@@ -28,6 +28,8 @@ use crate::vad::EarshotVad;
 
 pub struct AppState {
     pub models: Arc<ModelStore>,
+    /// The platform's services found at launch; their engines follow them.
+    pub native: FirstRunDefaults,
     pub engine: Mutex<Option<Engine>>,
     pub controller: ControllerHandle,
     pub platform: Arc<dyn Platform>,
@@ -51,6 +53,19 @@ impl AppState {
     pub fn refresh_problems(&self) {
         let engine = self.engine.lock().unwrap().clone();
         crate::problems::refresh(engine.as_ref(), &self.models, &self.ui);
+    }
+
+    /// The embedded engines follow the installed models; a failure to write
+    /// the configuration is logged, the next change tries again.
+    pub fn sync_engines(&self) {
+        let engine = self.engine.lock().unwrap().clone();
+        if let Some(e) = engine {
+            if let Err(err) =
+                crate::commands::models::engines_follow_models(&e, &self.models, &self.native)
+            {
+                tracing::warn!(error = %err.message, "engines could not follow the models");
+            }
+        }
     }
 }
 
@@ -226,7 +241,11 @@ pub fn run() {
             crate::commands::models::models_cancel,
             crate::commands::models::models_delete,
             crate::commands::models::models_import,
-            crate::commands::models::models_dir,
+            crate::commands::models::models_dir_get,
+            crate::commands::models::models_dir_set,
+            crate::commands::models::models_dir_open,
+            crate::commands::models::models_custom_dir,
+            crate::commands::system::system_open_folder,
             crate::commands::native::native_status,
             crate::commands::native::native_install_language,
             crate::commands::bench::bench_clip_status,
@@ -503,24 +522,18 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         Some(manifest_url(settings.manifest_url.as_deref())),
     ));
     let version = app.package_info().version.to_string();
-    let config_exists = dirs.config_path().exists();
-    let (engine, engine_error, runtime) = tauri::async_runtime::block_on(async {
+    let (engine, engine_error, runtime, native) = tauri::async_runtime::block_on(async {
         let runtime = tokio::runtime::Handle::current();
-        // Only a new config reads these defaults. The Apple status checks
-        // block and refuse the main thread.
+        // The platform's services: a new config starts with their engines,
+        // an existing one is brought in line with them. The Apple status
+        // checks block and refuse the main thread.
         #[cfg(target_os = "macos")]
-        let first_run: FirstRunDefaults = if config_exists {
-            FirstRunDefaults::default()
-        } else {
+        let first_run: FirstRunDefaults =
             tokio::task::spawn_blocking(crate::platform::macos::apple::first_run_defaults)
                 .await
-                .unwrap_or_default()
-        };
+                .unwrap_or_default();
         #[cfg(not(target_os = "macos"))]
-        let first_run = {
-            let _ = config_exists;
-            FirstRunDefaults::default()
-        };
+        let first_run = FirstRunDefaults::default();
         match Engine::open_with(
             dirs.clone(),
             EngineOptions {
@@ -532,12 +545,38 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         )
         .await
         {
-            Ok(e) => (Some(e), None, runtime),
-            Err(e) => (None, Some(crate::commands::CmdError::from(e)), runtime),
+            Ok(e) => (Some(e), None, runtime, first_run),
+            Err(e) => (
+                None,
+                Some(crate::commands::CmdError::from(e)),
+                runtime,
+                first_run,
+            ),
         }
     });
 
     let backup = backup_auto(&app, engine.clone(), &dirs, &version, runtime.clone());
+    if let Some(e) = &engine {
+        // The model files are where the user keeps them; files of an earlier
+        // build move out of the cache directory, once.
+        match e.config().current().general.models_dir.clone() {
+            Some(dir) => models.set_models_dir(dir),
+            None => match models.adopt_legacy_dir() {
+                Ok(report) if report.moved + report.left > 0 => tracing::info!(
+                    moved = report.moved,
+                    left = report.left,
+                    "model files moved out of the cache directory"
+                ),
+                Ok(_) => {}
+                Err(err) => {
+                    tracing::warn!(error = %err, "model files could not leave the cache directory")
+                }
+            },
+        }
+        if let Err(err) = crate::commands::models::engines_follow_models(e, &models, &native) {
+            tracing::warn!(error = %err.message, "engines could not follow the models");
+        }
+    }
     // Every change written to the history, by a dictation or by a command,
     // is announced from the store itself.
     if let Some(e) = &engine {
@@ -572,6 +611,7 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
     let state_models = models.clone();
     app.manage(AppState {
         models,
+        native,
         engine: Mutex::new(engine.clone()),
         controller: controller.clone(),
         platform: platform.clone(),

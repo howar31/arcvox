@@ -233,6 +233,9 @@ pub async fn settings_import(
     let file = read_settings(Path::new(&path))?;
     let client = ClientSettings::load(&state.dirs.config_dir);
     let imported = import_settings(&e, &client, &file, &sections).await?;
+    // Engines from the file take their models' ids and the ones of this
+    // machine's models are added.
+    state.sync_engines();
     if let Some(next) = imported.client {
         let applied = ClientSettings::copy_aside(&state.dirs.config_dir)
             .map_err(CmdError::from)

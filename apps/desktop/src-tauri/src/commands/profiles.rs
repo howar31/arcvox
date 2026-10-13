@@ -1,4 +1,5 @@
-use arcvox_core::config::{Config, Profile};
+use arcvox_core::config::{ensure_referenced_engines, Config, Profile};
+use arcvox_core::models::Manifest;
 use arcvox_core::profile::{preset, presets, reset_target};
 use arcvox_core::types::ProfileId;
 use arcvox_core::Engine;
@@ -49,7 +50,12 @@ fn unknown_preset(preset_id: &str) -> CmdError {
 /// given (the page offers the standard one when the profile's own preset is
 /// gone), else the preset the profile was made from; see
 /// `Profile::reset_to_preset` for what changes.
-pub fn reset(engine: &Engine, id: &ProfileId, preset_id: Option<&str>) -> CmdResult<Config> {
+pub fn reset(
+    engine: &Engine,
+    id: &ProfileId,
+    preset_id: Option<&str>,
+    manifest: &Manifest,
+) -> CmdResult<Config> {
     let current = engine.config().current();
     let profile = current
         .profiles
@@ -62,10 +68,10 @@ pub fn reset(engine: &Engine, id: &ProfileId, preset_id: Option<&str>) -> CmdRes
             .ok_or_else(|| unknown_preset(profile.preset.as_deref().unwrap_or("")))?,
     };
     let next = engine.config().update(|c| {
-        let providers = c.providers.clone();
         if let Some(p) = c.profiles.iter_mut().find(|p| &p.id == id) {
-            p.reset_to_preset(target, &providers);
+            p.reset_to_preset(target);
         }
+        ensure_referenced_engines(c, manifest);
     })?;
     Ok((*next).clone())
 }
@@ -97,24 +103,26 @@ pub fn preset_views() -> Vec<PresetView> {
         .collect()
 }
 
-/// Adds a profile built from the preset `preset_id`, using the default
-/// profile's providers. The id gets a numeric suffix while taken.
-pub fn add_preset(engine: &Engine, preset_id: &str, name: &str) -> CmdResult<Config> {
+/// Adds a copy of the template `preset_id`. The id gets a numeric suffix
+/// while taken; the template's engines are made when they are not there.
+pub fn add_preset(
+    engine: &Engine,
+    preset_id: &str,
+    name: &str,
+    manifest: &Manifest,
+) -> CmdResult<Config> {
     let preset = presets()
         .iter()
         .find(|p| p.id == preset_id)
         .ok_or_else(|| unknown_preset(preset_id))?;
     let current = engine.config().current();
-    let base = current
-        .profiles
-        .iter()
-        .find(|p| p.is_default)
-        .ok_or_else(|| CmdError::new("no_default_profile", "no default profile"))?;
     let taken: Vec<ProfileId> = current.profiles.iter().map(|p| p.id.clone()).collect();
-    upsert(
-        engine,
-        Profile::from_preset(preset, name.to_string(), base, &current.providers, &taken),
-    )
+    let profile = Profile::from_preset(preset, name.to_string(), &taken);
+    let next = engine.config().update(|c| {
+        c.profiles.push(profile.clone());
+        ensure_referenced_engines(c, manifest);
+    })?;
+    Ok((*next).clone())
 }
 
 #[tauri::command]
@@ -128,17 +136,29 @@ pub fn profiles_add_preset(
     preset_id: String,
     name: String,
 ) -> CmdResult<Config> {
-    add_preset(&engine(&state)?, &preset_id, &name)
+    let (manifest, _) = state.models.manifest_now();
+    let result = add_preset(&engine(&state)?, &preset_id, &name, &manifest);
+    followed(&state, result)
+}
+
+/// A profile that stops using an engine may leave that engine without a
+/// model and without a user; the engines are looked at again.
+fn followed(state: &State<'_, AppState>, result: CmdResult<Config>) -> CmdResult<Config> {
+    result?;
+    state.sync_engines();
+    Ok(engine(state)?.config().current().as_ref().clone())
 }
 
 #[tauri::command]
 pub fn profiles_upsert(state: State<'_, AppState>, profile: Profile) -> CmdResult<Config> {
-    upsert(&engine(&state)?, profile)
+    let result = upsert(&engine(&state)?, profile);
+    followed(&state, result)
 }
 
 #[tauri::command]
 pub fn profiles_delete(state: State<'_, AppState>, id: ProfileId) -> CmdResult<Config> {
-    delete(&engine(&state)?, &id)
+    let result = delete(&engine(&state)?, &id);
+    followed(&state, result)
 }
 
 #[tauri::command]
@@ -147,7 +167,9 @@ pub fn profiles_reset(
     id: ProfileId,
     preset: Option<String>,
 ) -> CmdResult<Config> {
-    reset(&engine(&state)?, &id, preset.as_deref())
+    let (manifest, _) = state.models.manifest_now();
+    let result = reset(&engine(&state)?, &id, preset.as_deref(), &manifest);
+    followed(&state, result)
 }
 
 #[tauri::command]
@@ -158,6 +180,8 @@ pub fn profiles_set_default(state: State<'_, AppState>, id: ProfileId) -> CmdRes
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arcvox_core::config::ProviderConfig;
+    use arcvox_core::types::ProviderId;
     use arcvox_core::{DataDir, MemorySecretStore};
     use std::sync::Arc;
 
@@ -197,11 +221,29 @@ mod tests {
         );
     }
 
+    fn manifest() -> Manifest {
+        Manifest::parse(crate::providers::BUNDLED_MANIFEST).unwrap()
+    }
+
     #[tokio::test]
-    async fn add_preset_creates_a_profile_with_the_default_pair() {
+    async fn add_preset_copies_the_template_and_makes_its_engines() {
         let (_t, e) = engine().await;
-        let base = e.config().current().profiles[0].clone();
-        let c = add_preset(&e, "formal", "正式").unwrap();
+        // The default profile moved to other engines; the template's own
+        // are gone from the list.
+        e.config()
+            .update(|c| {
+                c.providers.push(ProviderConfig::http_test_provider(
+                    "remote",
+                    "http://localhost:1/v1",
+                    true,
+                    true,
+                ));
+                c.profiles[0].asr_provider = ProviderId("remote".into());
+                c.profiles[0].llm_provider = Some(ProviderId("remote".into()));
+                c.providers.retain(|p| p.id.0 == "remote");
+            })
+            .unwrap();
+        let c = add_preset(&e, "formal", "正式", &manifest()).unwrap();
         let mail = c
             .profiles
             .iter()
@@ -209,19 +251,19 @@ mod tests {
             .unwrap();
         assert_eq!(mail.name, "正式");
         assert!(!mail.is_default);
-        assert_eq!(mail.asr_provider, base.asr_provider);
-        assert_eq!(mail.llm_provider, base.llm_provider);
+        assert_eq!(mail.asr_provider.0, preset("formal").unwrap().asr);
         assert!(!mail.matcher.app_ids.is_empty());
+        assert!(c.provider(&mail.asr_provider).is_some(), "made on the way");
         // A second copy gets a free id instead of replacing the first.
-        let c = add_preset(&e, "formal", "正式 2").unwrap();
+        let c = add_preset(&e, "formal", "正式 2", &manifest()).unwrap();
         assert_eq!(c.profiles.len(), 3);
-        assert!(add_preset(&e, "nope", "x").is_err());
+        assert!(add_preset(&e, "nope", "x", &manifest()).is_err());
     }
 
     #[tokio::test]
     async fn reset_returns_to_the_profile_preset_or_the_one_named() {
         let (_t, e) = engine().await;
-        let c = add_preset(&e, "verbatim", "逐字").unwrap();
+        let c = add_preset(&e, "verbatim", "逐字", &manifest()).unwrap();
         let mut chat = c
             .profiles
             .iter()
@@ -231,7 +273,7 @@ mod tests {
         chat.prompt_addition = "tuned".into();
         chat.llm_window_title = false;
         upsert(&e, chat).unwrap();
-        let c = reset(&e, &ProfileId("verbatim".into()), None).unwrap();
+        let c = reset(&e, &ProfileId("verbatim".into()), None, &manifest()).unwrap();
         let chat = c.profiles.iter().find(|p| p.id.0 == "verbatim").unwrap();
         assert_eq!(
             chat.prompt_addition,
@@ -242,15 +284,21 @@ mod tests {
         let mut gone = chat.clone();
         gone.preset = Some("retired".into());
         upsert(&e, gone).unwrap();
-        let err = reset(&e, &ProfileId("verbatim".into()), None).unwrap_err();
+        let err = reset(&e, &ProfileId("verbatim".into()), None, &manifest()).unwrap_err();
         assert_eq!(err.code, Some("unknown_preset"));
-        let c = reset(&e, &ProfileId("verbatim".into()), Some("casual")).unwrap();
+        let c = reset(
+            &e,
+            &ProfileId("verbatim".into()),
+            Some("casual"),
+            &manifest(),
+        )
+        .unwrap();
         let chat = c.profiles.iter().find(|p| p.id.0 == "verbatim").unwrap();
         assert_eq!(chat.prompt_addition, "");
         assert_eq!(chat.preset.as_deref(), Some("casual"));
         assert_eq!(chat.name, "逐字");
         assert_eq!(
-            reset(&e, &ProfileId("verbatim".into()), Some("nope"))
+            reset(&e, &ProfileId("verbatim".into()), Some("nope"), &manifest())
                 .unwrap_err()
                 .code,
             Some("unknown_preset")
@@ -261,8 +309,8 @@ mod tests {
     fn presets_list_every_builtin_preset() {
         let views = preset_views();
         let ids: Vec<&str> = views.iter().map(|v| v.id.as_str()).collect();
-        assert_eq!(ids, ["casual", "formal", "verbatim"]);
-        // Only the clean copy of the factory settings names no application.
+        assert_eq!(ids, ["casual", "formal", "verbatim", "blank"]);
+        // The formal template names its applications.
         assert!(views
             .iter()
             .all(|v| v.id != "formal" || !v.app_ids.is_empty()));

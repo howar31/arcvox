@@ -119,7 +119,6 @@ impl ProviderFactory for EmbeddedFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arcvox_core::config::Capabilities;
     use arcvox_core::DataDir;
     use std::path::Path;
 
@@ -138,7 +137,7 @@ mod tests {
     fn asr_requires_whisper_runtime() {
         let tmp = tempfile::tempdir().unwrap();
         let f = EmbeddedFactory::new(store(tmp.path()), false);
-        let cfg = ProviderConfig::embedded("e", "E", Runtime::Llama, "w", Capabilities::default());
+        let cfg = ProviderConfig::embedded("e", "E", Runtime::Llama, "w");
         assert_eq!(
             f.asr(&cfg, &General::default()).err().unwrap().code,
             ErrorCode::InvalidConfig
@@ -149,8 +148,7 @@ mod tests {
     fn missing_file_is_model_missing() {
         let tmp = tempfile::tempdir().unwrap();
         let f = EmbeddedFactory::new(store(tmp.path()), false);
-        let cfg =
-            ProviderConfig::embedded("e", "E", Runtime::Whisper, "w", Capabilities::default());
+        let cfg = ProviderConfig::embedded("e", "E", Runtime::Whisper, "w");
         let err = f.asr(&cfg, &General::default()).err().unwrap();
         assert_eq!(err.code, ErrorCode::ModelMissing);
         assert!(err.hint.as_deref().unwrap().contains("Engines and models"));
@@ -161,8 +159,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let s = store(tmp.path());
         let f = EmbeddedFactory::new(s.clone(), false);
-        let cfg =
-            ProviderConfig::embedded("e", "E", Runtime::Whisper, "w", Capabilities::default());
+        let cfg = ProviderConfig::embedded("e", "E", Runtime::Whisper, "w");
         assert_eq!(
             f.probe(&cfg).await.failure,
             Some(ProbeFailure::ModelMissing)

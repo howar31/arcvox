@@ -491,7 +491,10 @@ mod tests {
         .unwrap();
         let has_apple = |c: &Config| c.providers.iter().any(|p| p.id.0 == "apple-dictation");
         assert!(has_apple(&store.current()));
-        assert_eq!(store.current().profiles[0].asr_provider.0, "local-whisper");
+        assert_eq!(
+            store.current().profiles[0].asr_provider.0,
+            crate::config::MODEL_ID_DEFAULT_ASR
+        );
         // An existing file is never rewritten by defaults.
         let again = ConfigStore::open_with_defaults(&dirs, &FirstRunDefaults::default()).unwrap();
         assert!(has_apple(&again.current()));

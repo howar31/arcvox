@@ -9,14 +9,12 @@
   import Tag from "../../../lib/ui/Tag.svelte";
   import { toast } from "../../../lib/ui/toast.svelte";
 
-  let { open = $bindable(false), profiles, applies, presets, factoryEngines }: {
+  let { open = $bindable(false), profiles, applies, presets }: {
     open?: boolean;
     profiles: Profile[];
     applies: (p: Profile) => string;
     /** The built-in presets of this version; a profile whose preset is missing is offered the casual one. */
     presets: PresetView[];
-    /** Whether the local engine pair is configured, so a reset puts it back. */
-    factoryEngines: boolean;
   } = $props();
 
   let selected = $state<string[]>([]);
@@ -107,7 +105,7 @@
 
 <Modal bind:open title={resetTarget ? (resetKnown ? t("flow.reset_title", { name: resetTarget.name }) : t("flow.reset_missing_title", { name: resetTarget.name })) : confirming.length ? t("flow.manage_delete_title", { count: String(confirming.length) }) : t("flow.manage_title")} beforeclose={() => { if (resetting) { resetting = null; return false; } if (confirming.length) { confirming = []; return false; } return !busy; }}>
   {#if resetTarget}
-    <p class="ask">{resetKnown ? t("flow.reset_body", { preset: presetName(resetPreset) }) : t("flow.reset_missing_body")}{factoryEngines ? t("flow.reset_engines") : t("flow.reset_engines_kept")}</p>
+    <p class="ask">{resetKnown ? t("flow.reset_body", { preset: presetName(resetPreset) }) : t("flow.reset_missing_body")}</p>
   {:else if confirming.length}
     <p class="ask">{t("flow.manage_delete_body", { names })}</p>
   {:else}

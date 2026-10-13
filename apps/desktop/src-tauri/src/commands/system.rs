@@ -344,6 +344,13 @@ pub fn system_reveal(path: String) -> CmdResult<()> {
     Ok(())
 }
 
+/// Opens a folder in the file manager.
+#[tauri::command]
+pub fn system_open_folder(path: String) -> CmdResult<()> {
+    std::process::Command::new("open").arg(path).spawn()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

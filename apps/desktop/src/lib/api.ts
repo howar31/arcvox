@@ -195,6 +195,7 @@ export const runningApps = () => invoke<RunningApp[]>("system_running_apps");
 export const appNames = (bundleIds: string[]) => invoke<Record<string, string | null>>("system_app_names", { bundleIds });
 export const systemInfo = () => invoke<SystemInfo>("system_info");
 export const reveal = (path: string) => invoke<void>("system_reveal", { path });
+export const openFolder = (path: string) => invoke<void>("system_open_folder", { path });
 export type AboutLink = "sponsor" | "source" | "issue" | "website";
 export const openLink = (link: AboutLink) => invoke<void>("system_open_link", { link });
 export const uiLanguage = () => invoke<string>("ui_language");
@@ -283,7 +284,11 @@ export const modelsDownloadRecommended = () => invoke<void>("models_download_rec
 export const modelsCancel = (id: string) => invoke<void>("models_cancel", { id });
 export const modelsDelete = (id: string) => invoke<void>("models_delete", { id });
 export const modelsImport = (path: string) => invoke<InstalledModel>("models_import", { path });
-export const modelsDir = () => invoke<string>("models_dir");
+export interface ModelsDir { path: string; is_default: boolean; moved: number; left: number }
+export const modelsDirGet = () => invoke<ModelsDir>("models_dir_get");
+export const modelsDirSet = (path: string | null) => invoke<ModelsDir>("models_dir_set", { path });
+export const modelsDirOpen = () => invoke<void>("models_dir_open");
+export const modelsCustomDir = () => invoke<string>("models_custom_dir");
 export function onModelDownloadProgress(cb: (p: DownloadProgress) => void): Promise<UnlistenFn> {
   return listen<DownloadProgress>("model-download-progress", (e) => cb(e.payload));
 }

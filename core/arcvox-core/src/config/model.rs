@@ -33,6 +33,20 @@ pub struct FirstRunDefaults {
     pub apple_foundation_models: bool,
 }
 
+impl FirstRunDefaults {
+    /// The platform services that are there, as native ids.
+    pub fn native_ids(&self) -> Vec<&'static str> {
+        let mut ids = Vec::new();
+        if self.apple_dictation {
+            ids.push(NATIVE_APPLE_DICTATION);
+        }
+        if self.apple_foundation_models {
+            ids.push(NATIVE_APPLE_FM);
+        }
+        ids
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct General {
@@ -62,6 +76,8 @@ pub struct General {
     pub typing_chars_per_min: u32,
     /// The folder recordings are kept in; the default one when unset.
     pub recordings_dir: Option<std::path::PathBuf>,
+    /// The folder model files are kept in; the default one when unset.
+    pub models_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for General {
@@ -81,6 +97,7 @@ impl Default for General {
             retry_count: 1,
             typing_chars_per_min: crate::stats::TYPING_CHARS_PER_MIN,
             recordings_dir: None,
+            models_dir: None,
         }
     }
 }
@@ -177,9 +194,6 @@ pub enum StepSpec {
     Rules,
 }
 
-/// The providers the factory profile names.
-pub const FACTORY_ASR: &str = "local-whisper";
-pub const FACTORY_LLM: &str = "local-llama";
 /// The preset that is a copy of the factory profile: the everyday style.
 pub const FACTORY_PRESET: &str = "casual";
 
@@ -244,60 +258,25 @@ impl Config {
     /// native ones the platform reports, and one default profile that prefers
     /// the native providers.
     pub fn first_run_with(d: &FirstRunDefaults) -> Self {
-        let mut providers = Vec::new();
-        if d.apple_dictation {
-            providers.push(ProviderConfig::native(
-                "apple-dictation",
-                "Apple Dictation",
-                NATIVE_APPLE_DICTATION,
-                Capabilities {
-                    transcribe: true,
-                    chat: false,
-                    streaming: false,
-                    language_hint: true,
-                    hotwords: true,
-                },
-            ));
-        }
-        if d.apple_foundation_models {
-            providers.push(ProviderConfig::native(
-                "apple-fm",
-                "Apple Foundation Models",
-                NATIVE_APPLE_FM,
-                Capabilities {
-                    transcribe: false,
-                    chat: true,
-                    streaming: false,
-                    language_hint: false,
-                    hotwords: false,
-                },
-            ));
-        }
+        let mut providers: Vec<ProviderConfig> = d
+            .native_ids()
+            .into_iter()
+            .filter_map(ProviderConfig::native_engine)
+            .collect();
+        // The engines of the recommended pair exist before the models are
+        // downloaded, so the default profile is complete from the start; the
+        // catalogue gives them their names at the first sync.
         providers.push(ProviderConfig::embedded(
-            "local-whisper",
+            MODEL_ID_DEFAULT_ASR,
             "Local speech model",
             Runtime::Whisper,
             MODEL_ID_DEFAULT_ASR,
-            Capabilities {
-                transcribe: true,
-                chat: false,
-                streaming: false,
-                language_hint: true,
-                hotwords: true,
-            },
         ));
         providers.push(ProviderConfig::embedded(
-            "local-llama",
+            MODEL_ID_DEFAULT_LLM,
             "Local language model",
             Runtime::Llama,
             MODEL_ID_DEFAULT_LLM,
-            Capabilities {
-                transcribe: false,
-                chat: true,
-                streaming: false,
-                language_hint: false,
-                hotwords: false,
-            },
         ));
         let profile = Self::factory_profile();
         Self {
@@ -335,28 +314,17 @@ impl Config {
     }
 
     /// The profile a new installation starts with: the factory settings a
-    /// profile can be reset to. The local pair is the default everywhere;
-    /// the platform providers are created when available but stay optional
+    /// profile is reset to (its engines excepted: a reset keeps them). The
+    /// recommended local pair is the default everywhere; the platform
+    /// providers are created when available but stay optional
     /// (single-language dictation and a slower rewrite model on the
     /// platform side).
     pub fn factory_profile() -> Profile {
-        Profile {
-            id: ProfileId("default".into()),
-            name: "Default".into(),
-            is_default: true,
-            matcher: Matcher::default(),
-            asr_provider: ProviderId(FACTORY_ASR.into()),
-            llm_provider: Some(ProviderId(FACTORY_LLM.into())),
-            language_hint: Some("zh-TW".into()),
-            prompt_addition: String::new(),
-            few_shot: Vec::new(),
-            steps: Self::default_steps(),
-            preset: Some(FACTORY_PRESET.into()),
-            asr_dictionary_hint: true,
-            llm_dictionary_terms: true,
-            llm_window_title: true,
-            llm_short_fallback: true,
-        }
+        let casual = crate::profile::preset(FACTORY_PRESET).expect("the factory preset exists");
+        let mut p = Profile::from_preset(casual, "Default".into(), &[]);
+        p.id = ProfileId("default".into());
+        p.is_default = true;
+        p
     }
 
     pub fn default_steps() -> Vec<StepSpec> {
@@ -388,19 +356,37 @@ impl Config {
     }
 }
 
+impl Capabilities {
+    /// What an embedded engine of the runtime can do: a speech model
+    /// transcribes with a language hint and hot words, a text model chats.
+    pub fn for_runtime(runtime: Runtime) -> Self {
+        match runtime {
+            Runtime::Whisper => Self {
+                transcribe: true,
+                chat: false,
+                streaming: false,
+                language_hint: true,
+                hotwords: true,
+            },
+            Runtime::Llama => Self {
+                transcribe: false,
+                chat: true,
+                streaming: false,
+                language_hint: false,
+                hotwords: false,
+            },
+        }
+    }
+}
+
 impl ProviderConfig {
-    pub fn embedded(
-        id: &str,
-        label: &str,
-        runtime: Runtime,
-        model_id: &str,
-        capabilities: Capabilities,
-    ) -> Self {
+    /// An embedded engine that loads the catalogue model `model_id`.
+    pub fn embedded(id: &str, label: &str, runtime: Runtime, model_id: &str) -> Self {
         Self {
             id: ProviderId(id.into()),
             label: label.into(),
             kind: ProviderKind::Embedded,
-            capabilities,
+            capabilities: Capabilities::for_runtime(runtime),
             base_url: None,
             model: None,
             api_key_ref: None,
@@ -410,6 +396,31 @@ impl ProviderConfig {
             model_id: Some(model_id.into()),
             runtime: Some(runtime),
         }
+    }
+
+    /// The engine of a platform service, as the app makes it: a fixed id,
+    /// an English name (the service's own) and the service's capabilities.
+    /// None for a service this build does not know.
+    pub fn native_engine(native_id: &str) -> Option<Self> {
+        let (id, label, runtime) = match native_id {
+            NATIVE_APPLE_DICTATION => ("apple-dictation", "Apple Dictation", Runtime::Whisper),
+            NATIVE_APPLE_FM => ("apple-fm", "Apple Foundation Models", Runtime::Llama),
+            _ => return None,
+        };
+        Some(Self::native(
+            id,
+            label,
+            native_id,
+            Capabilities::for_runtime(runtime),
+        ))
+    }
+
+    /// The engine of a platform service by the fixed id the app gives it.
+    pub fn native_engine_by_id(id: &str) -> Option<Self> {
+        [NATIVE_APPLE_DICTATION, NATIVE_APPLE_FM]
+            .into_iter()
+            .filter_map(Self::native_engine)
+            .find(|made| made.id.0 == id)
     }
 
     pub fn native(id: &str, label: &str, native_id: &str, capabilities: Capabilities) -> Self {
@@ -539,11 +550,13 @@ mod tests {
     fn no_native_picks_embedded_pair() {
         let c = Config::first_run_with(&FirstRunDefaults::default());
         let ids: Vec<&str> = c.providers.iter().map(|p| p.id.0.as_str()).collect();
-        assert_eq!(ids, ["local-whisper", "local-llama"]);
+        assert_eq!(ids, [MODEL_ID_DEFAULT_ASR, MODEL_ID_DEFAULT_LLM]);
         let d = c.profiles.iter().find(|p| p.is_default).unwrap();
-        assert_eq!(d.asr_provider.0, "local-whisper");
-        assert_eq!(d.llm_provider.as_ref().unwrap().0, "local-llama");
-        let w = c.provider(&ProviderId("local-whisper".into())).unwrap();
+        assert_eq!(d.asr_provider.0, MODEL_ID_DEFAULT_ASR);
+        assert_eq!(d.llm_provider.as_ref().unwrap().0, MODEL_ID_DEFAULT_LLM);
+        let w = c
+            .provider(&ProviderId(MODEL_ID_DEFAULT_ASR.into()))
+            .unwrap();
         assert_eq!(w.kind, ProviderKind::Embedded);
         assert_eq!(w.runtime, Some(Runtime::Whisper));
         assert_eq!(w.model_id.as_deref(), Some("breeze-asr-25-q5_0"));
@@ -553,7 +566,9 @@ mod tests {
                 && w.capabilities.hotwords
                 && !w.capabilities.chat
         );
-        let l = c.provider(&ProviderId("local-llama".into())).unwrap();
+        let l = c
+            .provider(&ProviderId(MODEL_ID_DEFAULT_LLM.into()))
+            .unwrap();
         assert_eq!(l.model_id.as_deref(), Some("gemma-3-4b-it-q4_k_m"));
         assert!(l.capabilities.chat && !l.capabilities.transcribe);
     }
@@ -570,13 +585,13 @@ mod tests {
             [
                 "apple-dictation",
                 "apple-fm",
-                "local-whisper",
-                "local-llama"
+                MODEL_ID_DEFAULT_ASR,
+                MODEL_ID_DEFAULT_LLM
             ]
         );
         let d = c.profiles.iter().find(|p| p.is_default).unwrap();
-        assert_eq!(d.asr_provider.0, "local-whisper");
-        assert_eq!(d.llm_provider.as_ref().unwrap().0, "local-llama");
+        assert_eq!(d.asr_provider.0, MODEL_ID_DEFAULT_ASR);
+        assert_eq!(d.llm_provider.as_ref().unwrap().0, MODEL_ID_DEFAULT_LLM);
         let a = c.provider(&ProviderId("apple-dictation".into())).unwrap();
         assert_eq!(a.kind, ProviderKind::Native);
         assert_eq!(a.native_id.as_deref(), Some("apple.dictation"));
@@ -596,8 +611,8 @@ mod tests {
             apple_foundation_models: false,
         });
         let d = c.profiles.iter().find(|p| p.is_default).unwrap();
-        assert_eq!(d.asr_provider.0, "local-whisper");
-        assert_eq!(d.llm_provider.as_ref().unwrap().0, "local-llama");
+        assert_eq!(d.asr_provider.0, MODEL_ID_DEFAULT_ASR);
+        assert_eq!(d.llm_provider.as_ref().unwrap().0, MODEL_ID_DEFAULT_LLM);
         assert!(c.provider(&ProviderId("apple-dictation".into())).is_some());
         assert!(c.provider(&ProviderId("apple-fm".into())).is_none());
     }
