@@ -39,7 +39,8 @@ arcvox-eval <command> [options]
            transcript as `spoken`, the row's final text as `final`, tags
            guessed (short, long, mixed, correction). Edit both texts.
   run      --data <name|dir> --set <set.tsv> --out <run.json> --stage asr|llm|full
-           [--asr id,id] [--llm id,id] [--profile id] [--base-prompt file] [--name text]
+           [--asr id,id] [--llm id,id] [--profile id] [--base-prompt file]
+           [--style file] [--name text]
            asr: every recording through each ASR provider, scored against `spoken`.
            llm: `spoken` through the profile's steps after ASR with each LLM
                 provider, scored against `final`.
@@ -49,6 +50,8 @@ arcvox-eval <command> [options]
 
   --data names the application whose data to read (default \"Arcvox\") or a
   folder laid out like a custom data directory. Nothing in it is written.
+  --base-prompt and --style try a base prompt and a profile writing style
+  from files in place of the installed ones.
 ";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -299,6 +302,11 @@ async fn run(args: &Args) -> Result<(), String> {
             .ok_or_else(|| format!("no profile `{id}`"))?,
         None => config.default_profile().clone(),
     };
+    let style = args
+        .flag("style")
+        .map(|p| std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}")))
+        .transpose()?;
+    let profile = with_style(profile, style.as_deref());
 
     let client = reqwest::Client::new();
     let models = Arc::new(ModelStore::new(
@@ -319,6 +327,10 @@ async fn run(args: &Args) -> Result<(), String> {
         format!(
             "base prompt: {}",
             args.flag("base-prompt").unwrap_or("the installation's")
+        ),
+        format!(
+            "writing style: {}",
+            args.flag("style").unwrap_or("the profile's")
         ),
         format!("set: {} ({} rows)", args.required("set")?, rows.len()),
     ];
@@ -494,6 +506,14 @@ async fn run(args: &Args) -> Result<(), String> {
     print_summary(&report);
     println!("\nsaved to {}", out.display());
     Ok(())
+}
+
+/// The profile with its writing style replaced by `style`, when given.
+fn with_style(mut profile: Profile, style: Option<&str>) -> Profile {
+    if let Some(text) = style {
+        profile.prompt_addition = text.trim().to_string();
+    }
+    profile
 }
 
 fn build(
@@ -698,11 +718,18 @@ fn compare_runs(args: &Args) -> Result<(), String> {
         "stage", "provider", "words A", "words B", "punct A", "punct B"
     );
     for x in &c.before {
-        let Some(y) = c
-            .after
+        // The same pairing as the item matching: by provider, or by stage
+        // alone when each report ran one provider in it.
+        let same_stage: Vec<&Summary> = c.after.iter().filter(|y| y.stage == x.stage).collect();
+        let y = same_stage
             .iter()
-            .find(|y| y.stage == x.stage && y.provider == x.provider)
-        else {
+            .find(|y| y.provider == x.provider)
+            .copied()
+            .or_else(|| {
+                let before_count = c.before.iter().filter(|b| b.stage == x.stage).count();
+                (before_count == 1 && same_stage.len() == 1).then(|| same_stage[0])
+            });
+        let Some(y) = y else {
             continue;
         };
         println!(
@@ -926,5 +953,16 @@ mod tests {
             change_head(&ch),
             "[7 llm gemma] words +0 punct -1 (question, short)"
         );
+    }
+    #[test]
+    fn a_style_file_replaces_the_profile_writing_style_only() {
+        let mut p = arcvox_core::config::Config::factory_profile();
+        p.prompt_addition = "installed".into();
+        let kept = with_style(p.clone(), None);
+        assert_eq!(kept.prompt_addition, "installed");
+        let swapped = with_style(p.clone(), Some("聊天的寫法。\n"));
+        assert_eq!(swapped.prompt_addition, "聊天的寫法。");
+        assert_eq!(swapped.id, p.id);
+        assert_eq!(swapped.steps, p.steps);
     }
 }

@@ -666,21 +666,33 @@ pub struct Comparison {
     pub after: Vec<Summary>,
 }
 
-/// Matches items by id, stage and provider and tallies the word and the
-/// punctuation score apart, overall and per category.
+/// Matches items by id and stage, and by provider only where a report ran
+/// several providers in that stage (a provider label that changed between
+/// runs, such as a model renamed, must not hide the comparison); tallies
+/// the word and the punctuation score apart, overall and per category.
 pub fn compare(before: &Report, after: &Report) -> Comparison {
     let mut c = Comparison {
         before: summarize(before),
         after: summarize(after),
         ..Comparison::default()
     };
+    let providers_in = |stage: Stage| -> usize {
+        c.before
+            .iter()
+            .chain(c.after.iter())
+            .filter(|s| s.stage == stage)
+            .map(|s| s.provider.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+    };
     let mut matched_after = vec![false; after.items.len()];
     for b in &before.items {
-        let found = after
-            .items
-            .iter()
-            .enumerate()
-            .find(|(_, a)| a.id == b.id && a.stage == b.stage && a.provider == b.provider);
+        let by_provider = providers_in(b.stage) > 2
+            || c.before.iter().filter(|s| s.stage == b.stage).count() > 1
+            || c.after.iter().filter(|s| s.stage == b.stage).count() > 1;
+        let found = after.items.iter().enumerate().find(|(_, a)| {
+            a.id == b.id && a.stage == b.stage && (!by_provider || a.provider == b.provider)
+        });
         let Some((idx, a)) = found else {
             c.unmatched += 1;
             continue;
@@ -1194,6 +1206,45 @@ mod tests {
         assert_eq!(c.before[0].provider, "gemma");
         assert_eq!(c.before[0].total.marks.question.missing, 1);
         assert_eq!(c.after[0].total.marks.question.missing, 0);
+    }
+
+    #[test]
+    fn compare_ignores_the_provider_label_when_each_stage_has_one_provider() {
+        let before = report(vec![item(
+            "1",
+            Stage::Llm,
+            "gemma",
+            &[],
+            "一二三四",
+            "一二三五",
+        )]);
+        let after = report(vec![item(
+            "1",
+            Stage::Llm,
+            "gemma-3-4b-it-q4_k_m",
+            &[],
+            "一二三四",
+            "一二三四",
+        )]);
+        let c = compare(&before, &after);
+        assert_eq!(c.unmatched, 0);
+        assert_eq!(c.words.improved, 1);
+
+        let before = report(vec![
+            item("1", Stage::Llm, "a", &[], "一二三四", "一二三五"),
+            item("1", Stage::Llm, "b", &[], "一二三四", "一二三四"),
+        ]);
+        let after = report(vec![item(
+            "1",
+            Stage::Llm,
+            "b",
+            &[],
+            "一二三四",
+            "一二三四",
+        )]);
+        let c = compare(&before, &after);
+        assert_eq!(c.unmatched, 1, "with several providers the label matters");
+        assert_eq!(c.words.same, 1);
     }
 
     #[test]

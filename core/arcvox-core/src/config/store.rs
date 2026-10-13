@@ -326,6 +326,9 @@ mod tests {
         let dirs = DataDir::custom(tmp.path());
         assert!(dirs.config_path().exists());
         assert_eq!(store.base_prompt().unwrap(), DEFAULT_BASE_PROMPT);
+        // Rule 2 asks for question marks on questions and none on statements.
+        assert!(DEFAULT_BASE_PROMPT.contains("向對方提問的句子"));
+        assert!(DEFAULT_BASE_PROMPT.contains("陳述、請求與指示的句子句尾不用問號"));
         assert_eq!(*store.current(), Config::first_run());
     }
 
@@ -438,6 +441,9 @@ mod tests {
         assert_eq!(store.base_prompt().unwrap(), "custom");
         assert_eq!(store.restore_base_prompt().unwrap(), DEFAULT_BASE_PROMPT);
         assert_eq!(store.base_prompt().unwrap(), DEFAULT_BASE_PROMPT);
+        // Rule 2 asks for question marks on questions and none on statements.
+        assert!(DEFAULT_BASE_PROMPT.contains("向對方提問的句子"));
+        assert!(DEFAULT_BASE_PROMPT.contains("陳述、請求與指示的句子句尾不用問號"));
     }
 
     #[test]

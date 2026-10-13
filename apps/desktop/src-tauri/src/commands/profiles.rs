@@ -303,7 +303,10 @@ mod tests {
         )
         .unwrap();
         let chat = c.profiles.iter().find(|p| p.id.0 == "verbatim").unwrap();
-        assert_eq!(chat.prompt_addition, "");
+        assert_eq!(
+            chat.prompt_addition,
+            preset("casual").unwrap().prompt_addition
+        );
         assert_eq!(chat.preset.as_deref(), Some("casual"));
         assert_eq!(chat.name, "逐字");
         assert_eq!(
