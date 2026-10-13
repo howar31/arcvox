@@ -142,11 +142,7 @@ fn engine_for(m: &InstalledModel, label: String) -> ProviderConfig {
 }
 
 fn referenced_ids(config: &Config) -> HashSet<ProviderId> {
-    config
-        .profiles
-        .iter()
-        .flat_map(|p| std::iter::once(p.asr_provider.clone()).chain(p.llm_provider.clone()))
-        .collect()
+    config.referenced_engine_ids()
 }
 
 /// The id an app-made engine carries: for an embedded engine its catalogue
@@ -207,14 +203,17 @@ fn normalise_ids(config: &mut Config) {
     if renames.is_empty() {
         return;
     }
+    let follow = |id: &mut ProviderId| {
+        if let Some(new) = renames.get(id) {
+            *id = new.clone();
+        }
+    };
     for profile in &mut config.profiles {
-        if let Some(new) = renames.get(&profile.asr_provider) {
-            profile.asr_provider = new.clone();
-        }
-        if let Some(new) = profile.llm_provider.as_ref().and_then(|id| renames.get(id)) {
-            profile.llm_provider = Some(new.clone());
-        }
+        profile.asr_provider.as_mut().map(follow);
+        profile.llm_provider.as_mut().map(follow);
     }
+    follow(&mut config.default_engines.asr);
+    follow(&mut config.default_engines.llm);
 }
 
 #[cfg(test)]
@@ -283,11 +282,14 @@ mod tests {
         assert_eq!(d.kind, ProviderKind::Native);
         assert!(d.capabilities.transcribe && !d.capabilities.chat);
         // A service the platform no longer reports loses its engine unless a
-        // profile uses it; the language model it replaced, not installed
-        // and now unused, goes too.
+        // profile uses it; the language model of the default pair stays,
+        // not installed, because the pair names it.
         c.profiles[0].llm_provider = Some(ProviderId("apple-fm".into()));
         sync_engines(&mut c, &[], &manifest(), &none());
-        assert_eq!(ids(&c), [MODEL_ID_DEFAULT_ASR, "apple-fm"]);
+        assert_eq!(
+            ids(&c),
+            [MODEL_ID_DEFAULT_ASR, MODEL_ID_DEFAULT_LLM, "apple-fm"]
+        );
         assert!(crate::config::validate(&c).is_ok());
     }
 
@@ -344,10 +346,10 @@ mod tests {
         let mut c = Config::first_run();
         let turbo = installed("turbo-q5_0", Runtime::Whisper);
         sync_engines(&mut c, std::slice::from_ref(&turbo), &manifest(), &none());
-        c.profiles[0].asr_provider = ProviderId("turbo-q5_0".into());
+        c.profiles[0].asr_provider = Some(ProviderId("turbo-q5_0".into()));
         sync_engines(&mut c, &[], &manifest(), &none());
         assert!(c.provider(&ProviderId("turbo-q5_0".into())).is_some());
-        assert_eq!(c.profiles[0].asr_provider.0, "turbo-q5_0");
+        assert_eq!(c.profiles[0].asr_provider.as_ref().unwrap().0, "turbo-q5_0");
     }
 
     #[test]
@@ -379,12 +381,14 @@ mod tests {
         own.model_id = None;
         own.model_path = Some(PathBuf::from("mine.bin"));
         c.providers.push(own);
-        c.profiles[0].asr_provider = ProviderId("breeze".into());
+        c.profiles[0].asr_provider = Some(ProviderId("breeze".into()));
         c.profiles[0].llm_provider = Some(ProviderId("gemma-fast".into()));
+        c.default_engines.asr = ProviderId("breeze".into());
+        c.default_engines.llm = ProviderId("gemma".into());
         let mut second = c.profiles[0].clone();
         second.id = crate::types::ProfileId("mail".into());
         second.is_default = false;
-        second.asr_provider = ProviderId("mine".into());
+        second.asr_provider = Some(ProviderId("mine".into()));
         second.llm_provider = Some(ProviderId("gemma".into()));
         c.profiles.push(second);
 
@@ -398,12 +402,20 @@ mod tests {
                 "custom/mine.bin"
             ]
         );
-        assert_eq!(c.profiles[0].asr_provider.0, MODEL_ID_DEFAULT_ASR);
+        assert_eq!(
+            c.profiles[0].asr_provider.as_ref().unwrap().0,
+            MODEL_ID_DEFAULT_ASR
+        );
         assert_eq!(
             c.profiles[0].llm_provider.as_ref().unwrap().0,
             MODEL_ID_DEFAULT_LLM
         );
-        assert_eq!(c.profiles[1].asr_provider.0, "custom/mine.bin");
+        assert_eq!(c.default_engines.asr.0, MODEL_ID_DEFAULT_ASR);
+        assert_eq!(c.default_engines.llm.0, MODEL_ID_DEFAULT_LLM);
+        assert_eq!(
+            c.profiles[1].asr_provider.as_ref().unwrap().0,
+            "custom/mine.bin"
+        );
         assert_eq!(
             c.profiles[1].llm_provider.as_ref().unwrap().0,
             MODEL_ID_DEFAULT_LLM
@@ -446,10 +458,21 @@ mod tests {
     fn a_profile_naming_a_missing_template_engine_gets_it_made() {
         let mut c = Config::first_run();
         c.providers.clear();
-        c.profiles[0].asr_provider = ProviderId("turbo-q5_0".into());
+        c.profiles[0].asr_provider = Some(ProviderId("turbo-q5_0".into()));
         c.profiles[0].llm_provider = Some(ProviderId("apple-fm".into()));
         ensure_referenced_engines(&mut c, &manifest());
-        assert_eq!(ids(&c), ["turbo-q5_0", "apple-fm"]);
+        let mut made = ids(&c);
+        made.sort();
+        assert_eq!(
+            made,
+            [
+                "apple-fm",
+                MODEL_ID_DEFAULT_ASR,
+                MODEL_ID_DEFAULT_LLM,
+                "turbo-q5_0"
+            ],
+            "the default pair is made too"
+        );
         let t = c.provider(&ProviderId("turbo-q5_0".into())).unwrap();
         assert_eq!(t.label, "Whisper turbo (q5_0)");
         assert!(t.capabilities.transcribe);
@@ -459,7 +482,7 @@ mod tests {
         );
         assert!(crate::config::validate(&c).is_ok());
         // An id the app cannot make is left alone.
-        c.profiles[0].asr_provider = ProviderId("someone-elses".into());
+        c.profiles[0].asr_provider = Some(ProviderId("someone-elses".into()));
         ensure_referenced_engines(&mut c, &manifest());
         assert!(c.provider(&ProviderId("someone-elses".into())).is_none());
     }

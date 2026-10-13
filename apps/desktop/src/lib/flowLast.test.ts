@@ -93,7 +93,8 @@ describe("flowLast", () => {
 
   it("dims the stages a profile does not run", () => {
     expect(stageOpen("llm", profile)).toBe(true);
-    expect(stageOpen("llm", { ...profile, llm_provider: null })).toBe(false);
+    expect(stageOpen("llm", { ...profile, llm_provider: null })).toBe(true);
+    expect(stageOpen("llm", { ...profile, steps: profile.steps.filter((s) => s.step !== "llm") })).toBe(false);
     const bare: Profile = { ...profile, steps: [{ step: "asr" }] };
     expect(stageOpen("opencc1", bare)).toBe(false);
     expect(stageOpen("opencc2", bare)).toBe(false);

@@ -29,14 +29,16 @@ describe("backupView", () => {
       { kind: "needs_key", engine: "OpenAI" },
       { kind: "engine_replaced", profile: "郵件", role: "llm" },
       { kind: "engine_replaced", profile: "郵件", role: "asr" },
+      { kind: "default_engine_reset", role: "asr" },
       { kind: "engine_unavailable", engine: "Apple Dictation" },
       { kind: "unknown_section", name: "gestures" },
       { kind: "apps_not_installed", names: ["a.b", "c.d"] },
     ]);
     expect(lines.map((l) => l.text)).toEqual([
       "引擎「OpenAI」需要重新輸入 API 金鑰",
-      "情境「郵件」指向的文字改寫引擎不存在，改用預設情境的引擎",
-      "情境「郵件」指向的語音辨識引擎不存在，改用預設情境的引擎",
+      "情境「郵件」指定的文字改寫引擎無法改寫，改為跟隨預設引擎",
+      "情境「郵件」指定的語音辨識引擎無法辨識語音，改為跟隨預設引擎",
+      "檔案指定的預設語音辨識引擎不存在，改回內建的預設引擎",
       "引擎「Apple Dictation」無法在這台電腦使用",
       "檔案內的「gestures」是這個版本不認得的項目，已略過",
       "匯入的項目提到 2 個這台沒有安裝的應用程式：a.b、c.d",
@@ -44,7 +46,8 @@ describe("backupView", () => {
     expect(lines[0].go).toBe("engines");
     expect(lines[0].detail).toBe("金鑰不會寫進內容檔。");
     expect(lines[1].go).toBeUndefined();
-    expect(lines[5].detail).toBe("安裝後會自動生效。");
+    expect(lines[3].go).toBe("engines");
+    expect(lines[6].detail).toBe("安裝後會自動生效。");
     setLanguage("en");
     expect(noteLines([{ kind: "apps_not_installed", names: ["a.b", "c.d"] }])[0].text).toBe("The imported items name 2 applications that are not installed here: a.b, c.d");
   });

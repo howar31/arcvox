@@ -4,7 +4,7 @@
   import { bench } from "../../lib/bench.svelte";
   import { formatDateTime } from "../../lib/format";
   import { t } from "../../lib/i18n";
-  import { defaultProfile, providerLabel } from "../../lib/labels";
+  import { providerLabel } from "../../lib/labels";
   import { config } from "../../lib/store.svelte";
   import Group from "../../lib/ui/Group.svelte";
   import Icon from "../../lib/ui/Icon.svelte";
@@ -75,10 +75,10 @@
     bench.watch();
     // The first visit ticks the default profile's engines; later visits keep the choice.
     if (bench.asr === null || bench.llm === null) {
-      const profile = defaultProfile(config.value);
+      const pair = config.value?.default_engines;
       const ids = new Set((config.value?.providers ?? []).map((p) => p.id));
-      bench.asr = profile && ids.has(profile.asr_provider) ? [profile.asr_provider] : [];
-      bench.llm = profile?.llm_provider && ids.has(profile.llm_provider) ? [profile.llm_provider] : [];
+      bench.asr = pair && ids.has(pair.asr) ? [pair.asr] : [];
+      bench.llm = pair && ids.has(pair.llm) ? [pair.llm] : [];
     }
     benchClipStatus().then((c) => { clip = c; }).catch(fail);
     benchHistoryCandidates().then((c) => {
@@ -132,7 +132,7 @@
   }
 
   async function start() {
-    const defaultAsr = defaultProfile(config.value)?.asr_provider;
+    const defaultAsr = config.value?.default_engines.asr;
     const asr = selectedAsr.includes(defaultAsr ?? "")
       ? [defaultAsr as string, ...selectedAsr.filter((id) => id !== defaultAsr)]
       : [...selectedAsr];

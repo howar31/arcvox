@@ -91,6 +91,10 @@ impl ProviderFactory for EmbeddedFactory {
         )))
     }
 
+    fn ready(&self, cfg: &ProviderConfig) -> bool {
+        self.store.resolve(cfg).is_ok()
+    }
+
     async fn probe(&self, cfg: &ProviderConfig) -> ProbeResult {
         let path = match self.store.resolve(cfg) {
             Ok(p) => p,

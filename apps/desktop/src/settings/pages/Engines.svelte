@@ -4,12 +4,13 @@
   import {
     errorMessage, formatBytes, modelsCancel, modelsCustomDir, modelsDelete, modelsDirGet, modelsDirSet, modelsDownload, modelsDownloadRecommended, modelsImport,
     modelsInstalled, modelsManifest, modelsManifestNow, nativeInstallLanguage, nativeStatus, onModelDownloadProgress, onNativeInstallProgress, openFolder,
-    probeProvider, type DownloadProgress, type InstalledModel, type ManifestView, type ModelEntry, type ModelsDir, type NativeStatusView, type ProviderConfig,
+    probeProvider, setDefaultEngine, type DownloadProgress, type InstalledModel, type ManifestView, type ModelEntry, type ModelsDir, type NativeStatusView, type ProviderConfig,
   } from "../../lib/api";
   import { enginesOf, hasRole, recommendedMissing, runtimeFor, type Role } from "../../lib/engines";
   import { t } from "../../lib/i18n";
-  import { defaultProfile, modelDescription, modelLabel, usedBy } from "../../lib/labels";
+  import { defaultProfile, modelDescription, modelLabel, namedBy, usedBy } from "../../lib/labels";
   import { describeProbe, NATIVE_DICTATION } from "../../lib/providerForm";
+  import { usableWith } from "../../lib/resolve";
   import { engineDescription } from "../../lib/stages";
   import { guard } from "../../lib/guard.svelte";
   import { go } from "../../lib/route";
@@ -61,6 +62,24 @@
   const missingRecommended = $derived(recommendedMissing(manifest, installed));
   const busy = $derived(Object.values(progress).some((p) => !p.done));
   const defaultHint = $derived(defaultProfile(config.value)?.language_hint ?? null);
+  // The engines that can serve the role, for the default pair's picker.
+  const choices = $derived(engines.filter((p) => (role === "asr" ? p.capabilities.transcribe : p.capabilities.chat)));
+  const defaultId = $derived(config.value?.default_engines[role] ?? "");
+  /** Which engines can run now: a local one by its file, a platform service by its status, a network one at its word. */
+  const usable = $derived.by(() => {
+    const files = usableWith(installedKnown ? new Set(installed.map((m) => m.id)) : null, new Set(installed.map((m) => m.path)));
+    return (p: ProviderConfig) => (p.kind === "native" ? (nativeStates[p.id]?.status ?? "ready") === "ready" : files(p));
+  });
+  async function pickDefault(select: HTMLSelectElement) {
+    const id = select.value;
+    try {
+      await setDefaultEngine(role, id);
+      toast.ok(t("common.saved"));
+    } catch (e) {
+      select.value = defaultId;
+      toast.error(errorMessage(e));
+    }
+  }
 
   /**
    * One row per local model of the role: an installed file (catalogue or imported), a catalogue entry
@@ -157,18 +176,23 @@
    */
   type Light = { tone: "accent" | "ok" | "off" | "live"; title: string };
   function light(id: string, ready: boolean, fault: boolean): Light {
-    const inUse = usedBy(config.value, id).length > 0;
-    if (fault || (inUse && !ready)) return { tone: "live", title: t("engines.light.fault") };
+    const inUse = usedBy(config.value, id, usable).length > 0;
+    // A profile that names the engine depends on it, also while it runs on the default.
+    const wanted = inUse || namedBy(config.value, id).length > 0;
+    if (fault || (wanted && !ready)) return { tone: "live", title: t("engines.light.fault") };
     if (inUse) return { tone: "accent", title: t("engines.light.in_use") };
     if (ready) return { tone: "ok", title: t("engines.light.ready") };
     return { tone: "off", title: t("engines.light.off") };
   }
   const failed = (id: string): boolean => rowProbes[id]?.state === "bad";
+  /** Who runs with the engine: the default pair's engine says so first. */
   function usersLine(id: string): string {
-    const users = usedBy(config.value, id);
-    if (users.length === 0) return t("engines.not_in_use");
+    const users = usedBy(config.value, id, usable);
     const names = users.map((u) => (u.isDefault ? t("engines.default_user", { name: u.name }) : u.name)).join(t("engines.list_sep"));
-    return t("engines.in_use", { names });
+    if (id === defaultId) return users.length === 0 ? t("engines.default_not_in_use") : t("engines.default_in_use", { names });
+    if (users.length > 0) return t("engines.in_use", { names });
+    const wanted = namedBy(config.value, id).map((u) => u.name).join(t("engines.list_sep"));
+    return wanted ? t("engines.named_not_in_use", { names: wanted }) : t("engines.not_in_use");
   }
   const recommended = (id: string): boolean => !!manifest?.models.find((m) => m.id === id)?.recommended;
 
@@ -255,6 +279,16 @@
   {@const probe = rowProbes[id]}
   {#if probe}<small class="probe {probe.state}" role="status">{probe.text}</small>{/if}
 {/snippet}
+
+<!-- The one engine of the role every profile falls back on. -->
+<Group title={t("engines.default_group")}>
+  <Row label={t("engines.default_engine." + role)} help={t("engines.default_help")}>
+    <select class="field" value={defaultId} aria-label={t("engines.default_engine." + role)} onchange={(e) => pickDefault(e.currentTarget)}>
+      {#each choices as p (p.id)}<option value={p.id}>{p.label}</option>{/each}
+      {#if defaultId && !choices.some((p) => p.id === defaultId)}<option value={defaultId} disabled>{defaultId}</option>{/if}
+    </select>
+  </Row>
+</Group>
 
 <!-- Every installed model is an engine of its own; a file still to download is listed with it. -->
 <Group title={t("engines.local_models")}>

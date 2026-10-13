@@ -7,6 +7,7 @@
   import { failureText } from "../../lib/failure";
   import { formatDateTime, formatDay, formatTime } from "../../lib/format";
   import { clipLength, groupByDay, PAGE_SIZE, periodRange, rawState, redoneTag, seconds, totalSeconds, type PeriodSel } from "../../lib/historyView";
+  import { resolveEngines } from "../../lib/resolve";
   import { t } from "../../lib/i18n";
   import { isImeKey } from "../../lib/ime";
   import { firstShortcut } from "../../lib/shortcut";
@@ -242,8 +243,8 @@
     const p = redoProfile(u);
     if (!p) return "";
     const label = (id: string | null) => (id ? (config.value?.providers.find((x) => x.id === id)?.label ?? id) : null);
-    const rewrites = p.steps.some((s) => s.step === "llm");
-    return enginesOf(label(p.asr_provider) ?? "", rewrites ? label(p.llm_provider) : null);
+    const r = resolveEngines(config.value, p, () => true);
+    return enginesOf(label(r.asr.id) ?? "", r.llm ? label(r.llm.id) : null);
   }
   /** The results a row had, newest first. */
   async function loadAttempts(id: number) {

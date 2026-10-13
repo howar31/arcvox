@@ -9,7 +9,10 @@ use tokio::sync::mpsc;
 
 use crate::audio::encode_wav_pcm16;
 use crate::backup::{self, BackupError, BackupInfo, Categories, ImportReport, Scope, WriteReport};
-use crate::config::{ConfigStore, FirstRunDefaults, ProviderConfig, ProviderKind, StoreError};
+use crate::config::{
+    ConfigStore, FirstRunDefaults, Profile, ProviderConfig, ProviderKind, ResolvedEngines,
+    StoreError,
+};
 use crate::device::Device;
 use crate::history::{
     Delivery, DeviceRef, DeviceRow, HistoryError, HistoryStore, MoveReport, NewUtterance,
@@ -25,7 +28,9 @@ use crate::providers::registry::ProviderRegistry;
 use crate::secrets::SecretStore;
 use crate::session::{Session, SessionCmd, SessionFlags};
 use crate::steps::PipelineContext;
-use crate::types::{AppInfo, AudioClip, Context, ErrorCode, HistoryId, ProfileId, SessionId};
+use crate::types::{
+    AppInfo, AudioClip, Context, ErrorCode, HistoryId, ProfileId, ProviderId, SessionId,
+};
 use crate::SAMPLE_RATE;
 
 /// Shorter utterances are rejected before any provider call.
@@ -342,13 +347,26 @@ impl Engine {
             let Some(profile) = config.profiles.iter().find(|p| p.is_default) else {
                 return;
             };
-            let Some(cfg) = config.provider(&profile.asr_provider) else {
+            let engines = inner.resolve_engines(&config, profile);
+            let Some(cfg) = config.provider(&engines.asr.id) else {
                 return;
             };
             if let Ok(p) = inner.registry.asr(cfg, &config.general) {
                 let _ = p.load().await;
             }
         });
+    }
+
+    /// Whether an engine can run now, by the factory of its kind.
+    pub fn can_run(&self, cfg: &ProviderConfig) -> bool {
+        self.inner.registry.ready(cfg)
+    }
+
+    /// The engines a profile runs with now: its own when they can run,
+    /// else the default pair. See `Config::resolve_engines`.
+    pub fn resolve_engines(&self, profile: &Profile) -> ResolvedEngines {
+        let config = self.inner.config.current();
+        self.inner.resolve_engines(&config, profile)
     }
 
     pub fn config(&self) -> &ConfigStore {
@@ -712,19 +730,15 @@ impl Engine {
         let wanted = profile.unwrap_or_else(|| origin.unwrap_or_else(|| row.profile_id.clone()));
         let profile =
             Arc::new(resolve(&config.profiles, &AppInfo::default(), Some(&wanted)).clone());
+        let engines = self.inner.resolve_engines(&config, &profile);
         let label = |id: &crate::types::ProviderId| {
             config
                 .provider(id)
                 .map(|p| p.label.clone())
                 .unwrap_or_else(|| id.0.clone())
         };
-        let asr_label = label(&profile.asr_provider);
-        let llm_label = profile
-            .steps
-            .iter()
-            .any(|s| matches!(s, crate::config::StepSpec::Llm))
-            .then(|| profile.llm_provider.as_ref().map(label))
-            .flatten();
+        let asr_label = label(&engines.asr.id);
+        let llm_label = engines.llm.as_ref().map(|c| label(&c.id));
 
         self.mark_busy();
         let _idle = RearmIdle(self);
@@ -732,8 +746,8 @@ impl Engine {
             code: e.code,
             text: failure_text(e),
         };
-        let pipeline =
-            Pipeline::build(&config, &profile, &self.inner.registry).map_err(|e| fail(&e))?;
+        let pipeline = Pipeline::build(&config, &profile, &engines, &self.inner.registry)
+            .map_err(|e| fail(&e))?;
         let ctx =
             PipelineContext {
                 profile: profile.clone(),
@@ -875,14 +889,19 @@ impl Engine {
         self.inner.schedule_idle_unload();
     }
 
-    /// Drops and unloads every cached speech provider no profile uses, so a
-    /// model loaded only to be timed does not stay in memory.
+    /// Drops and unloads every cached speech provider no profile runs with,
+    /// so a model loaded only to be timed does not stay in memory.
     pub async fn unload_unreferenced_asr(&self) {
         let config = self.inner.config.current();
+        let in_use: std::collections::HashSet<ProviderId> = config
+            .profiles
+            .iter()
+            .map(|p| self.inner.resolve_engines(&config, p).asr.id)
+            .collect();
         let evicted = self
             .inner
             .registry
-            .evict_asr_where(|cfg| !config.profiles.iter().any(|p| p.asr_provider == cfg.id));
+            .evict_asr_where(|cfg| !in_use.contains(&cfg.id));
         for p in evicted {
             p.unload().await;
         }
@@ -978,11 +997,8 @@ impl Inner {
         config: &crate::config::Config,
         profile: &crate::config::Profile,
     ) {
-        let Some(cfg) = profile
-            .llm_provider
-            .as_ref()
-            .and_then(|id| config.provider(id))
-        else {
+        let engines = self.resolve_engines(config, profile);
+        let Some(cfg) = engines.llm.as_ref().and_then(|c| config.provider(&c.id)) else {
             return;
         };
         let Ok(p) = self.registry.llm(cfg, &config.general) else {
@@ -991,6 +1007,16 @@ impl Inner {
         self.runtime.spawn(async move {
             let _ = p.load().await;
         });
+    }
+
+    /// `Config::resolve_engines` with this engine's factories saying which
+    /// engines can run.
+    fn resolve_engines(
+        &self,
+        config: &crate::config::Config,
+        profile: &Profile,
+    ) -> ResolvedEngines {
+        config.resolve_engines(profile, |cfg| self.registry.ready(cfg))
     }
 
     fn schedule_idle_unload(self: &Arc<Self>) {
@@ -1525,7 +1551,8 @@ async fn run_session(
         recognised: Default::default(),
     };
 
-    let pipeline = match Pipeline::build(&config, &profile, &inner.registry) {
+    let engines = inner.resolve_engines(&config, &profile);
+    let pipeline = match Pipeline::build(&config, &profile, &engines, &inner.registry) {
         Ok(p) => p,
         Err(err) => {
             tracing::warn!(session = %session_id, code = ?err.code, error = %err.message, "session could not start its steps");
@@ -2018,7 +2045,7 @@ pub(crate) mod tests {
     #[tokio::test(start_paused = true)]
     async fn unload_unreferenced_asr_evicts_only_unreferenced_providers() {
         let (_fake, _tmp, e) = idle_rig().await;
-        let used = e.config().current().profiles[0].asr_provider.clone();
+        let used = e.config().current().default_engines.asr.clone();
         let spare = crate::types::ProviderId("spare-asr".into());
         e.config()
             .update(|c| {

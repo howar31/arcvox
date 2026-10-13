@@ -91,14 +91,23 @@ pub fn set_default(engine: &Engine, id: &ProfileId) -> CmdResult<Config> {
 pub struct PresetView {
     pub id: String,
     pub app_ids: Vec<String>,
+    /// The engines the template was tuned with, the ones the Profiles page
+    /// marks as suggested; None for an untuned template.
+    pub suggested_asr: Option<String>,
+    pub suggested_llm: Option<String>,
 }
 
 pub fn preset_views() -> Vec<PresetView> {
     presets()
         .iter()
-        .map(|p| PresetView {
-            id: p.id.to_string(),
-            app_ids: p.app_ids.iter().map(|a| a.to_string()).collect(),
+        .map(|p| {
+            let tuned = p.tuned_with();
+            PresetView {
+                id: p.id.to_string(),
+                app_ids: p.app_ids.iter().map(|a| a.to_string()).collect(),
+                suggested_asr: tuned.map(|(asr, _)| asr.to_string()),
+                suggested_llm: tuned.map(|(_, llm)| llm.to_string()),
+            }
         })
         .collect()
 }
@@ -228,7 +237,7 @@ mod tests {
     #[tokio::test]
     async fn add_preset_copies_the_template_and_makes_its_engines() {
         let (_t, e) = engine().await;
-        // The default profile moved to other engines; the template's own
+        // The default pair moved to another engine; the local pair's rows
         // are gone from the list.
         e.config()
             .update(|c| {
@@ -238,8 +247,8 @@ mod tests {
                     true,
                     true,
                 ));
-                c.profiles[0].asr_provider = ProviderId("remote".into());
-                c.profiles[0].llm_provider = Some(ProviderId("remote".into()));
+                c.default_engines.asr = ProviderId("remote".into());
+                c.default_engines.llm = ProviderId("remote".into());
                 c.providers.retain(|p| p.id.0 == "remote");
             })
             .unwrap();
@@ -251,9 +260,9 @@ mod tests {
             .unwrap();
         assert_eq!(mail.name, "正式");
         assert!(!mail.is_default);
-        assert_eq!(mail.asr_provider.0, preset("formal").unwrap().asr);
+        assert_eq!(mail.asr_provider, None, "a template follows the default");
         assert!(!mail.matcher.app_ids.is_empty());
-        assert!(c.provider(&mail.asr_provider).is_some(), "made on the way");
+        assert_eq!(e.resolve_engines(mail).asr.id, ProviderId("remote".into()));
         // A second copy gets a free id instead of replacing the first.
         let c = add_preset(&e, "formal", "正式 2", &manifest()).unwrap();
         assert_eq!(c.profiles.len(), 3);

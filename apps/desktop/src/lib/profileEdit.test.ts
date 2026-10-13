@@ -3,7 +3,7 @@ import type { Profile, ProviderConfig, StepSpec } from "./api";
 import { appsSummary, engineMeta, slugId, withLlm } from "./profileEdit";
 
 const profile = (steps: StepSpec[], llm: string | null = "llm-a"): Profile => ({
-  id: "p", name: "P", is_default: true, matcher: { app_ids: [], url_patterns: [] }, asr_provider: "asr-a", llm_provider: llm,
+  id: "p", name: "P", is_default: true, matcher: { app_ids: [], url_patterns: [] }, asr_provider: null, llm_provider: llm,
   language_hint: null, prompt_addition: "", few_shot: [], preset: null, asr_dictionary_hint: true, llm_dictionary_terms: true, llm_window_title: true, llm_short_fallback: true, steps,
 });
 const full: StepSpec[] = [{ step: "asr" }, { step: "opencc", config: "s2twp" }, { step: "llm" }, { step: "opencc", config: "s2twp" }, { step: "rules" }];
@@ -29,6 +29,11 @@ describe("withLlm", () => {
     const next = withLlm(profile(full), "llm-b");
     expect(next.llm_provider).toBe("llm-b");
     expect(next.steps).toEqual(full);
+  });
+  it("rewrites with the default engine for the follow value", () => {
+    const next = withLlm(profile([{ step: "asr" }], "llm-a"), "");
+    expect(next.llm_provider).toBeNull();
+    expect(next.steps.map((s) => s.step)).toEqual(["asr", "llm"]);
   });
   it("does not change its input", () => {
     const p = profile([{ step: "asr" }, { step: "rules" }], null);

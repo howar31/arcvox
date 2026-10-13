@@ -1,59 +1,47 @@
 //! What is wrong with the profiles and the engines as they are set up: the
 //! menu-bar menu and the settings window report the same list.
 
-use std::collections::HashSet;
-use std::path::PathBuf;
-
-use arcvox_core::config::{Config, ProviderConfig, ProviderKind};
-use arcvox_core::models::{InstalledModel, ModelStore};
+use arcvox_core::config::{Config, EngineRole, ProviderConfig};
 use arcvox_core::Engine;
 
 use crate::ui::tray::Notice;
 use crate::ui::TauriUi;
 
-/// Whether the file an engine runs from is there. Engines that run
-/// elsewhere, or come with the system, have none.
-fn ready(p: &ProviderConfig, ids: &HashSet<&str>, paths: &HashSet<&PathBuf>) -> bool {
-    if p.kind != ProviderKind::Embedded {
-        return true;
-    }
-    match (&p.model_id, &p.model_path) {
-        (Some(id), _) => ids.contains(id.as_str()),
-        (None, Some(path)) => paths.contains(path),
-        (None, None) => false,
-    }
-}
-
-/// One notice for every profile that names an engine that is gone or whose
-/// model is not there, and one for every engine whose own file is gone.
-pub fn notices(config: &Config, installed: &[InstalledModel]) -> Vec<Notice> {
-    let ids: HashSet<&str> = installed.iter().map(|m| m.id.as_str()).collect();
-    let paths: HashSet<&PathBuf> = installed.iter().map(|m| &m.path).collect();
+/// One notice for every profile that runs on the default instead of the
+/// engine it names, one for each engine of the default pair that cannot
+/// run, and one for every engine whose own file is gone. `usable` says
+/// whether an engine can run now.
+pub fn notices(config: &Config, usable: impl Fn(&ProviderConfig) -> bool) -> Vec<Notice> {
     let mut out = Vec::new();
     for profile in &config.profiles {
-        let used = std::iter::once(&profile.asr_provider).chain(profile.llm_provider.iter());
-        let engines: Vec<Option<&ProviderConfig>> = used
-            .map(|id| config.providers.iter().find(|p| &p.id == id))
-            .collect();
-        if engines.iter().any(Option::is_none) {
-            out.push(Notice::ProfileEngineMissing(profile.name.clone()));
-        } else if engines.iter().flatten().any(|p| !ready(p, &ids, &paths)) {
-            out.push(Notice::ProfileModelMissing(profile.name.clone()));
+        if config.resolve_engines(profile, &usable).any_fallback() {
+            out.push(Notice::ProfileOnDefault(profile.name.clone()));
+        }
+    }
+    for (role, id) in [
+        (EngineRole::Asr, &config.default_engines.asr),
+        (EngineRole::Llm, &config.default_engines.llm),
+    ] {
+        if !config.provider(id).is_some_and(&usable) {
+            out.push(match role {
+                EngineRole::Asr => Notice::DefaultAsrNotReady,
+                EngineRole::Llm => Notice::DefaultLlmNotReady,
+            });
         }
     }
     for p in &config.providers {
-        if p.model_id.is_none() && p.model_path.is_some() && !ready(p, &ids, &paths) {
+        if p.model_id.is_none() && p.model_path.is_some() && !usable(p) {
             out.push(Notice::ModelFileMissing(p.label.clone()));
         }
     }
     out
 }
 
-/// Reads the profiles, the engines and the installed models again and
-/// reports what is wrong with them.
-pub fn refresh(engine: Option<&Engine>, models: &ModelStore, ui: &TauriUi) {
+/// Reads the profiles and the engines again and reports what is wrong
+/// with them.
+pub fn refresh(engine: Option<&Engine>, ui: &TauriUi) {
     let found = match engine {
-        Some(e) => notices(&e.config().current(), &models.installed()),
+        Some(e) => notices(&e.config().current(), |cfg| e.can_run(cfg)),
         None => Vec::new(),
     };
     ui.set_engine_problems(found);
@@ -62,69 +50,71 @@ pub fn refresh(engine: Option<&Engine>, models: &ModelStore, ui: &TauriUi) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arcvox_core::config::Runtime;
+    use arcvox_core::types::ProviderId;
 
     fn config() -> Config {
         serde_json::from_value(serde_json::json!({
-            "schema_version": 1,
+            "schema_version": 3,
             "general": {},
             "providers": [
-                { "id": "remote", "label": "Remote", "kind": "http", "base_url": "http://localhost:1/v1" },
-                { "id": "local", "label": "Local", "kind": "embedded", "model_id": "small" },
-                { "id": "own", "label": "Own file", "kind": "embedded", "model_path": "/models/own.bin" },
+                { "id": "remote", "label": "Remote", "kind": "http", "base_url": "http://localhost:1/v1", "capabilities": { "transcribe": true, "chat": true } },
+                { "id": "local", "label": "Local", "kind": "embedded", "model_id": "small", "runtime": "whisper", "capabilities": { "transcribe": true } },
+                { "id": "own", "label": "Own file", "kind": "embedded", "model_path": "/models/own.bin", "runtime": "whisper", "capabilities": { "transcribe": true } },
             ],
             "profiles": [
-                { "id": "a", "name": "Default", "is_default": true, "asr_provider": "local", "llm_provider": "remote", "steps": [] },
+                { "id": "a", "name": "Default", "is_default": true, "asr_provider": "local", "llm_provider": "remote", "steps": [{ "step": "asr" }, { "step": "llm" }] },
+                { "id": "b", "name": "Follower", "steps": [{ "step": "asr" }] },
             ],
             "dictionary": [],
+            "default_engines": { "asr": "remote", "llm": "remote" }
         }))
         .unwrap()
     }
 
-    fn model(id: &str, path: &str) -> InstalledModel {
-        InstalledModel {
-            id: id.into(),
-            runtime: Runtime::Whisper,
-            path: path.into(),
-            size_bytes: 1,
-            custom: false,
-        }
+    /// The engines whose files are there, by id.
+    fn have<'a>(ids: &'a [&'a str]) -> impl Fn(&ProviderConfig) -> bool + 'a {
+        move |p| p.model_id.is_none() && p.model_path.is_none() || ids.contains(&p.id.0.as_str())
     }
 
     #[test]
     fn nothing_is_wrong_while_every_file_is_there() {
-        let installed = [
-            model("small", "/m/small"),
-            model("custom/own.bin", "/models/own.bin"),
-        ];
-        assert!(notices(&config(), &installed).is_empty());
+        assert!(notices(&config(), have(&["local", "own"])).is_empty());
     }
 
     #[test]
-    fn a_profile_whose_model_is_not_there_is_named() {
-        let installed = [model("custom/own.bin", "/models/own.bin")];
+    fn a_profile_whose_named_engine_cannot_run_is_on_the_default() {
         assert_eq!(
-            notices(&config(), &installed),
-            vec![Notice::ProfileModelMissing("Default".into())]
+            notices(&config(), have(&["own"])),
+            vec![Notice::ProfileOnDefault("Default".into())]
         );
     }
 
     #[test]
-    fn a_profile_whose_engine_is_gone_is_named_once() {
+    fn a_profile_whose_engine_is_gone_is_on_the_default_too() {
         let mut c = config();
-        c.providers.retain(|p| p.label == "Own file");
-        let installed = [model("custom/own.bin", "/models/own.bin")];
+        c.providers.retain(|p| p.id.0 != "local");
         assert_eq!(
-            notices(&c, &installed),
-            vec![Notice::ProfileEngineMissing("Default".into())]
+            notices(&c, have(&["own"])),
+            vec![Notice::ProfileOnDefault("Default".into())]
         );
+    }
+
+    #[test]
+    fn a_default_engine_that_cannot_run_is_named_by_its_role() {
+        let mut c = config();
+        c.default_engines.asr = ProviderId("local".into());
+        let found = notices(&c, have(&["own"]));
+        assert!(found.contains(&Notice::DefaultAsrNotReady), "{found:?}");
+        assert!(!found.contains(&Notice::DefaultLlmNotReady));
+        // The follower runs on the default too, but that is the pair's
+        // problem, not the profile's.
+        assert!(!found.contains(&Notice::ProfileOnDefault("Follower".into())));
     }
 
     #[test]
     fn an_engine_whose_own_file_is_gone_is_named_even_when_no_profile_uses_it() {
-        let installed = [model("small", "/m/small")];
         assert_eq!(
-            notices(&config(), &installed),
+            notices(&config(), have(&["local"])),
             vec![Notice::ModelFileMissing("Own file".into())]
         );
     }

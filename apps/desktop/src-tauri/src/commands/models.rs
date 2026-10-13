@@ -234,6 +234,32 @@ mod tests {
         }
     }
 
+    /// The models the shipped templates depend on are the ones this build
+    /// promises: the factory default pair and every model a template names
+    /// must be in the bundled catalogue, under the role the template uses
+    /// them for.
+    #[test]
+    fn templates_name_only_bundled_models() {
+        let m = Manifest::parse(crate::providers::BUNDLED_MANIFEST).unwrap();
+        let has = |id: &str, role: ModelRole| m.get(id).is_some_and(|e| e.role == role);
+        assert!(has(
+            arcvox_core::config::MODEL_ID_DEFAULT_ASR,
+            ModelRole::Asr
+        ));
+        assert!(has(
+            arcvox_core::config::MODEL_ID_DEFAULT_LLM,
+            ModelRole::Llm
+        ));
+        for preset in arcvox_core::profile::presets() {
+            if let Some(id) = preset.asr {
+                assert!(has(id, ModelRole::Asr), "template {} names {id}", preset.id);
+            }
+            if let Some(id) = preset.llm {
+                assert!(has(id, ModelRole::Llm), "template {} names {id}", preset.id);
+            }
+        }
+    }
+
     fn entry(id: &str, runtime: &str, role: &str, url: &str, body: &[u8]) -> String {
         let sha = format!("{:x}", Sha256::digest(body));
         format!(
@@ -412,10 +438,7 @@ mod tests {
         let file = dirs.models_dir().join("custom").join("x.gguf");
         assert!(file.is_file());
 
-        let llm_id = engine.config().current().profiles[0]
-            .llm_provider
-            .clone()
-            .unwrap();
+        let llm_id = engine.config().current().default_engines.llm.clone();
         engine
             .config()
             .update(|c| {

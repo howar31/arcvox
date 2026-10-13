@@ -222,10 +222,7 @@ mod tests {
     #[tokio::test]
     async fn cold_run_unloads_then_loads_and_reports_output() {
         let (fake, _tmp, e) = idle_rig().await;
-        let id = e.config().current().profiles[0]
-            .llm_provider
-            .clone()
-            .unwrap();
+        let id = e.config().current().default_engines.llm.clone();
         let run = e.bench_llm(&id, "原文", true).await;
         assert_eq!(fake.unloads.load(Ordering::SeqCst), 1);
         assert_eq!(run.output, "ok");
@@ -263,7 +260,7 @@ mod tests {
     #[tokio::test]
     async fn asr_run_uses_the_default_profile_hint() {
         let (_fake, _tmp, e) = idle_rig().await;
-        let id = e.config().current().profiles[0].asr_provider.clone();
+        let id = e.config().current().default_engines.asr.clone();
         let run = e.bench_asr(&id, Arc::new(one_second_clip()), false).await;
         assert_eq!(run.output, "原文");
         assert_eq!(run.role, BenchRole::Asr);
@@ -278,10 +275,7 @@ mod tests {
         s.push_audio(&one_second());
         s.finish();
         drain_session(&s).await;
-        let id = e.config().current().profiles[0]
-            .llm_provider
-            .clone()
-            .unwrap();
+        let id = e.config().current().default_engines.llm.clone();
         let run = e.bench_llm(&id, "原文", false).await;
         assert_eq!(fake.unloads.load(Ordering::SeqCst), 0);
         assert!(run.error.is_none());
@@ -293,10 +287,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn cancelled_run_rearms_the_idle_unload() {
         let (fake, _tmp, e) = idle_rig_with(FakeLlm::slow("ok", Duration::from_secs(3))).await;
-        let id = e.config().current().profiles[0]
-            .llm_provider
-            .clone()
-            .unwrap();
+        let id = e.config().current().default_engines.llm.clone();
         let cut =
             tokio::time::timeout(Duration::from_secs(1), e.bench_llm(&id, "原文", false)).await;
         assert!(cut.is_err());

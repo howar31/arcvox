@@ -328,7 +328,12 @@ async fn run(args: &Args) -> Result<(), String> {
             let ids = {
                 let l = args.list("asr");
                 if l.is_empty() {
-                    vec![profile.asr_provider.0.clone()]
+                    vec![config
+                        .resolve_engines(&profile, |cfg| registry.ready(cfg))
+                        .asr
+                        .id
+                        .0
+                        .clone()]
                 } else {
                     l
                 }
@@ -375,11 +380,11 @@ async fn run(args: &Args) -> Result<(), String> {
             let ids = {
                 let l = args.list("llm");
                 if l.is_empty() {
-                    vec![profile
-                        .llm_provider
-                        .as_ref()
-                        .map(|p| p.0.clone())
-                        .ok_or("the profile has no LLM provider; pass --llm")?]
+                    vec![config
+                        .resolve_engines(&profile, |cfg| registry.ready(cfg))
+                        .llm
+                        .map(|c| c.id.0)
+                        .ok_or("the profile has no rewrite step; pass --llm")?]
                 } else {
                     l
                 }
@@ -419,17 +424,19 @@ async fn run(args: &Args) -> Result<(), String> {
                 return Err("--stage full takes at most one --asr and one --llm".into());
             }
             if let Some(a) = asr.first() {
-                prof.asr_provider = ProviderId(a.clone());
+                prof.asr_provider = Some(ProviderId(a.clone()));
             }
             if let Some(l) = llm.first() {
                 prof.llm_provider = Some(ProviderId(l.clone()));
             }
+            let engines = config.resolve_engines(&prof, |cfg| registry.ready(cfg));
             let label = format!(
                 "{}+{}",
-                prof.asr_provider.0,
-                prof.llm_provider
+                engines.asr.id.0,
+                engines
+                    .llm
                     .as_ref()
-                    .map(|p| p.0.as_str())
+                    .map(|c| c.id.0.as_str())
                     .unwrap_or("none")
             );
             notes.push(format!("pipeline: {label}"));
@@ -493,7 +500,8 @@ fn build(
     registry: &ProviderRegistry,
     base_prompt: &str,
 ) -> Result<(Pipeline, PipelineContext), String> {
-    let pipeline = Pipeline::build(config, &profile, registry).map_err(|e| e.message)?;
+    let engines = config.resolve_engines(&profile, |cfg| registry.ready(cfg));
+    let pipeline = Pipeline::build(config, &profile, &engines, registry).map_err(|e| e.message)?;
     let ctx = PipelineContext {
         profile: Arc::new(profile),
         context: Context::default(),
