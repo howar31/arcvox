@@ -269,6 +269,184 @@ fn unescape(s: &str) -> String {
     out
 }
 
+/// How often a kind of mark was written where none was expected (`extra`)
+/// or left out where one was (`missing`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct MarkCount {
+    pub extra: usize,
+    pub missing: usize,
+}
+
+/// Punctuation and spacing differences by kind, read off the character
+/// diff: `stop` is a full stop at the end of the text, `inner` a comma,
+/// enumeration comma, semicolon, colon or a full stop inside the text,
+/// `question` a question mark, `quote` corner quotes, `other` every other
+/// mark, `space` a space between a CJK character and a Latin letter or
+/// digit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Marks {
+    pub stop: MarkCount,
+    pub question: MarkCount,
+    pub inner: MarkCount,
+    pub quote: MarkCount,
+    pub other: MarkCount,
+    pub space: MarkCount,
+}
+
+impl Marks {
+    pub fn add(&mut self, other: Marks) {
+        for (a, b) in self.each_mut().into_iter().zip(other.each()) {
+            a.extra += b.extra;
+            a.missing += b.missing;
+        }
+    }
+
+    /// The kinds in display order, with their names.
+    pub const KINDS: [&'static str; 6] = ["stop", "question", "inner", "quote", "other", "space"];
+
+    pub fn each(&self) -> [MarkCount; 6] {
+        [
+            self.stop,
+            self.question,
+            self.inner,
+            self.quote,
+            self.other,
+            self.space,
+        ]
+    }
+
+    fn each_mut(&mut self) -> [&mut MarkCount; 6] {
+        [
+            &mut self.stop,
+            &mut self.question,
+            &mut self.inner,
+            &mut self.quote,
+            &mut self.other,
+            &mut self.space,
+        ]
+    }
+}
+
+fn is_cjk(c: char) -> bool {
+    matches!(c,
+        '\u{4E00}'..='\u{9FFF}'
+        | '\u{3400}'..='\u{4DBF}'
+        | '\u{F900}'..='\u{FAFF}'
+        | '\u{3040}'..='\u{30FF}'
+        | '\u{AC00}'..='\u{D7AF}')
+}
+
+/// A CJK character next to a Latin letter or digit, in either order.
+fn is_script_boundary(left: Option<char>, right: Option<char>) -> bool {
+    match (left, right) {
+        (Some(l), Some(r)) => {
+            (is_cjk(l) && r.is_ascii_alphanumeric()) || (l.is_ascii_alphanumeric() && is_cjk(r))
+        }
+        _ => false,
+    }
+}
+
+/// Which counter a mark belongs to; `trailing` says whether the mark is
+/// the last non-whitespace character of its text.
+fn mark_kind(c: char, trailing: bool) -> Option<usize> {
+    if !is_punctuation(c) {
+        return None;
+    }
+    Some(match c {
+        '。' if trailing => 0,
+        '？' | '?' => 1,
+        '，' | '、' | '；' | '：' | '。' | ',' | ';' | ':' => 2,
+        '「' | '」' | '『' | '』' => 3,
+        _ => 4,
+    })
+}
+
+/// Punctuation and spacing differences between the expected and the
+/// actual text, by kind.
+pub fn marks(expected: &str, actual: &str) -> Marks {
+    let a: Vec<char> = expected.chars().collect();
+    let b: Vec<char> = actual.chars().collect();
+    let last_mark = |t: &[char]| t.iter().rposition(|c| !c.is_whitespace());
+    let (last_a, last_b) = (last_mark(&a), last_mark(&b));
+    let mut m = Marks::default();
+    let (mut i, mut j) = (0usize, 0usize);
+    for op in diff(expected, actual) {
+        match op {
+            DiffOp::Equal(s) => {
+                let n = s.chars().count();
+                i += n;
+                j += n;
+            }
+            DiffOp::Delete(s) => {
+                let n = s.chars().count();
+                if s.chars().all(char::is_whitespace) {
+                    if is_script_boundary(i.checked_sub(1).map(|k| a[k]), a.get(i + n).copied()) {
+                        m.space.missing += 1;
+                    }
+                } else {
+                    for (k, c) in s.chars().enumerate() {
+                        if let Some(kind) = mark_kind(c, last_a == Some(i + k)) {
+                            m.each_mut()[kind].missing += 1;
+                        }
+                    }
+                }
+                i += n;
+            }
+            DiffOp::Insert(s) => {
+                let n = s.chars().count();
+                if s.chars().all(char::is_whitespace) {
+                    if is_script_boundary(j.checked_sub(1).map(|k| b[k]), b.get(j + n).copied()) {
+                        m.space.extra += 1;
+                    }
+                } else {
+                    for (k, c) in s.chars().enumerate() {
+                        if let Some(kind) = mark_kind(c, last_b == Some(j + k)) {
+                            m.each_mut()[kind].extra += 1;
+                        }
+                    }
+                }
+                j += n;
+            }
+        }
+    }
+    m
+}
+
+/// The categories an item is reported under: `question`, `list`, `digits`
+/// and `english` read off the expected text, `correction` from a spoken
+/// marker in it or the stored tag, `plain` when none of those applies;
+/// then the stored tags (`short`, `long`, and anything written by hand)
+/// except `mixed`, which `english` replaces.
+pub fn categories(expected: &str, tags: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    if expected.contains(['？', '?']) {
+        out.push("question".into());
+    }
+    if expected.contains('\n') {
+        out.push("list".into());
+    }
+    if expected.chars().any(|c| c.is_ascii_digit()) {
+        out.push("digits".into());
+    }
+    if expected.chars().any(|c| c.is_ascii_alphabetic()) {
+        out.push("english".into());
+    }
+    if CORRECTION_MARKERS.iter().any(|m| expected.contains(m))
+        || tags.iter().any(|t| t == "correction")
+    {
+        out.push("correction".into());
+    }
+    if out.is_empty() {
+        out.push("plain".into());
+    }
+    for t in tags {
+        if t != "mixed" && !out.contains(t) {
+            out.push(t.clone());
+        }
+    }
+    out
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
@@ -341,17 +519,35 @@ pub struct Report {
     pub items: Vec<ItemResult>,
 }
 
-/// Totals for one stage and provider, overall and per tag.
+/// Scores added up over a set of items.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Totals {
+    pub items: usize,
+    pub text: Cer,
+    pub punctuation: Cer,
+    pub marks: Marks,
+}
+
+impl Totals {
+    fn add_item(&mut self, it: &ItemResult) {
+        self.items += 1;
+        add(&mut self.text, it.text);
+        add(&mut self.punctuation, it.punctuation);
+        self.marks.add(marks(&it.expected, &it.output));
+    }
+}
+
+/// Totals for one stage and provider, overall and per category (in order
+/// of first appearance).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Summary {
     pub stage: Stage,
     pub provider: String,
     pub items: usize,
     pub failed: usize,
-    pub text: Cer,
-    pub punctuation: Cer,
     pub ms_total: u64,
-    pub by_tag: Vec<(String, Cer)>,
+    pub total: Totals,
+    pub by_category: Vec<(String, Totals)>,
 }
 
 pub fn summarize(report: &Report) -> Vec<Summary> {
@@ -368,26 +564,27 @@ pub fn summarize(report: &Report) -> Vec<Summary> {
                     provider: it.provider.clone(),
                     items: 0,
                     failed: 0,
-                    text: Cer::default(),
-                    punctuation: Cer::default(),
                     ms_total: 0,
-                    by_tag: Vec::new(),
+                    total: Totals::default(),
+                    by_category: Vec::new(),
                 });
                 out.last_mut().unwrap()
             }
         };
         s.items += 1;
         s.failed += usize::from(it.error.is_some());
-        add(&mut s.text, it.text);
-        add(&mut s.punctuation, it.punctuation);
         s.ms_total += it.ms;
-        for tag in &it.tags {
-            match s.by_tag.iter_mut().find(|(t, _)| t == tag) {
-                Some((_, c)) => add(c, it.text),
-                None => s.by_tag.push((tag.clone(), it.text)),
+        s.total.add_item(it);
+        for cat in categories(&it.expected, &it.tags) {
+            match s.by_category.iter_mut().find(|(c, _)| *c == cat) {
+                Some((_, t)) => t.add_item(it),
+                None => {
+                    let mut t = Totals::default();
+                    t.add_item(it);
+                    s.by_category.push((cat, t));
+                }
             }
         }
-        s.by_tag.sort_by(|a, b| a.0.cmp(&b.0));
     }
     out
 }
@@ -403,24 +600,80 @@ pub struct Change {
     pub id: String,
     pub stage: Stage,
     pub provider: String,
+    pub categories: Vec<String>,
     pub before: Cer,
     pub after: Cer,
+    pub before_punctuation: Cer,
+    pub after_punctuation: Cer,
     pub before_output: String,
     pub after_output: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-pub struct Comparison {
-    pub improved: Vec<Change>,
-    pub worse: Vec<Change>,
-    pub same: usize,
-    /// Items present in only one of the reports.
-    pub unmatched: usize,
+impl Change {
+    /// Errors gained (positive) or lost in the word score.
+    pub fn words_delta(&self) -> i64 {
+        self.after.errors as i64 - self.before.errors as i64
+    }
+
+    pub fn punctuation_delta(&self) -> i64 {
+        self.after_punctuation.errors as i64 - self.before_punctuation.errors as i64
+    }
+
+    /// Worse in words first, then worse in punctuation, then improved in
+    /// words, then improved in punctuation only; larger changes first.
+    fn rank(&self) -> (u8, i64) {
+        let (w, p) = (self.words_delta(), self.punctuation_delta());
+        if w > 0 {
+            (0, -w)
+        } else if p > 0 {
+            (1, -p)
+        } else if w < 0 {
+            (2, w)
+        } else {
+            (3, p)
+        }
+    }
 }
 
-/// Matches items by id, stage and provider and sorts them by the word score.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Tally {
+    pub improved: usize,
+    pub worse: usize,
+    pub same: usize,
+}
+
+impl Tally {
+    fn count(&mut self, delta: i64) {
+        match delta.cmp(&0) {
+            std::cmp::Ordering::Less => self.improved += 1,
+            std::cmp::Ordering::Greater => self.worse += 1,
+            std::cmp::Ordering::Equal => self.same += 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct Comparison {
+    /// Items whose word or punctuation score changed, worst first.
+    pub changed: Vec<Change>,
+    /// Items present in only one of the reports.
+    pub unmatched: usize,
+    pub words: Tally,
+    pub punctuation: Tally,
+    /// Per category: the word tally and the punctuation tally.
+    pub by_category: Vec<(String, Tally, Tally)>,
+    pub before: Vec<Summary>,
+    pub after: Vec<Summary>,
+}
+
+/// Matches items by id, stage and provider and tallies the word and the
+/// punctuation score apart, overall and per category.
 pub fn compare(before: &Report, after: &Report) -> Comparison {
-    let mut c = Comparison::default();
+    let mut c = Comparison {
+        before: summarize(before),
+        after: summarize(after),
+        ..Comparison::default()
+    };
     let mut matched_after = vec![false; after.items.len()];
     for b in &before.items {
         let found = after
@@ -437,17 +690,34 @@ pub fn compare(before: &Report, after: &Report) -> Comparison {
             id: b.id.clone(),
             stage: b.stage,
             provider: b.provider.clone(),
+            categories: categories(&b.expected, &b.tags),
             before: b.text,
             after: a.text,
+            before_punctuation: b.punctuation,
+            after_punctuation: a.punctuation,
             before_output: b.output.clone(),
             after_output: a.output.clone(),
         };
-        match a.text.errors.cmp(&b.text.errors) {
-            std::cmp::Ordering::Less => c.improved.push(change),
-            std::cmp::Ordering::Greater => c.worse.push(change),
-            std::cmp::Ordering::Equal => c.same += 1,
+        let (w, p) = (change.words_delta(), change.punctuation_delta());
+        c.words.count(w);
+        c.punctuation.count(p);
+        for cat in &change.categories {
+            let entry = match c.by_category.iter_mut().find(|(n, _, _)| n == cat) {
+                Some(e) => e,
+                None => {
+                    c.by_category
+                        .push((cat.clone(), Tally::default(), Tally::default()));
+                    c.by_category.last_mut().unwrap()
+                }
+            };
+            entry.1.count(w);
+            entry.2.count(p);
+        }
+        if w != 0 || p != 0 {
+            c.changed.push(change);
         }
     }
+    c.changed.sort_by_key(Change::rank);
     c.unmatched += matched_after.iter().filter(|m| !**m).count();
     c
 }
@@ -513,6 +783,30 @@ pub fn pick_spread(candidates: &[(String, Vec<String>)], limit: usize) -> Vec<St
         }
     }
     picked
+}
+
+/// A fixed subset of a seed set for quick runs: every category is covered
+/// in turn until `limit` rows are taken, so the rare categories are all in
+/// and the common ones share the rest. The order the rows are tried in is
+/// a hash of the id, so the same set gives the same slice whatever its
+/// order on disk.
+pub fn pick_slice(rows: &[SeedRow], limit: usize) -> Vec<SeedRow> {
+    let mut ordered: Vec<&SeedRow> = rows.iter().collect();
+    ordered.sort_by_key(|r| (fnv1a(&r.id), r.id.clone()));
+    let keyed: Vec<(String, Vec<String>)> = ordered
+        .iter()
+        .map(|r| (r.id.clone(), categories(&r.final_text, &r.tags)))
+        .collect();
+    pick_spread(&keyed, limit)
+        .into_iter()
+        .filter_map(|id| ordered.iter().find(|r| r.id == id).map(|r| (*r).clone()))
+        .collect()
+}
+
+fn fnv1a(s: &str) -> u64 {
+    s.bytes().fold(0xcbf29ce484222325u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x100000001b3)
+    })
 }
 
 #[cfg(test)]
@@ -775,7 +1069,7 @@ mod tests {
     }
 
     #[test]
-    fn summary_totals_per_stage_provider_and_tag() {
+    fn summary_totals_per_stage_provider_and_category() {
         let r = report(vec![
             item(
                 "1",
@@ -795,36 +1089,28 @@ mod tests {
         assert_eq!(breeze.items, 2);
         assert_eq!(breeze.failed, 0);
         assert_eq!(
-            breeze.text,
+            breeze.total.text,
             Cer {
                 errors: 1,
                 length: 8
             }
         );
         assert_eq!(breeze.ms_total, 20);
+        let names: Vec<&str> = breeze.by_category.iter().map(|(c, _)| c.as_str()).collect();
+        assert_eq!(names, vec!["plain", "short", "long"]);
+        let long = &breeze.by_category[2].1;
+        assert_eq!(long.items, 1);
         assert_eq!(
-            breeze.by_tag,
-            vec![
-                (
-                    "long".to_string(),
-                    Cer {
-                        errors: 1,
-                        length: 4
-                    }
-                ),
-                (
-                    "short".to_string(),
-                    Cer {
-                        errors: 0,
-                        length: 4
-                    }
-                ),
-            ]
+            long.text,
+            Cer {
+                errors: 1,
+                length: 4
+            }
         );
         let turbo = s.iter().find(|s| s.provider == "turbo").unwrap();
         assert_eq!(turbo.failed, 1);
         assert_eq!(
-            turbo.text,
+            turbo.total.text,
             Cer {
                 errors: 4,
                 length: 6
@@ -833,27 +1119,180 @@ mod tests {
     }
 
     #[test]
-    fn compare_matches_items_and_sorts_them_into_improved_worse_same() {
+    fn summary_adds_up_marks_per_kind() {
+        let r = report(vec![
+            item("1", Stage::Llm, "gemma", &[], "你好嗎？", "你好嗎。"),
+            item("2", Stage::Llm, "gemma", &[], "用 git 提交", "用git提交"),
+        ]);
+        let s = summarize(&r);
+        let m = s[0].total.marks;
+        assert_eq!(m.question.missing, 1);
+        assert_eq!(m.stop.extra, 1);
+        assert_eq!(m.space.missing, 2);
+        assert_eq!(s[0].by_category[0].0, "question");
+        assert_eq!(s[0].by_category[0].1.marks.question.missing, 1);
+        assert_eq!(s[0].by_category[0].1.marks.space.missing, 0);
+    }
+
+    #[test]
+    fn compare_tallies_words_and_punctuation_apart_and_per_category() {
         let before = report(vec![
             item("1", Stage::Llm, "gemma", &[], "一二三四", "一二三五"),
             item("2", Stage::Llm, "gemma", &[], "一二三四", "一二三四"),
-            item("3", Stage::Llm, "gemma", &[], "一二三四", "一二三四"),
+            item("3", Stage::Llm, "gemma", &[], "好嗎？", "好嗎。"),
             item("9", Stage::Llm, "gemma", &[], "一二", "一二"),
         ]);
         let after = report(vec![
             item("1", Stage::Llm, "gemma", &[], "一二三四", "一二三四"),
             item("2", Stage::Llm, "gemma", &[], "一二三四", "一二五五"),
-            item("3", Stage::Llm, "gemma", &[], "一二三四", "一二三四"),
+            item("3", Stage::Llm, "gemma", &[], "好嗎？", "好嗎？"),
             item("3", Stage::Asr, "breeze", &[], "一二三四", "一二三四"),
         ]);
         let c = compare(&before, &after);
-        assert_eq!(c.improved.len(), 1);
-        assert_eq!(c.improved[0].id, "1");
-        assert_eq!(c.improved[0].after_output, "一二三四");
-        assert_eq!(c.worse.len(), 1);
-        assert_eq!(c.worse[0].id, "2");
-        assert_eq!(c.same, 1);
         assert_eq!(c.unmatched, 2);
+        assert_eq!(
+            c.words,
+            Tally {
+                improved: 1,
+                worse: 1,
+                same: 1
+            }
+        );
+        assert_eq!(
+            c.punctuation,
+            Tally {
+                improved: 1,
+                worse: 0,
+                same: 2
+            }
+        );
+        // Only the items that changed in either score, worst first.
+        let ids: Vec<&str> = c.changed.iter().map(|ch| ch.id.as_str()).collect();
+        assert_eq!(ids, vec!["2", "1", "3"]);
+        assert_eq!(c.changed[2].after_output, "好嗎？");
+        let q = c
+            .by_category
+            .iter()
+            .find(|(name, _, _)| name == "question")
+            .unwrap();
+        assert_eq!(
+            q.1,
+            Tally {
+                improved: 0,
+                worse: 0,
+                same: 1
+            }
+        );
+        assert_eq!(
+            q.2,
+            Tally {
+                improved: 1,
+                worse: 0,
+                same: 0
+            }
+        );
+        assert_eq!(c.before[0].provider, "gemma");
+        assert_eq!(c.before[0].total.marks.question.missing, 1);
+        assert_eq!(c.after[0].total.marks.question.missing, 0);
+    }
+
+    #[test]
+    fn marks_sort_punctuation_by_kind_and_place() {
+        let m = marks("你好嗎？", "你好嗎。");
+        assert_eq!(m.question.missing, 1);
+        assert_eq!(m.stop.extra, 1);
+        assert_eq!(m.inner.extra + m.inner.missing, 0);
+
+        let m = marks("今天，很好", "今天很好。");
+        assert_eq!(m.inner.missing, 1);
+        assert_eq!(m.stop.extra, 1);
+
+        let m = marks("一。二", "一二");
+        assert_eq!(m.inner.missing, 1, "a full stop inside the text is inner");
+        assert_eq!(m.stop.missing, 0);
+
+        let m = marks("「好」！", "好");
+        assert_eq!(m.quote.missing, 2);
+        assert_eq!(m.other.missing, 1);
+
+        let m = marks("好。", "好。 ");
+        assert_eq!(
+            m.stop.extra + m.stop.missing,
+            0,
+            "trailing whitespace is not a mark"
+        );
+    }
+
+    #[test]
+    fn marks_count_spaces_between_cjk_and_latin_only() {
+        let m = marks("用 git 提交", "用git提交");
+        assert_eq!(m.space.missing, 2);
+        assert_eq!(m.space.extra, 0);
+
+        let m = marks("第2次", "第 2 次");
+        assert_eq!(m.space.extra, 2, "digits count like letters");
+
+        let m = marks("a b", "ab");
+        assert_eq!(m.space.missing, 0, "two Latin words are not a CJK boundary");
+
+        let m = marks("打開 git 吧", "打開吧");
+        assert_eq!(
+            m.space.missing, 0,
+            "a dropped word is a word error, not spacing"
+        );
+    }
+
+    #[test]
+    fn categories_come_from_the_expected_text_plus_stored_length_tags() {
+        let t = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            categories("要不要？", &t(&["short", "mixed"])),
+            vec!["question", "short"]
+        );
+        assert_eq!(
+            categories("第 2 點\n第 3 點 OK", &t(&["long"])),
+            vec!["list", "digits", "english", "long"]
+        );
+        assert_eq!(categories("沒事", &[]), vec!["plain"]);
+        assert_eq!(
+            categories("十點 不對 十一點", &t(&["correction"])),
+            vec!["correction"]
+        );
+        assert_eq!(categories("好", &t(&["correction"])), vec!["correction"]);
+    }
+
+    #[test]
+    fn pick_slice_covers_every_category_and_is_deterministic() {
+        let row = |id: &str, final_text: &str, tags: &[&str]| SeedRow {
+            id: id.into(),
+            audio: PathBuf::from(format!("{id}.wav")),
+            tags: tags.iter().map(|t| t.to_string()).collect(),
+            spoken: String::new(),
+            final_text: final_text.into(),
+        };
+        let rows: Vec<SeedRow> = (1..=30)
+            .map(|n| row(&n.to_string(), "平常的句子", &[]))
+            .chain([
+                row("q1", "好嗎？", &[]),
+                row("q2", "行嗎？", &[]),
+                row("l1", "一\n二", &[]),
+                row("c1", "好", &["correction"]),
+            ])
+            .collect();
+        let a = pick_slice(&rows, 8);
+        let ids: Vec<&str> = a.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids.len(), 8);
+        assert!(ids.contains(&"l1") && ids.contains(&"c1"), "{ids:?}");
+        assert!(ids.contains(&"q1") || ids.contains(&"q2"), "{ids:?}");
+        assert!(ids.iter().any(|i| i.parse::<u32>().is_ok()), "{ids:?}");
+        assert_eq!(a, pick_slice(&rows, 8));
+        let mut shuffled = rows.clone();
+        shuffled.reverse();
+        let mut b: Vec<String> = pick_slice(&shuffled, 8).into_iter().map(|r| r.id).collect();
+        let mut a: Vec<String> = a.into_iter().map(|r| r.id).collect();
+        a.sort();
+        b.sort();
+        assert_eq!(a, b, "the pick does not depend on the input order");
     }
 
     #[test]
