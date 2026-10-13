@@ -210,10 +210,20 @@ fn migrate(value: serde_json::Value) -> Result<serde_json::Value, MigrateError> 
         .unwrap_or(0) as u32;
     match version {
         SCHEMA_VERSION => Ok(value),
-        1 => Ok(v1_to_v2(value)),
+        1 => Ok(v2_to_v3(v1_to_v2(value))),
+        2 => Ok(v2_to_v3(value)),
         v if v > SCHEMA_VERSION => Err(MigrateError::Unsupported(v)),
         v => Err(MigrateError::NoPath(v)),
     }
+}
+
+/// Version 3: a profile's engines may be left out to follow the default
+/// pair, and the pair itself is in the file. A version 2 file names an
+/// engine in every profile and has no pair; both read as they are, the
+/// pair taking its factory value, so nothing has to change in the value.
+fn v2_to_v3(mut value: serde_json::Value) -> serde_json::Value {
+    value["schema_version"] = serde_json::json!(3);
+    value
 }
 
 /// Version 2: the script conversion converts characters only. Every profile
@@ -383,6 +393,7 @@ mod tests {
         let store = ConfigStore::open(&dirs).unwrap();
         let c = store.current();
         assert_eq!(c.schema_version, SCHEMA_VERSION);
+        assert_eq!(c.default_engines, crate::config::DefaultEngines::default());
         let configs: Vec<&str> = c.profiles[0]
             .steps
             .iter()
@@ -400,7 +411,7 @@ mod tests {
         store.update(|_| {}).unwrap();
         let on_disk: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(dirs.config_path()).unwrap()).unwrap();
-        assert_eq!(on_disk["schema_version"], serde_json::json!(2));
+        assert_eq!(on_disk["schema_version"], serde_json::json!(SCHEMA_VERSION));
         assert_eq!(on_disk["profiles"][0]["steps"][1]["config"], "s2tw");
     }
 
@@ -492,7 +503,7 @@ mod tests {
         let has_apple = |c: &Config| c.providers.iter().any(|p| p.id.0 == "apple-dictation");
         assert!(has_apple(&store.current()));
         assert_eq!(
-            store.current().profiles[0].asr_provider.0,
+            store.current().default_engines.asr.0,
             crate::config::MODEL_ID_DEFAULT_ASR
         );
         // An existing file is never rewritten by defaults.

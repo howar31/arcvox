@@ -56,8 +56,3 @@ export function engineDescription(p: ProviderConfig, manifest: ManifestView | nu
   if (p.model_path) return t("engines.desc.custom", { file: baseName(p.model_path) });
   return t("engines.desc.no_model");
 }
-
-/** Whether a local engine runs the catalogue's recommended model. */
-export function engineRecommended(p: ProviderConfig, manifest: ManifestView | null): boolean {
-  return p.kind === "embedded" && !!p.model_id && !!manifest?.models.find((m) => m.id === p.model_id)?.recommended;
-}

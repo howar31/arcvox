@@ -33,7 +33,7 @@ export function inputOf(stages: Stage[], id: StageId): string | null {
 export function stageOpen(id: StageId, profile: Profile): boolean {
   const kinds = profile.steps.map((s) => s.step);
   switch (id) {
-    case "llm": return profile.llm_provider !== null && kinds.includes("llm");
+    case "llm": return kinds.includes("llm");
     case "opencc1": return scriptAt(profile, 1) !== null;
     case "opencc2": return scriptAt(profile, 2) !== null;
     case "rules": return kinds.includes("rules");

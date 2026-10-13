@@ -46,14 +46,21 @@ fn matches(profile: &Profile, app: &AppInfo) -> bool {
 
 /// A built-in profile template: a whole profile as shipped, from the
 /// engines to the applications it is used in. A new profile is a copy of
-/// one, and a reset makes a profile a copy of its own again. The engines
-/// named here are ones the app makes (a catalogue model's, a platform
-/// service's), so they can be created when missing.
+/// one, and a reset makes a profile a copy of its own again. A template
+/// follows the default engines unless it names a model on purpose; a
+/// named engine is one the app makes (a catalogue model's, a platform
+/// service's), created when missing, and the catalogue must carry it
+/// (`templates_name_only_bundled_models` in the desktop crate).
 #[derive(Debug, Clone, Copy)]
 pub struct ProfilePreset {
     pub id: &'static str,
-    pub asr: &'static str,
+    /// The speech engine, None to follow the default.
+    pub asr: Option<&'static str>,
+    /// The rewrite engine, None to follow the default.
     pub llm: Option<&'static str>,
+    /// Whether the writing style was tuned against engines: the named ones,
+    /// else the factory pair. The blank template is untuned.
+    pub tuned: bool,
     pub language_hint: Option<&'static str>,
     pub app_ids: &'static [&'static str],
     pub prompt_addition: &'static str,
@@ -64,24 +71,27 @@ pub struct ProfilePreset {
 static PRESETS: [ProfilePreset; 4] = [
     ProfilePreset {
         id: "casual",
-        asr: MODEL_ID_DEFAULT_ASR,
-        llm: Some(MODEL_ID_DEFAULT_LLM),
+        asr: None,
+        llm: None,
+        tuned: true,
         language_hint: Some("zh-TW"),
         app_ids: &[],
         prompt_addition: "",
     },
     ProfilePreset {
         id: "formal",
-        asr: MODEL_ID_DEFAULT_ASR,
-        llm: Some(MODEL_ID_DEFAULT_LLM),
+        asr: None,
+        llm: None,
+        tuned: true,
         language_hint: Some("zh-TW"),
         app_ids: &["com.apple.mail", "com.microsoft.Outlook"],
         prompt_addition: "這是正式的書面文字。使用完整句子與書面用語，句尾加句點，依語意分段；稱呼與結尾問候語依原稿保留，不自行增加。",
     },
     ProfilePreset {
         id: "verbatim",
-        asr: MODEL_ID_DEFAULT_ASR,
-        llm: Some(MODEL_ID_DEFAULT_LLM),
+        asr: None,
+        llm: None,
+        tuned: true,
         language_hint: Some("zh-TW"),
         app_ids: &[],
         prompt_addition: "逐字記錄：每個字都照原稿保留，不吸收自我修正、不刪語助詞與重複、不改用詞、不翻譯；只加入標點與分段。",
@@ -90,8 +100,9 @@ static PRESETS: [ProfilePreset; 4] = [
     // from, for a user who wants to tune everything alone.
     ProfilePreset {
         id: "blank",
-        asr: MODEL_ID_DEFAULT_ASR,
-        llm: Some(MODEL_ID_DEFAULT_LLM),
+        asr: None,
+        llm: None,
+        tuned: false,
         language_hint: Some("zh-TW"),
         app_ids: &[],
         prompt_addition: "",
@@ -100,6 +111,20 @@ static PRESETS: [ProfilePreset; 4] = [
 
 pub fn presets() -> &'static [ProfilePreset] {
     &PRESETS
+}
+
+impl ProfilePreset {
+    /// The engines the template's writing style was tuned with, as
+    /// (speech, rewrite): the ones it names, else the factory pair; None
+    /// for an untuned template. They do not move with the user's default.
+    pub fn tuned_with(&self) -> Option<(&'static str, &'static str)> {
+        self.tuned.then(|| {
+            (
+                self.asr.unwrap_or(MODEL_ID_DEFAULT_ASR),
+                self.llm.unwrap_or(MODEL_ID_DEFAULT_LLM),
+            )
+        })
+    }
 }
 
 pub fn preset(id: &str) -> Option<&'static ProfilePreset> {
@@ -128,7 +153,7 @@ impl Profile {
             name,
             is_default: false,
             matcher: Matcher::default(),
-            asr_provider: ProviderId(String::new()),
+            asr_provider: None,
             llm_provider: None,
             language_hint: None,
             prompt_addition: String::new(),
@@ -153,7 +178,7 @@ impl Profile {
             app_ids: preset.app_ids.iter().map(|a| a.to_string()).collect(),
             url_patterns: vec![],
         };
-        self.asr_provider = ProviderId(preset.asr.to_string());
+        self.asr_provider = preset.asr.map(|id| ProviderId(id.to_string()));
         self.llm_provider = preset.llm.map(|id| ProviderId(id.to_string()));
         self.language_hint = preset.language_hint.map(str::to_string);
         self.prompt_addition = preset.prompt_addition.to_string();
@@ -238,10 +263,16 @@ mod tests {
             } else {
                 assert!(!p.prompt_addition.trim().is_empty());
             }
-            assert!(!p.asr.is_empty());
+            assert_eq!(p.asr, None, "every template follows the default");
+            assert_eq!(p.llm, None);
         }
         assert!(!preset("formal").app_ids.is_empty());
         assert!(preset("verbatim").app_ids.is_empty());
+        assert_eq!(
+            preset("casual").tuned_with(),
+            Some((MODEL_ID_DEFAULT_ASR, MODEL_ID_DEFAULT_LLM))
+        );
+        assert_eq!(preset("blank").tuned_with(), None);
     }
 
     fn preset(id: &str) -> &'static ProfilePreset {
@@ -275,7 +306,7 @@ mod tests {
         p.language_hint = None;
         p.llm_short_fallback = false;
         p.steps = vec![crate::config::StepSpec::Asr];
-        p.asr_provider = ProviderId("other".into());
+        p.asr_provider = Some(ProviderId("other".into()));
         p.llm_provider = None;
         p.few_shot = vec![crate::config::Example {
             raw: "a".into(),
@@ -296,8 +327,8 @@ mod tests {
         assert_eq!(p.language_hint.as_deref(), Some("zh-TW"));
         assert!(p.llm_short_fallback);
         assert_eq!(p.steps, Config::default_steps());
-        assert_eq!(p.asr_provider.0, MODEL_ID_DEFAULT_ASR);
-        assert_eq!(p.llm_provider.as_ref().unwrap().0, MODEL_ID_DEFAULT_LLM);
+        assert_eq!(p.asr_provider, None, "follows the default");
+        assert_eq!(p.llm_provider, None);
         assert!(p.few_shot.is_empty());
     }
 
@@ -320,7 +351,7 @@ mod tests {
         assert_eq!(p.id, ProfileId("formal".into()));
         assert_eq!(p.name, "郵件");
         assert!(!p.is_default);
-        assert_eq!(p.asr_provider.0, MODEL_ID_DEFAULT_ASR);
+        assert_eq!(p.asr_provider, None);
         assert_eq!(p.language_hint.as_deref(), Some("zh-TW"));
         assert_eq!(p.steps, Config::default_steps());
         assert_eq!(

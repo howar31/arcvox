@@ -1,5 +1,6 @@
-import type { Config, InstalledModel, ManifestView, ModelEntry, Profile } from "./api";
+import type { Config, InstalledModel, ManifestView, ModelEntry, Profile, ProviderConfig } from "./api";
 import { has, t } from "./i18n";
+import { resolveEngines } from "./resolve";
 
 export function providerLabel(config: Config | null, id: string | null): string {
   if (id === null) return "";
@@ -14,10 +15,24 @@ export function defaultProfile(config: Config | null): Profile | null {
   return config?.profiles.find((p) => p.is_default) ?? null;
 }
 
-/** Profiles that select the provider for speech or rewrite, the default profile first. */
-export function usedBy(config: Config | null, providerId: string): { name: string; isDefault: boolean }[] {
-  const users = (config?.profiles ?? []).filter((p) => p.asr_provider === providerId || p.llm_provider === providerId);
+/**
+ * Profiles that run with the engine now, the default profile first: those naming it, and those
+ * on the default pair when it is part of it. `usable` says which engines can run.
+ */
+export function usedBy(config: Config | null, providerId: string, usable: (p: ProviderConfig) => boolean = () => true): { name: string; isDefault: boolean }[] {
+  const users = (config?.profiles ?? []).filter((p) => {
+    const r = resolveEngines(config, p, usable);
+    return r.asr.id === providerId || r.llm?.id === providerId;
+  });
   return users
+    .map((p) => ({ name: p.name, isDefault: p.is_default }))
+    .sort((a, b) => Number(b.isDefault) - Number(a.isDefault));
+}
+
+/** Profiles that name the engine in their own settings, whether or not they run with it now; the default profile first. */
+export function namedBy(config: Config | null, providerId: string): { name: string; isDefault: boolean }[] {
+  return (config?.profiles ?? [])
+    .filter((p) => p.asr_provider === providerId || p.llm_provider === providerId)
     .map((p) => ({ name: p.name, isDefault: p.is_default }))
     .sort((a, b) => Number(b.isDefault) - Number(a.isDefault));
 }

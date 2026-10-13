@@ -1,4 +1,4 @@
-use arcvox_core::config::{Config, ProviderConfig, ProviderKind};
+use arcvox_core::config::{validate, Config, EngineRole, ProviderConfig, ProviderKind};
 use arcvox_core::providers::probe::ProbeResult;
 use arcvox_core::types::ProviderId;
 use arcvox_core::Engine;
@@ -30,6 +30,8 @@ pub fn upsert(engine: &Engine, provider: ProviderConfig) -> CmdResult<Config> {
     Ok((*next).clone())
 }
 
+/// A hand-made engine goes only when nothing depends on it: not the
+/// default pair, and no profile that names it.
 pub fn delete(engine: &Engine, id: &ProviderId) -> CmdResult<Config> {
     let current = engine.config().current();
     if current
@@ -38,10 +40,49 @@ pub fn delete(engine: &Engine, id: &ProviderId) -> CmdResult<Config> {
     {
         return Err(automatic());
     }
+    if &current.default_engines.asr == id || &current.default_engines.llm == id {
+        return Err(CmdError::new(
+            "engine_is_default",
+            "the engine is one of the default pair; choose another default first",
+        ));
+    }
+    let users: Vec<String> = current
+        .profiles
+        .iter()
+        .filter(|p| p.asr_provider.as_ref() == Some(id) || p.llm_provider.as_ref() == Some(id))
+        .map(|p| p.name.clone())
+        .collect();
+    if !users.is_empty() {
+        return Err(CmdError::with(
+            "engine_in_use",
+            format!("the engine is used by {}", users.join(", ")),
+            &[("profiles", users.join(", "))],
+        ));
+    }
     let next = engine
         .config()
         .update(|c| c.providers.retain(|p| &p.id != id))?;
     Ok((*next).clone())
+}
+
+/// Sets one engine of the default pair; the engine must exist and serve
+/// the role, which validation checks.
+pub fn set_default(engine: &Engine, role: EngineRole, id: &ProviderId) -> CmdResult<Config> {
+    let next = engine.config().update(|c| match role {
+        EngineRole::Asr => c.default_engines.asr = id.clone(),
+        EngineRole::Llm => c.default_engines.llm = id.clone(),
+    })?;
+    debug_assert!(validate(&next).is_ok());
+    Ok((*next).clone())
+}
+
+#[tauri::command]
+pub fn default_engine_set(
+    state: State<'_, AppState>,
+    role: EngineRole,
+    id: ProviderId,
+) -> CmdResult<Config> {
+    set_default(&engine(&state)?, role, &id)
 }
 
 #[tauri::command]
@@ -116,13 +157,27 @@ mod tests {
         let (_t, e) = engine().await;
         upsert(&e, http("remote")).unwrap();
         e.config()
-            .update(|c| c.profiles[0].asr_provider = ProviderId("remote".into()))
+            .update(|c| c.profiles[0].asr_provider = Some(ProviderId("remote".into())))
             .unwrap();
         let err = delete(&e, &ProviderId("remote".into())).unwrap_err();
-        assert!(err.message.contains("unknown provider"), "{}", err.message);
+        assert_eq!(err.code, Some("engine_in_use"), "{}", err.message);
+        assert!(err.message.contains("Default"), "{}", err.message);
         assert_eq!(e.config().current().providers.len(), 3);
         upsert(&e, http("spare")).unwrap();
         let c = delete(&e, &ProviderId("spare".into())).unwrap();
         assert_eq!(c.providers.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn the_default_pair_is_set_by_role_and_cannot_be_deleted() {
+        let (_t, e) = engine().await;
+        upsert(&e, http("remote")).unwrap();
+        let c = set_default(&e, EngineRole::Asr, &ProviderId("remote".into())).unwrap();
+        assert_eq!(c.default_engines.asr, ProviderId("remote".into()));
+        let err = delete(&e, &ProviderId("remote".into())).unwrap_err();
+        assert_eq!(err.code, Some("engine_is_default"));
+        // An engine of the wrong kind is refused by validation.
+        let err = set_default(&e, EngineRole::Llm, &ProviderId("nope".into())).unwrap_err();
+        assert_eq!(err.code, Some("config_unknown_default_engine"));
     }
 }

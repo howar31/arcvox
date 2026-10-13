@@ -1067,7 +1067,8 @@ mod tests {
                     }
                 };
                 c.providers.push(p);
-                c.profiles[0].asr_provider = arcvox_core::types::ProviderId("failing".into());
+                // The default pair runs on it too, so nothing stands in.
+                c.default_engines.asr = arcvox_core::types::ProviderId("failing".into());
             },
         )
         .await

@@ -11,6 +11,7 @@
   import { t } from "../../lib/i18n";
   import { isImeKey } from "../../lib/ime";
   import { appsSummary, withLlm } from "../../lib/profileEdit";
+  import { FOLLOW, hasLlmStep, isFallback, resolveEngines, usableWith } from "../../lib/resolve";
   import { go } from "../../lib/route";
   import { engineLine, micLine, outputLine, type StageLine } from "../../lib/stages";
   import { client, config } from "../../lib/store.svelte";
@@ -100,6 +101,23 @@
   const asrChoices = $derived(providers.filter((p) => p.capabilities.transcribe));
   const llmChoices = $derived(providers.filter((p) => p.capabilities.chat));
   const installed = $derived({ ids: models ? new Set(models.map((m) => m.id)) : null, paths: new Set((models ?? []).map((m) => m.path)) });
+  // The engines the draft runs with now: its own when they can run, else the default pair.
+  const resolved = $derived(draft ? resolveEngines(config.value, draft, usableWith(installed.ids, installed.paths)) : null);
+  const defaultName = (role: "asr" | "llm") => providers.find((p) => p.id === config.value?.default_engines[role])?.label ?? config.value?.default_engines[role] ?? "";
+  const followChoice = (role: "asr" | "llm") => ({ name: t("flow.follow_default"), help: t("flow.follow_default_help", { name: defaultName(role) }) });
+  // The engine the draft's template was tuned with; none for an untuned template or a profile without one.
+  const suggested = $derived.by(() => {
+    const preset = presets.find((p) => p.id === draft?.preset);
+    return { asr: preset?.suggested_asr ?? null, llm: preset?.suggested_llm ?? null };
+  });
+  /** The fallback note of a stage: the engine the draft names cannot run, the default is used. */
+  function onDefault(role: "asr" | "llm"): { wanted: string; using: string; modelId: string | null } | null {
+    const c = role === "asr" ? resolved?.asr : resolved?.llm;
+    if (!c || !isFallback(c)) return null;
+    const wanted = providers.find((p) => p.id === c.source.wanted);
+    const modelId = wanted?.kind === "embedded" && wanted.model_id && manifest?.models.some((m) => m.id === wanted.model_id) ? wanted.model_id : null;
+    return { wanted: wanted?.label ?? c.source.wanted, using: providers.find((p) => p.id === c.id)?.label ?? c.id, modelId };
+  }
 
   // Copy the stored profile into the draft: always for another profile, otherwise only while nothing is edited.
   $effect(() => {
@@ -135,8 +153,8 @@
     if (!draft) return null;
     return {
       mic: micLine(client.value?.microphone ?? "builtin", mics),
-      asr: engineLine(providers, draft.asr_provider, installed),
-      llm: engineLine(providers, draft.llm_provider, installed),
+      asr: engineLine(providers, resolved?.asr.id ?? null, installed),
+      llm: engineLine(providers, resolved?.llm?.id ?? null, installed),
       out: outputLine(draft, client.value?.insertion.default),
     };
   });
@@ -276,6 +294,16 @@
 
 <PageHead title={t("nav.flow")} description={t("flow.description")} />
 
+{#snippet fallbackNote(role: "asr" | "llm")}
+  {@const fb = onDefault(role)}
+  {#if fb}
+    <p class="missing">
+      <span>{t("flow.on_default", { wanted: fb.wanted, using: fb.using })}</span>
+      {#if fb.modelId}<button type="button" class="btn" onclick={() => guard.request(() => go("engines", role))}>{t("flow.to_download")}</button>{/if}
+    </p>
+  {/if}
+{/snippet}
+
 {#if config.value && draft && source && lines}
   <div class="pick">
     <ProfilePicker
@@ -352,9 +380,10 @@
       {:else if stage === "asr"}
         <div class="bar"><h2>{t("flow.asr_engines")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("engines", "asr"))}>{t("flow.manage")}</button></div>
         <EnginePicker
-          engines={asrChoices} selected={draft.asr_provider} label={t("flow.asr_engines")} {manifest} {installed}
-          stale={stale(draft.asr_provider, asrChoices)} onpick={(id) => { if (id) draft!.asr_provider = id; }}
+          engines={asrChoices} selected={draft.asr_provider ?? FOLLOW} label={t("flow.asr_engines")} {manifest} {installed} follow={followChoice("asr")} suggested={suggested.asr}
+          stale={stale(draft.asr_provider, asrChoices)} onpick={(id) => { draft!.asr_provider = id === FOLLOW ? null : id; }}
         />
+        {@render fallbackNote("asr")}
         {#if lines.asr.missing}
           <p class="missing"><span>{t("flow.model_missing")}</span><button type="button" class="btn" onclick={() => guard.request(() => go("engines", "asr"))}>{t("flow.to_download")}</button></p>
         {/if}
@@ -373,14 +402,15 @@
       {:else if stage === "llm"}
         <div class="bar"><h2>{t("flow.llm_engines")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("engines", "llm"))}>{t("flow.manage")}</button></div>
         <EnginePicker
-          engines={llmChoices} selected={draft.llm_provider} label={t("flow.llm_engines")} {manifest} {installed}
-          none={{ name: t("home.no_rewrite"), help: t("home.no_rewrite_meta") }}
+          engines={llmChoices} selected={hasLlmStep(draft) ? (draft.llm_provider ?? FOLLOW) : null} label={t("flow.llm_engines")} {manifest} {installed}
+          follow={followChoice("llm")} suggested={suggested.llm} none={{ name: t("home.no_rewrite"), help: t("home.no_rewrite_meta") }}
           stale={stale(draft.llm_provider, llmChoices)} onpick={(id) => (draft = withLlm(snapshot(), id))}
         />
+        {@render fallbackNote("llm")}
         {#if lines.llm.missing}
           <p class="missing"><span>{t("flow.model_missing")}</span><button type="button" class="btn" onclick={() => guard.request(() => go("engines", "llm"))}>{t("flow.to_download")}</button></p>
         {/if}
-        {#if draft.llm_provider !== null}<Fold>
+        {#if hasLlmStep(draft)}<Fold>
           <div class="bar"><h2>{t("profiles.prompt_addition")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("prompt"))}>{t("flow.see_prompt")}</button></div>
           <textarea rows="4" bind:value={draft.prompt_addition} aria-label={t("profiles.prompt_addition")}></textarea>
           <p class="help">{t("profiles.prompt_help")}</p>

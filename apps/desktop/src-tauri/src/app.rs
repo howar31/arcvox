@@ -52,7 +52,7 @@ impl AppState {
     /// installed models change without the configuration changing.
     pub fn refresh_problems(&self) {
         let engine = self.engine.lock().unwrap().clone();
-        crate::problems::refresh(engine.as_ref(), &self.models, &self.ui);
+        crate::problems::refresh(engine.as_ref(), &self.ui);
     }
 
     /// The embedded engines follow the installed models; a failure to write
@@ -188,6 +188,7 @@ pub fn run() {
             crate::commands::config::config_update_general,
             crate::commands::providers::providers_upsert,
             crate::commands::providers::providers_delete,
+            crate::commands::providers::default_engine_set,
             crate::commands::providers::providers_probe,
             crate::commands::profiles::profiles_upsert,
             crate::commands::profiles::profiles_delete,
@@ -660,13 +661,13 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         e.warm_up_default_asr();
         let mut rx = e.config().subscribe();
         let app = app.clone();
-        let (watched, models, ui) = (e.clone(), state_models.clone(), ui.clone());
-        crate::problems::refresh(Some(&watched), &models, &ui);
+        let (watched, ui) = (e.clone(), ui.clone());
+        crate::problems::refresh(Some(&watched), &ui);
         ui.tray().set_profiles(tray_profiles(&e.config().current()));
         tauri::async_runtime::spawn(async move {
             while rx.changed().await.is_ok() {
                 backup.touch();
-                crate::problems::refresh(Some(&watched), &models, &ui);
+                crate::problems::refresh(Some(&watched), &ui);
                 let cfg = rx.borrow().clone();
                 ui.tray().set_profiles(tray_profiles(&cfg));
                 let _ = tauri::Emitter::emit_to(&app, "settings", "config-changed", (*cfg).clone());

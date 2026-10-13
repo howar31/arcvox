@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use tokio::sync::mpsc;
 
-use crate::config::{Config, Profile, StepSpec};
+use crate::config::{Config, Profile, ResolvedEngines, StepSpec};
 use crate::history::{StageKind, StageRecord};
 use crate::protocol::Event;
 use crate::providers::registry::ProviderRegistry;
@@ -41,19 +41,23 @@ pub struct Outcome {
 }
 
 impl Pipeline {
+    /// Builds the profile's steps on `engines`, the engines resolved for
+    /// it (`Config::resolve_engines`), so a profile whose own engine is
+    /// gone runs on the default.
     pub fn build(
         config: &Config,
         profile: &Profile,
+        engines: &ResolvedEngines,
         registry: &ProviderRegistry,
     ) -> Result<Pipeline, StepError> {
         let mut steps: Vec<Box<dyn Step>> = Vec::with_capacity(profile.steps.len());
         for spec in &profile.steps {
             let step: Box<dyn Step> = match spec {
                 StepSpec::Asr => {
-                    let cfg = config.provider(&profile.asr_provider).ok_or_else(|| {
+                    let cfg = config.provider(&engines.asr.id).ok_or_else(|| {
                         StepError::fatal(
                             ErrorCode::InvalidConfig,
-                            format!("asr provider {} missing", profile.asr_provider),
+                            format!("asr provider {} missing", engines.asr.id),
                         )
                     })?;
                     let provider = registry.asr(cfg, &config.general).map_err(|e| StepError {
@@ -67,8 +71,8 @@ impl Pipeline {
                     punctuation,
                 } => Box::new(OpenCcStep::new(config, *punctuation)?),
                 StepSpec::Llm => {
-                    let id = profile.llm_provider.as_ref().ok_or_else(|| {
-                        StepError::fatal(ErrorCode::InvalidConfig, "llm step without llm_provider")
+                    let id = engines.llm.as_ref().map(|c| &c.id).ok_or_else(|| {
+                        StepError::fatal(ErrorCode::InvalidConfig, "llm step without an engine")
                     })?;
                     let cfg = config.provider(id).ok_or_else(|| {
                         StepError::fatal(
@@ -630,7 +634,8 @@ mod tests {
             reqwest::Client::new(),
             Arc::new(crate::secrets::MemorySecretStore::default()),
         );
-        assert!(Pipeline::build(&config, config.default_profile(), &registry).is_ok());
+        let engines = config.resolve_engines(config.default_profile(), |_| true);
+        assert!(Pipeline::build(&config, config.default_profile(), &engines, &registry).is_ok());
     }
 
     #[tokio::test]
@@ -640,7 +645,8 @@ mod tests {
             reqwest::Client::new(),
             Arc::new(crate::secrets::MemorySecretStore::default()),
         );
-        assert!(Pipeline::build(&config, config.default_profile(), &registry).is_ok());
+        let engines = config.resolve_engines(config.default_profile(), |_| true);
+        assert!(Pipeline::build(&config, config.default_profile(), &engines, &registry).is_ok());
         let mut profile: Profile = config.default_profile().clone();
         profile.steps = vec![
             StepSpec::Asr,
@@ -649,7 +655,9 @@ mod tests {
                 punctuation: false,
             },
         ];
-        let err = Pipeline::build(&config, &profile, &registry).err().unwrap();
+        let err = Pipeline::build(&config, &profile, &engines, &registry)
+            .err()
+            .unwrap();
         assert_eq!(err.code, ErrorCode::InvalidConfig);
     }
 }

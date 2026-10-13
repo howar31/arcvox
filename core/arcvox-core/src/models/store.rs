@@ -237,6 +237,8 @@ impl ModelStore {
     }
 
     /// `model_path` wins over `model_id`; the file must exist either way.
+    /// A model the catalogue no longer lists is still found by its folder,
+    /// so a catalogue change never takes a working model away.
     pub fn resolve(&self, cfg: &ProviderConfig) -> Result<PathBuf, ModelError> {
         if let Some(p) = &cfg.model_path {
             return if p.is_file() {
@@ -246,11 +248,16 @@ impl ModelStore {
             };
         }
         let id = cfg.model_id.as_deref().unwrap_or("");
-        let manifest = self.known_manifest();
-        if manifest.get(id).is_none() {
+        if !safe_segment(id) || id == CUSTOM_DIR {
             return Err(ModelError::NotInCatalogue(id.to_string()));
         }
-        let path = self.path_in(&manifest, id);
+        let manifest = self.known_manifest();
+        let path = match manifest.get(id) {
+            Some(_) => self.path_in(&manifest, id),
+            None => lone_file(&self.models_dir().join(id))
+                .map(|(path, _)| path)
+                .ok_or_else(|| ModelError::NotInstalled(id.to_string()))?,
+        };
         if path.is_file() {
             Ok(path)
         } else {
@@ -617,10 +624,7 @@ mod tests {
         assert_eq!(s.resolve(&cfg).unwrap(), custom);
         cfg.model_path = None;
         cfg.model_id = Some("zzz".into());
-        assert!(matches!(
-            s.resolve(&cfg),
-            Err(ModelError::NotInCatalogue(_))
-        ));
+        assert!(matches!(s.resolve(&cfg), Err(ModelError::NotInstalled(_))));
     }
 
     #[test]
@@ -917,5 +921,24 @@ mod tests {
         let report = s.adopt_legacy_dir().unwrap();
         assert_eq!((report.moved, report.left), (0, 0));
         assert!(real.join("a").join("ggml-a.bin").is_file());
+    }
+
+    #[test]
+    fn resolve_finds_a_model_folder_the_catalogue_no_longer_lists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_d, s) = store(tmp.path());
+        let dir = s.models_dir().join("retired-q5_0");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ggml-retired.bin"), b"lmgg\x00\x00\x00\x00").unwrap();
+        let mut cfg =
+            ProviderConfig::embedded("retired-q5_0", "Retired", Runtime::Whisper, "retired-q5_0");
+        assert_eq!(s.resolve(&cfg).unwrap(), dir.join("ggml-retired.bin"));
+        cfg.model_id = Some("never-there".into());
+        assert!(matches!(s.resolve(&cfg), Err(ModelError::NotInstalled(_))));
+        cfg.model_id = Some("../victim".into());
+        assert!(matches!(
+            s.resolve(&cfg),
+            Err(ModelError::NotInCatalogue(_))
+        ));
     }
 }

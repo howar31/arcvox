@@ -417,6 +417,8 @@ mod tests {
         let mut names: Vec<_> = file.sections.keys().cloned().collect();
         names.sort();
         let mut expected = all();
+        // The default pair travels with the engines.
+        expected.push("default_engines".into());
         expected.sort();
         assert_eq!(names, expected);
         assert!(file.sections["general"].get("core").is_some());

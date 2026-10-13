@@ -549,9 +549,9 @@ mod tests {
         )
         .await
         .unwrap();
-        let profile = engine.config().current().profiles[0].clone();
-        let asr = profile.asr_provider.clone();
-        let llm_id = profile.llm_provider.clone().unwrap();
+        let pair = engine.config().current().default_engines.clone();
+        let asr = pair.asr;
+        let llm_id = pair.llm;
         (tmp, engine, llm, asr, llm_id, asr_unloads)
     }
 

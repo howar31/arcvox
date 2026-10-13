@@ -137,11 +137,19 @@ impl From<arcvox_core::config::ConfigError> for CmdError {
         let message = e.to_string();
         match e {
             E::DuplicateId(id) => CmdError::with("config_duplicate_id", message, &[("id", id)]),
-            E::UnknownProvider { profile, provider } => CmdError::with(
-                "config_unknown_provider",
+            E::UnknownDefaultEngine { role, provider } => CmdError::with(
+                "config_unknown_default_engine",
                 message,
                 &[
-                    ("profile", profile.to_string()),
+                    ("role", format!("{role:?}").to_lowercase()),
+                    ("provider", provider.to_string()),
+                ],
+            ),
+            E::DefaultEngineRole { role, provider } => CmdError::with(
+                "config_default_engine_role",
+                message,
+                &[
+                    ("role", format!("{role:?}").to_lowercase()),
                     ("provider", provider.to_string()),
                 ],
             ),
@@ -165,11 +173,6 @@ impl From<arcvox_core::config::ConfigError> for CmdError {
                 "config_step_order",
                 message,
                 &[("profile", profile.to_string()), ("reason", reason)],
-            ),
-            E::MissingLlmProvider(profile) => CmdError::with(
-                "config_missing_llm",
-                message,
-                &[("profile", profile.to_string())],
             ),
             E::EmbeddedProviderIncomplete(provider) => CmdError::with(
                 "config_embedded_incomplete",

@@ -92,6 +92,15 @@ impl ProviderFactory for AppleFactory {
         Ok(Arc::new(AppleLlmProvider::new(cfg.label.clone())))
     }
 
+    fn ready(&self, cfg: &ProviderConfig) -> bool {
+        let status = match cfg.native_id.as_deref() {
+            Some(NATIVE_APPLE_DICTATION) => dictation_status(locale_for_hint(None)),
+            Some(NATIVE_APPLE_FM) => fm_status(),
+            _ => return false,
+        };
+        status == NativeStatus::Ready
+    }
+
     async fn probe(&self, cfg: &ProviderConfig) -> ProbeResult {
         let status = match cfg.native_id.as_deref() {
             Some(NATIVE_APPLE_DICTATION) => {

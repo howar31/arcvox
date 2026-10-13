@@ -91,10 +91,13 @@ fn fix_msg(state: UiState) -> Option<Msg> {
 pub enum Notice {
     MicrophoneDenied,
     MicrophoneRestricted,
-    /// A profile, by name, that names an engine that is gone.
-    ProfileEngineMissing(String),
-    /// A profile, by name, whose engine has no model to run.
-    ProfileModelMissing(String),
+    /// A profile, by name, that runs on the default engine because the one
+    /// it names is gone or cannot run.
+    ProfileOnDefault(String),
+    /// The default speech engine cannot run.
+    DefaultAsrNotReady,
+    /// The default rewrite engine cannot run.
+    DefaultLlmNotReady,
     /// An engine, by name, whose own model file is gone.
     ModelFileMissing(String),
     BackupFolderMissing,
@@ -107,8 +110,9 @@ impl Notice {
         let (msg, name) = match self {
             Notice::MicrophoneDenied => (Msg::TrayMicrophoneDenied, None),
             Notice::MicrophoneRestricted => (Msg::TrayMicrophoneRestricted, None),
-            Notice::ProfileEngineMissing(n) => (Msg::TrayProfileEngineMissing, Some(n)),
-            Notice::ProfileModelMissing(n) => (Msg::TrayProfileModelMissing, Some(n)),
+            Notice::ProfileOnDefault(n) => (Msg::TrayProfileOnDefault, Some(n)),
+            Notice::DefaultAsrNotReady => (Msg::TrayDefaultAsrNotReady, None),
+            Notice::DefaultLlmNotReady => (Msg::TrayDefaultLlmNotReady, None),
             Notice::ModelFileMissing(n) => (Msg::TrayModelFileMissing, Some(n)),
             Notice::BackupFolderMissing => (Msg::TrayBackupFolderMissing, None),
             Notice::BackupFolderNotWritable => (Msg::TrayBackupFolderNotWritable, None),
@@ -125,10 +129,10 @@ impl Notice {
             Notice::MicrophoneDenied | Notice::MicrophoneRestricted => {
                 (ID_FIX_PERMISSIONS, Msg::TrayFixPermissions)
             }
-            Notice::ProfileEngineMissing(_) | Notice::ProfileModelMissing(_) => {
-                (ID_FIX_FLOW, Msg::TrayFixFlow)
-            }
-            Notice::ModelFileMissing(_) => (ID_FIX_ENGINES, Msg::TrayFixEngine),
+            Notice::ProfileOnDefault(_) => (ID_FIX_FLOW, Msg::TrayFixFlow),
+            Notice::DefaultAsrNotReady
+            | Notice::DefaultLlmNotReady
+            | Notice::ModelFileMissing(_) => (ID_FIX_ENGINES, Msg::TrayFixEngine),
             Notice::BackupFolderMissing | Notice::BackupFolderNotWritable => {
                 (ID_FIX_BACKUP, Msg::TrayFixBackup)
             }
@@ -797,16 +801,9 @@ mod tests {
         let all = [
             (Notice::MicrophoneDenied, ID_FIX_PERMISSIONS, "general"),
             (Notice::MicrophoneRestricted, ID_FIX_PERMISSIONS, "general"),
-            (
-                Notice::ProfileEngineMissing("Mail".into()),
-                ID_FIX_FLOW,
-                "flow",
-            ),
-            (
-                Notice::ProfileModelMissing("Mail".into()),
-                ID_FIX_FLOW,
-                "flow",
-            ),
+            (Notice::ProfileOnDefault("Mail".into()), ID_FIX_FLOW, "flow"),
+            (Notice::DefaultAsrNotReady, ID_FIX_ENGINES, "engines"),
+            (Notice::DefaultLlmNotReady, ID_FIX_ENGINES, "engines"),
             (
                 Notice::ModelFileMissing("Own".into()),
                 ID_FIX_ENGINES,
@@ -825,7 +822,7 @@ mod tests {
                 assert!(lines.insert(line));
             }
         }
-        assert!(Notice::ProfileEngineMissing("Mail".into())
+        assert!(Notice::ProfileOnDefault("Mail".into())
             .line(Language::En)
             .contains("Mail"));
         assert_eq!(
@@ -838,13 +835,14 @@ mod tests {
     fn notices_with_the_same_fix_share_its_item() {
         let all = [
             Notice::MicrophoneDenied,
-            Notice::ProfileEngineMissing("A".into()),
-            Notice::ProfileModelMissing("B".into()),
+            Notice::ProfileOnDefault("A".into()),
+            Notice::ProfileOnDefault("B".into()),
+            Notice::DefaultAsrNotReady,
             Notice::ModelFileMissing("C".into()),
             Notice::BackupFolderMissing,
         ];
         let sizes: Vec<usize> = runs(&all).iter().map(Vec::len).collect();
-        assert_eq!(sizes, vec![1, 2, 1, 1]);
+        assert_eq!(sizes, vec![1, 2, 2, 1]);
         assert!(runs(&[]).is_empty());
     }
 
@@ -852,8 +850,8 @@ mod tests {
     fn a_page_with_a_problem_is_named_once() {
         let all = [
             Notice::MicrophoneDenied,
-            Notice::ProfileEngineMissing("A".into()),
-            Notice::ProfileModelMissing("B".into()),
+            Notice::ProfileOnDefault("A".into()),
+            Notice::ProfileOnDefault("B".into()),
             Notice::BackupFolderNotWritable,
         ];
         assert_eq!(

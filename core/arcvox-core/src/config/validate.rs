@@ -1,15 +1,20 @@
 //! Structural validation of a Config. Runs on every load and every update.
 
-use crate::config::model::{Config, ProviderKind, StepSpec};
+use crate::config::model::{Config, EngineRole, ProviderConfig, ProviderKind, StepSpec};
 use crate::types::{ProfileId, ProviderId};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ConfigError {
     #[error("duplicate id `{0}`")]
     DuplicateId(String),
-    #[error("profile `{profile}` references unknown provider `{provider}`")]
-    UnknownProvider {
-        profile: ProfileId,
+    #[error("default {role:?} engine `{provider}` does not exist")]
+    UnknownDefaultEngine {
+        role: EngineRole,
+        provider: ProviderId,
+    },
+    #[error("default {role:?} engine `{provider}` cannot serve that role")]
+    DefaultEngineRole {
+        role: EngineRole,
         provider: ProviderId,
     },
     #[error("provider `{provider}` cannot be used for {layer} in profile `{profile}`")]
@@ -22,8 +27,6 @@ pub enum ConfigError {
     DefaultProfileCount(usize),
     #[error("profile `{profile}`: {reason}")]
     StepOrder { profile: ProfileId, reason: String },
-    #[error("profile `{0}` has an llm step but no llm_provider")]
-    MissingLlmProvider(ProfileId),
     #[error("provider `{0}` is embedded but has no runtime or model reference")]
     EmbeddedProviderIncomplete(ProviderId),
     #[error("general.{field} must be at least {min}")]
@@ -36,6 +39,15 @@ pub enum ConfigError {
 
 /// Highest accepted `general.retry_count`.
 pub const MAX_RETRY_COUNT: u32 = 5;
+
+/// Whether an engine can serve the role: speech recognition transcribes,
+/// rewriting chats.
+pub fn fits(engine: &ProviderConfig, role: EngineRole) -> bool {
+    match role {
+        EngineRole::Asr => engine.capabilities.transcribe,
+        EngineRole::Llm => engine.capabilities.chat,
+    }
+}
 
 pub fn validate(config: &Config) -> Result<(), ConfigError> {
     let mut seen = std::collections::HashSet::new();
@@ -103,43 +115,45 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
         }
     }
 
-    for profile in &config.profiles {
-        let asr =
-            config
-                .provider(&profile.asr_provider)
-                .ok_or_else(|| ConfigError::UnknownProvider {
-                    profile: profile.id.clone(),
-                    provider: profile.asr_provider.clone(),
-                })?;
-        if !asr.capabilities.transcribe {
-            return Err(ConfigError::CapabilityMismatch {
-                profile: profile.id.clone(),
-                provider: asr.id.clone(),
-                layer: "asr",
+    // The default pair is what every profile falls back on, so it must be
+    // there and fit its role.
+    for (role, id) in [
+        (EngineRole::Asr, &config.default_engines.asr),
+        (EngineRole::Llm, &config.default_engines.llm),
+    ] {
+        let engine = config
+            .provider(id)
+            .ok_or_else(|| ConfigError::UnknownDefaultEngine {
+                role,
+                provider: id.clone(),
+            })?;
+        if !fits(engine, role) {
+            return Err(ConfigError::DefaultEngineRole {
+                role,
+                provider: id.clone(),
             });
         }
+    }
 
-        let has_llm_step = profile.steps.iter().any(|s| matches!(s, StepSpec::Llm));
-        match &profile.llm_provider {
-            Some(id) => {
-                let llm = config
-                    .provider(id)
-                    .ok_or_else(|| ConfigError::UnknownProvider {
-                        profile: profile.id.clone(),
-                        provider: id.clone(),
-                    })?;
-                if !llm.capabilities.chat {
+    for profile in &config.profiles {
+        // A profile may name an engine that is gone (the default stands in
+        // until it is back); one that is there must fit its role.
+        for (role, named) in [
+            (EngineRole::Asr, &profile.asr_provider),
+            (EngineRole::Llm, &profile.llm_provider),
+        ] {
+            if let Some(engine) = named.as_ref().and_then(|id| config.provider(id)) {
+                if !fits(engine, role) {
                     return Err(ConfigError::CapabilityMismatch {
                         profile: profile.id.clone(),
-                        provider: llm.id.clone(),
-                        layer: "llm",
+                        provider: engine.id.clone(),
+                        layer: match role {
+                            EngineRole::Asr => "asr",
+                            EngineRole::Llm => "llm",
+                        },
                     });
                 }
             }
-            None if has_llm_step => {
-                return Err(ConfigError::MissingLlmProvider(profile.id.clone()))
-            }
-            None => {}
         }
 
         match profile.steps.first() {
@@ -171,7 +185,8 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
 mod tests {
     use super::*;
     use crate::config::model::{
-        Capabilities, Config, DictionaryEntry, Profile, ProviderConfig, ProviderKind, Runtime,
+        Capabilities, Config, DictionaryEntry, EngineRole, Profile, ProviderConfig, ProviderKind,
+        Runtime,
     };
 
     fn base() -> Config {
@@ -185,12 +200,32 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_provider() {
+    fn a_profile_may_name_an_engine_that_is_gone() {
         let mut c = base();
-        c.profiles[0].asr_provider = ProviderId("nope".into());
+        c.profiles[0].asr_provider = Some(ProviderId("nope".into()));
+        c.profiles[0].llm_provider = Some(ProviderId("gone".into()));
+        assert_eq!(validate(&c), Ok(()));
+    }
+
+    #[test]
+    fn the_default_pair_must_exist_and_fit() {
+        let mut c = base();
+        c.default_engines.asr = ProviderId("nope".into());
         assert!(matches!(
             validate(&c),
-            Err(ConfigError::UnknownProvider { .. })
+            Err(ConfigError::UnknownDefaultEngine {
+                role: EngineRole::Asr,
+                ..
+            })
+        ));
+        let mut c = base();
+        c.default_engines.llm = ProviderId("local-speaches".into());
+        assert!(matches!(
+            validate(&c),
+            Err(ConfigError::DefaultEngineRole {
+                role: EngineRole::Llm,
+                ..
+            })
         ));
     }
 
@@ -204,7 +239,7 @@ mod tests {
             .unwrap()
             .id
             .clone();
-        c.profiles[0].asr_provider = ollama;
+        c.profiles[0].asr_provider = Some(ollama);
         assert!(matches!(
             validate(&c),
             Err(ConfigError::CapabilityMismatch { layer: "asr", .. })
@@ -224,13 +259,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_llm_step_without_provider() {
+    fn an_llm_step_without_an_engine_follows_the_default() {
         let mut c = base();
         c.profiles[0].llm_provider = None;
-        assert!(matches!(
-            validate(&c),
-            Err(ConfigError::MissingLlmProvider(_))
-        ));
+        assert_eq!(validate(&c), Ok(()));
     }
 
     #[test]

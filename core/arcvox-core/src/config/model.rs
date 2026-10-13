@@ -8,7 +8,7 @@ use url::Url;
 
 use crate::types::{ProfileId, ProviderId};
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 pub const MODEL_ID_DEFAULT_ASR: &str = "breeze-asr-25-q5_0";
 pub const MODEL_ID_DEFAULT_LLM: &str = "gemma-3-4b-it-q4_k_m";
@@ -23,6 +23,90 @@ pub struct Config {
     pub providers: Vec<ProviderConfig>,
     pub profiles: Vec<Profile>,
     pub dictionary: Vec<DictionaryEntry>,
+    /// The engines a profile uses when it names none of its own.
+    #[serde(default)]
+    pub default_engines: DefaultEngines,
+}
+
+/// The one pair of engines every profile falls back on: the one used when
+/// a profile follows the default, and the one used when the engine a
+/// profile names is gone or cannot run. The factory value is the
+/// recommended local pair.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct DefaultEngines {
+    pub asr: ProviderId,
+    pub llm: ProviderId,
+}
+
+impl Default for DefaultEngines {
+    fn default() -> Self {
+        Self {
+            asr: ProviderId(MODEL_ID_DEFAULT_ASR.into()),
+            llm: ProviderId(MODEL_ID_DEFAULT_LLM.into()),
+        }
+    }
+}
+
+impl DefaultEngines {
+    pub fn for_role(&self, role: EngineRole) -> &ProviderId {
+        match role {
+            EngineRole::Asr => &self.asr,
+            EngineRole::Llm => &self.llm,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EngineRole {
+    Asr,
+    Llm,
+}
+
+/// Where the engine a profile runs with came from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "source", rename_all = "snake_case")]
+pub enum EngineSource {
+    /// The profile names it and it can run.
+    Explicit,
+    /// The profile names none; the default is used.
+    Default,
+    /// The profile names `wanted`, which is gone or cannot run; the
+    /// default is used until it is back.
+    Fallback { wanted: ProviderId },
+}
+
+/// The engine a profile runs with for one role, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineChoice {
+    pub id: ProviderId,
+    #[serde(flatten)]
+    pub source: EngineSource,
+}
+
+/// The engines a profile runs with now. `llm` is None when the profile
+/// has no rewrite step.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedEngines {
+    pub asr: EngineChoice,
+    pub llm: Option<EngineChoice>,
+}
+
+impl ResolvedEngines {
+    /// The ids in use, the rewrite's only when there is one.
+    pub fn ids(&self) -> impl Iterator<Item = &ProviderId> {
+        std::iter::once(&self.asr.id).chain(self.llm.as_ref().map(|c| &c.id))
+    }
+
+    /// Whether either role runs on the default instead of a named engine.
+    pub fn any_fallback(&self) -> bool {
+        matches!(self.asr.source, EngineSource::Fallback { .. })
+            || self
+                .llm
+                .as_ref()
+                .is_some_and(|c| matches!(c.source, EngineSource::Fallback { .. }))
+    }
 }
 
 /// Platform capabilities the client reports at engine start; they choose the
@@ -206,7 +290,11 @@ pub struct Profile {
     pub is_default: bool,
     #[serde(default)]
     pub matcher: Matcher,
-    pub asr_provider: ProviderId,
+    /// The speech engine the profile names; None follows the default.
+    #[serde(default)]
+    pub asr_provider: Option<ProviderId>,
+    /// The rewrite engine the profile names; None follows the default.
+    /// Whether a rewrite runs at all is the steps' business.
     #[serde(default)]
     pub llm_provider: Option<ProviderId>,
     #[serde(default)]
@@ -248,6 +336,13 @@ fn default_true() -> bool {
     true
 }
 
+impl Profile {
+    /// Whether the profile rewrites at all.
+    pub fn has_llm_step(&self) -> bool {
+        self.steps.iter().any(|s| matches!(s, StepSpec::Llm))
+    }
+}
+
 impl Config {
     /// The config written on first launch without any native provider.
     pub fn first_run() -> Self {
@@ -264,20 +359,10 @@ impl Config {
             .filter_map(ProviderConfig::native_engine)
             .collect();
         // The engines of the recommended pair exist before the models are
-        // downloaded, so the default profile is complete from the start; the
+        // downloaded, so the default pair is complete from the start; the
         // catalogue gives them their names at the first sync.
-        providers.push(ProviderConfig::embedded(
-            MODEL_ID_DEFAULT_ASR,
-            "Local speech model",
-            Runtime::Whisper,
-            MODEL_ID_DEFAULT_ASR,
-        ));
-        providers.push(ProviderConfig::embedded(
-            MODEL_ID_DEFAULT_LLM,
-            "Local language model",
-            Runtime::Llama,
-            MODEL_ID_DEFAULT_LLM,
-        ));
+        providers.push(ProviderConfig::factory_engine(EngineRole::Asr));
+        providers.push(ProviderConfig::factory_engine(EngineRole::Llm));
         let profile = Self::factory_profile();
         Self {
             schema_version: SCHEMA_VERSION,
@@ -285,6 +370,7 @@ impl Config {
             providers,
             profiles: vec![profile],
             dictionary: Vec::new(),
+            default_engines: DefaultEngines::default(),
         }
     }
 
@@ -308,17 +394,15 @@ impl Config {
                 true,
             ),
         ];
-        c.profiles[0].asr_provider = ProviderId("local-speaches".into());
-        c.profiles[0].llm_provider = Some(ProviderId("local-ollama".into()));
+        c.default_engines = DefaultEngines {
+            asr: ProviderId("local-speaches".into()),
+            llm: ProviderId("local-ollama".into()),
+        };
         c
     }
 
-    /// The profile a new installation starts with: the factory settings a
-    /// profile is reset to (its engines excepted: a reset keeps them). The
-    /// recommended local pair is the default everywhere; the platform
-    /// providers are created when available but stay optional
-    /// (single-language dictation and a slower rewrite model on the
-    /// platform side).
+    /// The profile a new installation starts with: a copy of the factory
+    /// template, following the default engines.
     pub fn factory_profile() -> Profile {
         let casual = crate::profile::preset(FACTORY_PRESET).expect("the factory preset exists");
         let mut p = Profile::from_preset(casual, "Default".into(), &[]);
@@ -345,6 +429,56 @@ impl Config {
 
     pub fn provider(&self, id: &ProviderId) -> Option<&ProviderConfig> {
         self.providers.iter().find(|p| &p.id == id)
+    }
+
+    /// The engines a profile runs with now: the one it names when that one
+    /// is there and `usable` says it can run, else the default. The
+    /// profile's own value is never changed by this; the named engine is
+    /// used again as soon as it is back.
+    pub fn resolve_engines(
+        &self,
+        profile: &Profile,
+        usable: impl Fn(&ProviderConfig) -> bool,
+    ) -> ResolvedEngines {
+        let choose = |named: &Option<ProviderId>, role: EngineRole| {
+            let fallback = self.default_engines.for_role(role).clone();
+            match named {
+                None => EngineChoice {
+                    id: fallback,
+                    source: EngineSource::Default,
+                },
+                Some(id) => match self.provider(id) {
+                    Some(cfg) if usable(cfg) => EngineChoice {
+                        id: id.clone(),
+                        source: EngineSource::Explicit,
+                    },
+                    _ => EngineChoice {
+                        id: fallback,
+                        source: EngineSource::Fallback { wanted: id.clone() },
+                    },
+                },
+            }
+        };
+        ResolvedEngines {
+            asr: choose(&profile.asr_provider, EngineRole::Asr),
+            llm: profile
+                .has_llm_step()
+                .then(|| choose(&profile.llm_provider, EngineRole::Llm)),
+        }
+    }
+
+    /// Every engine id the profiles and the default pair name, whether or
+    /// not such an engine exists.
+    pub fn referenced_engine_ids(&self) -> std::collections::HashSet<ProviderId> {
+        let mut ids: std::collections::HashSet<ProviderId> = self
+            .profiles
+            .iter()
+            .flat_map(|p| p.asr_provider.iter().chain(p.llm_provider.iter()))
+            .cloned()
+            .collect();
+        ids.insert(self.default_engines.asr.clone());
+        ids.insert(self.default_engines.llm.clone());
+        ids
     }
 
     /// Panics only if validation was skipped; `validate` guarantees one default.
@@ -381,6 +515,25 @@ impl Capabilities {
 
 impl ProviderConfig {
     /// An embedded engine that loads the catalogue model `model_id`.
+    /// The engine of the factory default pair for the role, as it is before
+    /// the catalogue names it.
+    pub fn factory_engine(role: EngineRole) -> Self {
+        match role {
+            EngineRole::Asr => Self::embedded(
+                MODEL_ID_DEFAULT_ASR,
+                "Local speech model",
+                Runtime::Whisper,
+                MODEL_ID_DEFAULT_ASR,
+            ),
+            EngineRole::Llm => Self::embedded(
+                MODEL_ID_DEFAULT_LLM,
+                "Local language model",
+                Runtime::Llama,
+                MODEL_ID_DEFAULT_LLM,
+            ),
+        }
+    }
+
     pub fn embedded(id: &str, label: &str, runtime: Runtime, model_id: &str) -> Self {
         Self {
             id: ProviderId(id.into()),
@@ -547,13 +700,87 @@ mod tests {
     }
 
     #[test]
+    fn engines_resolve_to_the_named_one_when_it_can_run_else_the_default() {
+        let mut c = Config::http_test_config();
+        let far = ProviderConfig::http_test_provider("far", "http://localhost:9/v1", true, true);
+        c.providers.push(far);
+        let mut p = c.profiles[0].clone();
+        let all = |_: &ProviderConfig| true;
+
+        let r = c.resolve_engines(&p, all);
+        assert_eq!(r.asr.id.0, "local-speaches");
+        assert_eq!(r.asr.source, EngineSource::Default);
+        assert_eq!(r.llm.as_ref().unwrap().id.0, "local-ollama");
+        assert_eq!(r.llm.as_ref().unwrap().source, EngineSource::Default);
+
+        p.asr_provider = Some(ProviderId("far".into()));
+        p.llm_provider = Some(ProviderId("far".into()));
+        let r = c.resolve_engines(&p, all);
+        assert_eq!(r.asr.id.0, "far");
+        assert_eq!(r.asr.source, EngineSource::Explicit);
+        assert_eq!(r.llm.as_ref().unwrap().source, EngineSource::Explicit);
+        assert!(!r.any_fallback());
+
+        // Named but cannot run: the default, and the name is kept.
+        let r = c.resolve_engines(&p, |cfg| cfg.id.0 != "far");
+        assert_eq!(r.asr.id.0, "local-speaches");
+        assert_eq!(
+            r.asr.source,
+            EngineSource::Fallback {
+                wanted: ProviderId("far".into())
+            }
+        );
+        assert!(r.any_fallback());
+        assert_eq!(p.asr_provider, Some(ProviderId("far".into())));
+
+        // Named but gone.
+        p.llm_provider = Some(ProviderId("nowhere".into()));
+        let r = c.resolve_engines(&p, all);
+        assert_eq!(r.llm.as_ref().unwrap().id.0, "local-ollama");
+        assert!(matches!(
+            r.llm.as_ref().unwrap().source,
+            EngineSource::Fallback { .. }
+        ));
+
+        // No rewrite step: no rewrite engine, whatever is named.
+        p.steps.retain(|s| !matches!(s, StepSpec::Llm));
+        let r = c.resolve_engines(&p, all);
+        assert_eq!(r.llm, None);
+        assert_eq!(r.ids().count(), 1);
+    }
+
+    #[test]
+    fn referenced_ids_cover_the_profiles_and_the_default_pair() {
+        let mut c = Config::http_test_config();
+        c.profiles[0].asr_provider = Some(ProviderId("x".into()));
+        let ids = c.referenced_engine_ids();
+        for id in ["x", "local-speaches", "local-ollama"] {
+            assert!(ids.contains(&ProviderId(id.into())), "{id}");
+        }
+        assert_eq!(ids.len(), 3);
+    }
+
+    #[test]
+    fn a_config_without_the_pair_or_profile_engines_reads_with_the_factory_pair() {
+        let value = serde_json::json!({
+            "schema_version": 3, "general": {}, "providers": [], "dictionary": [],
+            "profiles": [{ "id": "a", "name": "A", "is_default": true, "steps": [] }]
+        });
+        let c: Config = serde_json::from_value(value).unwrap();
+        assert_eq!(c.default_engines, DefaultEngines::default());
+        assert_eq!(c.profiles[0].asr_provider, None);
+    }
+
+    #[test]
     fn no_native_picks_embedded_pair() {
         let c = Config::first_run_with(&FirstRunDefaults::default());
         let ids: Vec<&str> = c.providers.iter().map(|p| p.id.0.as_str()).collect();
         assert_eq!(ids, [MODEL_ID_DEFAULT_ASR, MODEL_ID_DEFAULT_LLM]);
         let d = c.profiles.iter().find(|p| p.is_default).unwrap();
-        assert_eq!(d.asr_provider.0, MODEL_ID_DEFAULT_ASR);
-        assert_eq!(d.llm_provider.as_ref().unwrap().0, MODEL_ID_DEFAULT_LLM);
+        assert_eq!(d.asr_provider, None, "follows the default pair");
+        assert_eq!(d.llm_provider, None);
+        assert_eq!(c.default_engines.asr.0, MODEL_ID_DEFAULT_ASR);
+        assert_eq!(c.default_engines.llm.0, MODEL_ID_DEFAULT_LLM);
         let w = c
             .provider(&ProviderId(MODEL_ID_DEFAULT_ASR.into()))
             .unwrap();
@@ -589,9 +816,7 @@ mod tests {
                 MODEL_ID_DEFAULT_LLM
             ]
         );
-        let d = c.profiles.iter().find(|p| p.is_default).unwrap();
-        assert_eq!(d.asr_provider.0, MODEL_ID_DEFAULT_ASR);
-        assert_eq!(d.llm_provider.as_ref().unwrap().0, MODEL_ID_DEFAULT_LLM);
+        assert_eq!(c.default_engines, DefaultEngines::default());
         let a = c.provider(&ProviderId("apple-dictation".into())).unwrap();
         assert_eq!(a.kind, ProviderKind::Native);
         assert_eq!(a.native_id.as_deref(), Some("apple.dictation"));
@@ -610,9 +835,7 @@ mod tests {
             apple_dictation: true,
             apple_foundation_models: false,
         });
-        let d = c.profiles.iter().find(|p| p.is_default).unwrap();
-        assert_eq!(d.asr_provider.0, MODEL_ID_DEFAULT_ASR);
-        assert_eq!(d.llm_provider.as_ref().unwrap().0, MODEL_ID_DEFAULT_LLM);
+        assert_eq!(c.default_engines, DefaultEngines::default());
         assert!(c.provider(&ProviderId("apple-dictation".into())).is_some());
         assert!(c.provider(&ProviderId("apple-fm".into())).is_none());
     }

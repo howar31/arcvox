@@ -26,4 +26,11 @@ pub trait ProviderFactory: Send + Sync {
         general: &General,
     ) -> Result<Arc<dyn LlmProvider>, ProviderError>;
     async fn probe(&self, cfg: &ProviderConfig) -> ProbeResult;
+    /// Whether the engine can run now without anything else happening
+    /// first: an in-process engine has its model file, a platform service
+    /// is there. A network service is taken at its word. Cheap, no I/O
+    /// beyond a file check.
+    fn ready(&self, _cfg: &ProviderConfig) -> bool {
+        true
+    }
 }

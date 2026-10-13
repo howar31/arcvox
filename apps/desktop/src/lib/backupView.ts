@@ -27,6 +27,7 @@ export function noteLines(notes: SettingsNote[]): NoteLine[] {
     switch (note.kind) {
       case "needs_key": return { text: t("backup.note.needs_key", { engine: note.engine }), detail: t("backup.note.needs_key_detail"), go: "engines" };
       case "engine_replaced": return { text: t(note.role === "asr" ? "backup.note.engine_replaced_asr" : "backup.note.engine_replaced_llm", { profile: note.profile }) };
+      case "default_engine_reset": return { text: t(note.role === "asr" ? "backup.note.default_engine_reset_asr" : "backup.note.default_engine_reset_llm"), go: "engines" };
       case "engine_unavailable": return { text: t("backup.note.engine_unavailable", { engine: note.engine }) };
       case "unknown_section": return { text: t("backup.note.unknown_section", { name: note.name }) };
       case "apps_not_installed": return { text: t("backup.note.apps", { n: n(note.names.length), names: note.names.join(t("backup.list_sep")) }), detail: t("backup.note.apps_detail") };

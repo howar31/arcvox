@@ -8,13 +8,20 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::config::{Config, DictionaryEntry, General, Profile, ProviderConfig, ProviderKind};
+use crate::config::validate::fits;
+use crate::config::{
+    Config, DefaultEngines, DictionaryEntry, EngineRole, General, Profile, ProviderConfig,
+    ProviderKind,
+};
 use crate::engine::{Engine, EngineError};
 use crate::history::now_unix;
 use crate::types::ProviderId;
 
 pub const SETTINGS_FORMAT: &str = "arcvox-settings";
 pub const SETTINGS_VERSION: u32 = 1;
+/// Written and read with `providers`: the default pair is a choice among
+/// the engines, not a section of its own.
+const DEFAULT_ENGINES_SECTION: &str = "default_engines";
 
 /// The sections the core fills and applies. `general` is shared with the
 /// client: the core's part is its `core` member.
@@ -75,8 +82,12 @@ pub enum SettingsFileError {
 pub enum Note {
     /// The engine names an API key that is not stored on this machine.
     NeedsKey { engine: String },
-    /// The profile named an engine that is not in the list; another one was set.
+    /// The profile named an engine of the wrong kind for the role; it
+    /// follows the default now.
     EngineReplaced { profile: String, role: String },
+    /// The default engine for the role named nothing that can serve it;
+    /// the factory one, else the first fitting engine, was set.
+    DefaultEngineReset { role: String },
     /// The engine cannot run on this machine.
     EngineUnavailable { engine: String },
     /// The file has a section this version does not know.
@@ -134,7 +145,9 @@ impl SettingsFile {
     pub fn unknown_sections(&self) -> Vec<String> {
         self.sections
             .keys()
-            .filter(|k| !ALL_SECTIONS.contains(&k.as_str()))
+            .filter(|k| {
+                !ALL_SECTIONS.contains(&k.as_str()) && k.as_str() != DEFAULT_ENGINES_SECTION
+            })
             .cloned()
             .collect()
     }
@@ -155,6 +168,9 @@ fn section<T: serde::de::DeserializeOwned>(
 struct Picked {
     profiles: Option<Vec<Profile>>,
     providers: Option<Vec<ProviderConfig>>,
+    /// Travels with the engines: a file from before the default pair
+    /// existed has none, and the pair in place stays.
+    default_engines: Option<DefaultEngines>,
     dictionary: Option<Vec<DictionaryEntry>>,
     base_prompt: Option<String>,
     general: Option<General>,
@@ -175,6 +191,9 @@ impl Picked {
         }
         if let Some(v) = get("providers") {
             picked.providers = Some(section("providers", v)?);
+            if let Some(d) = file.sections.get(DEFAULT_ENGINES_SECTION) {
+                picked.default_engines = Some(section(DEFAULT_ENGINES_SECTION, d)?);
+            }
         }
         if let Some(v) = get("dictionary") {
             picked.dictionary = Some(section("dictionary", v)?);
@@ -203,10 +222,12 @@ impl Picked {
     }
 }
 
-/// Makes every profile name engines that are in the list, and exactly one
-/// profile the default. `fallback` is the pair the default profile had
-/// before the change.
-fn repair(config: &mut Config, fallback: (ProviderId, Option<ProviderId>), notes: &mut Vec<Note>) {
+/// Makes exactly one profile the default, the default pair name engines
+/// that can serve their roles (else the factory engine, made if need be),
+/// and no profile name an engine of the wrong kind. A profile naming an
+/// engine that is gone is left as it is: the default stands in until the
+/// engine is back.
+fn repair(config: &mut Config, notes: &mut Vec<Note>) {
     if !config.profiles.iter().any(|p| p.is_default) {
         if let Some(first) = config.profiles.first_mut() {
             first.is_default = true;
@@ -219,56 +240,55 @@ fn repair(config: &mut Config, fallback: (ProviderId, Option<ProviderId>), notes
         }
         seen_default |= p.is_default;
     }
-    let can = |id: &ProviderId, chat: bool| {
-        config.providers.iter().any(|e| {
-            &e.id == id
-                && if chat {
-                    e.capabilities.chat
-                } else {
-                    e.capabilities.transcribe
-                }
-        })
-    };
-    let first = |chat: bool| {
-        config
-            .providers
-            .iter()
-            .find(|e| {
-                if chat {
-                    e.capabilities.chat
-                } else {
-                    e.capabilities.transcribe
-                }
-            })
-            .map(|e| e.id.clone())
-    };
-    let asr = Some(fallback.0)
-        .filter(|id| can(id, false))
-        .or_else(|| first(false));
-    let llm = fallback
-        .1
-        .filter(|id| can(id, true))
-        .or_else(|| first(true));
-    let mut changes: Vec<(usize, &str, ProviderId)> = Vec::new();
-    for (i, p) in config.profiles.iter().enumerate() {
-        if let (false, Some(id)) = (can(&p.asr_provider, false), &asr) {
-            changes.push((i, "asr", id.clone()));
+    let factory = DefaultEngines::default();
+    let mut defaults = config.default_engines.clone();
+    for (role, chosen, name) in [
+        (EngineRole::Asr, &mut defaults.asr, "asr"),
+        (EngineRole::Llm, &mut defaults.llm, "llm"),
+    ] {
+        let serves = |id: &ProviderId| config.provider(id).is_some_and(|e| fits(e, role));
+        if serves(chosen) {
+            continue;
         }
-        let llm_missing = p.llm_provider.as_ref().is_some_and(|id| !can(id, true));
-        if let (true, Some(id)) = (llm_missing, &llm) {
-            changes.push((i, "llm", id.clone()));
+        // Back to the factory engine, made as on the first launch when the
+        // file did not carry it.
+        let factory_id = factory.for_role(role).clone();
+        if !serves(&factory_id) {
+            config.providers.retain(|e| e.id != factory_id);
+            config.providers.push(ProviderConfig::factory_engine(role));
         }
+        *chosen = factory_id;
+        notes.push(Note::DefaultEngineReset { role: name.into() });
     }
-    for (i, role, id) in changes {
+    config.default_engines = defaults;
+    let wrong_kind: Vec<(usize, EngineRole, &str)> = config
+        .profiles
+        .iter()
+        .enumerate()
+        .flat_map(|(i, p)| {
+            [
+                (EngineRole::Asr, &p.asr_provider, "asr"),
+                (EngineRole::Llm, &p.llm_provider, "llm"),
+            ]
+            .into_iter()
+            .filter(|(role, named, _)| {
+                named
+                    .as_ref()
+                    .and_then(|id| config.provider(id))
+                    .is_some_and(|e| !fits(e, *role))
+            })
+            .map(move |(role, _, name)| (i, role, name))
+        })
+        .collect();
+    for (i, role, name) in wrong_kind {
         let p = &mut config.profiles[i];
-        if role == "asr" {
-            p.asr_provider = id;
-        } else {
-            p.llm_provider = Some(id);
+        match role {
+            EngineRole::Asr => p.asr_provider = None,
+            EngineRole::Llm => p.llm_provider = None,
         }
         notes.push(Note::EngineReplaced {
             profile: p.name.clone(),
-            role: role.into(),
+            role: name.into(),
         });
     }
 }
@@ -305,6 +325,10 @@ impl Engine {
             out.insert(
                 "providers".to_string(),
                 serde_json::to_value(&engines).expect("engines serialize"),
+            );
+            out.insert(
+                DEFAULT_ENGINES_SECTION.to_string(),
+                serde_json::to_value(&config.default_engines).expect("default engines serialize"),
             );
         }
         if has("dictionary") {
@@ -361,17 +385,14 @@ impl Engine {
         let prompt = picked.base_prompt.clone();
         let mut repaired = Vec::new();
         let next = self.config().update(|c| {
-            let fallback = c
-                .profiles
-                .iter()
-                .find(|p| p.is_default)
-                .map(|p| (p.asr_provider.clone(), p.llm_provider.clone()))
-                .unwrap_or_else(|| (ProviderId(String::new()), None));
             if let Some(v) = picked.profiles {
                 c.profiles = v;
             }
             if let Some(v) = picked.providers {
                 c.providers = v;
+            }
+            if let Some(v) = picked.default_engines {
+                c.default_engines = v;
             }
             if let Some(v) = picked.dictionary {
                 c.dictionary = v;
@@ -385,7 +406,7 @@ impl Engine {
                     ..v
                 };
             }
-            repair(c, fallback, &mut repaired);
+            repair(c, &mut repaired);
         })?;
         notes.extend(repaired);
         if let Some(text) = prompt {
@@ -422,7 +443,7 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, ProviderConfig};
+    use crate::config::{Config, EngineSource, ProviderConfig};
     use crate::engine::EngineError;
     use crate::secrets::MemorySecretStore;
     use crate::types::{ProfileId, ProviderId};
@@ -597,33 +618,83 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn profiles_alone_fall_back_to_engines_that_exist() {
+    async fn profiles_alone_keep_their_engines_and_run_on_the_default_meanwhile() {
         let tmp = tempfile::tempdir().unwrap();
         let a = engine(&tmp.path().join("a")).await;
         a.config()
             .update(|c| {
                 c.providers.push(http("far-asr", true));
                 c.providers.push(http("far-llm", false));
-                c.profiles[0].asr_provider = ProviderId("far-asr".into());
+                c.profiles[0].asr_provider = Some(ProviderId("far-asr".into()));
                 c.profiles[0].llm_provider = Some(ProviderId("far-llm".into()));
             })
             .unwrap();
         let file = file_of(&a, &only(&["profiles"]));
         let b = engine(&tmp.path().join("b")).await;
-        let own = b.config().current().profiles[0].clone();
+        let defaults = b.config().current().default_engines.clone();
         let outcome = b
             .settings_import(&file, &only(&["profiles"]))
             .await
             .unwrap();
         let p = b.config().current().profiles[0].clone();
-        assert_eq!(p.asr_provider, own.asr_provider);
-        assert_eq!(p.llm_provider, own.llm_provider);
-        let replaced: Vec<_> = outcome
-            .notes
-            .iter()
-            .filter(|n| matches!(n, Note::EngineReplaced { .. }))
-            .collect();
-        assert_eq!(replaced.len(), 2, "{:?}", outcome.notes);
+        assert_eq!(p.asr_provider, Some(ProviderId("far-asr".into())));
+        assert_eq!(p.llm_provider, Some(ProviderId("far-llm".into())));
+        let engines = b.resolve_engines(&p);
+        assert_eq!(engines.asr.id, defaults.asr);
+        assert_eq!(
+            engines.asr.source,
+            EngineSource::Fallback {
+                wanted: ProviderId("far-asr".into())
+            }
+        );
+        assert_eq!(engines.llm.as_ref().unwrap().id, defaults.llm);
+        assert!(
+            !outcome
+                .notes
+                .iter()
+                .any(|n| matches!(n, Note::EngineReplaced { .. })),
+            "{:?}",
+            outcome.notes
+        );
+    }
+
+    #[tokio::test]
+    async fn an_engine_of_the_wrong_kind_is_dropped_and_the_default_pair_repaired() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = engine(&tmp.path().join("a")).await;
+        let mut file = SettingsFile::new("0.1.0", "macos", "Anna");
+        let mut p = a.config().current().profiles[0].clone();
+        // The file's profile names the chat engine for speech.
+        p.asr_provider = Some(ProviderId("local-ollama".into()));
+        file.sections.insert("profiles".into(), json!([p]));
+        file.sections.insert(
+            "providers".into(),
+            json!([http("far-asr", true), http("local-ollama", false)]),
+        );
+        file.sections.insert(
+            "default_engines".into(),
+            json!({ "asr": "far-asr", "llm": "nowhere" }),
+        );
+        let file = SettingsFile::parse(&file.to_bytes()).unwrap();
+        let outcome = a.settings_import(&file, &all()).await.unwrap();
+        let c = a.config().current();
+        assert_eq!(c.profiles[0].asr_provider, None, "follows the default now");
+        assert_eq!(c.default_engines.asr, ProviderId("far-asr".into()));
+        // The pair named a chat engine that is not there: back to the
+        // factory one, made because the file did not carry it.
+        assert_eq!(
+            c.default_engines.llm,
+            ProviderId(crate::config::MODEL_ID_DEFAULT_LLM.into())
+        );
+        assert!(c.provider(&c.default_engines.llm).is_some());
+        assert!(outcome.notes.iter().any(|n| matches!(
+            n,
+            Note::EngineReplaced { role, .. } if role == "asr"
+        )));
+        assert!(outcome.notes.iter().any(|n| matches!(
+            n,
+            Note::DefaultEngineReset { role } if role == "llm"
+        )));
     }
 
     #[tokio::test]
@@ -633,13 +704,12 @@ mod tests {
         a.config()
             .update(|c| {
                 c.providers = vec![http("far-asr", true), http("far-llm", false)];
-                for p in &mut c.profiles {
-                    p.asr_provider = ProviderId("far-asr".into());
-                    p.llm_provider = Some(ProviderId("far-llm".into()));
-                }
+                c.default_engines.asr = ProviderId("far-asr".into());
+                c.default_engines.llm = ProviderId("far-llm".into());
             })
             .unwrap();
         let file = file_of(&a, &only(&["providers"]));
+        assert!(file.sections.contains_key("default_engines"));
         let b = changed(&tmp.path().join("b")).await;
         let outcome = b
             .settings_import(&file, &only(&["providers"]))
@@ -647,19 +717,21 @@ mod tests {
             .unwrap();
         let c = b.config().current();
         assert_eq!(c.profiles.len(), 2);
+        assert_eq!(c.default_engines.asr, ProviderId("far-asr".into()));
+        assert_eq!(c.default_engines.llm, ProviderId("far-llm".into()));
         for p in &c.profiles {
-            assert_eq!(p.asr_provider, ProviderId("far-asr".into()));
-            assert_eq!(p.llm_provider, Some(ProviderId("far-llm".into())));
+            let engines = b.resolve_engines(p);
+            assert_eq!(engines.asr.id, ProviderId("far-asr".into()));
+            assert_eq!(
+                engines.llm.map(|e| e.id),
+                Some(ProviderId("far-llm".into()))
+            );
         }
         crate::config::validate(&c).unwrap();
-        assert_eq!(
-            outcome
-                .notes
-                .iter()
-                .filter(|n| matches!(n, Note::EngineReplaced { .. }))
-                .count(),
-            4
-        );
+        assert!(outcome
+            .notes
+            .iter()
+            .all(|n| !matches!(n, Note::EngineReplaced { .. })));
     }
 
     #[tokio::test]
@@ -820,9 +892,10 @@ mod tests {
         let b = changed(&tmp.path().join("b")).await;
         let before = b.config().current();
         let mut file = SettingsFile::new("0.1.0", "macos", "Anna");
-        // No engine can transcribe: no profile can be made valid.
+        // Two profiles with one id: nothing repairs that.
+        let p = before.profiles[0].clone();
         file.sections
-            .insert("providers".into(), json!([http("far-llm", false)]));
+            .insert("profiles".into(), json!([p.clone(), p]));
         file.sections
             .insert("base_prompt".into(), json!("other prompt"));
         let got = b.settings_import(&file, &all()).await;

@@ -18,7 +18,9 @@ export type StepSpec = { step: "asr" } | { step: "opencc"; config: string; punct
 export interface Example { raw: string; refined: string }
 export interface Matcher { app_ids: string[]; url_patterns: string[] }
 export interface Profile {
-  id: string; name: string; is_default: boolean; matcher: Matcher; asr_provider: string; llm_provider: string | null;
+  id: string; name: string; is_default: boolean; matcher: Matcher;
+  /** The engines the profile names; null follows the default. Whether a rewrite runs is the steps' business. */
+  asr_provider: string | null; llm_provider: string | null;
   language_hint: string | null; prompt_addition: string; few_shot: Example[]; steps: StepSpec[];
   /** The built-in preset the profile was made from; a reset returns to it. */
   preset: string | null;
@@ -35,7 +37,13 @@ export interface General {
   /** The folder recordings are kept in; null for the default one. Changed with `setRecordingsDir` only. */
   recordings_dir: string | null;
 }
-export interface Config { schema_version: number; general: General; providers: ProviderConfig[]; profiles: Profile[]; dictionary: DictionaryEntry[] }
+/** The pair a profile runs with when it names no engine, or when the one it names cannot run. */
+export interface DefaultEngines { asr: string; llm: string }
+export type EngineRole = "asr" | "llm";
+export interface Config {
+  schema_version: number; general: General; providers: ProviderConfig[]; profiles: Profile[]; dictionary: DictionaryEntry[];
+  default_engines: DefaultEngines;
+}
 export interface ProbeResult { ok: boolean; failure: { kind: string; message?: string; reason?: string; status?: number } | null }
 export interface Utterance {
   id: number; ts: number; profile_id: string; app_name: string | null; raw_text: string; refined_text: string; final_text: string;
@@ -108,6 +116,7 @@ export const getConfig = () => invoke<Config>("config_get");
 export const updateGeneral = (general: General) => invoke<Config>("config_update_general", { general });
 export const upsertProvider = (provider: ProviderConfig) => invoke<Config>("providers_upsert", { provider });
 export const deleteProvider = (id: string) => invoke<Config>("providers_delete", { id });
+export const setDefaultEngine = (role: EngineRole, id: string) => invoke<Config>("default_engine_set", { role, id });
 export const probeProvider = (provider: ProviderConfig) => invoke<ProbeResult>("providers_probe", { provider });
 export const upsertProfile = (profile: Profile) => invoke<Config>("profiles_upsert", { profile });
 export const deleteProfile = (id: string) => invoke<Config>("profiles_delete", { id });
@@ -306,7 +315,8 @@ export function onNativeInstallProgress(cb: (fraction: number) => void): Promise
   return listen<{ fraction: number }>("native-install-progress", (e) => cb(e.payload.fraction));
 }
 
-export interface PresetView { id: string; app_ids: string[] }
+/** `suggested_*` are the engines the template was tuned with; null for an untuned template. */
+export interface PresetView { id: string; app_ids: string[]; suggested_asr: string | null; suggested_llm: string | null }
 export interface ClipStatus { present: boolean; secs: number; recorded_at: number | null }
 export interface ClipCandidate { id: number; ts: number; raw_text: string }
 export type BenchRole = "asr" | "llm";
@@ -351,6 +361,7 @@ export interface SettingsInfo { file_name: string; app_version: string; platform
 export type SettingsNote =
   | { kind: "needs_key"; engine: string }
   | { kind: "engine_replaced"; profile: string; role: string }
+  | { kind: "default_engine_reset"; role: string }
   | { kind: "engine_unavailable"; engine: string }
   | { kind: "unknown_section"; name: string }
   | { kind: "apps_not_installed"; names: string[] };

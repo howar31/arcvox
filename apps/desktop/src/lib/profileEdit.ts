@@ -1,20 +1,20 @@
 import type { Profile, ProviderConfig, StepSpec } from "./api";
 
 /**
- * Returns a copy of the profile that rewrites with `llmId`, or does not rewrite
- * when it is null. Turning rewriting off drops every `llm` step; turning it on
- * when there is no `llm` step inserts one after the first OpenCC step, or after
- * speech recognition when there is none.
+ * Returns a copy of the profile that rewrites with `pick`: an engine id, or `FOLLOW` ("") to
+ * rewrite with the default engine; null does not rewrite at all. Turning rewriting off drops
+ * every `llm` step; turning it on when there is no `llm` step inserts one after the first
+ * OpenCC step, or after speech recognition when there is none.
  */
-export function withLlm(profile: Profile, llmId: string | null): Profile {
+export function withLlm(profile: Profile, pick: string | null): Profile {
   const steps: StepSpec[] = profile.steps.map((s) => ({ ...s }));
-  if (llmId === null) return { ...profile, llm_provider: null, steps: steps.filter((s) => s.step !== "llm") };
+  if (pick === null) return { ...profile, llm_provider: null, steps: steps.filter((s) => s.step !== "llm") };
   if (!steps.some((s) => s.step === "llm")) {
     let at = steps.findIndex((s) => s.step === "opencc");
     if (at < 0) at = steps.findIndex((s) => s.step === "asr");
     steps.splice(at + 1, 0, { step: "llm" });
   }
-  return { ...profile, llm_provider: llmId, steps };
+  return { ...profile, llm_provider: pick === "" ? null : pick, steps };
 }
 
 /** The first `max` names and how many more there are. */

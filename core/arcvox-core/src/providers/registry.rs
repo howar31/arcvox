@@ -68,6 +68,15 @@ impl ProviderRegistry {
         self.factories.iter().find(|f| f.kind() == kind).cloned()
     }
 
+    /// Whether the engine can run now, by its kind's factory; an engine of
+    /// a kind no factory serves cannot.
+    pub fn ready(&self, cfg: &ProviderConfig) -> bool {
+        match cfg.kind {
+            ProviderKind::Http => true,
+            kind => self.factory_for(kind).is_some_and(|f| f.ready(cfg)),
+        }
+    }
+
     pub fn llm_providers(&self) -> Vec<Arc<dyn LlmProvider>> {
         self.llm
             .lock()

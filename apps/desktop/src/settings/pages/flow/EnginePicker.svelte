@@ -1,11 +1,14 @@
 <script lang="ts">
   import type { ManifestView, ProviderConfig } from "../../../lib/api";
   import { t } from "../../../lib/i18n";
-  import { engineDescription, engineKind, engineRecommended, type Installed } from "../../../lib/stages";
+  import { engineDescription, engineKind, type Installed } from "../../../lib/stages";
   import Tag from "../../../lib/ui/Tag.svelte";
 
-  /** A list of engines to choose one from. `none`, when given, adds a last choice that selects no engine. */
-  let { engines, selected, onpick, label, manifest, installed, none, stale }: {
+  /**
+   * A list of engines to choose one from. `follow`, when given, adds a first choice that follows the
+   * default engine (selected as ""); `none` adds a last choice that selects no engine (selected as null).
+   */
+  let { engines, selected, onpick, label, manifest, installed, follow, none, stale, suggested }: {
     engines: ProviderConfig[];
     selected: string | null;
     onpick: (id: string | null) => void;
@@ -13,13 +16,22 @@
     label: string;
     manifest: ManifestView | null;
     installed: Installed;
+    follow?: { name: string; help: string };
     none?: { name: string; help: string };
     /** Shown as the selected row when the stored engine is not in `engines`. */
     stale?: { name: string; help: string };
+    /** The engine the profile's template was tuned with; it gets the suggested tag. */
+    suggested?: string | null;
   } = $props();
 </script>
 
 <div class="picker" role="radiogroup" aria-label={label}>
+  {#if follow}
+    <button type="button" class="pick" role="radio" aria-checked={selected === "" && !stale} onclick={() => onpick("")}>
+      <span class="dot" class:on={selected === "" && !stale}></span>
+      <span class="text"><span class="name">{follow.name}</span><small>{follow.help}</small></span>
+    </button>
+  {/if}
   {#if stale}
     <div class="pick stale" role="radio" aria-checked="true" aria-disabled="true" tabindex="-1">
       <span class="dot on"></span>
@@ -31,7 +43,7 @@
     <button type="button" class="pick" role="radio" aria-checked={selected === p.id} onclick={() => onpick(p.id)}>
       <span class="dot" class:on={selected === p.id}></span>
       <span class="text">
-        <span class="name">{p.label}{#if engineRecommended(p, manifest)}<Tag tone="accent">{t("engines.recommended")}</Tag>{/if}</span>
+        <span class="name">{p.label}{#if p.id === suggested}<Tag tone="accent" title={t("flow.suggested_tip")}>{t("flow.suggested")}</Tag>{/if}</span>
         <small class:warn={kind.missing}>{#if p.kind !== "http"}{kind.meta}<span class="sep" aria-hidden="true">·</span>{/if}{engineDescription(p, manifest)}</small>
       </span>
     </button>
