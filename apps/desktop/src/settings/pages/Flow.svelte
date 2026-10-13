@@ -10,7 +10,7 @@
   import { guard } from "../../lib/guard.svelte";
   import { t } from "../../lib/i18n";
   import { isImeKey } from "../../lib/ime";
-  import { appsSummary, blankProfile, slugId, withLlm } from "../../lib/profileEdit";
+  import { appsSummary, withLlm } from "../../lib/profileEdit";
   import { go } from "../../lib/route";
   import { engineLine, micLine, outputLine, type StageLine } from "../../lib/stages";
   import { client, config } from "../../lib/store.svelte";
@@ -97,8 +97,6 @@
   const profiles = $derived([...(config.value?.profiles ?? [])].sort((a, b) => Number(b.is_default) - Number(a.is_default)));
   const source = $derived(selectedProfile(config.value, arg));
   const providers = $derived(config.value?.providers ?? []);
-  // Whether the factory engines are still configured: the reset puts them back only then.
-  const factoryEngines = $derived(providers.some((p) => p.id === "local-whisper") && providers.some((p) => p.id === "local-llama"));
   const asrChoices = $derived(providers.filter((p) => p.capabilities.transcribe));
   const llmChoices = $derived(providers.filter((p) => p.capabilities.chat));
   const installed = $derived({ ids: models ? new Set(models.map((m) => m.id)) : null, paths: new Set((models ?? []).map((m) => m.path)) });
@@ -256,22 +254,13 @@
     newApp = ""; newUrl = ""; newRaw = ""; newRefined = "";
   }
 
-  /** Adds a profile (blank, or from a preset) and shows it. */
-  async function create(presetId: string | null) {
+  /** Adds a copy of a template and shows it. */
+  async function create(presetId: string) {
     if (!config.value) return;
     busy = true;
     const before = new Set(config.value.profiles.map((p) => p.id));
     try {
-      let next;
-      if (presetId) {
-        next = await profilesAddPreset(presetId, t(`profiles.preset.${presetId}`));
-      } else {
-        const base = config.value.profiles.find((p) => p.is_default) ?? config.value.profiles[0];
-        const blank = blankProfile($state.snapshot(base) as Profile);
-        blank.name = t("profiles.new_title");
-        blank.id = slugId(blank.name, [...before]);
-        next = await upsertProfile(blank);
-      }
+      const next = await profilesAddPreset(presetId, t(`profiles.preset.${presetId}`));
       config.value = next;
       const created = next.profiles.find((p) => !before.has(p.id));
       adding = false;
@@ -478,11 +467,10 @@
   <SaveBar {dirty} {saving} message={problem} onsave={save} onrevert={revert} />
 {/if}
 
-<ManageProfiles bind:open={managing} {profiles} {applies} {presets} {factoryEngines} />
+<ManageProfiles bind:open={managing} {profiles} {applies} {presets} />
 
 <Modal bind:open={adding} title={t("flow.add")}>
   <div class="choices" class:busy inert={busy} aria-busy={busy}>
-    <Row label={t("profiles.blank")} help={t("profiles.blank.desc")} onclick={() => create(null)} />
     {#each presets as p (p.id)}
       <Row label={t(`profiles.preset.${p.id}`)} help={t(`profiles.preset.${p.id}.desc`)} onclick={() => create(p.id)} />
     {/each}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Profile, ProviderConfig, StepSpec } from "./api";
-import { appsSummary, blankProfile, engineMeta, slugId, withLlm } from "./profileEdit";
+import { appsSummary, engineMeta, slugId, withLlm } from "./profileEdit";
 
 const profile = (steps: StepSpec[], llm: string | null = "llm-a"): Profile => ({
   id: "p", name: "P", is_default: true, matcher: { app_ids: [], url_patterns: [] }, asr_provider: "asr-a", llm_provider: llm,
@@ -71,20 +71,6 @@ describe("engineMeta", () => {
   it("names the host of an http engine", () => {
     const http = { ...base, kind: "http" as const, model_id: null, base_url: "http://localhost:11434/v1" };
     expect(engineMeta(http, new Set())).toEqual({ kind: "external", ready: true, detail: "localhost:11434" });
-  });
-});
-
-describe("blankProfile", () => {
-  it("copies the engines, language and steps of the base and nothing else", () => {
-    const base: Profile = { ...profile(full, "llm-a"), id: "default", name: "Default", language_hint: "ja", prompt_addition: "x",
-      few_shot: [{ raw: "a", refined: "b" }], matcher: { app_ids: ["com.example.a"], url_patterns: ["example.com"] } };
-    const blank = blankProfile(base);
-    expect(blank).toEqual({
-      id: "", name: "", is_default: false, matcher: { app_ids: [], url_patterns: [] }, asr_provider: "asr-a", llm_provider: "llm-a",
-      language_hint: "ja", prompt_addition: "", few_shot: [], preset: null, asr_dictionary_hint: true, llm_dictionary_terms: true, llm_window_title: true, llm_short_fallback: true, steps: full,
-    });
-    blank.steps.push({ step: "rules" });
-    expect(base.steps).toEqual(full);
   });
 });
 

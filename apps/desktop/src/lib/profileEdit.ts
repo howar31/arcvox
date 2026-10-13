@@ -50,16 +50,6 @@ function hostOf(url: string | null): string | null {
 /** Ids `slugId` never returns: earlier builds used them as the route argument of an unsaved profile. */
 const RESERVED_IDS = ["new", "+new"];
 
-/** A new profile that starts from the engines, language and steps of `base`. */
-export function blankProfile(base: Profile): Profile {
-  return {
-    id: "", name: "", is_default: false, matcher: { app_ids: [], url_patterns: [] },
-    asr_provider: base.asr_provider, llm_provider: base.llm_provider, language_hint: base.language_hint,
-    prompt_addition: "", few_shot: [], steps: base.steps.map((s) => ({ ...s })), preset: null,
-    asr_dictionary_hint: base.asr_dictionary_hint, llm_dictionary_terms: base.llm_dictionary_terms, llm_window_title: base.llm_window_title, llm_short_fallback: base.llm_short_fallback,
-  };
-}
-
 /**
  * An id for a new profile: the lowercase ASCII words of the name joined by dashes, with a
  * numeric suffix when taken or reserved ("new"). A name without ASCII letters or digits becomes `profile-<n>`.

@@ -1,8 +1,8 @@
 //! Per-user data directories. Data never lives under the install directory.
 //!
 //! The folders carry the app's name (a build under another name has its own):
-//! macOS: config + history + recordings in `~/Library/Application Support/<name>`,
-//!        models in `~/Library/Caches/<name>`.
+//! macOS: config + history + recordings + models in `~/Library/Application Support/<name>`,
+//!        the speed test's clip and import staging in `~/Library/Caches/<name>`.
 //! Windows: config in `%APPDATA%\<name>` (roaming),
 //!          history + recordings + models in `%LOCALAPPDATA%\<name>`.
 //! Linux: XDG config / data / cache dirs under the lower-case name.
@@ -13,9 +13,9 @@ use std::path::{Path, PathBuf};
 pub struct DataDir {
     /// `config.json`, `prompts/`.
     pub config_dir: PathBuf,
-    /// `history.sqlite`, `recordings/`.
+    /// `history.sqlite`, `recordings/`, `models/`.
     pub data_dir: PathBuf,
-    /// `models/`, `bench/`.
+    /// `bench/` and import staging: what can be lost without harm.
     pub cache_dir: PathBuf,
 }
 
@@ -102,7 +102,14 @@ impl DataDir {
     pub fn legacy_recordings_dir(&self) -> PathBuf {
         self.cache_dir.join("recordings")
     }
+    /// Where model files are kept unless the user chose another folder:
+    /// with the user's data, since an imported file cannot be fetched again
+    /// and a cache may be cleared.
     pub fn models_dir(&self) -> PathBuf {
+        self.data_dir.join("models")
+    }
+    /// Where earlier builds kept model files.
+    pub fn legacy_models_dir(&self) -> PathBuf {
         self.cache_dir.join("models")
     }
     /// The clip the speed test replays, recorded or copied from history.

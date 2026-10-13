@@ -1055,13 +1055,16 @@ mod tests {
                 };
                 let p = match kind {
                     ProviderKind::Native => ProviderConfig::native("failing", "Failing", "x", caps),
-                    _ => ProviderConfig::embedded(
-                        "failing",
-                        "Failing",
-                        arcvox_core::config::Runtime::Whisper,
-                        "missing-model",
-                        caps,
-                    ),
+                    _ => {
+                        let mut p = ProviderConfig::embedded(
+                            "failing",
+                            "Failing",
+                            arcvox_core::config::Runtime::Whisper,
+                            "missing-model",
+                        );
+                        p.capabilities = caps;
+                        p
+                    }
                 };
                 c.providers.push(p);
                 c.profiles[0].asr_provider = arcvox_core::types::ProviderId("failing".into());

@@ -2,6 +2,7 @@ use super::download::{self, DownloadProgress};
 use super::manifest::{safe_segment, Manifest, ManifestSource};
 use super::*;
 use crate::config::{ProviderConfig, Runtime};
+use crate::history::MoveReport;
 use crate::paths::DataDir;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -26,6 +27,9 @@ pub struct InstalledModel {
 
 pub struct ModelStore {
     pub(crate) dirs: DataDir,
+    /// Where the model files are: the default under the cache, or the
+    /// folder the user chose.
+    models_dir: RwLock<PathBuf>,
     pub(crate) client: reqwest::Client,
     bundled: Manifest,
     manifest_url: Option<Url>,
@@ -48,6 +52,7 @@ impl ModelStore {
         let (progress, _) = broadcast::channel(64);
         ModelStore {
             dirs: dirs.clone(),
+            models_dir: RwLock::new(dirs.models_dir()),
             client,
             bundled: Manifest::parse(bundled_manifest).expect("bundled model manifest is valid"),
             manifest_url,
@@ -56,6 +61,76 @@ impl ModelStore {
             downloads: Mutex::new(HashMap::new()),
             progress,
         }
+    }
+
+    /// The folder the model files are in.
+    pub fn models_dir(&self) -> PathBuf {
+        self.models_dir.read().expect("models dir lock").clone()
+    }
+
+    /// Uses `dir` as the folder the files are in, without moving anything:
+    /// the folder the user chose earlier, at launch.
+    pub fn set_models_dir(&self, dir: PathBuf) {
+        *self.models_dir.write().expect("models dir lock") = dir;
+    }
+
+    /// Whether the files are in the default folder.
+    pub fn in_default_dir(&self) -> bool {
+        self.models_dir() == self.dirs.models_dir()
+    }
+
+    /// Keeps the model files in `dir` from now on (the default folder for
+    /// `None`), moving what is in the current folder there: every model
+    /// folder, the imported files and partial downloads. An item that cannot
+    /// be moved, or whose name is taken, stays behind and is counted in
+    /// `left`. Loaded models must have been unloaded first.
+    pub fn move_to(&self, dir: Option<&Path>) -> Result<MoveReport, ModelError> {
+        let to = dir
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| self.dirs.models_dir());
+        let from = self.models_dir();
+        if to == from {
+            return Ok(MoveReport::default());
+        }
+        std::fs::create_dir_all(&to)?;
+        // A folder that cannot be written to is refused before anything moves.
+        let probe = to.join(".arcvox-write-test");
+        std::fs::write(&probe, b"")?;
+        let _ = std::fs::remove_file(&probe);
+        let report = move_items(&from, &to);
+        *self.models_dir.write().expect("models dir lock") = to;
+        Ok(report)
+    }
+
+    /// Earlier builds kept the model files in the cache directory, which may
+    /// be cleared. While the default folder is in use and still empty, the
+    /// files move out of the old place once; a folder that is a link was
+    /// arranged by hand and is left alone. Returns what moved.
+    pub fn adopt_legacy_dir(&self) -> Result<MoveReport, ModelError> {
+        let legacy = self.dirs.legacy_models_dir();
+        let to = self.models_dir();
+        if !self.in_default_dir() || legacy == to {
+            return Ok(MoveReport::default());
+        }
+        let Ok(meta) = std::fs::symlink_metadata(&legacy) else {
+            return Ok(MoveReport::default());
+        };
+        if !meta.is_dir() {
+            return Ok(MoveReport::default());
+        }
+        let occupied = std::fs::read_dir(&to)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|e| safe_segment(&e.file_name().to_string_lossy()));
+        if occupied {
+            return Ok(MoveReport::default());
+        }
+        std::fs::create_dir_all(&to)?;
+        let report = move_items(&legacy, &to);
+        // Goes only when nothing is left in it.
+        let _ = std::fs::remove_dir(&legacy);
+        Ok(report)
     }
 
     /// Manifest for synchronous callers: the one `manifest()` settled on; before
@@ -93,7 +168,7 @@ impl ModelStore {
             .get(id)
             .map(|e| e.file_name())
             .unwrap_or_else(|| format!("{id}.bin"));
-        let models = self.dirs.models_dir();
+        let models = self.models_dir();
         if safe_segment(id) && safe_segment(&file) {
             models.join(id).join(file)
         } else {
@@ -104,7 +179,7 @@ impl ModelStore {
     pub fn installed(&self) -> Vec<InstalledModel> {
         let manifest = self.known_manifest();
         let mut out = Vec::new();
-        for entry in std::fs::read_dir(self.dirs.models_dir())
+        for entry in std::fs::read_dir(self.models_dir())
             .into_iter()
             .flatten()
             .flatten()
@@ -135,7 +210,7 @@ impl ModelStore {
             }
         }
         out.sort_by(|a, b| a.id.cmp(&b.id));
-        let mut custom: Vec<_> = std::fs::read_dir(self.dirs.models_dir().join(CUSTOM_DIR))
+        let mut custom: Vec<_> = std::fs::read_dir(self.models_dir().join(CUSTOM_DIR))
             .into_iter()
             .flatten()
             .flatten()
@@ -184,7 +259,7 @@ impl ModelStore {
     }
 
     pub fn delete(&self, id: &str) -> Result<(), ModelError> {
-        let models = self.dirs.models_dir();
+        let models = self.models_dir();
         if let Some(name) = id.strip_prefix("custom/") {
             if !safe_segment(name) {
                 return Err(ModelError::NotInstalled(id.to_string()));
@@ -205,7 +280,7 @@ impl ModelStore {
             .map(|n| n.to_string_lossy().into_owned())
             .filter(|n| safe_segment(n))
             .ok_or(ModelError::UnknownFormat)?;
-        let dir = self.dirs.models_dir().join(CUSTOM_DIR);
+        let dir = self.models_dir().join(CUSTOM_DIR);
         std::fs::create_dir_all(&dir)?;
         let path = dir.join(&name);
         let same_file = matches!(
@@ -247,7 +322,7 @@ impl ModelStore {
         #[cfg(unix)]
         {
             use std::os::unix::ffi::OsStrExt;
-            let dir = self.dirs.models_dir();
+            let dir = self.models_dir();
             std::fs::create_dir_all(&dir)?;
             let c = std::ffi::CString::new(dir.as_os_str().as_bytes())
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
@@ -306,7 +381,7 @@ impl ModelStore {
         cancel: Arc<AtomicBool>,
     ) -> Result<InstalledModel, ModelError> {
         let dest = self.path_in(manifest, &entry.id);
-        if dest.starts_with(self.dirs.models_dir().join(".invalid")) {
+        if dest.starts_with(self.models_dir().join(".invalid")) {
             return Err(ModelError::Manifest(format!(
                 "model `{}` has an unsafe id or file name",
                 entry.id
@@ -438,10 +513,55 @@ fn lone_file(dir: &Path) -> Option<(PathBuf, u64)> {
     files.next().is_none().then_some(first)
 }
 
+/// Moves every item directly inside `from` into `to`; an item that cannot
+/// be moved, or whose name is taken, stays behind and is counted in `left`.
+fn move_items(from: &Path, to: &Path) -> MoveReport {
+    let mut report = MoveReport::default();
+    for entry in std::fs::read_dir(from).into_iter().flatten().flatten() {
+        let name = entry.file_name();
+        if !safe_segment(&name.to_string_lossy()) {
+            continue;
+        }
+        let old = entry.path();
+        let new = to.join(&name);
+        // A rename works within one volume; across volumes the item is copied.
+        let moved = !new.exists()
+            && (std::fs::rename(&old, &new).is_ok()
+                || (copy_item(&old, &new).is_ok() && remove_item(&old).is_ok()));
+        if moved {
+            report.moved += 1;
+        } else {
+            report.left += 1;
+        }
+    }
+    report
+}
+
+/// Copies a file or a folder tree.
+fn copy_item(from: &Path, to: &Path) -> std::io::Result<()> {
+    if from.is_dir() {
+        std::fs::create_dir_all(to)?;
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            copy_item(&entry.path(), &to.join(entry.file_name()))?;
+        }
+        Ok(())
+    } else {
+        std::fs::copy(from, to).map(|_| ())
+    }
+}
+
+fn remove_item(path: &Path) -> std::io::Result<()> {
+    if path.is_dir() {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Capabilities;
 
     fn store(tmp: &Path) -> (DataDir, ModelStore) {
         let dirs = DataDir::custom(tmp);
@@ -485,8 +605,7 @@ mod tests {
     fn resolve_prefers_model_path_then_catalogue() {
         let tmp = tempfile::tempdir().unwrap();
         let (_d, s) = store(tmp.path());
-        let mut cfg =
-            ProviderConfig::embedded("e", "E", Runtime::Whisper, "a", Capabilities::default());
+        let mut cfg = ProviderConfig::embedded("e", "E", Runtime::Whisper, "a");
         assert!(matches!(s.resolve(&cfg), Err(ModelError::NotInstalled(_))));
         let p = s.model_path("a");
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -613,7 +732,7 @@ mod tests {
         assert_eq!(p, dirs.models_dir().join("r").join("r-file.gguf"));
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(&p, b"GGUF").unwrap();
-        let cfg = ProviderConfig::embedded("e", "E", Runtime::Llama, "r", Capabilities::default());
+        let cfg = ProviderConfig::embedded("e", "E", Runtime::Llama, "r");
         assert_eq!(s.resolve(&cfg).unwrap(), p);
         assert_eq!(s.installed()[0].id, "r");
     }
@@ -627,7 +746,7 @@ mod tests {
             s.model_path("r"),
             dirs.models_dir().join("r").join("r-file.gguf")
         );
-        let cfg = ProviderConfig::embedded("e", "E", Runtime::Llama, "r", Capabilities::default());
+        let cfg = ProviderConfig::embedded("e", "E", Runtime::Llama, "r");
         assert!(matches!(s.resolve(&cfg), Err(ModelError::NotInstalled(_))));
     }
 
@@ -721,5 +840,82 @@ mod tests {
             b"GGUF\x03\x00\x00\x00second"
         );
         assert_eq!(s.installed().len(), 1);
+    }
+
+    #[test]
+    fn moving_the_folder_takes_every_item_and_back() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (dirs, s) = store(tmp.path());
+        let a = dirs.models_dir().join("a");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::write(a.join("ggml-a.bin"), b"ggml").unwrap();
+        let custom = dirs.models_dir().join("custom");
+        std::fs::create_dir_all(&custom).unwrap();
+        std::fs::write(custom.join("mine.gguf"), b"GGUF\x03\x00\x00\x00").unwrap();
+        std::fs::write(dirs.models_dir().join(".hidden"), b"").unwrap();
+        assert!(s.in_default_dir());
+
+        let chosen = tmp.path().join("elsewhere").join("models");
+        let report = s.move_to(Some(&chosen)).unwrap();
+        assert_eq!((report.moved, report.left), (2, 0));
+        assert_eq!(s.models_dir(), chosen);
+        assert!(!s.in_default_dir());
+        assert!(chosen.join("a").join("ggml-a.bin").is_file());
+        assert!(chosen.join("custom").join("mine.gguf").is_file());
+        assert!(!a.exists());
+        let ids: Vec<String> = s.installed().into_iter().map(|m| m.id).collect();
+        assert_eq!(ids, ["a", "custom/mine.gguf"]);
+        assert_eq!(s.model_path("a"), chosen.join("a").join("ggml-a.bin"));
+
+        // An item whose name is taken stays behind.
+        std::fs::create_dir_all(dirs.models_dir().join("a")).unwrap();
+        std::fs::write(dirs.models_dir().join("a").join("other.bin"), b"x").unwrap();
+        std::fs::write(chosen.join("b.part"), b"").unwrap();
+        let report = s.move_to(None).unwrap();
+        assert_eq!((report.moved, report.left), (2, 1));
+        assert!(s.in_default_dir());
+        assert!(dirs.models_dir().join("custom").join("mine.gguf").is_file());
+        assert!(
+            chosen.join("a").join("ggml-a.bin").is_file(),
+            "left where it was"
+        );
+        // Nothing to do when the folder is the current one.
+        let report = s.move_to(None).unwrap();
+        assert_eq!((report.moved, report.left), (0, 0));
+    }
+
+    #[test]
+    fn files_of_an_earlier_build_move_out_of_the_cache_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (dirs, s) = store(tmp.path());
+        let legacy = dirs.legacy_models_dir();
+        std::fs::create_dir_all(legacy.join("a")).unwrap();
+        std::fs::write(legacy.join("a").join("ggml-a.bin"), b"ggml").unwrap();
+        let report = s.adopt_legacy_dir().unwrap();
+        assert_eq!((report.moved, report.left), (1, 0));
+        assert!(dirs.models_dir().join("a").join("ggml-a.bin").is_file());
+        assert!(!legacy.exists(), "the emptied old folder goes");
+        // Nothing to adopt the second time, and a non-empty default folder
+        // is never written into from the old place.
+        std::fs::create_dir_all(legacy.join("b")).unwrap();
+        let report = s.adopt_legacy_dir().unwrap();
+        assert_eq!((report.moved, report.left), (0, 0));
+        assert!(legacy.join("b").is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_cache_folder_is_left_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (dirs, s) = store(tmp.path());
+        let real = tmp.path().join("real");
+        std::fs::create_dir_all(real.join("a")).unwrap();
+        std::fs::write(real.join("a").join("ggml-a.bin"), b"ggml").unwrap();
+        let _ = std::fs::remove_dir(dirs.legacy_models_dir());
+        std::fs::create_dir_all(dirs.cache_dir.clone()).unwrap();
+        std::os::unix::fs::symlink(&real, dirs.legacy_models_dir()).unwrap();
+        let report = s.adopt_legacy_dir().unwrap();
+        assert_eq!((report.moved, report.left), (0, 0));
+        assert!(real.join("a").join("ggml-a.bin").is_file());
     }
 }

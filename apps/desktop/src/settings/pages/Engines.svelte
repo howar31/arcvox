@@ -2,17 +2,15 @@
   import { onMount } from "svelte";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import {
-    errorMessage, formatBytes, modelsCancel, modelsDelete, modelsDir, modelsDownload, modelsDownloadRecommended, modelsImport, modelsInstalled,
-    modelsManifest, modelsManifestNow, onModelDownloadProgress, probeProvider, reveal, upsertProvider,
-    type DownloadProgress, type InstalledModel, type ManifestView, type ModelEntry, type ProviderConfig,
+    errorMessage, formatBytes, modelsCancel, modelsCustomDir, modelsDelete, modelsDirGet, modelsDirSet, modelsDownload, modelsDownloadRecommended, modelsImport,
+    modelsInstalled, modelsManifest, modelsManifestNow, nativeInstallLanguage, nativeStatus, onModelDownloadProgress, onNativeInstallProgress, openFolder,
+    probeProvider, type DownloadProgress, type InstalledModel, type ManifestView, type ModelEntry, type ModelsDir, type NativeStatusView, type ProviderConfig,
   } from "../../lib/api";
-  import { engineFromModel, enginesOf, hasRole, recommendedMissing, runtimeFor, unusedModels, type Role } from "../../lib/engines";
+  import { enginesOf, hasRole, recommendedMissing, runtimeFor, type Role } from "../../lib/engines";
   import { t } from "../../lib/i18n";
-  import { modelDescription, modelLabel, usedBy } from "../../lib/labels";
-  import { rowStatus } from "../../lib/models.svelte";
-  import { engineMeta } from "../../lib/profileEdit";
-  import { baseName, describeProbe, NATIVE_FM } from "../../lib/providerForm";
-  import { engineDescription, engineRecommended } from "../../lib/stages";
+  import { defaultProfile, modelDescription, modelLabel, usedBy } from "../../lib/labels";
+  import { describeProbe, NATIVE_DICTATION } from "../../lib/providerForm";
+  import { engineDescription } from "../../lib/stages";
   import { guard } from "../../lib/guard.svelte";
   import { go } from "../../lib/route";
   import { config } from "../../lib/store.svelte";
@@ -35,11 +33,19 @@
 
   let manifest = $state<ManifestView | null>(null);
   let installed = $state<InstalledModel[]>([]);
-  let dir = $state("");
+  // The files on disk have been read once; before that no engine is called gone.
+  let installedKnown = $state(false);
+  // The folder of the model files. Changing it moves them at once.
+  let folder = $state<ModelsDir | null>(null);
+  let moving = $state(false);
   let progress = $state<Record<string, DownloadProgress>>({});
   let refreshing = $state(false);
-  // Per-row test result, keyed by provider id.
+  // Per-row test result, keyed by engine id.
   let rowProbes = $state<Record<string, { state: "wait" | "ok" | "bad"; text: string }>>({});
+  // The platform services' status, keyed by engine id.
+  let nativeStates = $state<Record<string, NativeStatusView>>({});
+  let installing = $state(false);
+  let installFraction = $state(0);
   let formOpen = $state(false);
   let formInitial = $state<ProviderConfig | null>(null);
   // The installed model waiting for the delete confirmation.
@@ -49,18 +55,53 @@
     { value: "asr" as Role, label: t("engines.role.asr") },
     { value: "llm" as Role, label: t("engines.role.llm") },
   ]);
-  const providers = $derived(config.value?.providers ?? []);
   const engines = $derived(enginesOf(config.value, role));
-  const installedIds = $derived(new Set(installed.map((m) => m.id)));
-  const installedPaths = $derived(new Set(installed.map((m) => m.path)));
-  const catalogue = $derived((manifest?.models ?? []).filter((m) => m.role === role));
-  const unused = $derived(unusedModels(installed, providers, role));
-  const imported = $derived(installed.filter((m) => m.custom && m.runtime === runtimeFor(role)));
+  const builtins = $derived(engines.filter((p) => p.kind === "native"));
+  const externals = $derived(engines.filter((p) => p.kind === "http"));
   const missingRecommended = $derived(recommendedMissing(manifest, installed));
   const busy = $derived(Object.values(progress).some((p) => !p.done));
+  const defaultHint = $derived(defaultProfile(config.value)?.language_hint ?? null);
+
+  /**
+   * One row per local model of the role: an installed file (catalogue or imported), a catalogue entry
+   * still to download, or an engine whose file is gone. Installed and downloading rows come first.
+   */
+  type LocalRow = {
+    id: string; label: string; desc: string; meta: string;
+    engine: ProviderConfig | null; model: InstalledModel | null;
+    state: "installed" | "downloading" | "missing" | "error" | "gone"; received: number; total: number; error: string;
+  };
+  const locals = $derived.by((): LocalRow[] => {
+    if (!manifest || !installedKnown) return [];
+    const providers = config.value?.providers ?? [];
+    const engineOf = (id: string) => providers.find((p) => p.id === id && p.kind === "embedded") ?? null;
+    const rows: LocalRow[] = [];
+    const seen = new Set<string>();
+    for (const m of installed.filter((x) => x.runtime === runtimeFor(role))) {
+      const entry = manifest?.models.find((e) => e.id === m.id) ?? null;
+      seen.add(m.id);
+      rows.push({
+        id: m.id, label: modelLabel(manifest, m), engine: engineOf(m.id), model: m, state: "installed", received: 0, total: 0, error: "",
+        desc: entry ? modelDescription(entry) : "",
+        meta: entry ? entryMeta(entry) : t("engines.imported_meta", { size: formatBytes(m.size_bytes) }),
+      });
+    }
+    for (const e of (manifest?.models ?? []).filter((x) => x.role === role)) {
+      if (seen.has(e.id)) continue;
+      seen.add(e.id);
+      const p = progress[e.id];
+      const state = p && !p.done ? "downloading" : p?.error ? "error" : "missing";
+      rows.push({ id: e.id, label: e.label, desc: modelDescription(e), meta: entryMeta(e), engine: engineOf(e.id), model: null, state, received: p?.received ?? 0, total: p?.total ?? 0, error: p?.error ?? "" });
+    }
+    for (const p of engines.filter((x) => x.kind === "embedded" && !seen.has(x.id))) {
+      rows.push({ id: p.id, label: p.label, desc: engineDescription(p, manifest), meta: "", engine: p, model: null, state: "gone", received: 0, total: 0, error: "" });
+    }
+    const rank = (r: LocalRow) => (r.state === "installed" ? 0 : r.state === "downloading" ? 1 : r.state === "gone" ? 2 : 3);
+    return rows.sort((a, b) => rank(a) - rank(b));
+  });
 
   async function refreshInstalled() {
-    try { installed = await modelsInstalled(); } catch (e) { toast.error(errorMessage(e)); }
+    try { installed = await modelsInstalled(); installedKnown = true; } catch (e) { toast.error(errorMessage(e)); }
   }
   async function refreshManifest() {
     refreshing = true;
@@ -71,28 +112,65 @@
     } catch (e) { toast.error(errorMessage(e)); }
     refreshing = false;
   }
+  // The catalogue and the files on disk, looked at again; the engines follow on the way.
+  async function refreshAll() {
+    await Promise.all([refreshManifest(), refreshInstalled()]);
+  }
   onMount(() => {
-    refreshManifest();
-    refreshInstalled();
-    modelsDir().then((d) => { dir = d; }).catch((e) => toast.error(errorMessage(e)));
-    let unlisten: (() => void) | undefined;
+    refreshAll();
+    loadFolder();
+    let unlistenModels: (() => void) | undefined;
+    let unlistenNative: (() => void) | undefined;
     let disposed = false;
     onModelDownloadProgress((p) => {
       progress = { ...progress, [p.id]: p };
       if (p.done && !p.error) refreshInstalled();
-    }).then((u) => { if (disposed) u(); else unlisten = u; });
-    return () => { disposed = true; unlisten?.(); };
+    }).then((u) => { if (disposed) u(); else unlistenModels = u; });
+    onNativeInstallProgress((f) => (installFraction = f)).then((u) => { if (disposed) u(); else unlistenNative = u; });
+    return () => { disposed = true; unlistenModels?.(); unlistenNative?.(); };
   });
 
-  // Engines
-  const describe = (p: ProviderConfig) => engineDescription(p, manifest);
-  function usersLine(p: ProviderConfig): string {
-    const users = usedBy(config.value, p.id);
+  // The platform services report their status when they appear on the page.
+  $effect(() => {
+    for (const p of builtins) {
+      if (!p.native_id || nativeStates[p.id]) continue;
+      nativeStatus(p.native_id, defaultHint)
+        .then((s) => { nativeStates = { ...nativeStates, [p.id]: s }; })
+        .catch((e) => { nativeStates = { ...nativeStates, [p.id]: { status: "failed", reason: errorMessage(e) } }; });
+    }
+  });
+  const STATUSES = ["ready", "needs_download", "locale_unsupported", "os_too_old", "not_eligible", "intelligence_off", "model_not_ready", "failed"];
+  async function installLanguage(p: ProviderConfig) {
+    installing = true;
+    installFraction = 0;
+    try { await nativeInstallLanguage(defaultHint); }
+    catch (e) { const m = errorMessage(e); toast.error(STATUSES.includes(m) ? t("engines.native." + m) : m); }
+    installing = false;
+    const { [p.id]: _, ...rest } = nativeStates;
+    nativeStates = rest;
+  }
+
+  /**
+   * The ring before an engine says one thing: in use by a profile and working (accent), ready and
+   * waiting (green), not usable yet and nobody depends on it (grey), or a problem to deal with (red):
+   * a profile depends on it and it cannot work, a download or a test failed, a file is gone.
+   */
+  type Light = { tone: "accent" | "ok" | "off" | "live"; title: string };
+  function light(id: string, ready: boolean, fault: boolean): Light {
+    const inUse = usedBy(config.value, id).length > 0;
+    if (fault || (inUse && !ready)) return { tone: "live", title: t("engines.light.fault") };
+    if (inUse) return { tone: "accent", title: t("engines.light.in_use") };
+    if (ready) return { tone: "ok", title: t("engines.light.ready") };
+    return { tone: "off", title: t("engines.light.off") };
+  }
+  const failed = (id: string): boolean => rowProbes[id]?.state === "bad";
+  function usersLine(id: string): string {
+    const users = usedBy(config.value, id);
     if (users.length === 0) return t("engines.not_in_use");
     const names = users.map((u) => (u.isDefault ? t("engines.default_user", { name: u.name }) : u.name)).join(t("engines.list_sep"));
     return t("engines.in_use", { names });
   }
-  const recommended = (p: ProviderConfig) => engineRecommended(p, manifest);
+  const recommended = (id: string): boolean => !!manifest?.models.find((m) => m.id === id)?.recommended;
 
   async function test(p: ProviderConfig) {
     rowProbes = { ...rowProbes, [p.id]: { state: "wait", text: t("engines.testing") } };
@@ -111,16 +189,6 @@
   }
 
   // Models
-  const isUnused = (id: string): boolean => unused.some((m) => m.id === id);
-
-  async function createEngine(id: string) {
-    const m = installed.find((x) => x.id === id);
-    if (!m) return;
-    try {
-      await upsertProvider(engineFromModel(m, modelLabel(manifest, m), providers.map((p) => p.id)));
-      toast.ok(t("engines.created"));
-    } catch (e) { toast.error(errorMessage(e)); }
-  }
   function download(id: string) {
     const { [id]: _, ...rest } = progress;
     progress = rest;
@@ -148,17 +216,33 @@
       await refreshInstalled();
     } catch (e) { toast.error(errorMessage(e)); }
   }
+  // The folder a file is dropped in by hand, made on the way if it is not there yet.
+  async function openCustomFolder() {
+    try { await openFolder(await modelsCustomDir()); } catch (e) { toast.error(errorMessage(e)); }
+  }
+  const loadFolder = () => modelsDirGet().then((d) => { folder = d; }).catch((e) => toast.error(errorMessage(e)));
+  async function moveModels(path: string | null) {
+    moving = true;
+    try {
+      const d = await modelsDirSet(path);
+      folder = d;
+      const counts = { n: d.moved.toLocaleString(), left: d.left.toLocaleString() };
+      toast.ok(t(d.left ? "engines.models_dir_left" : "engines.models_dir_moved", counts));
+    } catch (e) { toast.error(errorMessage(e)); }
+    moving = false;
+    await refreshInstalled();
+  }
+  async function chooseFolder() {
+    const picked = await openDialog({ directory: true, multiple: false, defaultPath: folder?.path });
+    if (typeof picked === "string" && picked !== folder?.path) await moveModels(picked);
+  }
   const percent = (received: number, total: number): number => (total > 0 ? Math.min(100, Math.floor((received / total) * 100)) : 0);
   const entryMeta = (m: ModelEntry): string =>
     t("engines.model_meta", { size: formatBytes(m.size_bytes), license: m.license, languages: m.languages.join(t("engines.list_sep")) });
 </script>
 
 {#snippet description()}{t("engines.description_before")}<PageLink page="flow" label={t("nav.flow")} />{t("engines.description_after")}{/snippet}
-<PageHead title={t("nav.engines")} {description}>
-  {#snippet actions()}
-    <button type="button" class="btn primary" onclick={() => openForm(null)}><Icon name="plus" size={14} />{t("engines.add")}</button>
-  {/snippet}
-</PageHead>
+<PageHead title={t("nav.engines")} {description} />
 
 <div class="toolbar">
   <Segmented options={roles} bind:value={() => role, (v) => guard.request(() => go("engines", v))} label={t("engines.role")} />
@@ -167,99 +251,133 @@
   {/if}
 </div>
 
-<Group title={t("engines.configured")}>
-  {#each engines as p (p.id)}
-    {@const meta = engineMeta(p, installedIds, installedPaths)}
-    {@const probe = rowProbes[p.id]}
-    <Row>
-      {#snippet leading()}<Ring tone={usedBy(config.value, p.id).length > 0 ? "accent" : "off"} />{/snippet}
-      <div class="info">
-        <div class="title">
-          <span class="name">{p.label}</span>
-          <Tag>{t("engines.tag." + p.kind)}</Tag>
-          {#if recommended(p)}<Tag tone="accent">{t("engines.recommended")}</Tag>{/if}
-          {#if !hasRole(p)}<Tag tone="warn">{t("engines.no_role")}</Tag>{/if}
-          {#if meta.kind === "local" && !meta.ready && p.model_id}<Tag tone="warn">{t("engines.not_downloaded")}</Tag>
-          {:else if meta.kind === "local" && !meta.ready && p.model_path}<Tag tone="live">{t("engines.file_missing")}</Tag>{/if}
-        </div>
-        <small>{describe(p)}</small>
-        <small>{usersLine(p)}</small>
-        {#if probe}<small class="probe {probe.state}" role="status">{probe.text}</small>{/if}
-      </div>
-      <button type="button" class="btn quiet" onclick={() => test(p)} disabled={probe?.state === "wait"}>{t("engines.test")}</button>
-      <button type="button" class="btn quiet" onclick={() => openForm(p)}>{t("common.edit")}</button>
-    </Row>
-  {:else}
-    <Empty text={t("engines.none." + role)}>
-      {#snippet action()}<button type="button" class="btn" onclick={() => openForm(null)}>{t("engines.add")}</button>{/snippet}
-    </Empty>
-  {/each}
-</Group>
-
-{#snippet modelState(id: string)}
-  <Tag tone="ok">{t("engines.installed")}</Tag>
-  {#if isUnused(id)}<button type="button" class="btn quiet" onclick={() => createEngine(id)}>{t("engines.create")}</button>{/if}
-  <button type="button" class="btn quiet danger" onclick={() => { deleting = installed.find((m) => m.id === id) ?? null; }}>{t("engines.delete_model")}</button>
+{#snippet probeLine(id: string)}
+  {@const probe = rowProbes[id]}
+  {#if probe}<small class="probe {probe.state}" role="status">{probe.text}</small>{/if}
 {/snippet}
 
-<Group title={t("engines.catalogue")}>
+<!-- Every installed model is an engine of its own; a file still to download is listed with it. -->
+<Group title={t("engines.local_models")}>
   {#snippet actions()}
-    <button type="button" class="btn" onclick={refreshManifest} disabled={refreshing}><Icon name="refresh" size={14} />{t("common.refresh")}</button>
+    <button type="button" class="btn" onclick={refreshAll} disabled={refreshing}><Icon name="refresh" size={14} />{t("common.refresh")}</button>
   {/snippet}
-  {#if !manifest}
+  {#if !manifest || !installedKnown}
     <Row><span class="sub">{t("common.loading")}</span></Row>
   {/if}
-  {#each catalogue as m (m.id)}
-    {@const s = rowStatus(m, installed, progress)}
+  {#each locals as r (r.id)}
     <Row>
-      <div class="info">
+      {#snippet leading()}
+        {@const lamp = light(r.id, r.state === "installed", r.state === "error" || r.state === "gone" || failed(r.id))}
+        <Ring tone={lamp.tone} title={lamp.title} />
+      {/snippet}
+      <!-- Words only for what the ring cannot say; a dimmed row is one nobody depends on yet. -->
+      <div class="info" class:dim={r.state === "missing" && !r.engine}>
         <div class="title">
-          <span class="name">{m.label}</span>
-          {#if m.recommended}<Tag tone="accent">{t("engines.recommended")}</Tag>{/if}
+          <span class="name">{r.label}</span>
+          {#if r.model?.custom}<Tag title={t("engines.tip.imported")}>{t("engines.tag.imported")}</Tag>{/if}
+          {#if recommended(r.id)}<Tag tone="accent" title={t("engines.tip.recommended")}>{t("engines.recommended")}</Tag>{/if}
+          {#if r.state === "downloading"}<Tag tone="warn">{t("engines.downloading")}</Tag>
+          {:else if r.state === "error"}<Tag tone="live" title={r.error}>{t("engines.download_failed")}</Tag>
+          {:else if r.state === "gone"}<Tag tone="live" title={t("engines.tip.file_missing")}>{t("engines.file_missing")}</Tag>
+          {:else if r.state === "missing" && r.engine}<Tag tone="live" title={t("engines.tip.not_downloaded")}>{t("engines.not_downloaded")}</Tag>{/if}
+          {#if r.engine && !hasRole(r.engine)}<Tag tone="warn">{t("engines.no_role")}</Tag>{/if}
         </div>
-        <small class="line" title={entryMeta(m)}>{entryMeta(m)}</small>
-        {#if modelDescription(m)}<small>{modelDescription(m)}</small>{/if}
-        {#if s.kind === "error"}<small class="probe bad">{s.message}</small>{/if}
+        {#if r.meta}<small class="line" title={r.meta}>{r.meta}</small>{/if}
+        {#if r.desc}<small>{r.desc}</small>{/if}
+        {#if r.engine}<small>{usersLine(r.id)}</small>{/if}
+        {#if r.state === "error"}<small class="probe bad">{r.error}</small>{/if}
+        {@render probeLine(r.id)}
       </div>
-      {#if s.kind === "missing"}
-        <button type="button" class="btn" onclick={() => download(m.id)}><Icon name="download" />{t("engines.download")}</button>
-      {:else if s.kind === "downloading"}
-        {@const pct = percent(s.received, s.total)}
-        <div class="bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label={m.label}><i style:width="{pct}%"></i></div>
+      {#if r.state === "installed"}
+        {#if r.engine}<button type="button" class="btn quiet" onclick={() => test(r.engine!)} disabled={rowProbes[r.id]?.state === "wait"}>{t("engines.test")}</button>{/if}
+        <button type="button" class="btn quiet danger" onclick={() => { deleting = r.model; }}>{t("engines.delete_model")}</button>
+      {:else if r.state === "downloading"}
+        {@const pct = percent(r.received, r.total)}
+        <div class="bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label={r.label}><i style:width="{pct}%"></i></div>
         <span class="sub num pct">{pct}%</span>
-        <button type="button" class="btn quiet" onclick={() => cancel(m.id)}>{t("common.cancel")}</button>
-      {:else if s.kind === "installed"}
-        {@render modelState(m.id)}
-      {:else}
-        <button type="button" class="btn" onclick={() => download(m.id)}>{t("engines.retry")}</button>
+        <button type="button" class="btn quiet" onclick={() => cancel(r.id)}>{t("common.cancel")}</button>
+      {:else if r.state === "error"}
+        <button type="button" class="btn" onclick={() => download(r.id)}>{t("engines.retry")}</button>
+      {:else if r.state === "missing"}
+        <button type="button" class="btn" onclick={() => download(r.id)}><Icon name="download" />{t("engines.download")}</button>
       {/if}
     </Row>
   {/each}
+  <div class="rowfoot">
+    {#if folder}<p>{t(folder.is_default ? "engines.folder_help_default" : "engines.folder_help", { dir: folder.path })}</p>{/if}
+    <p class="links">
+      <button type="button" class="link" onclick={openCustomFolder}>{t("engines.open_folder")}</button>
+      <button type="button" class="link" onclick={importFile}>{t("engines.import")}</button>
+      <button type="button" class="link" disabled={moving} onclick={chooseFolder}>{t("engines.models_dir_choose")}</button>
+      {#if folder && !folder.is_default}<button type="button" class="link" disabled={moving} onclick={() => moveModels(null)}>{t("engines.models_dir_reset")}</button>{/if}
+    </p>
+  </div>
 </Group>
 
-{#if imported.length > 0}
-  <Group title={t("engines.imported_title")}>
-    {#each imported as m (m.path)}
+{#if builtins.length > 0}
+  <!-- The platform's own services; their engines are made by the app and carry the service's name. -->
+  <Group title={t("engines.builtin")}>
+    {#each builtins as p (p.id)}
+      {@const s = nativeStates[p.id]}
       <Row>
+        {#snippet leading()}
+          {@const lamp = light(p.id, s?.status === "ready", s?.status === "failed" || failed(p.id))}
+          <Ring tone={lamp.tone} title={lamp.title} />
+        {/snippet}
         <div class="info">
-          <div class="title"><span class="name">{baseName(m.path)}</span></div>
-          <small>{formatBytes(m.size_bytes)}</small>
+          <div class="title">
+            <span class="name">{p.label}</span>
+            {#if s && s.status !== "ready"}<Tag tone={s.status === "failed" ? "live" : "warn"} title={s.reason ?? undefined}>{t("engines.native." + s.status)}</Tag>{/if}
+          </div>
+          <small>{engineDescription(p, manifest)}</small>
+          <small>{usersLine(p.id)}</small>
+          {@render probeLine(p.id)}
         </div>
-        {@render modelState(m.id)}
+        {#if p.native_id === NATIVE_DICTATION && s?.status === "needs_download"}
+          <button type="button" class="btn" onclick={() => installLanguage(p)} disabled={installing}>
+            {installing ? t("engines.installing", { percent: `${Math.round(installFraction * 100)}%` }) : t("engines.install_language")}
+          </button>
+        {/if}
+        <button type="button" class="btn quiet" onclick={() => test(p)} disabled={rowProbes[p.id]?.state === "wait"}>{t("engines.test")}</button>
       </Row>
     {/each}
   </Group>
 {/if}
 
+<!-- The only engines made by hand. -->
+<Group title={t("engines.external")}>
+  {#snippet actions()}
+    <button type="button" class="btn" onclick={() => openForm(null)}><Icon name="plus" size={14} />{t("engines.add")}</button>
+  {/snippet}
+  {#each externals as p (p.id)}
+    <Row>
+      {#snippet leading()}
+        {@const lamp = light(p.id, true, failed(p.id))}
+        <Ring tone={lamp.tone} title={lamp.title} />
+      {/snippet}
+      <div class="info">
+        <div class="title">
+          <span class="name">{p.label}</span>
+          {#if !hasRole(p)}<Tag tone="warn">{t("engines.no_role")}</Tag>{/if}
+        </div>
+        <small>{engineDescription(p, manifest)}</small>
+        <small>{usersLine(p.id)}</small>
+        {@render probeLine(p.id)}
+      </div>
+      <button type="button" class="btn quiet" onclick={() => test(p)} disabled={rowProbes[p.id]?.state === "wait"}>{t("engines.test")}</button>
+      <button type="button" class="btn quiet" onclick={() => openForm(p)}>{t("common.edit")}</button>
+    </Row>
+  {:else}
+    <Empty text={t("engines.none_external." + role)}>
+      {#snippet action()}<button type="button" class="btn" onclick={() => openForm(null)}>{t("engines.add")}</button>{/snippet}
+    </Empty>
+  {/each}
+</Group>
+
 <!-- How the engines are run: timeouts, retries, unloading; saved with its own bar. -->
 <General section="processing" />
 
 <div class="foot">
-  <p class="help">
-    {#if dir}{t("engines.dir", { dir })}{/if}
-    <button type="button" class="link" onclick={() => reveal(dir).catch((e) => toast.error(errorMessage(e)))} disabled={!dir}>{t("engines.reveal")}</button>
-    <button type="button" class="link" onclick={importFile}>{t("engines.import")}</button>
-  </p>
   {#if manifest}<p class="help">{t(`engines.source.${manifest.source}`)}</p>{/if}
   <p class="help">
     {t("engines.speed")}
@@ -276,11 +394,12 @@
 </Modal>
 
 {#if formOpen}
-  <EngineForm bind:open={formOpen} initial={formInitial} {role} {installed} {manifest} />
+  <EngineForm bind:open={formOpen} initial={formInitial} {role} />
 {/if}
 
 <style>
   .info { flex: 1; min-width: 0; }
+  .info.dim .name, .info.dim small { color: var(--ink-3); }
   .toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
   .toolbar .btn.quiet { margin-right: -8px; }
   /* Tags move to a second line before the name is shortened. */
@@ -293,6 +412,11 @@
   .bar { width: 96px; height: 4px; border-radius: 2px; background: var(--sunken); overflow: hidden; flex: none; }
   .bar i { display: block; height: 100%; background: var(--accent); transition: width .2s; }
   .pct { width: 38px; text-align: right; flex: none; }
+  /* Where a file goes by hand, at the foot of the list it then appears in. */
+  .rowfoot { padding: 10px var(--row-x, 20px) 12px; border-top: 1px solid var(--line); background: var(--sunken); color: var(--ink-2); font-size: var(--text-sm); }
+  .rowfoot p { margin: 0; overflow-wrap: anywhere; }
+  .rowfoot .links { margin-top: 2px; }
+  .rowfoot .links .link { margin: 0 14px 0 0; }
   .foot { margin-top: 8px; }
   .foot .help { margin-top: 4px; }
   .link { border: 0; background: none; padding: 0; margin-left: 6px; color: var(--accent); font-size: var(--text-sm); cursor: default; }

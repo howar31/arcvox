@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use arcvox_core::config::{sync_engines, FirstRunDefaults};
 use arcvox_core::models::{
     InstalledModel, ManifestSource, ModelEntry, ModelError, ModelRole, ModelStore,
 };
@@ -7,7 +8,7 @@ use arcvox_core::Engine;
 use serde::Serialize;
 use tauri::State;
 
-use super::{CmdError, CmdResult};
+use super::{engine, CmdError, CmdResult};
 use crate::app::AppState;
 
 #[derive(Debug, Clone, Serialize)]
@@ -32,9 +33,29 @@ pub async fn download_recommended(store: &ModelStore) -> Result<(), ModelError> 
     Ok(())
 }
 
+/// Brings the embedded engines in line with the installed models and the
+/// catalogue; written only when something differs. Runs at launch and after
+/// every change of the models, the catalogue, the profiles or an import.
+pub fn engines_follow_models(
+    engine: &Engine,
+    store: &ModelStore,
+    native: &FirstRunDefaults,
+) -> CmdResult<()> {
+    let installed = store.installed();
+    let (manifest, _) = store.manifest_now();
+    let current = engine.config().current();
+    let mut next = (*current).clone();
+    sync_engines(&mut next, &installed, &manifest, native);
+    if next != *current {
+        engine.config().update(|c| *c = next)?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn models_manifest(state: State<'_, AppState>) -> CmdResult<ManifestView> {
     let (manifest, source) = state.models.manifest().await;
+    state.sync_engines();
     Ok(ManifestView {
         source,
         models: manifest.models,
@@ -60,6 +81,7 @@ pub fn models_installed(state: State<'_, AppState>) -> CmdResult<Vec<InstalledMo
 #[tauri::command]
 pub async fn models_download(id: String, state: State<'_, AppState>) -> CmdResult<InstalledModel> {
     let model = state.models.download(&id).await?;
+    state.sync_engines();
     state.refresh_problems();
     Ok(model)
 }
@@ -67,6 +89,7 @@ pub async fn models_download(id: String, state: State<'_, AppState>) -> CmdResul
 #[tauri::command]
 pub async fn models_download_recommended(state: State<'_, AppState>) -> CmdResult<()> {
     let done = download_recommended(&state.models).await;
+    state.sync_engines();
     state.refresh_problems();
     Ok(done?)
 }
@@ -82,7 +105,7 @@ pub fn models_cancel(id: String, state: State<'_, AppState>) -> CmdResult<()> {
 pub async fn delete(store: &ModelStore, engine: Option<&Engine>, id: &str) -> CmdResult<()> {
     store.delete(id)?;
     if let Some(e) = engine {
-        e.evict_model(id).await;
+        e.evict_model(&store.models_dir(), id).await;
     }
     Ok(())
 }
@@ -91,6 +114,7 @@ pub async fn delete(store: &ModelStore, engine: Option<&Engine>, id: &str) -> Cm
 pub async fn models_delete(id: String, state: State<'_, AppState>) -> CmdResult<()> {
     let engine = state.engine.lock().unwrap().clone();
     let done = delete(&state.models, engine.as_ref(), &id).await;
+    state.sync_engines();
     state.refresh_problems();
     done
 }
@@ -106,13 +130,81 @@ pub fn models_import(path: String, state: State<'_, AppState>) -> CmdResult<Inst
         ));
     }
     let model = state.models.import(&path)?;
+    state.sync_engines();
     state.refresh_problems();
     Ok(model)
 }
 
+/// The folder the model files are kept in.
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelsDirDto {
+    pub path: String,
+    /// False when the user chose it.
+    pub is_default: bool,
+    /// Items moved by this change, and those that could not be moved.
+    pub moved: usize,
+    pub left: usize,
+}
+
+fn models_dir_dto(store: &ModelStore, moved: usize, left: usize) -> ModelsDirDto {
+    ModelsDirDto {
+        path: store.models_dir().display().to_string(),
+        is_default: store.in_default_dir(),
+        moved,
+        left,
+    }
+}
+
 #[tauri::command]
-pub fn models_dir(state: State<'_, AppState>) -> CmdResult<String> {
-    Ok(state.dirs.models_dir().to_string_lossy().into_owned())
+pub fn models_dir_get(state: State<'_, AppState>) -> CmdResult<ModelsDirDto> {
+    Ok(models_dir_dto(&state.models, 0, 0))
+}
+
+/// Keeps the model files in `path` from now on, or in the default folder
+/// without one, and moves the existing files there. The loaded models are
+/// unloaded first; a dictation in progress refuses the change.
+#[tauri::command]
+pub async fn models_dir_set(
+    state: State<'_, AppState>,
+    path: Option<String>,
+) -> CmdResult<ModelsDirDto> {
+    let e = engine(&state)?;
+    if e.is_busy() {
+        return Err(CmdError::new("busy", "a dictation is being processed"));
+    }
+    let target = path.map(PathBuf::from);
+    if target.as_ref().is_some_and(|p| !p.is_absolute()) {
+        return Err(CmdError::new("folder_unusable", "not an absolute path"));
+    }
+    e.evict_embedded().await;
+    let store = state.models.clone();
+    let to = target.clone();
+    let report = tokio::task::spawn_blocking(move || store.move_to(to.as_deref()))
+        .await
+        .map_err(CmdError::from)??;
+    let setting = target.filter(|_| !state.models.in_default_dir());
+    e.config().update(|c| c.general.models_dir = setting)?;
+    // Imported files are loaded by path: the engines take the new one.
+    state.sync_engines();
+    state.refresh_problems();
+    Ok(models_dir_dto(&state.models, report.moved, report.left))
+}
+
+/// Opens the models folder in the file manager.
+#[tauri::command]
+pub fn models_dir_open(state: State<'_, AppState>) -> CmdResult<()> {
+    let dir = state.models.models_dir();
+    std::fs::create_dir_all(&dir)?;
+    std::process::Command::new("open").arg(dir).spawn()?;
+    Ok(())
+}
+
+/// The folder a model file is put in by hand, made if it is not there yet.
+#[tauri::command]
+pub fn models_custom_dir(state: State<'_, AppState>) -> CmdResult<String> {
+    let dir = state.models.models_dir().join("custom");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]
@@ -186,6 +278,49 @@ mod tests {
         assert_eq!(ids, ["a", "b"]);
         // A second run finds both installed and downloads nothing.
         download_recommended(&store).await.unwrap();
+
+        // The downloaded models bring their engines, named by the catalogue;
+        // the first-run pair stays for the default profile.
+        let engine = Engine::open(
+            dirs.clone(),
+            std::sync::Arc::new(arcvox_core::MemorySecretStore::default()),
+        )
+        .await
+        .unwrap();
+        let none = FirstRunDefaults::default();
+        engines_follow_models(&engine, &store, &none).unwrap();
+        let config = engine.config().current();
+        let a = config
+            .provider(&arcvox_core::types::ProviderId("a".into()))
+            .unwrap();
+        assert_eq!(a.label, "a");
+        assert_eq!(a.model_id.as_deref(), Some("a"));
+        assert!(a.capabilities.transcribe && !a.capabilities.chat);
+        assert!(config
+            .provider(&arcvox_core::types::ProviderId("b".into()))
+            .is_some_and(|b| b.capabilities.chat));
+        assert_eq!(config.providers.len(), 4);
+        // Nothing changed: nothing written.
+        let before = std::fs::metadata(dirs.config_path())
+            .unwrap()
+            .modified()
+            .unwrap();
+        engines_follow_models(&engine, &store, &none).unwrap();
+        assert_eq!(
+            std::fs::metadata(dirs.config_path())
+                .unwrap()
+                .modified()
+                .unwrap(),
+            before
+        );
+        // A deleted model takes its engine with it.
+        delete(&store, Some(&engine), "a").await.unwrap();
+        engines_follow_models(&engine, &store, &none).unwrap();
+        assert!(engine
+            .config()
+            .current()
+            .provider(&arcvox_core::types::ProviderId("a".into()))
+            .is_none());
     }
 
     #[derive(Default)]
