@@ -7,6 +7,7 @@
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { appliesDictionary, PUNCTUATION_CONFIGS, SCRIPT_CONFIGS, SCRIPT_GROUPS, scriptAt, scriptLabel, selectedProfile, withDictionary, withScriptAt, withScriptPunctuation, type ScriptPass } from "../../lib/flowEdit";
   import { cellLine, cellTime, runHeadline, STAGE_IDS, stageOpen, type StageId } from "../../lib/flowLast";
+  import { rememberStage, storedStage } from "../../lib/stageMemory";
   import { guard } from "../../lib/guard.svelte";
   import { t } from "../../lib/i18n";
   import { isImeKey } from "../../lib/ime";
@@ -39,7 +40,9 @@
   const LANGS = ["zh-TW", "en", "ja"];
   const LANG_KEYS: Record<string, string> = { "zh-TW": "profiles.lang.zh_tw", en: "profiles.lang.en", ja: "profiles.lang.ja" };
 
-  let stage = $state<StageId>("asr");
+  // The stage shown first is the one shown when the page was left last.
+  let stage = $state<StageId>(storedStage());
+  $effect(() => { rememberStage(stage); });
   let managing = $state(false);
   // The profile's newest dictation with its stages: undefined while it is being read, null when there is none.
   let last = $state<LastRun | null | undefined>(undefined);
