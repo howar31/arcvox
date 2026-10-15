@@ -260,8 +260,18 @@ mod tests {
             .unwrap();
         assert_eq!(mail.name, "正式");
         assert!(!mail.is_default);
-        assert_eq!(mail.asr_provider, None, "a template follows the default");
+        // A tuned template names the engines it was tuned with, and the
+        // app makes their rows again from the catalogue.
+        assert_eq!(
+            mail.asr_provider,
+            Some(ProviderId(arcvox_core::config::MODEL_ID_DEFAULT_ASR.into()))
+        );
+        assert!(c
+            .providers
+            .iter()
+            .any(|p| p.id.0 == arcvox_core::config::MODEL_ID_DEFAULT_ASR));
         assert!(!mail.matcher.app_ids.is_empty());
+        // Its model is not installed here, so the default serves meanwhile.
         assert_eq!(e.resolve_engines(mail).asr.id, ProviderId("remote".into()));
         // A second copy gets a free id instead of replacing the first.
         let c = add_preset(&e, "formal", "正式 2", &manifest()).unwrap();

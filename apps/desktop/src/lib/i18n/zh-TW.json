@@ -274,7 +274,7 @@
   "engines.default_group": "預設引擎",
   "engines.default_engine.asr": "預設語音辨識引擎",
   "engines.default_engine.llm": "預設文字改寫引擎",
-  "engines.default_help": "沒有指定引擎的情境使用它；情境指定的引擎無法使用時也改用它。",
+  "engines.default_help": "設為「跟隨預設引擎」的情境用它，從空白範本建立的情境一開始就是；情境指定的引擎無法使用時也暫時改用它。",
   "engines.recommended": "推薦",
   "engines.not_downloaded": "尚未下載",
   "engines.in_use": "使用中：{names}",
