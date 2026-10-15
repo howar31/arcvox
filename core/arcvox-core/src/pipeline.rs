@@ -16,6 +16,7 @@ use crate::steps::llm::{LlmStep, UnavailableLlmStep};
 use crate::steps::opencc::OpenCcStep;
 use crate::steps::rules::RulesStep;
 use crate::steps::{PipelineContext, Step, StepError, StepInput};
+use crate::tidy::TidyRules;
 use crate::types::{AudioClip, ErrorCode, StepName};
 
 pub struct Pipeline {
@@ -93,7 +94,23 @@ impl Pipeline {
                     };
                     llm_step
                 }
-                StepSpec::Rules => Box::new(RulesStep),
+                StepSpec::Rules {
+                    dictionary,
+                    trailing_stop,
+                    question_mark,
+                    question_mark_inside,
+                    spacing,
+                    punctuation_width,
+                } => Box::new(RulesStep {
+                    dictionary: *dictionary,
+                    rules: TidyRules {
+                        trailing_stop: *trailing_stop,
+                        question_mark: *question_mark,
+                        question_mark_inside: *question_mark_inside,
+                        spacing: *spacing,
+                        punctuation_width: *punctuation_width,
+                    },
+                }),
             };
             steps.push(step);
         }
@@ -290,7 +307,10 @@ mod tests {
                 Box::new(OpenCcStep::new("s2twp", false).unwrap()),
                 Box::new(LlmStep::new(llm)),
                 Box::new(OpenCcStep::new("s2twp", false).unwrap()),
-                Box::new(RulesStep),
+                Box::new(RulesStep {
+                    dictionary: true,
+                    rules: TidyRules::NONE,
+                }),
             ],
         }
     }
@@ -352,7 +372,10 @@ mod tests {
                 Box::new(AsrStep::new(FakeAsr::ok("软件"))),
                 Box::new(OpenCcStep::new("s2tw", false).unwrap()),
                 Box::new(OpenCcStep::new("t2s", false).unwrap()),
-                Box::new(RulesStep),
+                Box::new(RulesStep {
+                    dictionary: true,
+                    rules: TidyRules::NONE,
+                }),
             ],
         };
         let out = p.run(audio(), &test_context(), &tx).await.unwrap();

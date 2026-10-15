@@ -5,7 +5,7 @@
     profilesPresets, upsertProfile, type InstalledModel, type LastRun, type ManifestView, type PresetView, type Profile,
   } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
-  import { appliesDictionary, PUNCTUATION_CONFIGS, SCRIPT_CONFIGS, SCRIPT_GROUPS, scriptAt, scriptLabel, selectedProfile, withDictionary, withScriptAt, withScriptPunctuation, type ScriptPass } from "../../lib/flowEdit";
+  import { appliesDictionary, PUNCTUATION_CONFIGS, RULE_KEYS, rulesAt, SCRIPT_CONFIGS, SCRIPT_GROUPS, scriptAt, scriptLabel, selectedProfile, withDictionary, withRule, withScriptAt, withScriptPunctuation, type RuleKey, type ScriptPass } from "../../lib/flowEdit";
   import { cellLine, cellTime, runHeadline, STAGE_IDS, stageOpen, type StageId } from "../../lib/flowLast";
   import { rememberStage, storedStage } from "../../lib/stageMemory";
   import { guard } from "../../lib/guard.svelte";
@@ -179,10 +179,9 @@
       const script = scriptAt(draft!, pass);
       return script ? scriptLabel(script.config) : t("flow.script_none");
     };
-    const dict = config.value?.dictionary ?? [];
-    const aliases = dict.reduce((n, e) => n + e.aliases.length, 0);
-    const snippets = dict.filter((e) => e.term.includes("\n")).length;
-    const rules = !appliesDictionary(draft) ? t("flow.rules_off") : dict.length === 0 ? t("flow.rules_meta_none") : t("flow.rules_meta", { aliases: String(aliases), snippets: String(snippets) });
+    const on = rulesAt(draft);
+    const ruleCount = on ? RULE_KEYS.filter((k) => k !== "dictionary" && on[k]).length : 0;
+    const rules = !on || (!on.dictionary && ruleCount === 0) ? t("flow.rules_none") : on.dictionary ? t("flow.rules_meta", { n: String(ruleCount) }) : t("flow.rules_meta_nodict", { n: String(ruleCount) });
     const cell = (id: StageId, name: string, setting: string, warn = false, unknown = false): Cell =>
       ({ id, name, setting, line: runLines[id], time: runTimes[id], open: stageOpen(id, draft!), warn, unknown });
     return [
@@ -476,11 +475,19 @@
           </Row>
         </Group>
       {:else if stage === "rules"}
-        <Group title={t("flow.stage.rules")}>
+        <Group title={t("flow.dictionary_group")}>
           <Row label={t("flow.dictionary")} help={t("flow.dictionary_help")}>
             <Switch bind:checked={() => appliesDictionary(draft!), (v) => (draft = withDictionary(snapshot(), v))} label={t("flow.dictionary")} />
           </Row>
           <Row label={t("flow.rules_edit")} help={t("flow.rules_edit_help")} onclick={() => guard.request(() => go("dictionary"))} />
+        </Group>
+        <Group title={t("flow.rules_group")}>
+          {#each (["trailing_stop", "question_mark", "question_mark_inside", "spacing", "punctuation_width"] as RuleKey[]) as key (key)}
+            {@const on = rulesAt(draft!)?.[key] ?? false}
+            <Row label={t(`flow.rule.${key}`)} help={t(on ? `flow.rule.${key}_on` : `flow.rule.${key}_off`)}>
+              <Switch bind:checked={() => on, (v) => (draft = withRule(snapshot(), key, v))} label={t(`flow.rule.${key}`)} />
+            </Row>
+          {/each}
         </Group>
       {:else if stage === "insert"}
         <Group title={t("flow.stage.insert")}>

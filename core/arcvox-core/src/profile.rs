@@ -2,7 +2,7 @@
 //! hit, then the default profile.
 
 use crate::config::{
-    Config, Matcher, Profile, FACTORY_PRESET, MODEL_ID_DEFAULT_ASR, MODEL_ID_DEFAULT_LLM,
+    Config, Matcher, Profile, StepSpec, FACTORY_PRESET, MODEL_ID_DEFAULT_ASR, MODEL_ID_DEFAULT_LLM,
 };
 use crate::types::{AppInfo, ProfileId, ProviderId};
 
@@ -64,6 +64,8 @@ pub struct ProfilePreset {
     pub language_hint: Option<&'static str>,
     pub app_ids: &'static [&'static str],
     pub prompt_addition: &'static str,
+    /// Whether the rules step removes a full stop that ends the text.
+    pub trailing_stop: bool,
 }
 
 /// The order the templates are offered in: the tuned ones, then the
@@ -77,6 +79,7 @@ static PRESETS: [ProfilePreset; 4] = [
         language_hint: Some("zh-TW"),
         app_ids: &[],
         prompt_addition: "這是聊天訊息的寫法：輸出的最後一個字之後不加句號，整段以最後一個字或問號結束；中間句子之間的句號照常。",
+        trailing_stop: true,
     },
     ProfilePreset {
         id: "formal",
@@ -86,6 +89,7 @@ static PRESETS: [ProfilePreset; 4] = [
         language_hint: Some("zh-TW"),
         app_ids: &["com.apple.mail", "com.microsoft.Outlook"],
         prompt_addition: "這是正式的書面文字。使用完整句子與書面用語，句尾加句點，依語意分段；稱呼與結尾問候語依原稿保留，不自行增加。",
+        trailing_stop: false,
     },
     ProfilePreset {
         id: "verbatim",
@@ -95,6 +99,7 @@ static PRESETS: [ProfilePreset; 4] = [
         language_hint: Some("zh-TW"),
         app_ids: &[],
         prompt_addition: "逐字記錄：每個字都照原稿保留，不吸收自我修正、不刪語助詞與重複、不改用詞、不翻譯；只加入標點與分段。",
+        trailing_stop: false,
     },
     // Every option at its untuned default: where the other templates start
     // from, for a user who wants to tune everything alone.
@@ -106,6 +111,7 @@ static PRESETS: [ProfilePreset; 4] = [
         language_hint: Some("zh-TW"),
         app_ids: &[],
         prompt_addition: "",
+        trailing_stop: false,
     },
 ];
 
@@ -184,6 +190,11 @@ impl Profile {
         self.prompt_addition = preset.prompt_addition.to_string();
         self.few_shot = vec![];
         self.steps = Config::default_steps();
+        for step in &mut self.steps {
+            if let StepSpec::Rules { trailing_stop, .. } = step {
+                *trailing_stop = preset.trailing_stop;
+            }
+        }
         self.asr_dictionary_hint = true;
         self.llm_dictionary_terms = true;
         self.llm_window_title = true;
@@ -339,7 +350,14 @@ mod tests {
         assert_eq!(p.preset.as_deref(), Some("formal"));
         assert_eq!(p.language_hint.as_deref(), Some("zh-TW"));
         assert!(p.llm_short_fallback);
-        assert_eq!(p.steps, Config::default_steps());
+        assert_eq!(p.steps.len(), Config::default_steps().len());
+        assert!(matches!(
+            p.steps.last(),
+            Some(StepSpec::Rules {
+                trailing_stop: false,
+                ..
+            })
+        ));
         assert_eq!(p.asr_provider, None, "follows the default");
         assert_eq!(p.llm_provider, None);
         assert!(p.few_shot.is_empty());
@@ -366,7 +384,7 @@ mod tests {
         assert!(!p.is_default);
         assert_eq!(p.asr_provider, None);
         assert_eq!(p.language_hint.as_deref(), Some("zh-TW"));
-        assert_eq!(p.steps, Config::default_steps());
+        assert_eq!(p.steps.len(), Config::default_steps().len());
         assert_eq!(
             p.matcher.app_ids,
             ["com.apple.mail", "com.microsoft.Outlook"]

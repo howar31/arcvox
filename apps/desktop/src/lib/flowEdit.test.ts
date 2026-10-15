@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Config, Profile } from "./api";
-import { appliesDictionary, convertsScript, SCRIPT_CONFIGS, scriptAt, scriptLabel, selectedProfile, withDictionary, withScriptAt, withScriptPunctuation } from "./flowEdit";
+import { appliesDictionary, convertsScript, rulesAt, SCRIPT_CONFIGS, scriptAt, scriptLabel, selectedProfile, withDictionary, withRule, withScriptAt, withScriptPunctuation } from "./flowEdit";
 
 const base: Profile = {
   id: "default", name: "Default", is_default: true, matcher: { app_ids: [], url_patterns: [] },
@@ -54,6 +54,23 @@ describe("flowEdit", () => {
     expect(appliesDictionary(off)).toBe(false);
     expect(kinds(withDictionary(off, true)).at(-1)).toBe("rules");
     expect(kinds(withDictionary(base, true))).toEqual(kinds(base));
+  });
+
+  it("reads a rules step from before the text rules with the trailing stop kept", () => {
+    expect(rulesAt(base)).toEqual({ step: "rules", dictionary: true, trailing_stop: false, question_mark: true, question_mark_inside: true, spacing: true, punctuation_width: true });
+    expect(rulesAt({ ...base, steps: [{ step: "asr" }] })).toBeNull();
+  });
+
+  it("sets one rule at a time and keeps the step in place", () => {
+    const on = withRule(base, "trailing_stop", true);
+    expect(rulesAt(on)?.trailing_stop).toBe(true);
+    expect(rulesAt(on)?.spacing).toBe(true);
+    expect(kinds(on)).toEqual(kinds(base));
+    const off = withRule(on, "spacing", false);
+    expect(rulesAt(off)).toEqual({ step: "rules", dictionary: true, trailing_stop: true, question_mark: true, question_mark_inside: true, spacing: false, punctuation_width: true });
+    const added = withRule({ ...base, steps: [{ step: "asr" }] }, "question_mark", false);
+    expect(kinds(added)).toEqual(["asr", "rules"]);
+    expect(rulesAt(added)?.question_mark).toBe(false);
   });
 
   it("does not change the profile it was given", () => {

@@ -23,6 +23,7 @@ pub mod session;
 pub mod settings_file;
 pub mod stats;
 pub mod steps;
+pub mod tidy;
 pub mod types;
 
 pub use config::FirstRunDefaults;
