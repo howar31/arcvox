@@ -136,9 +136,26 @@ fn prompt(model: &LlamaModel, messages: &[ChatMessage]) -> String {
         .iter()
         .filter_map(|m| LlamaChatMessage::new(role_name(m.role).into(), m.content.clone()).ok())
         .collect();
-    model
+    let rendered = model
         .apply_chat_template(&tpl, &msgs, true)
-        .unwrap_or_else(|_| chat::chatml(messages))
+        .unwrap_or_else(|_| chat::chatml(messages));
+    without_thinking(&tpl.to_string().unwrap_or_default(), rendered)
+}
+
+/// The empty reasoning block a thinking model's template writes at the
+/// assistant turn when thinking is off (Qwen3's `enable_thinking: false`).
+const NO_THINKING_PREFIX: &str = "<think>\n\n</think>\n\n";
+
+/// Starts the assistant turn with an empty reasoning block when the model's
+/// template has a thinking switch. The rendering API takes no template
+/// variables, so without this prefix such a model reasons at length before
+/// the rewrite and the reasoning lands in the output.
+fn without_thinking(template: &str, rendered: String) -> String {
+    if template.contains("enable_thinking") {
+        rendered + NO_THINKING_PREFIX
+    } else {
+        rendered
+    }
 }
 
 fn generate(
@@ -319,6 +336,19 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::ModelMissing);
+    }
+
+    #[test]
+    fn a_thinking_template_gets_an_empty_reasoning_block() {
+        let tpl = "{%- if enable_thinking is defined and enable_thinking is false %}...";
+        let p = without_thinking(tpl, "<|im_start|>assistant\n".into());
+        assert_eq!(p, "<|im_start|>assistant\n<think>\n\n</think>\n\n");
+    }
+
+    #[test]
+    fn other_templates_are_left_alone() {
+        let p = without_thinking("<start_of_turn>model\n", "<start_of_turn>model\n".into());
+        assert_eq!(p, "<start_of_turn>model\n");
     }
 
     #[test]
