@@ -82,8 +82,18 @@ export function cellLine(id: StageId, stages: Stage[] | null): string {
     }
     case "rules": {
       if (s.text === null) return t("flow.cell.failed");
-      const n = num(d.fixes) + num(d.snippets);
-      return n > 0 ? t("flow.cell.fixes", { n: String(n) }) : t("flow.cell.unchanged");
+      const parts: string[] = [];
+      const fixes = num(d.fixes) + num(d.snippets);
+      if (fixes > 0) parts.push(t("flow.cell.fixes", { n: String(fixes) }));
+      const widened = num(d.widened);
+      if (widened > 0) parts.push(t("flow.cell.widened", { n: String(widened) }));
+      const spaces = num(d.spaces);
+      if (spaces > 0) parts.push(t("flow.cell.spaces", { n: String(spaces) }));
+      if (d.stop_removed === true) parts.push(t("flow.cell.stop_removed"));
+      if (d.question_added === true) parts.push(t("flow.cell.question_added"));
+      const inside = num(d.questions_inside);
+      if (inside > 0) parts.push(t("flow.cell.questions_inside", { n: String(inside) }));
+      return parts.length > 0 ? parts.join(t("flow.cell.join")) : t("flow.cell.unchanged");
     }
     case "insert": {
       const outcome = str(d.outcome), method = str(d.method) ?? "paste", app = str(d.app_name);

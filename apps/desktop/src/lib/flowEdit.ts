@@ -80,16 +80,34 @@ export function scriptLabel(config: string): string {
   return SCRIPT_CONFIGS.includes(config) ? t(`flow.script.${config}`) : config;
 }
 
-/** True when the profile applies the dictionary's aliases to the text. */
-export function appliesDictionary(profile: Profile): boolean {
-  return profile.steps.some((s) => s.step === "rules");
+export type RulesStep = Extract<StepSpec, { step: "rules" }>;
+export type RuleKey = "dictionary" | "trailing_stop" | "question_mark" | "question_mark_inside" | "spacing" | "punctuation_width";
+export const RULE_KEYS: RuleKey[] = ["dictionary", "trailing_stop", "question_mark", "question_mark_inside", "spacing", "punctuation_width"];
+
+/** The rules step with every switch read: a step from before the text rules has the dictionary on, the trailing stop kept and the other rules on. */
+export function rulesAt(profile: Profile): Required<RulesStep> | null {
+  const s = profile.steps.find((s): s is RulesStep => s.step === "rules");
+  if (!s) return null;
+  return { step: "rules", dictionary: s.dictionary ?? true, trailing_stop: s.trailing_stop ?? false, question_mark: s.question_mark ?? true, question_mark_inside: s.question_mark_inside ?? true, spacing: s.spacing ?? true, punctuation_width: s.punctuation_width ?? true };
 }
 
-/** A copy without any dictionary step, or with one added at the end when there was none. */
-export function withDictionary(profile: Profile, on: boolean): Profile {
+/** True when the profile applies the dictionary's aliases to the text. */
+export function appliesDictionary(profile: Profile): boolean {
+  return rulesAt(profile)?.dictionary ?? false;
+}
+
+/** A copy with one switch of the rules step set; a profile without the step gets one at the end, its other switches at their defaults. */
+export function withRule(profile: Profile, key: RuleKey, on: boolean): Profile {
   const steps = copy(profile.steps);
-  if (!on) return { ...profile, steps: steps.filter((s) => s.step !== "rules") };
-  if (!appliesDictionary(profile)) steps.push({ step: "rules" });
+  const current = rulesAt(profile);
+  const next: Required<RulesStep> = { ...(current ?? { step: "rules", dictionary: true, trailing_stop: false, question_mark: true, question_mark_inside: true, spacing: true, punctuation_width: true }), [key]: on };
+  const i = steps.findIndex((s) => s.step === "rules");
+  if (i >= 0) steps[i] = next; else steps.push(next);
   return { ...profile, steps };
+}
+
+/** A copy with the dictionary switch of the rules step set. */
+export function withDictionary(profile: Profile, on: boolean): Profile {
+  return withRule(profile, "dictionary", on);
 }
 

@@ -75,7 +75,7 @@
   .body:last-child { padding-bottom: 18px; }
   .actions { flex: none; display: flex; justify-content: flex-end; gap: 10px; padding: 22px 22px 18px; }
   .lg { width: min(780px, 100%); }
-  .lg h2 { padding: 18px 22px 16px; border-bottom: 1px solid var(--line); }
-  .lg .body { padding: 0 22px 22px; background: var(--page); color: var(--ink); }
-  .lg .actions { padding: 14px 22px; border-top: 1px solid var(--line); }
+  .lg h2 { padding: 18px 22px 16px; }
+  .lg .body { padding: 22px 22px 22px; color: var(--ink); }
+  .lg .actions { padding: 14px 22px; }
 </style>

@@ -49,6 +49,8 @@ describe("flowLast", () => {
     expect(cellLine("llm", run)).toBe("Changed 2");
     expect(cellLine("opencc2", run)).toBe("No change");
     expect(cellLine("rules", run)).toBe("No change");
+    const tidy = run.map((s) => (s.position === 7 ? { ...s, detail: { fixes: 1, snippets: 0, widened: 0, spaces: 2, stop_removed: true, question_added: false } } : s));
+    expect(cellLine("rules", tidy)).toBe("Replaced 1, Spaces added 2, Final full stop dropped");
     expect(cellLine("insert", run)).toBe("Pasted into Slack");
     expect(cellLine("record", run)).toBe("Stored");
   });

@@ -275,7 +275,41 @@ pub enum StepSpec {
         punctuation: bool,
     },
     Llm,
-    Rules,
+    /// The fixed rules at the end: the dictionary's aliases and the text
+    /// rules. A step written before the rules existed reads as dictionary
+    /// on, the trailing stop kept, the other rules on.
+    Rules {
+        #[serde(default = "yes")]
+        dictionary: bool,
+        #[serde(default)]
+        trailing_stop: bool,
+        #[serde(default = "yes")]
+        question_mark: bool,
+        #[serde(default = "yes")]
+        question_mark_inside: bool,
+        #[serde(default = "yes")]
+        spacing: bool,
+        #[serde(default = "yes")]
+        punctuation_width: bool,
+    },
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl StepSpec {
+    /// The rules step as the shipped profile has it: everything on.
+    pub fn rules_default() -> StepSpec {
+        StepSpec::Rules {
+            dictionary: true,
+            trailing_stop: true,
+            question_mark: true,
+            question_mark_inside: true,
+            spacing: true,
+            punctuation_width: true,
+        }
+    }
 }
 
 /// The preset that is a copy of the factory profile: the everyday style.
@@ -423,7 +457,7 @@ impl Config {
                 config: "s2tw".into(),
                 punctuation: false,
             },
-            StepSpec::Rules,
+            StepSpec::rules_default(),
         ]
     }
 
@@ -667,7 +701,26 @@ mod tests {
             serde_json::json!({"step":"opencc","config":"s2tw","punctuation":false})
         );
         assert_eq!(json[2], serde_json::json!({"step":"llm"}));
-        assert_eq!(json[4], serde_json::json!({"step":"rules"}));
+        assert_eq!(
+            json[4],
+            serde_json::json!({"step":"rules","dictionary":true,"trailing_stop":true,"question_mark":true,"question_mark_inside":true,"spacing":true,"punctuation_width":true})
+        );
+    }
+
+    #[test]
+    fn a_rules_step_from_before_the_text_rules_keeps_the_trailing_stop() {
+        let step: StepSpec = serde_json::from_value(serde_json::json!({"step":"rules"})).unwrap();
+        assert_eq!(
+            step,
+            StepSpec::Rules {
+                dictionary: true,
+                trailing_stop: false,
+                question_mark: true,
+                question_mark_inside: true,
+                spacing: true,
+                punctuation_width: true,
+            }
+        );
     }
 
     #[test]
