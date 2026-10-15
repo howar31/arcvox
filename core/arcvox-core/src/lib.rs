@@ -18,6 +18,7 @@ pub mod prompt;
 pub mod protocol;
 pub mod providers;
 pub mod secrets;
+pub mod segments;
 pub mod session;
 pub mod settings_file;
 pub mod stats;

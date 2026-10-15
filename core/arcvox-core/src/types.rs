@@ -116,6 +116,29 @@ impl AudioClip {
 pub struct Transcript {
     pub text: String,
     pub language: Option<String>,
+    /// The segments the engine decoded, when it reports them.
+    #[serde(default)]
+    pub segments: Vec<TranscriptSegment>,
+}
+
+/// One segment of a transcript as the speech engine decoded it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TranscriptSegment {
+    /// The segment's text as the engine gave it, spacing included.
+    pub text: String,
+    pub start_ms: u32,
+    pub end_ms: u32,
+    /// The engine's probability that the segment holds no speech.
+    pub no_speech: f32,
+    /// The decoded tokens, special tokens left out.
+    pub tokens: Vec<TranscriptToken>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TranscriptToken {
+    pub text: String,
+    /// The engine's probability for this token.
+    pub p: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

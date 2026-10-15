@@ -139,6 +139,8 @@ impl AsrProvider for HttpAsrProvider {
         Ok(Transcript {
             text: parsed.text.trim().to_string(),
             language: parsed.language,
+            // Servers answer with the text alone.
+            segments: Vec::new(),
         })
     }
 }
@@ -203,7 +205,8 @@ mod tests {
             out,
             Transcript {
                 text: "你好".into(),
-                language: Some("zh".into())
+                language: Some("zh".into()),
+                segments: Vec::new(),
             }
         );
 

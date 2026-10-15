@@ -138,6 +138,7 @@ impl AsrProvider for AppleAsrProvider {
         Ok(Transcript {
             text: text.trim().to_string(),
             language: hint.language.clone(),
+            segments: Vec::new(),
         })
     }
 }
