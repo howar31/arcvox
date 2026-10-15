@@ -8,7 +8,8 @@ use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
 
 use arcvox_core::providers::{AsrHint, AsrProvider, ProviderError};
-use arcvox_core::types::{AudioClip, ErrorCode, Transcript};
+use arcvox_core::segments::join_segments;
+use arcvox_core::types::{AudioClip, ErrorCode, Transcript, TranscriptSegment, TranscriptToken};
 use async_trait::async_trait;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
@@ -210,14 +211,39 @@ fn run(
         p.set_abort_callback_user_data(Arc::as_ptr(&abort.0) as *mut c_void);
     }
     state.full(p, samples).map_err(|e| format!("{e:?}"))?;
-    let mut text = String::new();
+    let mut segments = Vec::new();
     for seg in state.as_iter() {
-        text.push_str(&seg.to_str_lossy().map_err(|e| format!("{e:?}"))?);
+        let mut tokens = Vec::with_capacity(seg.n_tokens() as usize);
+        for i in 0..seg.n_tokens() {
+            let Some(tok) = seg.get_token(i) else { break };
+            let text = tok.to_str_lossy().map_err(|e| format!("{e:?}"))?;
+            // Special tokens (segment start, timestamps) carry no speech.
+            if text.starts_with("[_") && text.ends_with(']') {
+                continue;
+            }
+            tokens.push(TranscriptToken {
+                text: text.into_owned(),
+                p: tok.token_probability(),
+            });
+        }
+        segments.push(TranscriptSegment {
+            text: seg
+                .to_str_lossy()
+                .map_err(|e| format!("{e:?}"))?
+                .into_owned(),
+            // whisper.cpp reports centiseconds.
+            start_ms: u32::try_from(seg.start_timestamp().max(0) * 10).unwrap_or(u32::MAX),
+            end_ms: u32::try_from(seg.end_timestamp().max(0) * 10).unwrap_or(u32::MAX),
+            no_speech: seg.no_speech_probability(),
+            tokens,
+        });
     }
+    let (text, _) = join_segments(&segments);
     let language = whisper_rs::get_lang_str(state.full_lang_id_from_state()).map(str::to_string);
     Ok(Transcript {
-        text: text.trim().to_string(),
+        text,
         language,
+        segments,
     })
 }
 

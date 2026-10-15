@@ -6,6 +6,7 @@ use async_trait::async_trait;
 
 use crate::dictionary::asr_hint;
 use crate::providers::{AsrHint, AsrProvider, ProviderError};
+use crate::segments::segment_records;
 use crate::steps::{PipelineContext, Step, StepError, StepInput, StepOutput};
 use crate::types::{ErrorCode, StepName};
 
@@ -74,6 +75,9 @@ impl Step for AsrStep {
             detail: serde_json::json!({
                 "language": t.language,
                 "chars": t.text.chars().count(),
+                // What the engine knows beyond the text, kept for later
+                // analysis; nothing downstream reads it yet.
+                "segments": segment_records(&t.segments),
             }),
             text: t.text,
             language: t.language,
@@ -100,6 +104,7 @@ pub(crate) mod fakes {
                 result: Ok(Transcript {
                     text: text.into(),
                     language: Some("zh".into()),
+                    segments: Vec::new(),
                 }),
                 hints: Mutex::new(Vec::new()),
             })
@@ -163,6 +168,35 @@ mod tests {
         let hints = fake.hints.lock().unwrap();
         assert_eq!(hints[0].language.as_deref(), Some("zh-TW"));
         assert_eq!(hints[0].prompt.as_deref(), Some("Arcvox"));
+    }
+
+    #[tokio::test]
+    async fn the_segments_the_engine_decoded_go_into_the_stage_record() {
+        let fake = Arc::new(FakeAsr {
+            result: Ok(crate::types::Transcript {
+                text: "你好世界".into(),
+                language: None,
+                segments: vec![crate::types::TranscriptSegment {
+                    text: "你好世界".into(),
+                    start_ms: 0,
+                    end_ms: 800,
+                    no_speech: 0.0,
+                    tokens: Vec::new(),
+                }],
+            }),
+            hints: std::sync::Mutex::new(Vec::new()),
+        });
+        let out = AsrStep::new(fake)
+            .run(
+                StepInput {
+                    text: String::new(),
+                    audio: Some(audio()),
+                },
+                &test_context(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.detail["segments"][0]["end_ms"], 800);
     }
 
     #[tokio::test]
