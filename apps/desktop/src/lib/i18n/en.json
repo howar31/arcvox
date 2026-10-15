@@ -274,7 +274,7 @@
   "engines.default_group": "Default engine",
   "engines.default_engine.asr": "Default speech recognition engine",
   "engines.default_engine.llm": "Default text rewriting engine",
-  "engines.default_help": "Used by every profile that names no engine of its own, and by a profile whose own engine cannot run.",
+  "engines.default_help": "Used by a profile set to follow the default engine, which a profile made from the blank template is at first, and meanwhile by a profile whose own engine cannot run.",
   "engines.recommended": "Recommended",
   "engines.not_downloaded": "Not downloaded",
   "engines.in_use": "In use by: {names}",

@@ -436,7 +436,7 @@ impl Config {
     }
 
     /// The profile a new installation starts with: a copy of the factory
-    /// template, following the default engines.
+    /// template, naming the engines that template was tuned with.
     pub fn factory_profile() -> Profile {
         let casual = crate::profile::preset(FACTORY_PRESET).expect("the factory preset exists");
         let mut p = Profile::from_preset(casual, "Default".into(), &[]);
@@ -758,6 +758,9 @@ mod tests {
         let far = ProviderConfig::http_test_provider("far", "http://localhost:9/v1", true, true);
         c.providers.push(far);
         let mut p = c.profiles[0].clone();
+        // A profile that follows the default.
+        p.asr_provider = None;
+        p.llm_provider = None;
         let all = |_: &ProviderConfig| true;
 
         let r = c.resolve_engines(&p, all);
@@ -806,6 +809,7 @@ mod tests {
     fn referenced_ids_cover_the_profiles_and_the_default_pair() {
         let mut c = Config::http_test_config();
         c.profiles[0].asr_provider = Some(ProviderId("x".into()));
+        c.profiles[0].llm_provider = None;
         let ids = c.referenced_engine_ids();
         for id in ["x", "local-speaches", "local-ollama"] {
             assert!(ids.contains(&ProviderId(id.into())), "{id}");
@@ -830,8 +834,14 @@ mod tests {
         let ids: Vec<&str> = c.providers.iter().map(|p| p.id.0.as_str()).collect();
         assert_eq!(ids, [MODEL_ID_DEFAULT_ASR, MODEL_ID_DEFAULT_LLM]);
         let d = c.profiles.iter().find(|p| p.is_default).unwrap();
-        assert_eq!(d.asr_provider, None, "follows the default pair");
-        assert_eq!(d.llm_provider, None);
+        assert_eq!(
+            d.asr_provider.as_ref().map(|p| p.0.as_str()),
+            Some(MODEL_ID_DEFAULT_ASR)
+        );
+        assert_eq!(
+            d.llm_provider.as_ref().map(|p| p.0.as_str()),
+            Some(MODEL_ID_DEFAULT_LLM)
+        );
         assert_eq!(c.default_engines.asr.0, MODEL_ID_DEFAULT_ASR);
         assert_eq!(c.default_engines.llm.0, MODEL_ID_DEFAULT_LLM);
         let w = c

@@ -46,10 +46,12 @@ fn matches(profile: &Profile, app: &AppInfo) -> bool {
 
 /// A built-in profile template: a whole profile as shipped, from the
 /// engines to the applications it is used in. A new profile is a copy of
-/// one, and a reset makes a profile a copy of its own again. A template
-/// follows the default engines unless it names a model on purpose; a
-/// named engine is one the app makes (a catalogue model's, a platform
-/// service's), created when missing, and the catalogue must carry it
+/// one, and a reset makes a profile a copy of its own again. A tuned
+/// template binds the engines its writing style was tuned with (the ones
+/// it names, else the factory pair), since the style is written for them;
+/// the untuned template follows the default engines. A named engine is
+/// one the app makes (a catalogue model's, a platform service's), created
+/// when missing, and the catalogue must carry it
 /// (`templates_name_only_bundled_models` in the desktop crate).
 #[derive(Debug, Clone, Copy)]
 pub struct ProfilePreset {
@@ -184,8 +186,14 @@ impl Profile {
             app_ids: preset.app_ids.iter().map(|a| a.to_string()).collect(),
             url_patterns: vec![],
         };
-        self.asr_provider = preset.asr.map(|id| ProviderId(id.to_string()));
-        self.llm_provider = preset.llm.map(|id| ProviderId(id.to_string()));
+        // The writing style was tuned with these engines, so the profile
+        // names them; the user may switch it to the default afterwards.
+        let (asr, llm) = match preset.tuned_with() {
+            Some((asr, llm)) => (Some(asr), Some(llm)),
+            None => (preset.asr, preset.llm),
+        };
+        self.asr_provider = asr.map(|id| ProviderId(id.to_string()));
+        self.llm_provider = llm.map(|id| ProviderId(id.to_string()));
         self.language_hint = preset.language_hint.map(str::to_string);
         self.prompt_addition = preset.prompt_addition.to_string();
         self.few_shot = vec![];
@@ -358,9 +366,23 @@ mod tests {
                 ..
             })
         ));
-        assert_eq!(p.asr_provider, None, "follows the default");
-        assert_eq!(p.llm_provider, None);
+        assert_eq!(
+            p.asr_provider.as_ref().map(|p| p.0.as_str()),
+            Some(MODEL_ID_DEFAULT_ASR),
+            "a tuned template binds the engines it was tuned with"
+        );
+        assert_eq!(
+            p.llm_provider.as_ref().map(|p| p.0.as_str()),
+            Some(MODEL_ID_DEFAULT_LLM)
+        );
         assert!(p.few_shot.is_empty());
+    }
+
+    #[test]
+    fn the_blank_template_follows_the_default_engines() {
+        let p = Profile::from_preset(preset("blank"), "x".into(), &[]);
+        assert_eq!(p.asr_provider, None);
+        assert_eq!(p.llm_provider, None);
     }
 
     #[test]
@@ -382,7 +404,10 @@ mod tests {
         assert_eq!(p.id, ProfileId("formal".into()));
         assert_eq!(p.name, "郵件");
         assert!(!p.is_default);
-        assert_eq!(p.asr_provider, None);
+        assert_eq!(
+            p.asr_provider.as_ref().map(|p| p.0.as_str()),
+            Some(MODEL_ID_DEFAULT_ASR)
+        );
         assert_eq!(p.language_hint.as_deref(), Some("zh-TW"));
         assert_eq!(p.steps.len(), Config::default_steps().len());
         assert_eq!(
