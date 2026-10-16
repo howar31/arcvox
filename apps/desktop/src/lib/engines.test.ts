@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { Config, InstalledModel, ManifestView, ModelEntry, ProviderConfig } from "./api";
-import { blankHttp, encoderMissing, entryBytes, freshId, hasRole, enginesOf, modelServes, recommendedMissing, runnable } from "./engines";
+import { blankHttp, encoderMissing, entryBytes, factsLine, freshId, hasRole, enginesOf, modelServes, ownModelDescription, recommendedMissing, runnable } from "./engines";
+import { setLanguage } from "./i18n";
 import { ASR_CAPS, blankFor, LLM_CAPS } from "./providerForm";
 
 const provider = (id: string, extra: Partial<ProviderConfig>): ProviderConfig => ({ ...blankFor("embedded"), id, label: id, ...extra });
 const file = (id: string, runtime: "whisper" | "llama", custom = false): InstalledModel => ({
   id, runtime, path: `/models/${id}${custom ? "" : "/model.bin"}`, size_bytes: 1, custom,
-  capabilities: runtime === "whisper" ? { ...ASR_CAPS } : { ...LLM_CAPS }, encoder: null,
+  capabilities: runtime === "whisper" ? { ...ASR_CAPS } : { ...LLM_CAPS }, encoder: null, facts: { shape: null, quantization: null, license: null },
 });
 const entry = (id: string, role: "asr" | "llm", recommended: boolean): ModelEntry => ({
   id, runtime: role === "asr" ? "whisper" : "llama", role, label: id, description: "", languages: [], url: "", sha256: "",
@@ -83,3 +84,17 @@ describe("installed models by use", () => {
   });
 });
 
+describe("a model file's own facts", () => {
+  const own = (facts: InstalledModel["facts"], chat = true, transcribe = false): InstalledModel => ({ ...file("custom/m.gguf", "llama", true), capabilities: { ...LLM_CAPS, chat, transcribe }, facts });
+  it("lists what the structure gives and skips what it does not", () => {
+    setLanguage("zh-TW");
+    expect(factsLine(own({ shape: "qwen3 8B", quantization: "Q4_K_M", license: "apache-2.0" }))).toBe("qwen3 8B，Q4_K_M，apache-2.0");
+    expect(factsLine(own({ shape: "Whisper large-v3", quantization: "Q5_0", license: null }))).toBe("Whisper large-v3，Q5_0");
+    expect(factsLine(own({ shape: null, quantization: null, license: null }))).toBe("");
+  });
+  it("says when a file serves both uses", () => {
+    setLanguage("en");
+    expect(ownModelDescription(own({ shape: "omni 3B", quantization: "Q4_K_M", license: null }, true, true))).toBe("omni 3B, Q4_K_M, Usable for speech recognition and text rewriting");
+    expect(ownModelDescription(own({ shape: null, quantization: null, license: null }))).toBe("");
+  });
+});

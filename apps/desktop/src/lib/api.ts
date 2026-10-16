@@ -285,7 +285,9 @@ export interface ModelFile { url: string; sha256: string; size_bytes: number }
 export interface ModelEntry { id: string; runtime: Runtime; role: "asr" | "llm"; label: string; description: string; languages: string[]; url: string; sha256: string; size_bytes: number; license: string; recommended: boolean; min_ram_gb: number; mmproj?: ModelFile }
 export interface ManifestView { source: "remote" | "cached" | "bundled"; models: ModelEntry[] }
 /** An installed model: what its file can be used for, and the audio encoder it hears through. */
-export interface InstalledModel { id: string; runtime: Runtime; path: string; size_bytes: number; custom: boolean; capabilities: Capabilities; encoder: string | null }
+/** What a model file's structure says about it: architecture and size, quantisation, licence. */
+export interface ModelFacts { shape: string | null; quantization: string | null; license: string | null }
+export interface InstalledModel { id: string; runtime: Runtime; path: string; size_bytes: number; custom: boolean; capabilities: Capabilities; encoder: string | null; facts: ModelFacts }
 export interface DownloadProgress { id: string; received: number; total: number; done: boolean; error: string | null }
 export const modelsManifest = () => invoke<ManifestView>("models_manifest");
 export const modelsManifestNow = () => invoke<ManifestView>("models_manifest_now");

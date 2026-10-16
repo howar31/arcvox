@@ -1,5 +1,5 @@
 use super::download::{self, DownloadProgress};
-use super::kind::{self, FoundModel};
+use super::kind::{self, FoundModel, ModelFacts};
 use super::manifest::{safe_segment, Manifest, ManifestSource};
 use super::*;
 use crate::config::{Capabilities, ProviderConfig, Runtime};
@@ -30,6 +30,8 @@ pub struct InstalledModel {
     pub capabilities: Capabilities,
     /// The audio encoder the model hears through.
     pub encoder: Option<PathBuf>,
+    /// What the file's structure says about it.
+    pub facts: ModelFacts,
 }
 
 impl InstalledModel {
@@ -44,6 +46,7 @@ impl InstalledModel {
             custom,
             capabilities: m.capabilities,
             encoder: m.encoder,
+            facts: m.facts,
         })
     }
 
@@ -229,6 +232,7 @@ impl ModelStore {
                     let encoder = self.encoder_path_in(&manifest, &id);
                     let complete = path.is_file() && encoder.as_ref().is_none_or(|p| p.is_file());
                     complete.then(|| FoundModel {
+                        facts: file_facts(&path),
                         path,
                         runtime: e.runtime,
                         capabilities: e.capabilities(),
@@ -539,6 +543,7 @@ impl ModelStore {
         Ok(InstalledModel {
             id: entry.id.clone(),
             runtime: entry.runtime,
+            facts: file_facts(&dest),
             path: dest,
             size_bytes: total,
             custom: false,
@@ -611,6 +616,15 @@ fn regular_size(path: &Path) -> Option<u64> {
         .ok()
         .filter(|m| m.is_file())
         .map(|m| m.len())
+}
+
+/// What a model file's structure says about it; nothing for a file that cannot be read.
+fn file_facts(path: &Path) -> ModelFacts {
+    kind::inspect(path)
+        .ok()
+        .flatten()
+        .map(|k| kind::facts(&k))
+        .unwrap_or_default()
 }
 
 /// The partial file a download writes before the checksum is verified.

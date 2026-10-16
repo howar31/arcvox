@@ -1,4 +1,5 @@
 import type { Config, InstalledModel, ManifestView, ModelEntry, ProviderConfig } from "./api";
+import { t } from "./i18n";
 import { ASR_CAPS, blankFor, LLM_CAPS } from "./providerForm";
 
 export type Role = "asr" | "llm";
@@ -49,3 +50,14 @@ export function recommendedMissing(manifest: ManifestView | null, installed: Ins
   return (manifest?.models ?? []).filter((m) => m.recommended && !installed.some((i) => i.id === m.id));
 }
 
+/** The facts a model file's structure gives, in one line; empty when it gives none. */
+export function factsLine(m: InstalledModel): string {
+  return [m.facts.shape, m.facts.quantization, m.facts.license].filter((x): x is string => !!x).join(t("engines.fact_sep"));
+}
+
+/** A model file of the user's own as a description: its facts, and both uses when it has them. */
+export function ownModelDescription(m: InstalledModel): string {
+  const facts = factsLine(m);
+  const both = m.capabilities.transcribe && m.capabilities.chat ? t("engines.both_roles") : "";
+  return [facts, both].filter(Boolean).join(t("engines.fact_sep"));
+}

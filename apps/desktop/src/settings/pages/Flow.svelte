@@ -13,7 +13,7 @@
   import { isImeKey } from "../../lib/ime";
   import { appsSummary, freshName, withLlm } from "../../lib/profileEdit";
   import { FOLLOW, hasLlmStep, isFallback, resolveEngines, usableWith } from "../../lib/resolve";
-  import { runnable } from "../../lib/engines";
+  import { encoderMissing, runnable } from "../../lib/engines";
   import { go } from "../../lib/route";
   import { engineLine, micLine, outputLine, type StageLine } from "../../lib/stages";
   import { client, config } from "../../lib/store.svelte";
@@ -108,7 +108,8 @@
   const llmChoices = $derived(providers.filter((p) => p.capabilities.chat));
   const installed = $derived.by(() => {
     const ok = runnable(models ?? []);
-    return { ids: models ? new Set(ok.map((m) => m.id)) : null, paths: new Set(ok.map((m) => m.path)) };
+    const deaf = (models ?? []).filter(encoderMissing).flatMap((m) => [m.id, m.path]);
+    return { ids: models ? new Set(ok.map((m) => m.id)) : null, paths: new Set(ok.map((m) => m.path)), deaf: new Set(deaf) };
   });
   // The engines the draft runs with now: its own when they can run, else the default pair.
   const resolved = $derived(draft ? resolveEngines(config.value, draft, usableWith(installed.ids, installed.paths)) : null);
@@ -409,7 +410,7 @@
       {:else if stage === "asr"}
         <div class="bar"><h2>{t("flow.asr_engines")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("engines", "asr"))}>{t("flow.manage")}</button></div>
         <EnginePicker
-          engines={asrChoices} selected={draft.asr_provider ?? FOLLOW} label={t("flow.asr_engines")} {manifest} {installed} follow={followChoice("asr")} suggested={suggested.asr}
+          engines={asrChoices} selected={draft.asr_provider ?? FOLLOW} label={t("flow.asr_engines")} {manifest} {installed} models={models ?? []} follow={followChoice("asr")} suggested={suggested.asr}
           stale={stale(draft.asr_provider, asrChoices)} onpick={(id) => { draft!.asr_provider = id === FOLLOW ? null : id; }}
         />
         {@render fallbackNote("asr")}
@@ -431,7 +432,7 @@
       {:else if stage === "llm"}
         <div class="bar"><h2>{t("flow.llm_engines")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("engines", "llm"))}>{t("flow.manage")}</button></div>
         <EnginePicker
-          engines={llmChoices} selected={hasLlmStep(draft) ? (draft.llm_provider ?? FOLLOW) : null} label={t("flow.llm_engines")} {manifest} {installed}
+          engines={llmChoices} selected={hasLlmStep(draft) ? (draft.llm_provider ?? FOLLOW) : null} label={t("flow.llm_engines")} {manifest} {installed} models={models ?? []}
           follow={followChoice("llm")} suggested={suggested.llm} none={{ name: t("home.no_rewrite"), help: t("home.no_rewrite_meta") }}
           stale={stale(draft.llm_provider, llmChoices)} onpick={(id) => (draft = withLlm(snapshot(), id))}
         />

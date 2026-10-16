@@ -16,8 +16,14 @@ const MAX_KV: u64 = 1 << 16;
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GgufInfo {
     /// `general.type`: `model`, or `mmproj` for a companion encoder.
-    pub file_type: Option<String>,
+    pub kind: Option<String>,
     pub architecture: Option<String>,
+    /// `general.size_label`, such as `8B`.
+    pub size_label: Option<String>,
+    /// `general.license`.
+    pub license: Option<String>,
+    /// `general.file_type`: the quantisation, as llama.cpp numbers it.
+    pub file_type: Option<u64>,
     pub tags: Vec<String>,
     /// `<architecture>.embedding_length`: the width an encoder must project to.
     pub embedding_length: Option<u64>,
@@ -29,7 +35,7 @@ pub struct GgufInfo {
 
 impl GgufInfo {
     pub fn is_mmproj(&self) -> bool {
-        self.file_type.as_deref() == Some("mmproj")
+        self.kind.as_deref() == Some("mmproj")
     }
 
     /// A model trained for speech recognition only: it transcribes and does not chat.
@@ -90,7 +96,10 @@ fn parse<R: Read + Seek>(r: &mut R) -> std::io::Result<GgufInfo> {
     };
     let architecture = text("general.architecture");
     Ok(GgufInfo {
-        file_type: text("general.type"),
+        kind: text("general.type"),
+        file_type: uint("general.file_type"),
+        size_label: text("general.size_label"),
+        license: text("general.license"),
         embedding_length: architecture
             .as_deref()
             .and_then(|a| uint(&format!("{a}.embedding_length"))),
@@ -266,6 +275,9 @@ pub mod testing {
             .str("general.architecture", "qwen3vl")
             .str("general.type", "model")
             .strs("general.tags", &["automatic-speech-recognition"])
+            .str("general.size_label", "752M")
+            .str("general.license", "apache-2.0")
+            .u32("general.file_type", 7)
             .u32("qwen3vl.embedding_length", width)
             .strs("tokenizer.ggml.tokens", &["a", "b", "c"])
             .floats("tokenizer.ggml.scores", 3)
@@ -315,6 +327,9 @@ mod tests {
         assert_eq!(i.architecture.as_deref(), Some("qwen3vl"));
         assert_eq!(i.embedding_length, Some(1024));
         assert!(i.speech_only() && !i.is_mmproj() && !i.audio_encoder);
+        assert_eq!(i.size_label.as_deref(), Some("752M"));
+        assert_eq!(i.license.as_deref(), Some("apache-2.0"));
+        assert_eq!(i.file_type, Some(7));
     }
 
     #[test]

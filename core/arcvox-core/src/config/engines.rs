@@ -254,6 +254,7 @@ mod tests {
             custom,
             capabilities: Capabilities::for_runtime(runtime),
             encoder: None,
+            facts: Default::default(),
         }
     }
 
