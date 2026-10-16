@@ -6,6 +6,7 @@
   import { t } from "../../lib/i18n";
   import Modal from "../../lib/ui/Modal.svelte";
   import PageHead from "../../lib/ui/PageHead.svelte";
+  import PageLink from "../../lib/ui/PageLink.svelte";
   import SaveBar from "../../lib/ui/SaveBar.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
 
@@ -75,7 +76,8 @@
 </script>
 
 {#if saved !== null}
-  <PageHead title={t("nav.prompt")} description={t("prompt.note")} crumb={{ label: t("nav.flow"), page: "flow" }}>
+  {#snippet note()}{t("prompt.note_before")}<PageLink page="flow" stage="rules" label={t("nav.flow")} />{t("prompt.note_after")}{/snippet}
+  <PageHead title={t("nav.prompt")} description={note} crumb={{ label: t("nav.flow"), page: "flow" }}>
     {#snippet actions()}
       {#if restorable}<button type="button" class="btn" disabled={saving} onclick={() => (confirmRestore = true)}>{t("prompt.restore")}</button>{/if}
     {/snippet}
