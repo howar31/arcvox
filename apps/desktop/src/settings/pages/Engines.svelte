@@ -55,7 +55,10 @@
   let deleting = $state<InstalledModel | null>(null);
 
   // A tab carries the problem mark while a ring in it is red.
-  const roles = $derived((["asr", "llm"] as Role[]).map((r) => ({ value: r, label: t(`engines.role.${r}`), problem: roleProblem(r) ? t("engines.tab_problem") : undefined })));
+  const roles = $derived((["asr", "llm"] as Role[]).map((r) => {
+    const level = roleProblem(r);
+    return { value: r, label: t(`engines.role.${r}`), problem: level ? t("engines.tab_problem") : undefined, level: level ?? undefined };
+  }));
   const engines = $derived(enginesOf(config.value, role));
   const builtins = $derived(engines.filter((p) => p.kind === "native"));
   const externals = $derived(engines.filter((p) => p.kind === "http"));
@@ -134,7 +137,7 @@
   const matches = (...texts: string[]): boolean => texts.some((x) => x.toLowerCase().includes(q));
   const shownRows = $derived(
     q ? locals.filter((r) => inFilter(r) && matches(r.label, r.id, r.meta, r.desc))
-      : locals.filter((r) => !toDownload(r) && (inFilter(r) || rowFault(r))),
+      : locals.filter((r) => !toDownload(r) && (inFilter(r) || rowLevel(r) !== null)),
   );
   const foldRows = $derived(filter === "all" && !q ? locals.filter(toDownload) : []);
   const shownBuiltins = $derived(q ? builtins.filter((p) => matches(p.label, engineDescription(p, manifest))) : builtins);
@@ -200,31 +203,39 @@
 
   /**
    * The ring before an engine says one thing: in use by a profile and working (accent), ready and
-   * waiting (green), not usable yet and nobody depends on it (grey), or a problem to deal with (red):
-   * a profile depends on it and it cannot work, a download or a test failed, a file is gone.
+   * waiting (green), not usable yet and nobody depends on it (grey), or a problem to deal with: a
+   * profile depends on it and it cannot work, a download or a test failed, a file is gone. The problem
+   * is red when it is a default engine, so dictation with the default fails, and orange otherwise,
+   * since a profile then runs on the default meanwhile.
    */
-  type Light = { tone: "accent" | "ok" | "off" | "live"; title: string };
-  /** Whether a local model's ring is red. */
-  function rowFault(r: LocalRow): boolean {
+  type Level = "live" | "warn";
+  type Light = { tone: "accent" | "ok" | "off" | Level; title: string };
+  const isDefaultEngine = (id: string): boolean => id === config.value?.default_engines.asr || id === config.value?.default_engines.llm;
+  const levelOf = (tone: Light["tone"]): Level | null => (tone === "live" || tone === "warn" ? tone : null);
+  /** The problem level of a local model's ring; null when it has none. */
+  function rowLevel(r: LocalRow): Level | null {
     const deaf = r.model !== null && encoderMissing(r.model);
-    return light(r.id, r.state === "installed" && !deaf, r.state === "error" || r.state === "gone" || deaf || failed(r.id)).tone === "live";
+    return levelOf(light(r.id, r.state === "installed" && !deaf, r.state === "error" || r.state === "gone" || deaf || failed(r.id)).tone);
   }
-  /** Whether a ring is red anywhere on the role's tab: a local model, a platform service or a network engine. */
-  function roleProblem(r: Role): boolean {
-    if (rowsFor(r).some(rowFault)) return true;
-    return enginesOf(config.value, r).some((p) => {
-      if (p.kind === "native") {
-        const s = nativeStates[p.id]?.status;
-        return light(p.id, (s ?? "ready") === "ready", s === "failed" || failed(p.id)).tone === "live";
-      }
-      return p.kind === "http" && light(p.id, true, failed(p.id)).tone === "live";
-    });
+  /** The worst problem level of any ring on the role's tab: a local model, a platform service or a network engine. */
+  function roleProblem(r: Role): Level | null {
+    const levels = [
+      ...rowsFor(r).map(rowLevel),
+      ...enginesOf(config.value, r).map((p) => {
+        if (p.kind === "native") {
+          const s = nativeStates[p.id]?.status;
+          return levelOf(light(p.id, (s ?? "ready") === "ready", s === "failed" || failed(p.id)).tone);
+        }
+        return p.kind === "http" ? levelOf(light(p.id, true, failed(p.id)).tone) : null;
+      }),
+    ];
+    return levels.includes("live") ? "live" : levels.includes("warn") ? "warn" : null;
   }
   function light(id: string, ready: boolean, fault: boolean): Light {
     const inUse = usedBy(config.value, id, usable).length > 0;
     // A profile that names the engine depends on it, also while it runs on the default.
     const wanted = inUse || namedBy(config.value, id).length > 0;
-    if (fault || (wanted && !ready)) return { tone: "live", title: t("engines.light.fault") };
+    if (fault || (wanted && !ready)) return isDefaultEngine(id) ? { tone: "live", title: t("engines.light.fault") } : { tone: "warn", title: t("engines.light.attention") };
     if (inUse) return { tone: "accent", title: t("engines.light.in_use") };
     if (ready) return { tone: "ok", title: t("engines.light.ready") };
     return { tone: "off", title: t("engines.light.off") };
@@ -351,10 +362,10 @@
           {#if recommended(r.id)}<Tag tone="accent" title={t("engines.tip.recommended")}>{t("engines.recommended")}</Tag>{/if}
           {@render defaultTag(r.engine)}
           {#if r.state === "downloading"}<Tag tone="warn">{t("engines.downloading")}</Tag>
-          {:else if r.state === "error"}<Tag tone="live" title={r.error}>{t("engines.download_failed")}</Tag>
-          {:else if r.state === "gone"}<Tag tone="live" title={t("engines.tip.file_missing")}>{t("engines.file_missing")}</Tag>
-          {:else if r.state === "missing" && r.engine}<Tag tone="live" title={t("engines.tip.not_downloaded")}>{t("engines.not_downloaded")}</Tag>
-          {:else if r.model && encoderMissing(r.model)}<Tag tone="live" title={t("engines.tip.encoder_missing")}>{t("engines.encoder_missing")}</Tag>{/if}
+          {:else if r.state === "error"}<Tag tone={rowLevel(r) ?? "warn"} title={r.error}>{t("engines.download_failed")}</Tag>
+          {:else if r.state === "gone"}<Tag tone={rowLevel(r) ?? "warn"} title={t("engines.tip.file_missing")}>{t("engines.file_missing")}</Tag>
+          {:else if r.state === "missing" && r.engine}<Tag tone={rowLevel(r) ?? "warn"} title={t("engines.tip.not_downloaded")}>{t("engines.not_downloaded")}</Tag>
+          {:else if r.model && encoderMissing(r.model)}<Tag tone={rowLevel(r) ?? "warn"} title={t("engines.tip.encoder_missing")}>{t("engines.encoder_missing")}</Tag>{/if}
           {#if r.engine && !hasRole(r.engine)}<Tag tone="warn">{t("engines.no_role")}</Tag>{/if}
         </div>
         {#if r.meta}<small class="line" title={r.meta}>{r.meta}</small>{/if}
@@ -496,7 +507,14 @@
 </div>
 
 <Modal bind:open={() => deleting !== null, (v) => { if (!v) deleting = null; }} title={t("engines.delete_model_title")}>
-  {#if deleting}<p>{t("engines.delete_model_body", { name: modelLabel(manifest, deleting), size: formatBytes(deleting.size_bytes) })}</p>{/if}
+  {#if deleting}
+    {@const named = namedBy(config.value, deleting.id).map((u) => u.name)}
+    {@const defaultOf = (["asr", "llm"] as Role[]).filter((r) => config.value?.default_engines[r] === deleting!.id)}
+    <p>{t("engines.delete_model_body", { name: modelLabel(manifest, deleting), size: formatBytes(deleting.size_bytes) })}</p>
+    <!-- What the deletion does to dictation, before it is done. -->
+    {#each defaultOf as r (r)}<p class="consequence live">{t("engines.delete_default", { role: t(`engines.role.${r}`) })}</p>{/each}
+    {#if named.length > 0}<p class="consequence" class:live={defaultOf.length > 0}>{t(defaultOf.length > 0 ? "engines.delete_named_default" : "engines.delete_named", { names: named.join(t("engines.list_sep")) })}</p>{/if}
+  {/if}
   {#snippet actions()}
     <button type="button" class="btn" onclick={() => (deleting = null)}>{t("common.cancel")}</button>
     <button type="button" class="btn danger" onclick={removeModel}>{t("engines.delete_model")}</button>
@@ -541,6 +559,8 @@
   .foldrow .sub { color: var(--ink-2); font-weight: 400; font-size: var(--text-sm); }
   .foldrow .chev { display: inline-flex; color: var(--ink-3); transition: transform .2s; }
   .foldrow .chev.open { transform: rotate(90deg); }
+  .consequence { color: var(--warn); }
+  .consequence.live { color: var(--live); }
   .foot { margin-top: 8px; }
   .foot .help { margin-top: 4px; }
   .link { border: 0; background: none; padding: 0; margin-left: 6px; color: var(--accent); font-size: var(--text-sm); cursor: default; }

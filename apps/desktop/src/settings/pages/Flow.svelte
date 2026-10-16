@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from "svelte";
   import {
-    errorMessage, historyLast, listMicrophones, modelsInstalled, modelsManifestNow, onHistoryChanged, profilesAddPreset,
+    errorMessage, historyLast, listMicrophones, modelsDownload, modelsInstalled, modelsManifestNow, onHistoryChanged, onModelDownloadProgress, openFolder, profilesAddPreset,
     profilesPresets, setDefaultProfile, upsertProfile, type InstalledModel, type LastRun, type ManifestView, type PresetView, type Profile,
   } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
@@ -126,12 +126,41 @@
     return { asr: preset?.suggested_asr ?? null, llm: preset?.suggested_llm ?? null };
   });
   /** The fallback note of a stage: the engine the draft names cannot run, the default is used. */
-  function onDefault(role: "asr" | "llm"): { wanted: string; using: string; modelId: string | null } | null {
+  /**
+   * Why a stage runs on the default engine instead of the one the profile names, and what fixes it:
+   * the engine is gone, its model file is gone, a catalogue model is not downloaded, a speech model
+   * lacks its audio encoder, or a service cannot run.
+   */
+  type Reason = "gone" | "file" | "download" | "encoder" | "service";
+  function onDefault(role: "asr" | "llm"): { wanted: string; using: string; reason: Reason; modelId: string | null; folder: string | null } | null {
     const c = role === "asr" ? resolved?.asr : resolved?.llm;
     if (!c || !isFallback(c)) return null;
     const wanted = providers.find((p) => p.id === c.source.wanted);
+    const using = providers.find((p) => p.id === c.id)?.label ?? c.id;
     const modelId = wanted?.kind === "embedded" && wanted.model_id && manifest?.models.some((m) => m.id === wanted.model_id) ? wanted.model_id : null;
-    return { wanted: wanted?.label ?? c.source.wanted, using: providers.find((p) => p.id === c.id)?.label ?? c.id, modelId };
+    const path = wanted?.kind === "embedded" ? wanted.model_path : null;
+    const deaf = !!wanted && (installed.deaf?.has(wanted.id) || (!!path && installed.deaf?.has(path)));
+    const reason: Reason = !wanted ? "gone" : deaf ? "encoder" : modelId ? "download" : path ? "file" : "service";
+    return { wanted: wanted?.label ?? c.source.wanted, using, reason, modelId, folder: path ? path.replace(/[\\/][^\\/]*$/, "") : null };
+  }
+  // A download started from a stage's note, with its progress.
+  let noteDownload = $state<{ id: string; received: number; total: number } | null>(null);
+  async function downloadFromNote(id: string) {
+    noteDownload = { id, received: 0, total: 0 };
+    const off = await onModelDownloadProgress((p) => { if (p.id === id && !p.done) noteDownload = { id, received: p.received, total: p.total }; });
+    try {
+      await modelsDownload(id);
+      models = await modelsInstalled();
+      toast.ok(t("flow.downloaded"));
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      off();
+      noteDownload = null;
+    }
+  }
+  async function openModelFolder(folder: string) {
+    try { await openFolder(folder); } catch (e) { toast.error(errorMessage(e)); }
   }
 
   // Copy the stored profile into the draft: always for another profile, otherwise only while nothing is edited.
@@ -347,13 +376,27 @@
 
 <PageHead title={t("nav.flow")} description={t("flow.description")} />
 
+<!-- What is wrong with the engine the stage names, that dictation goes on meanwhile, and a fix in place. -->
 {#snippet fallbackNote(role: "asr" | "llm")}
   {@const fb = onDefault(role)}
   {#if fb}
-    <p class="missing fallback">
-      <span>{t("flow.on_default", { wanted: fb.wanted, using: fb.using })}</span>
-      <button type="button" class="btn" onclick={() => guard.request(() => go("engines", role))}>{t(fb.modelId ? "flow.to_download" : "flow.to_engines")}</button>
-    </p>
+    <div class="fallback">
+      <p><b>{t(`flow.reason.${fb.reason}`, { wanted: fb.wanted })}</b> {t("flow.fallback_then", { using: fb.using })}</p>
+      <div class="acts">
+        {#if fb.reason === "download" && fb.modelId}
+          {#if noteDownload?.id === fb.modelId}
+            <span class="sub num">{t("flow.downloading", { percent: String(noteDownload.total > 0 ? Math.floor((noteDownload.received / noteDownload.total) * 100) : 0) })}</span>
+          {:else}
+            <button type="button" class="btn" disabled={noteDownload !== null} onclick={() => downloadFromNote(fb.modelId!)}><Icon name="download" size={14} />{t("engines.download")}</button>
+          {/if}
+        {:else if (fb.reason === "file" || fb.reason === "encoder") && fb.folder}
+          <button type="button" class="btn" onclick={() => openModelFolder(fb.folder!)}>{t("flow.open_model_folder")}</button>
+        {:else if fb.reason === "service"}
+          <button type="button" class="btn" onclick={() => guard.request(() => go("engines", role))}>{t("flow.to_engines")}</button>
+        {/if}
+        <button type="button" class="btn quiet" onclick={() => { if (role === "asr") draft!.asr_provider = null; else draft!.llm_provider = null; }}>{t("flow.use_default")}</button>
+      </div>
+    </div>
   {/if}
 {/snippet}
 
@@ -609,7 +652,10 @@
 
   .bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: var(--gap-group) 4px 12px; min-height: 20px; }
   .missing { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 4px 0; color: var(--warn); font-size: var(--text-sm); }
-  .missing.fallback { margin: 0 4px 10px; color: var(--live); }
+  .fallback { margin: 0 0 12px; padding: 12px 14px; border-radius: var(--radius); background: color-mix(in srgb, var(--warn) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); font-size: var(--text-sm); }
+  .fallback p { margin: 0; color: var(--ink); }
+  .fallback b { color: var(--warn); font-weight: 600; }
+  .fallback .acts { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 8px; }
   .bar h2 { margin: 0; font: 600 var(--text-sm)/1 var(--font); color: var(--ink-2); }
   .bar .btn { margin: -10px -8px -10px 0; }
   .field { width: 240px; flex: none; }

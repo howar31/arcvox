@@ -1,8 +1,8 @@
 <script lang="ts" generics="V extends string">
   import Bang from "./Bang.svelte";
   let { options, value = $bindable(), label }: {
-    /** `problem`, when set, puts the problem mark after the label with this text. */
-    options: { value: V; label: string; problem?: string }[];
+    /** `problem`, when set, puts the problem mark after the label with this text, at `level`. */
+    options: { value: V; label: string; problem?: string; level?: "live" | "warn" }[];
     value: V;
     label?: string;
   } = $props();
@@ -30,7 +30,7 @@
       bind:this={buttons[i]}
       onclick={() => (value = o.value)}
       onkeydown={(e) => onkeydown(e, i)}
-    >{o.label}{#if o.problem}<Bang title={o.problem} />{/if}</button>
+    >{o.label}{#if o.problem}<Bang title={o.problem} tone={o.level} />{/if}</button>
   {/each}
 </div>
 

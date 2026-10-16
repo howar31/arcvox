@@ -150,6 +150,22 @@ impl Notice {
         }
     }
 
+    /// A missing permission or a default engine that cannot run stops
+    /// dictation; a profile on the default engine, a model file gone from an
+    /// engine nobody falls back on, and the backup folder do not.
+    pub fn level(&self) -> Level {
+        match self {
+            Notice::MicrophoneDenied
+            | Notice::MicrophoneRestricted
+            | Notice::DefaultAsrNotReady
+            | Notice::DefaultLlmNotReady => Level::Fails,
+            Notice::ProfileOnDefault(..)
+            | Notice::ModelFileMissing(..)
+            | Notice::BackupFolderMissing
+            | Notice::BackupFolderNotWritable => Level::Attention,
+        }
+    }
+
     /// Where the fix item leads: the page, opened at the profile or the
     /// Engines tab the problem is in.
     pub fn target(&self) -> String {
@@ -200,16 +216,35 @@ fn runs(notices: &[Notice]) -> Vec<Vec<&Notice>> {
     out
 }
 
+/// How much a problem matters: dictation fails until it is fixed, or
+/// dictation goes on and the problem asks for attention.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Level {
+    Attention,
+    Fails,
+}
+
+/// A settings page with a problem to show, at the level of its worst one.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PageProblem {
+    pub page: &'static str,
+    pub level: Level,
+}
+
 /// The settings pages that have a problem to show, each once.
-fn problem_pages(state: UiState, notices: &[Notice]) -> Vec<&'static str> {
-    let mut pages = Vec::new();
+fn problem_pages(state: UiState, notices: &[Notice]) -> Vec<PageProblem> {
+    let mut pages: Vec<PageProblem> = Vec::new();
+    let mut add = |page: &'static str, level: Level| match pages.iter_mut().find(|p| p.page == page)
+    {
+        Some(p) => p.level = p.level.max(level),
+        None => pages.push(PageProblem { page, level }),
+    };
     if state == UiState::NoAccessibility {
-        pages.push("general");
+        add("general", Level::Fails);
     }
     for notice in notices {
-        if !pages.contains(&notice.page()) {
-            pages.push(notice.page());
-        }
+        add(notice.page(), notice.level());
     }
     pages
 }
@@ -543,7 +578,7 @@ impl<R: Runtime> Tray<R> {
     }
 
     /// The settings pages that have a problem to show.
-    pub fn problem_pages(&self) -> Vec<&'static str> {
+    pub fn problem_pages(&self) -> Vec<PageProblem> {
         problem_pages(self.state(), &self.notices())
     }
 
@@ -916,17 +951,38 @@ mod tests {
             Notice::ProfileOnDefault("B".into(), "b".into()),
             Notice::BackupFolderNotWritable,
         ];
+        let pages = |state, notices: &[Notice]| -> Vec<(&str, Level)> {
+            problem_pages(state, notices)
+                .into_iter()
+                .map(|p| (p.page, p.level))
+                .collect()
+        };
         assert_eq!(
-            problem_pages(UiState::NoAccessibility, &all),
-            vec!["general", "flow", "backup"]
+            pages(UiState::NoAccessibility, &all),
+            vec![
+                ("general", Level::Fails),
+                ("flow", Level::Attention),
+                ("backup", Level::Attention)
+            ]
         );
-        assert_eq!(problem_pages(UiState::Idle, &[]), Vec::<&str>::new());
+        assert_eq!(pages(UiState::Idle, &[]), vec![]);
         assert_eq!(
-            problem_pages(UiState::NoAccessibility, &[]),
-            vec!["general"]
+            pages(UiState::NoAccessibility, &[]),
+            vec![("general", Level::Fails)]
         );
         // The engine that never opened has its own notice on every page.
-        assert_eq!(problem_pages(UiState::EngineError, &[]), Vec::<&str>::new());
+        assert_eq!(pages(UiState::EngineError, &[]), vec![]);
+        // A page takes the level of its worst problem.
+        assert_eq!(
+            pages(
+                UiState::Idle,
+                &[
+                    Notice::ModelFileMissing("A".into(), "llm"),
+                    Notice::DefaultLlmNotReady
+                ]
+            ),
+            vec![("engines", Level::Fails)]
+        );
     }
 
     #[test]

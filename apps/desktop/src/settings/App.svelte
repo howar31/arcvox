@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import { onProblemPages, problemPages, systemInfo, uiLanguage, type SystemInfo } from "../lib/api";
+  import { onProblemPages, problemPages, systemInfo, uiLanguage, type PageProblem, type SystemInfo } from "../lib/api";
   import { setLanguage, t, type Lang } from "../lib/i18n";
   import { client, config, defaults } from "../lib/store.svelte";
   import { go, NAV, navPage, parseRoute, routeHash, routeSection, SETTINGS_PAGES, shouldIntercept, type SettingsPage } from "../lib/route";
@@ -39,7 +39,8 @@
   const section = $derived((SETTINGS_PAGES as readonly string[]).includes(route.page) ? (route.page as SettingsPage) : null);
 
   // The pages that have a problem to show; the menu-bar menu lists the same problems.
-  let problems = $state<string[]>([]);
+  let problems = $state<PageProblem[]>([]);
+  const problemOf = (page: string): PageProblem["level"] | undefined => problems.find((x) => x.page === page)?.level;
 
   function checkProblems() {
     problemPages().then((pages) => { problems = pages; }).catch(() => {});
@@ -133,7 +134,7 @@
               class:on={current === p}
               aria-current={current === p ? "page" : undefined}
               onclick={() => guard.request(() => go(p))}
-            ><Icon name={p} size={18} /><span>{t(`nav.${p}`)}</span>{#if problems.includes(p)}<span class="mark"><Bang title={t("shell.page_problem")} /></span>{/if}</button>
+            ><Icon name={p} size={18} /><span>{t(`nav.${p}`)}</span>{#if problemOf(p)}<span class="mark"><Bang title={t(problemOf(p) === "fails" ? "shell.page_problem" : "shell.page_attention")} tone={problemOf(p) === "fails" ? "live" : "warn"} /></span>{/if}</button>
           {/each}
         {/each}
       </nav>
