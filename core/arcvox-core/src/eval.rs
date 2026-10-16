@@ -821,6 +821,97 @@ fn fnv1a(s: &str) -> u64 {
     })
 }
 
+/// How the examples shown to the rewrite model are chosen from a pool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExamplePick {
+    /// The rows whose spoken text shares the most character pairs with the
+    /// one under test.
+    Similar,
+    /// A fixed arbitrary choice per row, the control for `Similar`.
+    Random,
+}
+
+impl ExamplePick {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "similar" => Some(Self::Similar),
+            "random" => Some(Self::Random),
+            _ => None,
+        }
+    }
+}
+
+/// Character pairs of the word characters, the unit `similarity` counts.
+fn bigrams(s: &str) -> Vec<(char, char)> {
+    let chars = normalize_text(s);
+    let mut pairs: Vec<(char, char)> = chars.windows(2).map(|w| (w[0], w[1])).collect();
+    pairs.sort_unstable();
+    pairs
+}
+
+/// Dice coefficient over character pairs: 1 for the same words, 0 for
+/// nothing in common. Both inputs are sorted pair lists from `bigrams`.
+fn similarity(a: &[(char, char)], b: &[(char, char)]) -> f64 {
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    let (mut i, mut j, mut shared) = (0, 0, 0usize);
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                shared += 1;
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    2.0 * shared as f64 / (a.len() + b.len()) as f64
+}
+
+/// Up to `k` rows of `pool` as examples for the row `id` with text `spoken`.
+/// The row itself is never an example, so a pool that holds the set under
+/// test is held out row by row. The best example comes last, nearest the
+/// utterance. `Random` orders the pool by a hash of both ids, so every row
+/// gets its own fixed choice.
+pub fn pick_examples(
+    pool: &[SeedRow],
+    id: &str,
+    spoken: &str,
+    k: usize,
+    pick: ExamplePick,
+) -> Vec<crate::config::Example> {
+    let others = pool.iter().filter(|r| r.id != id);
+    let mut ranked: Vec<(f64, u64, &SeedRow)> = match pick {
+        ExamplePick::Similar => {
+            let own = bigrams(spoken);
+            others
+                .map(|r| (similarity(&own, &bigrams(&r.spoken)), 0, r))
+                .collect()
+        }
+        ExamplePick::Random => others
+            .map(|r| (0.0, fnv1a(&format!("{id}:{}", r.id)), r))
+            .collect(),
+    };
+    // Best first for the cut; ties by id so the result does not depend on
+    // the pool's order on disk.
+    ranked.sort_by(|a, b| {
+        b.0.total_cmp(&a.0)
+            .then(a.1.cmp(&b.1))
+            .then(a.2.id.cmp(&b.2.id))
+    });
+    ranked
+        .into_iter()
+        .take(k)
+        .rev()
+        .map(|(_, _, r)| crate::config::Example {
+            raw: r.spoken.clone(),
+            refined: r.final_text.clone(),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1379,5 +1470,70 @@ mod tests {
         assert_eq!(pick_spread(&cands, 4), vec!["1", "3", "5", "6"]);
         assert_eq!(pick_spread(&cands, 10), vec!["1", "3", "5", "6", "2", "4"]);
         assert_eq!(pick_spread(&cands, 0), Vec::<String>::new());
+    }
+
+    fn pool() -> Vec<SeedRow> {
+        let row = |id: &str, spoken: &str, final_text: &str| SeedRow {
+            id: id.into(),
+            audio: PathBuf::new(),
+            spoken: spoken.into(),
+            final_text: final_text.into(),
+            tags: vec![],
+        };
+        vec![
+            row("1", "今天下午三點開會", "今天下午三點開會"),
+            row("2", "明天早上開會嗎", "明天早上開會嗎？"),
+            row("3", "這個檔案要刪掉", "這個檔案要刪掉"),
+            row("4", "今天下午要開會對吧", "今天下午要開會對吧"),
+            row("5", "完全不同的句子", "完全不同的句子"),
+        ]
+    }
+
+    #[test]
+    fn similarity_is_one_for_the_same_words_and_zero_for_none_shared() {
+        let a = bigrams("今天，開會。");
+        assert_eq!(similarity(&a, &bigrams("今天開會")), 1.0);
+        assert_eq!(similarity(&a, &bigrams("完全不同")), 0.0);
+        assert_eq!(similarity(&a, &bigrams("")), 0.0);
+        let half = similarity(&bigrams("今天開會"), &bigrams("今天休息"));
+        assert!(half > 0.0 && half < 1.0, "{half}");
+    }
+
+    #[test]
+    fn similar_examples_leave_the_row_itself_out_and_end_with_the_best() {
+        let pool = pool();
+        let picked = pick_examples(&pool, "1", "今天下午三點開會", 2, ExamplePick::Similar);
+        let raws: Vec<&str> = picked.iter().map(|e| e.raw.as_str()).collect();
+        // Row 4 shares the most pairs; row 2 shares 開會. Row 1 is held out.
+        assert_eq!(raws, vec!["明天早上開會嗎", "今天下午要開會對吧"]);
+        assert_eq!(picked[0].refined, "明天早上開會嗎？");
+    }
+
+    #[test]
+    fn random_examples_are_fixed_per_row_and_hold_the_row_out() {
+        let pool = pool();
+        let a = pick_examples(&pool, "3", "這個檔案要刪掉", 3, ExamplePick::Random);
+        let b = pick_examples(&pool, "3", "這個檔案要刪掉", 3, ExamplePick::Random);
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 3);
+        assert!(a.iter().all(|e| e.raw != "這個檔案要刪掉"));
+        let mut reversed = pool.clone();
+        reversed.reverse();
+        assert_eq!(
+            pick_examples(&reversed, "3", "這個檔案要刪掉", 3, ExamplePick::Random),
+            a
+        );
+    }
+
+    #[test]
+    fn examples_stop_at_the_pool_and_at_zero() {
+        let pool = pool();
+        assert_eq!(
+            pick_examples(&pool, "1", "x", 9, ExamplePick::Similar).len(),
+            4
+        );
+        assert!(pick_examples(&pool, "1", "x", 0, ExamplePick::Random).is_empty());
+        assert_eq!(ExamplePick::parse("similar"), Some(ExamplePick::Similar));
+        assert_eq!(ExamplePick::parse("nearest"), None);
     }
 }
