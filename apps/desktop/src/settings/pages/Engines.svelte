@@ -15,7 +15,9 @@
   import { guard } from "../../lib/guard.svelte";
   import { go } from "../../lib/route";
   import { config } from "../../lib/store.svelte";
+  import { rememberFilter, rememberFold, storedFilter, storedFold, type ModelFilter } from "../../lib/engineListMemory";
   import Empty from "../../lib/ui/Empty.svelte";
+  import Fold from "../../lib/ui/Fold.svelte";
   import Group from "../../lib/ui/Group.svelte";
   import Icon from "../../lib/ui/Icon.svelte";
   import PageLink from "../../lib/ui/PageLink.svelte";
@@ -118,6 +120,33 @@
     return rows.sort((a, b) => rank(a) - rank(b));
   }
   const locals = $derived(rowsFor(role));
+
+  // The filter keeps installed or own files only; a row with a red ring stays in every filter.
+  // Catalogue models nobody has asked for yet sit in the fold at the end of the full list.
+  let filter = $state<ModelFilter>(storedFilter());
+  $effect(() => { rememberFilter(filter); });
+  const isOwn = (r: LocalRow): boolean => r.model?.custom ?? (!!r.engine?.model_path && !r.engine.model_id);
+  const toDownload = (r: LocalRow): boolean => r.state === "missing" && !r.engine;
+  const inFilter = (r: LocalRow): boolean => filter === "all" || (filter === "own" ? isOwn(r) : r.state === "installed" || r.state === "downloading");
+  // A search looks through every engine on the tab, the fold included, and shows only what matches.
+  let query = $state("");
+  const q = $derived(query.trim().toLowerCase());
+  const matches = (...texts: string[]): boolean => texts.some((x) => x.toLowerCase().includes(q));
+  const shownRows = $derived(
+    q ? locals.filter((r) => inFilter(r) && matches(r.label, r.id, r.meta, r.desc))
+      : locals.filter((r) => !toDownload(r) && (inFilter(r) || rowFault(r))),
+  );
+  const foldRows = $derived(filter === "all" && !q ? locals.filter(toDownload) : []);
+  const shownBuiltins = $derived(q ? builtins.filter((p) => matches(p.label, engineDescription(p, manifest))) : builtins);
+  const shownExternals = $derived(q ? externals.filter((p) => matches(p.label, engineDescription(p, manifest))) : externals);
+  // Open while a recommended model is missing, until the user opens or shuts it.
+  let foldChoice = $state<boolean | null>(storedFold());
+  const foldOpen = $derived(foldChoice ?? foldRows.some((r) => recommended(r.id)));
+  const filters = $derived([
+    { value: "all" as ModelFilter, label: t("engines.filter.all"), count: locals.length },
+    { value: "installed" as ModelFilter, label: t("engines.filter.installed"), count: locals.filter((r) => r.state === "installed").length },
+    { value: "own" as ModelFilter, label: t("engines.filter.own"), count: locals.filter(isOwn).length },
+  ]);
 
   async function refreshInstalled() {
     try { installed = await modelsInstalled(); installedKnown = true; } catch (e) { toast.error(errorMessage(e)); }
@@ -285,6 +314,10 @@
 
 <div class="toolbar">
   <Segmented options={roles} bind:value={() => role, (v) => guard.request(() => go("engines", v))} label={t("engines.role")} />
+  <label class="search">
+    <Icon name="search" />
+    <input type="search" bind:value={query} placeholder={t("engines.search")} aria-label={t("engines.search")} />
+  </label>
   {#if missingRecommended.length > 0}
     <button type="button" class="btn quiet" disabled={busy} onclick={downloadRecommended}><Icon name="download" />{t("engines.download_recommended")}</button>
   {/if}
@@ -303,15 +336,7 @@
   {#if p && canBeDefault(p)}<button type="button" class="btn quiet" onclick={() => makeDefault(p)}>{t("engines.make_default")}</button>{/if}
 {/snippet}
 
-<!-- Every installed model is an engine of its own; a file still to download is listed with it. -->
-<Group title={t("engines.local_models")}>
-  {#snippet actions()}
-    <button type="button" class="btn" onclick={refreshAll} disabled={refreshing}><Icon name="refresh" size={14} />{t("common.refresh")}</button>
-  {/snippet}
-  {#if !manifest || !installedKnown}
-    <Row><span class="sub">{t("common.loading")}</span></Row>
-  {/if}
-  {#each locals as r (r.id)}
+{#snippet localRow(r: LocalRow)}
     <Row>
       {#snippet leading()}
         {@const deaf = r.model !== null && encoderMissing(r.model)}
@@ -353,7 +378,36 @@
         <button type="button" class="btn" onclick={() => download(r.id)}><Icon name="download" />{t("engines.download")}</button>
       {/if}
     </Row>
+{/snippet}
+
+<!-- Every installed model is an engine of its own; a file still to download is listed with it. -->
+<Group title={t("engines.local_models")}>
+  {#snippet actions()}
+    <div class="pills" role="radiogroup" aria-label={t("engines.filter")}>
+      {#each filters as f (f.value)}
+        <button type="button" class="pill" class:on={filter === f.value} role="radio" aria-checked={filter === f.value} onclick={() => (filter = f.value)}>{f.label}<span class="num">{f.count}</span></button>
+      {/each}
+    </div>
+    <button type="button" class="btn" onclick={refreshAll} disabled={refreshing}><Icon name="refresh" size={14} />{t("common.refresh")}</button>
+  {/snippet}
+  {#if !manifest || !installedKnown}
+    <Row><span class="sub">{t("common.loading")}</span></Row>
+  {/if}
+  {#each shownRows as r (r.id)}
+    {@render localRow(r)}
+  {:else}
+    {#if manifest && installedKnown && q}<Row><span class="sub">{t("engines.no_match")}</span></Row>
+    {:else if manifest && installedKnown && filter !== "all"}<Row><span class="sub">{t(filter === "own" ? "engines.none_own" : "engines.none_installed")}</span></Row>{/if}
   {/each}
+  {#if foldRows.length > 0}
+    <button type="button" class="foldrow" aria-expanded={foldOpen} onclick={() => { foldChoice = !foldOpen; rememberFold(foldChoice); }}>
+      <span class="chev" class:open={foldOpen}><Icon name="chevron-right" size={14} /></span>
+      <span>{t("engines.downloadable")}</span><span class="sub">{t("engines.downloadable_count", { count: String(foldRows.length) })}</span>
+    </button>
+    {#if foldOpen}
+      <Fold>{#each foldRows as r (r.id)}{@render localRow(r)}{/each}</Fold>
+    {/if}
+  {/if}
   <div class="rowfoot">
     {#if folder}<p>{t(folder.is_default ? "engines.folder_help_default" : "engines.folder_help", { dir: folder.path })}</p>{/if}
     <p class="links">
@@ -365,10 +419,10 @@
   </div>
 </Group>
 
-{#if builtins.length > 0}
+{#if shownBuiltins.length > 0}
   <!-- The platform's own services; their engines are made by the app and carry the service's name. -->
   <Group title={t("engines.builtin")}>
-    {#each builtins as p (p.id)}
+    {#each shownBuiltins as p (p.id)}
       {@const s = nativeStates[p.id]}
       <Row>
         {#snippet leading()}
@@ -402,7 +456,7 @@
   {#snippet actions()}
     <button type="button" class="btn" onclick={() => openForm(null)}><Icon name="plus" size={14} />{t("engines.add")}</button>
   {/snippet}
-  {#each externals as p (p.id)}
+  {#each shownExternals as p (p.id)}
     <Row>
       {#snippet leading()}
         {@const lamp = light(p.id, true, failed(p.id))}
@@ -423,9 +477,10 @@
       <button type="button" class="btn quiet" onclick={() => openForm(p)}>{t("common.edit")}</button>
     </Row>
   {:else}
+    {#if q}<Row><span class="sub">{t("engines.no_match")}</span></Row>{:else}
     <Empty text={t("engines.none_external." + role)}>
       {#snippet action()}<button type="button" class="btn" onclick={() => openForm(null)}>{t("engines.add")}</button>{/snippet}
-    </Empty>
+    </Empty>{/if}
   {/each}
 </Group>
 
@@ -455,7 +510,11 @@
 <style>
   .info { flex: 1; min-width: 0; }
   .info.dim .name, .info.dim small { color: var(--ink-3); }
-  .toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+  .toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+  .toolbar .search { flex: 1 1 200px; max-width: 320px; display: flex; align-items: center; gap: 9px; height: var(--control); padding: 0 12px; border-radius: var(--radius); border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink-3); cursor: text; }
+  .toolbar .search input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; background: none; color: var(--ink); font-size: var(--text-control); outline: none; -webkit-appearance: none; appearance: none; }
+  .toolbar .search:focus-within { border-color: var(--accent); }
+  .toolbar > .btn { margin-left: auto; }
   .toolbar .btn.quiet { margin-right: -8px; }
   /* Tags move to a second line before the name is shortened. */
   .title { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 6px; min-width: 0; }
@@ -472,6 +531,16 @@
   .rowfoot p { margin: 0; overflow-wrap: anywhere; }
   .rowfoot .links { margin-top: 2px; }
   .rowfoot .links .link { margin: 0 14px 0 0; }
+  .pills { display: flex; gap: 6px; margin-right: 6px; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 15px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink-2); font-size: var(--text-sm); cursor: default; }
+  .pill .num { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .pill.on { border-color: transparent; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .pill.on .num { color: inherit; }
+  /* The last row of the full list: the catalogue models still to download, shown on request. */
+  .foldrow { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 54px; padding: 0 var(--row-x, 20px); border: 0; border-top: 1px solid var(--line); background: none; color: var(--ink); font-size: var(--text-control); font-weight: 600; text-align: left; cursor: default; }
+  .foldrow .sub { color: var(--ink-2); font-weight: 400; font-size: var(--text-sm); }
+  .foldrow .chev { display: inline-flex; color: var(--ink-3); transition: transform .2s; }
+  .foldrow .chev.open { transform: rotate(90deg); }
   .foot { margin-top: 8px; }
   .foot .help { margin-top: 4px; }
   .link { border: 0; background: none; padding: 0; margin-left: 6px; color: var(--accent); font-size: var(--text-sm); cursor: default; }
