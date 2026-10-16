@@ -4,7 +4,9 @@
     chooseAttempt, clearHistory, clearHistoryRange, clearRecordingsRange, deleteAttempt, historyAttempts, historyStages, clearRecordings, deleteHistory, deleteRecording, errorMessage, formatBytes, historyStorage, listHistory, onHistoryChanged, openRecordingsDir, reprocessHistory, revealRecording, widgetCopy,
     type Attempt, type HistoryStorage, type Stage, type Utterance,
   } from "../../lib/api";
+  import { storedOpen, rememberOpen, type DetailBlock } from "../../lib/detailMemory";
   import { failureText } from "../../lib/failure";
+  import { changedStages } from "../../lib/flowLast";
   import { formatDateTime, formatDay, formatTime } from "../../lib/format";
   import { clipLength, groupByDay, PAGE_SIZE, periodRange, rawState, redoneTag, seconds, spentSeconds, totalSeconds, type PeriodSel } from "../../lib/historyView";
   import { resolveEngines } from "../../lib/resolve";
@@ -22,6 +24,8 @@
   import PageLink from "../../lib/ui/PageLink.svelte";
   import Tag from "../../lib/ui/Tag.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
+  import Attempts from "./history/Attempts.svelte";
+  import DetailFold from "./history/DetailFold.svelte";
   import PeriodPicker from "./history/PeriodPicker.svelte";
   import Player from "./history/Player.svelte";
   import StageChanges from "./history/StageChanges.svelte";
@@ -71,13 +75,11 @@
   // What each stage of the open row's current result did; empty for rows from before stages were kept.
   let stages = $state<Record<number, Stage[]>>({});
   let fresh = $state<Record<number, number>>({});
-  // The result whose delete button was pressed once; a second press within a few seconds deletes it.
-  let confirming = $state<number | null>(null);
-  let confirmTimer: ReturnType<typeof setTimeout> | undefined;
-  function askDelete(a: Attempt) {
-    clearTimeout(confirmTimer);
-    confirming = a.id;
-    confirmTimer = setTimeout(() => { if (confirming === a.id) confirming = null; }, 4000);
+  // Which blocks of an expanded row are open, for every row; remembered across visits.
+  let opened = $state<Record<DetailBlock, boolean>>({ stages: storedOpen("stages"), attempts: storedOpen("attempts") });
+  function setOpen(block: DetailBlock, open: boolean) {
+    opened[block] = open;
+    rememberOpen(block, open);
   }
   // The same for a row's delete buttons: the row and which of the two was pressed once.
   let sure = $state<{ id: number; what: "row" | "recording" } | null>(null);
@@ -261,7 +263,7 @@
       const { attempt, failure } = await reprocessHistory(u.id, chosen[u.id] || null);
       if (failure) toast.error(failureText(failure.code, failure.detail));
       else if (attempt?.chosen) toast.ok(t("history.retry_done"));
-      else if (attempt) fresh[u.id] = attempt.id;
+      else if (attempt) { fresh[u.id] = attempt.id; setOpen("attempts", true); }
     } catch (e) {
       toast.error(errorMessage(e));
     }
@@ -277,8 +279,6 @@
     }
   }
   async function removeAttempt(u: Utterance, a: Attempt) {
-    clearTimeout(confirmTimer);
-    confirming = null;
     try {
       await deleteAttempt(a.id);
       if (fresh[u.id] === a.id) delete fresh[u.id];
@@ -290,6 +290,13 @@
   function attemptWhen(u: Utterance, a: Attempt): string {
     if (fresh[u.id] === a.id) return t("history.attempt_just_now");
     return formatTime(a.ts);
+  }
+  /** The result in use, for the closed results block: when, which profile, which engines. */
+  function inUse(u: Utterance): string {
+    const a = attempts[u.id]?.find((x) => x.chosen);
+    if (!a) return "";
+    const parts = [attemptWhen(u, a), profileOf(a.profile_id).name, ...(a.asr_label ? [enginesOf(a.asr_label, a.llm_label)] : [])];
+    return t("history.attempts_in_use", { what: parts.join(" · ") });
   }
 
   function toggle(id: number, play = false) {
@@ -464,10 +471,6 @@
                 <div class="label">{t("history.raw_label")}{#if raw !== "changed"}<span class="same" class:kept={raw === "same"} class:bad={raw === "failed"}>{t(raw === "same" ? "history.raw_same" : raw === "failed" ? "history.not_rewritten" : "history.rewrite_off")}</span>{/if}</div>
                 <div class="raw">{u.raw_text.trim()}</div>
               {/if}
-              {#if stages[u.id]?.length}
-                <div class="label">{t("history.stages")}</div>
-                <StageChanges stages={stages[u.id]} />
-              {/if}
               {#if u.has_audio}
                 {@const failedRow = u.error !== null}
                 <div class="label">{t("history.recording")}</div>
@@ -486,44 +489,19 @@
                   </div>
                 {/if}
               {/if}
+              {#if stages[u.id]?.length}
+                {@const changed = changedStages(stages[u.id]).length}
+                <DetailFold title={t("history.stages")} small={changed ? t("history.stages_count", { n: String(changed) }) : t("history.stages_none")} open={opened.stages} ontoggle={(v) => setOpen("stages", v)}>
+                  <StageChanges stages={stages[u.id]} />
+                </DetailFold>
+              {/if}
               {#if attempts[u.id]?.length}
-                <div class="label">{t("history.attempts")}</div>
-                <div class="attempts">
-                  {#each attempts[u.id] as a (a.id)}
-                    {@const isFresh = fresh[u.id] === a.id}
-                    <div class="attempt" class:chosen={a.chosen} class:fresh={isFresh}>
-                      {#if !a.chosen && !a.origin}
-                        {#if confirming === a.id}
-                          <button type="button" class="btn sm danger sure" onclick={() => removeAttempt(u, a)}>{t("history.delete_attempt_confirm")}</button>
-                        {:else}
-                          <button type="button" class="x" aria-label={t("history.delete_attempt")} title={t("history.delete_attempt")} onclick={() => askDelete(a)}><Icon name="x" size={12} /></button>
-                        {/if}
-                      {/if}
-                      <div class="head num">
-                        <span class="when">{attemptWhen(u, a)}</span>
-                        <span>{profileOf(a.profile_id).name}</span>
-                        {#if a.asr_label}<span>{enginesOf(a.asr_label, a.llm_label)}</span>{/if}
-                        {#if a.error === null && timing(a)}<span>{timing(a)}</span>{/if}
-                        {#if a.chosen}<Tag tone="accent">{t("history.attempt_chosen")}</Tag>{/if}
-                        {#if isFresh}<Tag tone="accent">{t("history.attempt_fresh")}</Tag>{/if}
-                        {#if a.origin}<Tag>{t("history.attempt_origin")}</Tag>{/if}
-                        {#if a.error !== null}<Tag tone="live">{t("history.attempt_failed")}</Tag>{/if}
-                        {#if a.degraded}<Tag tone="warn">{t("history.not_rewritten")}</Tag>{/if}
-                      </div>
-                      {#if a.error !== null}
-                        <div class="text problem">{failureText(a.error_code, a.error)}</div>
-                      {:else}
-                        <div class="text">{a.final_text}</div>
-                        {#if !a.chosen}
-                          <div class="choose">
-                            <button type="button" class="btn quiet icon-btn" aria-label={t("history.copy_result")} title={t("history.copy_result")} onclick={() => copy(a.final_text)}><Icon name="copy" /></button>
-                            <button type="button" class="btn" class:primary={isFresh} onclick={() => use(u, a)}>{t("history.use_result")}</button>
-                          </div>
-                        {/if}
-                      {/if}
-                    </div>
-                  {/each}
-                </div>
+                <DetailFold title={t("history.attempts")} small={t("history.attempts_count", { n: String(attempts[u.id].length) })} right={inUse(u)} open={opened.attempts} ontoggle={(v) => setOpen("attempts", v)}>
+                  <Attempts
+                    items={attempts[u.id]} fresh={fresh[u.id] ?? null} when={(a) => attemptWhen(u, a)} profileName={(id) => profileOf(id).name} engines={enginesOf} {timing}
+                    failure={(a) => failureText(a.error_code, a.error)} oncopy={copy} onuse={(a) => use(u, a)} ondelete={(a) => removeAttempt(u, a)}
+                  />
+                </DetailFold>
               {/if}
               <div class="foot">
                 <span class="facts num">
@@ -661,17 +639,6 @@
   .busy { display: flex; align-items: center; gap: 9px; min-height: var(--control); color: var(--ink-2); font-size: var(--text-control); }
   .spin { width: 16px; height: 16px; flex: none; border-radius: 50%; border: 2.5px solid var(--accent); border-right-color: transparent; animation: spin .9s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .attempts { display: flex; flex-direction: column; gap: 8px; }
-  .attempt { position: relative; padding: 12px 16px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); }
-  .attempt.chosen { border-color: var(--accent); background: var(--accent-soft); }
-  .attempt.fresh { border-color: var(--accent); border-style: dashed; }
-  .attempt .head { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 12px; margin-bottom: 4px; padding-right: 28px; color: var(--ink-2); font-size: var(--text-sm); }
-  .attempt .when { color: var(--ink); font-weight: 600; }
-  .attempt .text { line-height: 1.55; overflow-wrap: anywhere; white-space: pre-line; -webkit-user-select: text; user-select: text; }
-  .attempt .x { position: absolute; top: 8px; right: 8px; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: none; color: var(--ink-3); cursor: default; }
-  .attempt .x:hover { background: var(--sunken); color: var(--ink); }
-  .attempt .sure { position: absolute; top: 6px; right: 8px; height: 28px; padding: 0 10px; font-size: var(--text-xs); }
-  .choose { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 10px; }
   .foot { display: flex; align-items: center; gap: 4px; margin-top: 12px; }
   .foot .btn:last-child { margin-right: -8px; }
   .facts { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 2px 14px; color: var(--ink-2); font-size: var(--text-sm); }
