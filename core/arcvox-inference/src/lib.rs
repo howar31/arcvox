@@ -3,6 +3,7 @@ pub mod chat;
 pub mod factory;
 pub mod lang;
 pub mod llama;
+pub mod llama_asr;
 pub mod whisper;
 
 use std::sync::atomic::{AtomicBool, Ordering};

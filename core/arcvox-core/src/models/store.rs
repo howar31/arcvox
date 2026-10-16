@@ -1,7 +1,8 @@
 use super::download::{self, DownloadProgress};
+use super::kind::{self, FoundModel};
 use super::manifest::{safe_segment, Manifest, ManifestSource};
 use super::*;
-use crate::config::{ProviderConfig, Runtime};
+use crate::config::{Capabilities, ProviderConfig, Runtime};
 use crate::history::MoveReport;
 use crate::paths::DataDir;
 use std::collections::HashMap;
@@ -17,12 +18,39 @@ const MANIFEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct InstalledModel {
-    /// Catalogue id, or `custom/<file name>` for an imported file.
+    /// Catalogue id, or `custom/<file name>` (`custom/<folder>/<file name>`)
+    /// for a file of the custom folder.
     pub id: String,
     pub runtime: Runtime,
     pub path: PathBuf,
+    /// The model's files together, its audio encoder included.
     pub size_bytes: u64,
     pub custom: bool,
+    /// What the model can be used for.
+    pub capabilities: Capabilities,
+    /// The audio encoder the model hears through.
+    pub encoder: Option<PathBuf>,
+}
+
+impl InstalledModel {
+    fn found(id: String, m: FoundModel, custom: bool) -> Option<Self> {
+        let size_bytes =
+            regular_size(&m.path)? + m.encoder.as_deref().and_then(regular_size).unwrap_or(0);
+        Some(Self {
+            id,
+            runtime: m.runtime,
+            path: m.path,
+            size_bytes,
+            custom,
+            capabilities: m.capabilities,
+            encoder: m.encoder,
+        })
+    }
+
+    /// A model that transcribes through an audio encoder it does not have.
+    pub fn encoder_missing(&self) -> bool {
+        self.runtime == Runtime::Llama && self.capabilities.transcribe && self.encoder.is_none()
+    }
 }
 
 pub struct ModelStore {
@@ -176,6 +204,13 @@ impl ModelStore {
         }
     }
 
+    /// Where a catalogue model's audio encoder is kept, when it has one.
+    fn encoder_path_in(&self, manifest: &Manifest, id: &str) -> Option<PathBuf> {
+        let file = manifest.get(id)?.mmproj.as_ref()?.file_name();
+        let main = self.path_in(manifest, id);
+        safe_segment(&file).then(|| main.with_file_name(file))
+    }
+
     pub fn installed(&self) -> Vec<InstalledModel> {
         let manifest = self.known_manifest();
         let mut out = Vec::new();
@@ -191,48 +226,51 @@ impl ModelStore {
             let found = match manifest.get(&id) {
                 Some(e) => {
                     let path = self.path_in(&manifest, &id);
-                    regular_size(&path).map(|size| (path, size, e.runtime))
+                    let encoder = self.encoder_path_in(&manifest, &id);
+                    let complete = path.is_file() && encoder.as_ref().is_none_or(|p| p.is_file());
+                    complete.then(|| FoundModel {
+                        path,
+                        runtime: e.runtime,
+                        capabilities: e.capabilities(),
+                        encoder,
+                    })
                 }
-                // Left over from a catalogue that no longer lists it: accept a lone file.
-                None => lone_file(&entry.path()).and_then(|(path, size)| {
-                    let runtime = magic::detect(&path).ok().flatten()?;
-                    Some((path, size, runtime))
-                }),
+                // Left over from a catalogue that no longer lists it: accept a lone model.
+                None => lone_model(&entry.path()),
             };
-            if let Some((path, size_bytes, runtime)) = found {
-                out.push(InstalledModel {
-                    id,
-                    runtime,
-                    path,
-                    size_bytes,
-                    custom: false,
-                });
+            if let Some(m) = found.and_then(|m| InstalledModel::found(id, m, false)) {
+                out.push(m);
             }
         }
         out.sort_by(|a, b| a.id.cmp(&b.id));
-        let mut custom: Vec<_> = std::fs::read_dir(self.models_dir().join(CUSTOM_DIR))
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter_map(|e| {
-                let name = e.file_name().to_string_lossy().into_owned();
-                if !safe_segment(&name) {
-                    return None;
+        out.extend(self.custom_models());
+        out
+    }
+
+    /// The models of the custom folder: its files, and the files of each
+    /// folder inside it, every model paired with its audio encoder.
+    fn custom_models(&self) -> Vec<InstalledModel> {
+        let root = self.models_dir().join(CUSTOM_DIR);
+        let mut out: Vec<InstalledModel> = Vec::new();
+        let mut add = |dir: &Path, prefix: &str| {
+            for m in kind::models_in(dir) {
+                let Some(name) = m.path.file_name().map(|n| n.to_string_lossy().into_owned())
+                else {
+                    continue;
+                };
+                if let Some(found) = InstalledModel::found(format!("{prefix}{name}"), m, true) {
+                    out.push(found);
                 }
-                let path = e.path();
-                let size_bytes = regular_size(&path)?;
-                let runtime = magic::detect(&path).ok().flatten()?;
-                Some(InstalledModel {
-                    id: format!("{CUSTOM_DIR}/{name}"),
-                    runtime,
-                    path,
-                    size_bytes,
-                    custom: true,
-                })
-            })
-            .collect();
-        custom.sort_by(|a, b| a.id.cmp(&b.id));
-        out.extend(custom);
+            }
+        };
+        add(&root, &format!("{CUSTOM_DIR}/"));
+        for entry in std::fs::read_dir(&root).into_iter().flatten().flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if safe_segment(&name) && entry.path().is_dir() {
+                add(&entry.path(), &format!("{CUSTOM_DIR}/{name}/"));
+            }
+        }
+        out.sort_by(|a, b| a.id.cmp(&b.id));
         out
     }
 
@@ -254,8 +292,8 @@ impl ModelStore {
         let manifest = self.known_manifest();
         let path = match manifest.get(id) {
             Some(_) => self.path_in(&manifest, id),
-            None => lone_file(&self.models_dir().join(id))
-                .map(|(path, _)| path)
+            None => lone_model(&self.models_dir().join(id))
+                .map(|m| m.path)
                 .ok_or_else(|| ModelError::NotInstalled(id.to_string()))?,
         };
         if path.is_file() {
@@ -265,13 +303,50 @@ impl ModelStore {
         }
     }
 
+    /// The audio encoder the engine's model hears through: the catalogue's
+    /// file for a catalogue model, else the one paired beside the file.
+    pub fn resolve_encoder(&self, cfg: &ProviderConfig) -> Result<Option<PathBuf>, ModelError> {
+        let main = self.resolve(cfg)?;
+        if cfg.model_path.is_none() {
+            let manifest = self.known_manifest();
+            if let Some(id) = cfg
+                .model_id
+                .as_deref()
+                .filter(|id| manifest.get(id).is_some())
+            {
+                return Ok(self.encoder_path_in(&manifest, id).filter(|p| p.is_file()));
+            }
+        }
+        Ok(kind::encoder_beside(&main))
+    }
+
+    /// A custom file goes with the encoders that only it paired with, and a
+    /// folder inside the custom folder goes once it is empty.
     pub fn delete(&self, id: &str) -> Result<(), ModelError> {
         let models = self.models_dir();
-        if let Some(name) = id.strip_prefix("custom/") {
-            if !safe_segment(name) {
+        if let Some(rest) = id.strip_prefix("custom/") {
+            let parts: Vec<&str> = rest.split('/').collect();
+            if parts.len() > 2 || !parts.iter().all(|p| safe_segment(p)) {
                 return Err(ModelError::NotInstalled(id.to_string()));
             }
-            return std::fs::remove_file(models.join(CUSTOM_DIR).join(name)).map_err(Into::into);
+            let mut dir = models.join(CUSTOM_DIR);
+            if parts.len() == 2 {
+                dir.push(parts[0]);
+            }
+            let paired: Vec<PathBuf> = kind::models_in(&dir)
+                .into_iter()
+                .filter_map(|m| m.encoder)
+                .collect();
+            std::fs::remove_file(dir.join(parts[parts.len() - 1]))?;
+            for e in kind::unpaired_encoders(&dir) {
+                if paired.contains(&e) {
+                    std::fs::remove_file(e)?;
+                }
+            }
+            if parts.len() == 2 && std::fs::read_dir(&dir)?.next().is_none() {
+                std::fs::remove_dir(&dir)?;
+            }
+            return Ok(());
         }
         if !safe_segment(id) || id == CUSTOM_DIR {
             return Err(ModelError::NotInCatalogue(id.to_string()));
@@ -279,9 +354,10 @@ impl ModelStore {
         std::fs::remove_dir_all(models.join(id)).map_err(Into::into)
     }
 
-    /// Copies a user-supplied ggml or GGUF file into `custom/`, replacing a file of the same name.
-    pub fn import(&self, source: &Path) -> Result<InstalledModel, ModelError> {
-        let runtime = magic::detect(source)?.ok_or(ModelError::UnknownFormat)?;
+    /// Copies a user-supplied ggml or GGUF file (a model or an encoder) into
+    /// `custom/`, replacing a file of the same name; returns where it is.
+    pub fn import(&self, source: &Path) -> Result<PathBuf, ModelError> {
+        magic::detect(source)?.ok_or(ModelError::UnknownFormat)?;
         let name = source
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -303,14 +379,7 @@ impl ModelStore {
                 return Err(e.into());
             }
         }
-        let size_bytes = std::fs::metadata(&path)?.len();
-        Ok(InstalledModel {
-            id: format!("{CUSTOM_DIR}/{name}"),
-            runtime,
-            path,
-            size_bytes,
-            custom: true,
-        })
+        Ok(path)
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<DownloadProgress> {
@@ -373,14 +442,20 @@ impl ModelStore {
         drop(guard);
         let _ = self.progress.send(DownloadProgress {
             id: id.into(),
-            received: if result.is_ok() { entry.size_bytes } else { 0 },
-            total: entry.size_bytes,
+            received: if result.is_ok() {
+                entry.total_bytes()
+            } else {
+                0
+            },
+            total: entry.total_bytes(),
             done: true,
             error: result.as_ref().err().map(|e| e.to_string()),
         });
         result
     }
 
+    /// Fetches the model's files one after the other into its folder; a file
+    /// already in place was checked when it arrived and is kept.
     async fn download_inner(
         &self,
         manifest: &Manifest,
@@ -394,53 +469,81 @@ impl ModelStore {
                 entry.id
             )));
         }
-        let ext = dest.extension().and_then(|e| e.to_str()).unwrap_or("bin");
-        let part = dest.with_extension(format!("{ext}.part"));
+        let mut files = vec![(
+            entry.url.clone(),
+            entry.sha256.clone(),
+            entry.size_bytes,
+            dest.clone(),
+        )];
+        let encoder = self.encoder_path_in(manifest, &entry.id);
+        if let (Some(m), Some(path)) = (&entry.mmproj, &encoder) {
+            files.push((m.url.clone(), m.sha256.clone(), m.size_bytes, path.clone()));
+        }
         let dir = dest.parent().expect("model path has a parent");
         tokio::fs::create_dir_all(dir).await?;
-        let existing = tokio::fs::metadata(&part)
-            .await
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let total = entry.total_bytes();
+        let mut missing = 0u64;
+        for (_, _, size, path) in &files {
+            if !path.is_file() {
+                let existing = tokio::fs::metadata(part_of(path))
+                    .await
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                missing += size.saturating_sub(existing);
+            }
+        }
         let free = self.free_disk_bytes()?;
         // Keep headroom beyond the model itself.
-        let needed = entry
-            .size_bytes
-            .saturating_sub(existing)
-            .saturating_add(512 * 1024 * 1024);
+        let needed = missing.saturating_add(512 * 1024 * 1024);
         if free < needed {
             return Err(ModelError::InsufficientDisk { needed, free });
         }
-        let tx = self.progress.clone();
-        let id = entry.id.clone();
-        download::fetch_to(&self.client, entry, &part, cancel, |received, total| {
-            let _ = tx.send(DownloadProgress {
-                id: id.clone(),
-                received,
-                total,
-                done: false,
-                error: None,
-            });
-        })
-        .await?;
-        let p = part.clone();
-        let actual = tokio::task::spawn_blocking(move || download::sha256_file(&p))
-            .await
-            .expect("hash task")?;
-        if !actual.eq_ignore_ascii_case(&entry.sha256) {
-            let _ = tokio::fs::remove_file(&part).await;
-            return Err(ModelError::Sha256Mismatch {
-                expected: entry.sha256.clone(),
-                actual,
-            });
+        let mut before = 0u64;
+        for (url, sha256, size, path) in &files {
+            if !path.is_file() {
+                let part = part_of(path);
+                let tx = self.progress.clone();
+                let id = entry.id.clone();
+                download::fetch_to(
+                    &self.client,
+                    url,
+                    *size,
+                    &part,
+                    cancel.clone(),
+                    |received, _| {
+                        let _ = tx.send(DownloadProgress {
+                            id: id.clone(),
+                            received: before + received,
+                            total,
+                            done: false,
+                            error: None,
+                        });
+                    },
+                )
+                .await?;
+                let p = part.clone();
+                let actual = tokio::task::spawn_blocking(move || download::sha256_file(&p))
+                    .await
+                    .expect("hash task")?;
+                if !actual.eq_ignore_ascii_case(sha256) {
+                    let _ = tokio::fs::remove_file(&part).await;
+                    return Err(ModelError::Sha256Mismatch {
+                        expected: sha256.clone(),
+                        actual,
+                    });
+                }
+                tokio::fs::rename(&part, path).await?;
+            }
+            before += size;
         }
-        tokio::fs::rename(&part, &dest).await?;
         Ok(InstalledModel {
             id: entry.id.clone(),
             runtime: entry.runtime,
             path: dest,
-            size_bytes: entry.size_bytes,
+            size_bytes: total,
             custom: false,
+            capabilities: entry.capabilities(),
+            encoder,
         })
     }
 
@@ -510,14 +613,18 @@ fn regular_size(path: &Path) -> Option<u64> {
         .map(|m| m.len())
 }
 
-/// The only regular file directly inside `dir`; `None` for zero or several.
-fn lone_file(dir: &Path) -> Option<(PathBuf, u64)> {
-    let mut files = std::fs::read_dir(dir)
-        .ok()?
-        .flatten()
-        .filter_map(|e| regular_size(&e.path()).map(|s| (e.path(), s)));
-    let first = files.next()?;
-    files.next().is_none().then_some(first)
+/// The partial file a download writes before the checksum is verified.
+fn part_of(dest: &Path) -> PathBuf {
+    let ext = dest.extension().and_then(|e| e.to_str()).unwrap_or("bin");
+    dest.with_extension(format!("{ext}.part"))
+}
+
+/// The only model directly inside `dir`, with its audio encoder; `None` for
+/// zero or several.
+fn lone_model(dir: &Path) -> Option<FoundModel> {
+    let mut models = kind::models_in(dir).into_iter();
+    let first = models.next()?;
+    models.next().is_none().then_some(first)
 }
 
 /// Moves every item directly inside `from` into `to`; an item that cannot
@@ -589,14 +696,13 @@ mod tests {
         let src = tmp.path().join("mine.gguf");
         std::fs::write(&src, b"GGUF\x03\x00\x00\x00").unwrap();
         let imported = s.import(&src).unwrap();
-        assert!(imported.custom);
-        assert_eq!(imported.runtime, Runtime::Llama);
-        assert_eq!(
-            imported.path,
-            dirs.models_dir().join("custom").join("mine.gguf")
-        );
-        let ids: Vec<String> = s.installed().into_iter().map(|m| m.id).collect();
+        assert_eq!(imported, dirs.models_dir().join("custom").join("mine.gguf"));
+        let listed = s.installed();
+        let ids: Vec<&str> = listed.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(ids, ["a", "custom/mine.gguf"]);
+        assert!(listed[1].custom);
+        assert_eq!(listed[1].runtime, Runtime::Llama);
+        assert!(listed[1].capabilities.chat && !listed[1].capabilities.transcribe);
     }
 
     #[test]
@@ -836,11 +942,11 @@ mod tests {
         let first = s.import(&src).unwrap();
         std::fs::write(&src, b"GGUF\x03\x00\x00\x00second").unwrap();
         let second = s.import(&src).unwrap();
-        assert_eq!(second.size_bytes, 14);
-        let again = s.import(&second.path).unwrap();
-        assert_eq!(again.path, first.path);
+        assert_eq!(std::fs::metadata(&second).unwrap().len(), 14);
+        let again = s.import(&second).unwrap();
+        assert_eq!(again, first);
         assert_eq!(
-            std::fs::read(&again.path).unwrap(),
+            std::fs::read(&again).unwrap(),
             b"GGUF\x03\x00\x00\x00second"
         );
         assert_eq!(s.installed().len(), 1);
@@ -940,5 +1046,135 @@ mod tests {
             s.resolve(&cfg),
             Err(ModelError::NotInCatalogue(_))
         ));
+    }
+
+    #[test]
+    fn custom_speech_models_pair_with_their_encoders_in_the_folder_and_in_folders_inside() {
+        use crate::models::gguf::testing::{encoder, speech_model, text_model};
+        let tmp = tempfile::tempdir().unwrap();
+        let (dirs, s) = store(tmp.path());
+        let custom = dirs.models_dir().join("custom");
+        let inner = custom.join("Qwen3-ASR-1.7B");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::write(custom.join("asr.gguf"), speech_model(1024)).unwrap();
+        std::fs::write(custom.join("mmproj-asr.gguf"), encoder(Some(1024))).unwrap();
+        std::fs::write(custom.join("lonely.gguf"), speech_model(4096)).unwrap();
+        std::fs::write(custom.join("gemma.gguf"), text_model(2560)).unwrap();
+        std::fs::write(inner.join("model.gguf"), speech_model(2048)).unwrap();
+        std::fs::write(inner.join("mmproj.gguf"), encoder(Some(2048))).unwrap();
+        let listed = s.installed();
+        let ids: Vec<&str> = listed.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "custom/Qwen3-ASR-1.7B/model.gguf",
+                "custom/asr.gguf",
+                "custom/gemma.gguf",
+                "custom/lonely.gguf"
+            ]
+        );
+        let of = |id: &str| listed.iter().find(|m| m.id == id).unwrap();
+        assert_eq!(
+            of("custom/asr.gguf").encoder,
+            Some(custom.join("mmproj-asr.gguf"))
+        );
+        assert_eq!(
+            of("custom/asr.gguf").size_bytes,
+            (speech_model(1024).len() + encoder(Some(1024)).len()) as u64
+        );
+        assert!(of("custom/lonely.gguf").encoder_missing());
+        assert!(of("custom/gemma.gguf").capabilities.chat);
+        assert_eq!(
+            of("custom/Qwen3-ASR-1.7B/model.gguf").encoder,
+            Some(inner.join("mmproj.gguf"))
+        );
+        let mut cfg = ProviderConfig::embedded("e", "E", Runtime::Llama, "x");
+        cfg.model_id = None;
+        cfg.model_path = Some(custom.join("asr.gguf"));
+        assert_eq!(
+            s.resolve_encoder(&cfg).unwrap(),
+            Some(custom.join("mmproj-asr.gguf"))
+        );
+        cfg.model_path = Some(custom.join("gemma.gguf"));
+        assert_eq!(s.resolve_encoder(&cfg).unwrap(), None);
+    }
+
+    #[test]
+    fn deleting_a_custom_model_takes_the_encoder_only_it_used() {
+        use crate::models::gguf::testing::{encoder, speech_model};
+        let tmp = tempfile::tempdir().unwrap();
+        let (dirs, s) = store(tmp.path());
+        let custom = dirs.models_dir().join("custom");
+        let inner = custom.join("pair");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::write(custom.join("asr-q8.gguf"), speech_model(1024)).unwrap();
+        std::fs::write(custom.join("asr-q4.gguf"), speech_model(1024)).unwrap();
+        std::fs::write(custom.join("mmproj-asr.gguf"), encoder(Some(1024))).unwrap();
+        std::fs::write(custom.join("mmproj-spare.gguf"), encoder(Some(8))).unwrap();
+        std::fs::write(inner.join("model.gguf"), speech_model(2048)).unwrap();
+        std::fs::write(inner.join("mmproj.gguf"), encoder(Some(2048))).unwrap();
+        s.delete("custom/asr-q8.gguf").unwrap();
+        assert!(
+            custom.join("mmproj-asr.gguf").exists(),
+            "still used by the other quantisation"
+        );
+        s.delete("custom/asr-q4.gguf").unwrap();
+        assert!(!custom.join("mmproj-asr.gguf").exists());
+        assert!(
+            custom.join("mmproj-spare.gguf").exists(),
+            "never paired, left alone"
+        );
+        s.delete("custom/pair/model.gguf").unwrap();
+        assert!(!inner.exists());
+        assert!(s.delete("custom/a/b/c.gguf").is_err());
+        assert!(s.delete("custom/../x.gguf").is_err());
+    }
+
+    #[tokio::test]
+    async fn a_catalogue_speech_model_downloads_both_files() {
+        use crate::models::gguf::testing::{encoder, speech_model};
+        use sha2::{Digest, Sha256};
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        let model = speech_model(1024);
+        let enc = encoder(Some(1024));
+        let hex = |b: &[u8]| format!("{:x}", Sha256::digest(b));
+        for (p, body) in [("/q.gguf", &model), ("/mmproj-q.gguf", &enc)] {
+            Mock::given(method("GET"))
+                .and(path(p))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(body.clone()))
+                .mount(&server)
+                .await;
+        }
+        let json = format!(
+            r#"{{"schema_version":1,"models":[{{"id":"q","runtime":"llama","role":"asr","label":"Q","url":"{u}/q.gguf","sha256":"{a}","size_bytes":{n},"license":"Apache-2.0","mmproj":{{"url":"{u}/mmproj-q.gguf","sha256":"{b}","size_bytes":{m}}}}}]}}"#,
+            u = server.uri(),
+            a = hex(&model),
+            b = hex(&enc),
+            n = model.len(),
+            m = enc.len()
+        );
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = DataDir::custom(tmp.path());
+        dirs.ensure().unwrap();
+        let s = ModelStore::new(&dirs, reqwest::Client::new(), json.leak(), None);
+        let got = s.download("q").await.unwrap();
+        let folder = s.models_dir().join("q");
+        assert_eq!(got.encoder, Some(folder.join("mmproj-q.gguf")));
+        assert_eq!(got.size_bytes, (model.len() + enc.len()) as u64);
+        let listed = s.installed();
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].capabilities.transcribe && !listed[0].capabilities.chat);
+        let cfg = ProviderConfig::embedded("q", "Q", Runtime::Llama, "q");
+        assert_eq!(
+            s.resolve_encoder(&cfg).unwrap(),
+            Some(folder.join("mmproj-q.gguf"))
+        );
+        std::fs::remove_file(folder.join("mmproj-q.gguf")).unwrap();
+        assert!(
+            s.installed().is_empty(),
+            "a model without its encoder is not installed"
+        );
     }
 }

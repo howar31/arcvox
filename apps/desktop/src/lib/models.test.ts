@@ -17,6 +17,7 @@ describe("formatBytes", () => {
 
 import { rowStatus } from "./models.svelte";
 import type { ModelEntry } from "./api";
+const caps = { transcribe: true, chat: false, streaming: false, language_hint: true, hotwords: true };
 const entry: ModelEntry = { id: "a", runtime: "whisper", role: "asr", label: "A", description: "", languages: [], url: "https://h/a.bin", sha256: "0".repeat(64), size_bytes: 10, license: "MIT", recommended: true, min_ram_gb: 8 };
 
 describe("rowStatus", () => {
@@ -27,12 +28,12 @@ describe("rowStatus", () => {
     expect(rowStatus(entry, [], { a: { id: "a", received: 4, total: 10, done: false, error: null } })).toEqual({ kind: "downloading", received: 4, total: 10 });
   });
   it("is installed when the file exists", () => {
-    expect(rowStatus(entry, [{ id: "a", runtime: "whisper", path: "/p", size_bytes: 10, custom: false }], {})).toEqual({ kind: "installed", size: 10, custom: false });
+    expect(rowStatus(entry, [{ id: "a", runtime: "whisper", path: "/p", size_bytes: 10, custom: false, capabilities: caps, encoder: null }], {})).toEqual({ kind: "installed", size: 10, custom: false });
   });
   it("shows the error from a finished failed download", () => {
     expect(rowStatus(entry, [], { a: { id: "a", received: 0, total: 10, done: true, error: "checksum mismatch" } })).toEqual({ kind: "error", message: "checksum mismatch" });
   });
   it("installed wins over a stale error", () => {
-    expect(rowStatus(entry, [{ id: "a", runtime: "whisper", path: "/p", size_bytes: 10, custom: false }], { a: { id: "a", received: 0, total: 10, done: true, error: "x" } }).kind).toBe("installed");
+    expect(rowStatus(entry, [{ id: "a", runtime: "whisper", path: "/p", size_bytes: 10, custom: false, capabilities: caps, encoder: null }], { a: { id: "a", received: 0, total: 10, done: true, error: "x" } }).kind).toBe("installed");
   });
 });

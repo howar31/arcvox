@@ -250,7 +250,7 @@ fn run(
 /// Runs `work` on a blocking thread, bounded by `timeout`. The flag handed to
 /// `work` is set on timeout and also when this future is dropped, so a
 /// cancelled session stops whisper.cpp at its next abort check.
-async fn run_abortable<F>(
+pub(crate) async fn run_abortable<F>(
     label: &str,
     timeout: Duration,
     work: F,

@@ -525,25 +525,25 @@ impl Config {
 }
 
 impl Capabilities {
-    /// What an embedded engine of the runtime can do: a speech model
+    /// What an embedded model can do, given the uses its file allows: a
+    /// whisper.cpp model takes a language hint and hot words; a llama.cpp
+    /// model transcribing takes the hot words as context, and is not told
+    /// the language.
+    pub fn for_model(runtime: Runtime, transcribe: bool, chat: bool) -> Self {
+        Self {
+            transcribe,
+            chat,
+            streaming: false,
+            language_hint: transcribe && runtime == Runtime::Whisper,
+            hotwords: transcribe,
+        }
+    }
+
+    /// What an engine of the runtime does by default: a speech model
     /// transcribes with a language hint and hot words, a text model chats.
     pub fn for_runtime(runtime: Runtime) -> Self {
-        match runtime {
-            Runtime::Whisper => Self {
-                transcribe: true,
-                chat: false,
-                streaming: false,
-                language_hint: true,
-                hotwords: true,
-            },
-            Runtime::Llama => Self {
-                transcribe: false,
-                chat: true,
-                streaming: false,
-                language_hint: false,
-                hotwords: false,
-            },
-        }
+        let speech = runtime == Runtime::Whisper;
+        Self::for_model(runtime, speech, !speech)
     }
 }
 

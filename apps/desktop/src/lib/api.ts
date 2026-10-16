@@ -281,9 +281,11 @@ export function errorMessage(e: unknown): string {
   return String(e);
 }
 
-export interface ModelEntry { id: string; runtime: Runtime; role: "asr" | "llm"; label: string; description: string; languages: string[]; url: string; sha256: string; size_bytes: number; license: string; recommended: boolean; min_ram_gb: number }
+export interface ModelFile { url: string; sha256: string; size_bytes: number }
+export interface ModelEntry { id: string; runtime: Runtime; role: "asr" | "llm"; label: string; description: string; languages: string[]; url: string; sha256: string; size_bytes: number; license: string; recommended: boolean; min_ram_gb: number; mmproj?: ModelFile }
 export interface ManifestView { source: "remote" | "cached" | "bundled"; models: ModelEntry[] }
-export interface InstalledModel { id: string; runtime: Runtime; path: string; size_bytes: number; custom: boolean }
+/** An installed model: what its file can be used for, and the audio encoder it hears through. */
+export interface InstalledModel { id: string; runtime: Runtime; path: string; size_bytes: number; custom: boolean; capabilities: Capabilities; encoder: string | null }
 export interface DownloadProgress { id: string; received: number; total: number; done: boolean; error: string | null }
 export const modelsManifest = () => invoke<ManifestView>("models_manifest");
 export const modelsManifestNow = () => invoke<ManifestView>("models_manifest_now");
@@ -292,7 +294,7 @@ export const modelsDownload = (id: string) => invoke<InstalledModel>("models_dow
 export const modelsDownloadRecommended = () => invoke<void>("models_download_recommended");
 export const modelsCancel = (id: string) => invoke<void>("models_cancel", { id });
 export const modelsDelete = (id: string) => invoke<void>("models_delete", { id });
-export const modelsImport = (path: string) => invoke<InstalledModel>("models_import", { path });
+export const modelsImport = (path: string) => invoke<void>("models_import", { path });
 export interface ModelsDir { path: string; is_default: boolean; moved: number; left: number }
 export const modelsDirGet = () => invoke<ModelsDir>("models_dir_get");
 export const modelsDirSet = (path: string | null) => invoke<ModelsDir>("models_dir_set", { path });

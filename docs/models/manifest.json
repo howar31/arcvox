@@ -44,6 +44,44 @@
       "min_ram_gb": 8
     },
     {
+      "id": "qwen3-asr-1.7b-q8_0",
+      "runtime": "llama",
+      "role": "asr",
+      "label": "Qwen3-ASR 1.7B (Q8_0)",
+      "description": "Chinese, English, Japanese and 27 more languages, with punctuation. Output is converted to Traditional Chinese.",
+      "languages": ["zh", "en", "ja"],
+      "url": "https://huggingface.co/ggml-org/Qwen3-ASR-1.7B-GGUF/resolve/36a678687ba7d07a74ca70ccb0e36902e005fb80/Qwen3-ASR-1.7B-Q8_0.gguf",
+      "sha256": "58e22d0532d4eacaf034cfac17a6fed159f37c41390c710186783be439d1fc57",
+      "size_bytes": 2165034944,
+      "license": "Apache-2.0",
+      "recommended": false,
+      "min_ram_gb": 8,
+      "mmproj": {
+        "url": "https://huggingface.co/ggml-org/Qwen3-ASR-1.7B-GGUF/resolve/36a678687ba7d07a74ca70ccb0e36902e005fb80/mmproj-Qwen3-ASR-1.7B-Q8_0.gguf",
+        "sha256": "46c1d533af3f354ceb37ce855dbceff7da7fa7cf1e6a523df3b13440bd164c0d",
+        "size_bytes": 355709344
+      }
+    },
+    {
+      "id": "qwen3-asr-0.6b-q8_0",
+      "runtime": "llama",
+      "role": "asr",
+      "label": "Qwen3-ASR 0.6B (Q8_0)",
+      "description": "Chinese, English, Japanese and 27 more languages, with punctuation. Output is converted to Traditional Chinese.",
+      "languages": ["zh", "en", "ja"],
+      "url": "https://huggingface.co/ggml-org/Qwen3-ASR-0.6B-GGUF/resolve/928ab958557df9aa2ef1c93e0e83c7ad0933fae2/Qwen3-ASR-0.6B-Q8_0.gguf",
+      "sha256": "bca259818b50ca7c4c05e9bdb35a5dc04fa039653a6d6f3f0f331f96f6aa1971",
+      "size_bytes": 804749248,
+      "license": "Apache-2.0",
+      "recommended": false,
+      "min_ram_gb": 8,
+      "mmproj": {
+        "url": "https://huggingface.co/ggml-org/Qwen3-ASR-0.6B-GGUF/resolve/928ab958557df9aa2ef1c93e0e83c7ad0933fae2/mmproj-Qwen3-ASR-0.6B-Q8_0.gguf",
+        "sha256": "41a342b5e4c514e968cb756de6cd1b7be39eff43c44c57a2ef5fc6522e36603d",
+        "size_bytes": 214392480
+      }
+    },
+    {
       "id": "gemma-3-4b-it-q4_k_m",
       "runtime": "llama",
       "role": "llm",
