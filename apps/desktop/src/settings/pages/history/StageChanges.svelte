@@ -31,9 +31,10 @@
 <style>
   .none { color: var(--ink-2); font-size: var(--text-sm); }
   .failed { color: var(--warn); font-size: var(--text-sm); }
-  .list { display: flex; flex-direction: column; gap: 8px; }
-  .stage { padding: 10px 14px 12px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); -webkit-user-select: text; user-select: text; }
-  .head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; color: var(--ink-2); font-size: var(--text-sm); }
+  .list { display: flex; flex-direction: column; }
+  .stage { padding: 10px 0 11px; -webkit-user-select: text; user-select: text; }
+  .stage + .stage { border-top: 1px solid var(--line); }
+  .head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; color: var(--ink-2); font-size: var(--text-sm); }
   .head b { color: var(--ink); font-weight: 600; }
   .num { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--sunken); color: var(--ink-2); font-size: var(--text-xs); font-weight: 600; }
 </style>
