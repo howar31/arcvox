@@ -13,6 +13,7 @@
   import { isImeKey } from "../../lib/ime";
   import { appsSummary, withLlm } from "../../lib/profileEdit";
   import { FOLLOW, hasLlmStep, isFallback, resolveEngines, usableWith } from "../../lib/resolve";
+  import { runnable } from "../../lib/engines";
   import { go } from "../../lib/route";
   import { engineLine, micLine, outputLine, type StageLine } from "../../lib/stages";
   import { client, config } from "../../lib/store.svelte";
@@ -103,7 +104,10 @@
   const providers = $derived(config.value?.providers ?? []);
   const asrChoices = $derived(providers.filter((p) => p.capabilities.transcribe));
   const llmChoices = $derived(providers.filter((p) => p.capabilities.chat));
-  const installed = $derived({ ids: models ? new Set(models.map((m) => m.id)) : null, paths: new Set((models ?? []).map((m) => m.path)) });
+  const installed = $derived.by(() => {
+    const ok = runnable(models ?? []);
+    return { ids: models ? new Set(ok.map((m) => m.id)) : null, paths: new Set(ok.map((m) => m.path)) };
+  });
   // The engines the draft runs with now: its own when they can run, else the default pair.
   const resolved = $derived(draft ? resolveEngines(config.value, draft, usableWith(installed.ids, installed.paths)) : null);
   const defaultName = (role: "asr" | "llm") => providers.find((p) => p.id === config.value?.default_engines[role])?.label ?? config.value?.default_engines[role] ?? "";

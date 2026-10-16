@@ -28,7 +28,7 @@ const DEFAULT_MAX_TOKENS: u32 = 1024;
 const SEED: u32 = 1234;
 
 /// llama.cpp allows a single backend per process.
-fn backend() -> &'static LlamaBackend {
+pub(crate) fn backend() -> &'static LlamaBackend {
     static BACKEND: OnceLock<LlamaBackend> = OnceLock::new();
     BACKEND.get_or_init(|| {
         // Routes llama.cpp and ggml logs to `tracing` instead of stderr.
@@ -105,7 +105,11 @@ impl Loader {
     }
 }
 
-fn load_model(path: &Path, label: &str, use_gpu: bool) -> Result<LlamaModel, ProviderError> {
+pub(crate) fn load_model(
+    path: &Path,
+    label: &str,
+    use_gpu: bool,
+) -> Result<LlamaModel, ProviderError> {
     if !path.is_file() {
         return Err(ProviderError::new(
             ErrorCode::ModelMissing,
@@ -127,7 +131,7 @@ fn inference_failed(label: &str, e: impl std::fmt::Display) -> ProviderError {
     ProviderError::new(ErrorCode::InferenceFailed, format!("{label}: {e}"))
 }
 
-fn prompt(model: &LlamaModel, messages: &[ChatMessage]) -> String {
+pub(crate) fn prompt(model: &LlamaModel, messages: &[ChatMessage]) -> String {
     let Ok(tpl) = model.chat_template(None) else {
         return chat::chatml(messages);
     };

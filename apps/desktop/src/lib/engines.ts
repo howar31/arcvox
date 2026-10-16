@@ -1,9 +1,19 @@
-import type { Config, InstalledModel, ManifestView, ModelEntry, ProviderConfig, Runtime } from "./api";
+import type { Config, InstalledModel, ManifestView, ModelEntry, ProviderConfig } from "./api";
 import { ASR_CAPS, blankFor, LLM_CAPS } from "./providerForm";
 
 export type Role = "asr" | "llm";
 
-export const runtimeFor = (role: Role): Runtime => (role === "asr" ? "whisper" : "llama");
+/** Whether an installed model can serve the role; a model that both transcribes and chats serves both. */
+export const modelServes = (m: InstalledModel, role: Role): boolean => (role === "asr" ? m.capabilities.transcribe : m.capabilities.chat);
+
+/** A llama.cpp model that transcribes through an audio encoder it does not have beside it. */
+export const encoderMissing = (m: InstalledModel): boolean => m.runtime === "llama" && m.capabilities.transcribe && !m.encoder;
+
+/** The installed models that can run: a model without the audio encoder it needs cannot. */
+export const runnable = (models: InstalledModel[]): InstalledModel[] => models.filter((m) => !encoderMissing(m));
+
+/** Bytes of every file a catalogue model needs. */
+export const entryBytes = (e: ModelEntry): number => e.size_bytes + (e.mmproj?.size_bytes ?? 0);
 
 /**
  * A blank network service whose capabilities match the role. Nothing else is made by hand:
@@ -38,3 +48,4 @@ export function freshId(text: string, existingIds: string[]): string {
 export function recommendedMissing(manifest: ManifestView | null, installed: InstalledModel[]): ModelEntry[] {
   return (manifest?.models ?? []).filter((m) => m.recommended && !installed.some((i) => i.id === m.id));
 }
+

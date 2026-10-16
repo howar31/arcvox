@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::config::{Capabilities, Config, FirstRunDefaults, ProviderConfig, ProviderKind};
+use crate::config::{Config, FirstRunDefaults, ProviderConfig, ProviderKind};
 use crate::models::{InstalledModel, Manifest};
 use crate::types::ProviderId;
 
@@ -53,7 +53,7 @@ pub fn sync_engines(
             Some(row) => {
                 row.label = label;
                 row.runtime = Some(m.runtime);
-                row.capabilities = Capabilities::for_runtime(m.runtime);
+                row.capabilities = m.capabilities;
                 if m.custom {
                     row.model_id = None;
                     row.model_path = Some(m.path.clone());
@@ -87,7 +87,7 @@ pub fn sync_engines(
         if let Some(entry) = row.model_id.as_deref().and_then(|id| manifest.get(id)) {
             row.label = entry.label.clone();
             row.runtime = Some(entry.runtime);
-            row.capabilities = Capabilities::for_runtime(entry.runtime);
+            row.capabilities = entry.capabilities();
         }
     }
 }
@@ -104,12 +104,9 @@ pub fn ensure_referenced_engines(config: &mut Config, manifest: &Manifest) {
         .collect();
     for id in wanted {
         if let Some(entry) = manifest.get(&id.0) {
-            config.providers.push(ProviderConfig::embedded(
-                &id.0,
-                &entry.label,
-                entry.runtime,
-                &id.0,
-            ));
+            let mut made = ProviderConfig::embedded(&id.0, &entry.label, entry.runtime, &id.0);
+            made.capabilities = entry.capabilities();
+            config.providers.push(made);
         } else if let Some(made) = ProviderConfig::native_engine_by_id(&id.0) {
             config.providers.push(made);
         }
@@ -134,6 +131,7 @@ fn model_label(m: &InstalledModel, manifest: &Manifest) -> String {
 
 fn engine_for(m: &InstalledModel, label: String) -> ProviderConfig {
     let mut p = ProviderConfig::embedded(&m.id, &label, m.runtime, &m.id);
+    p.capabilities = m.capabilities;
     if m.custom {
         p.model_id = None;
         p.model_path = Some(m.path.clone());
@@ -146,7 +144,8 @@ fn referenced_ids(config: &Config) -> HashSet<ProviderId> {
 }
 
 /// The id an app-made engine carries: for an embedded engine its catalogue
-/// model's id, or `custom/<file name>` of the file it loads; for a native
+/// model's id, or `custom/<file name>` of the file it loads
+/// (`custom/<folder>/<file name>` inside a folder of the custom folder); for a native
 /// engine the fixed id of its service. None for a hand-made engine, and for
 /// an engine naming neither (validation refuses such a config anyway).
 fn made_id_of(p: &ProviderConfig) -> Option<String> {
@@ -161,8 +160,15 @@ fn made_id_of(p: &ProviderConfig) -> Option<String> {
             if let Some(id) = &p.model_id {
                 return Some(id.clone());
             }
-            let file = p.model_path.as_ref()?.file_name()?;
-            Some(format!("custom/{}", file.to_string_lossy()))
+            let path = p.model_path.as_ref()?;
+            let file = path.file_name()?.to_string_lossy();
+            let folder = path.parent().filter(|d| {
+                d.parent().and_then(|g| g.file_name()) == Some(std::ffi::OsStr::new("custom"))
+            });
+            Some(match folder.and_then(|d| d.file_name()) {
+                Some(dir) => format!("custom/{}/{file}", dir.to_string_lossy()),
+                None => format!("custom/{file}"),
+            })
         }
     }
 }
@@ -219,7 +225,7 @@ fn normalise_ids(config: &mut Config) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Runtime, MODEL_ID_DEFAULT_ASR, MODEL_ID_DEFAULT_LLM};
+    use crate::config::{Capabilities, Runtime, MODEL_ID_DEFAULT_ASR, MODEL_ID_DEFAULT_LLM};
     use std::path::PathBuf;
 
     fn manifest() -> Manifest {
@@ -246,6 +252,8 @@ mod tests {
             path,
             size_bytes: 1,
             custom,
+            capabilities: Capabilities::for_runtime(runtime),
+            encoder: None,
         }
     }
 

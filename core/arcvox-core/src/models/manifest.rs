@@ -1,5 +1,5 @@
 use super::ModelError;
-use crate::config::Runtime;
+use crate::config::{Capabilities, Runtime};
 use serde::{Deserialize, Serialize};
 
 /// One path component that cannot leave its parent directory. Hidden names are
@@ -37,22 +37,50 @@ pub struct ModelEntry {
     pub recommended: bool,
     #[serde(default)]
     pub min_ram_gb: u32,
+    /// The audio encoder a llama.cpp speech model reads the sound through,
+    /// kept beside the model file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mmproj: Option<ModelFile>,
+}
+
+/// A second file of a catalogue model.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelFile {
+    pub url: String,
+    pub sha256: String,
+    pub size_bytes: u64,
+}
+
+impl ModelFile {
+    pub fn file_name(&self) -> String {
+        url_file_name(&self.url).unwrap_or_default()
+    }
+}
+
+/// Last path segment of a download URL, `None` when there is none.
+fn url_file_name(url: &str) -> Option<String> {
+    url.split(['?', '#'])
+        .next()
+        .and_then(|u| u.rsplit('/').next())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 impl ModelEntry {
+    /// What the model is used for, from its role.
+    pub fn capabilities(&self) -> Capabilities {
+        let speech = self.role == ModelRole::Asr;
+        Capabilities::for_model(self.runtime, speech, !speech)
+    }
+
+    /// Bytes of every file the model needs.
+    pub fn total_bytes(&self) -> u64 {
+        self.size_bytes + self.mmproj.as_ref().map_or(0, |m| m.size_bytes)
+    }
+
     /// Last path segment of the download URL; `<id>.bin` when there is none.
     pub fn file_name(&self) -> String {
-        let last = self
-            .url
-            .split(['?', '#'])
-            .next()
-            .and_then(|u| u.rsplit('/').next())
-            .unwrap_or("");
-        if last.is_empty() {
-            format!("{}.bin", self.id)
-        } else {
-            last.to_string()
-        }
+        url_file_name(&self.url).unwrap_or_else(|| format!("{}.bin", self.id))
     }
 }
 
@@ -63,24 +91,52 @@ pub struct Manifest {
 }
 
 impl Manifest {
+    /// Entries this build cannot read (a newer runtime or field shape) are
+    /// left out, so one new entry never hides the rest of the catalogue.
     pub fn parse(json: &str) -> Result<Manifest, ModelError> {
-        let m: Manifest =
+        #[derive(Deserialize)]
+        struct Raw {
+            schema_version: u32,
+            models: Vec<serde_json::Value>,
+        }
+        let raw: Raw =
             serde_json::from_str(json).map_err(|e| ModelError::Manifest(e.to_string()))?;
-        if m.schema_version > MANIFEST_SCHEMA_VERSION {
+        if raw.schema_version > MANIFEST_SCHEMA_VERSION {
             return Err(ModelError::Manifest(format!(
                 "schema version {} is newer than supported version {}",
-                m.schema_version, MANIFEST_SCHEMA_VERSION
+                raw.schema_version, MANIFEST_SCHEMA_VERSION
             )));
         }
-        for e in &m.models {
-            if !safe_segment(&e.id) || e.id == "custom" || !safe_segment(&e.file_name()) {
+        let mut models = Vec::with_capacity(raw.models.len());
+        for v in raw.models {
+            let e: ModelEntry = match serde_json::from_value(v) {
+                Ok(e) => e,
+                Err(err) => {
+                    tracing::warn!("manifest entry skipped: {err}");
+                    continue;
+                }
+            };
+            let encoder_ok = match &e.mmproj {
+                Some(m) => safe_segment(&m.file_name()) && m.file_name() != e.file_name(),
+                // A llama.cpp speech model hears through its encoder.
+                None => !(e.runtime == Runtime::Llama && e.role == ModelRole::Asr),
+            };
+            if !safe_segment(&e.id)
+                || e.id == "custom"
+                || !safe_segment(&e.file_name())
+                || !encoder_ok
+            {
                 return Err(ModelError::Manifest(format!(
                     "model `{}` has an unsafe id or file name",
                     e.id
                 )));
             }
+            models.push(e);
         }
-        Ok(m)
+        Ok(Manifest {
+            schema_version: raw.schema_version,
+            models,
+        })
     }
 
     pub fn get(&self, id: &str) -> Option<&ModelEntry> {
@@ -123,6 +179,49 @@ pub(crate) mod tests {
           {"id":"a","runtime":"whisper","role":"asr","label":"A","url":"https://h/a.bin","sha256":"00","size_bytes":1,"license":"MIT","alternates":["https://m/a.bin"]}]}"#;
         let m = Manifest::parse(json).unwrap();
         assert_eq!(m.get("a").unwrap().file_name(), "a.bin");
+    }
+
+    #[test]
+    fn entries_this_build_cannot_read_are_left_out() {
+        let json = r#"{"schema_version":1,"models":[
+          {"id":"a","runtime":"whisper","role":"asr","label":"A","url":"https://h/a.bin","sha256":"00","size_bytes":1,"license":"MIT"},
+          {"id":"n","runtime":"onnx","role":"asr","label":"N","url":"https://h/n.onnx","sha256":"00","size_bytes":1,"license":"MIT"}]}"#;
+        let m = Manifest::parse(json).unwrap();
+        assert_eq!(m.models.len(), 1);
+        assert!(m.get("a").is_some());
+    }
+
+    #[test]
+    fn a_speech_model_on_llama_carries_its_encoder() {
+        let entry = |mmproj: &str| {
+            format!(
+                r#"{{"schema_version":1,"models":[{{"id":"q","runtime":"llama","role":"asr","label":"Q","url":"https://h/q.gguf","sha256":"0","size_bytes":10,"license":"Apache-2.0"{mmproj}}}]}}"#
+            )
+        };
+        let m = Manifest::parse(&entry(
+            r#","mmproj":{"url":"https://h/mmproj-q.gguf","sha256":"1","size_bytes":3}"#,
+        ))
+        .unwrap();
+        let q = m.get("q").unwrap();
+        assert_eq!(q.mmproj.as_ref().unwrap().file_name(), "mmproj-q.gguf");
+        assert_eq!(q.total_bytes(), 13);
+        let c = q.capabilities();
+        assert!(c.transcribe && !c.chat && !c.language_hint && c.hotwords);
+        assert!(Manifest::parse(&entry("")).is_err(), "no encoder");
+        assert!(
+            Manifest::parse(&entry(
+                r#","mmproj":{"url":"https://h/q.gguf","sha256":"1","size_bytes":3}"#
+            ))
+            .is_err(),
+            "same file name"
+        );
+        assert!(
+            Manifest::parse(&entry(
+                r#","mmproj":{"url":"https://h/x/..","sha256":"1","size_bytes":3}"#
+            ))
+            .is_err(),
+            "unsafe file name"
+        );
     }
 
     #[test]

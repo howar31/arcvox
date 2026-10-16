@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { Config, InstalledModel, ManifestView, ModelEntry, ProviderConfig } from "./api";
-import { blankHttp, freshId, hasRole, enginesOf, recommendedMissing } from "./engines";
+import { blankHttp, encoderMissing, entryBytes, freshId, hasRole, enginesOf, modelServes, recommendedMissing, runnable } from "./engines";
 import { ASR_CAPS, blankFor, LLM_CAPS } from "./providerForm";
 
 const provider = (id: string, extra: Partial<ProviderConfig>): ProviderConfig => ({ ...blankFor("embedded"), id, label: id, ...extra });
 const file = (id: string, runtime: "whisper" | "llama", custom = false): InstalledModel => ({
   id, runtime, path: `/models/${id}${custom ? "" : "/model.bin"}`, size_bytes: 1, custom,
+  capabilities: runtime === "whisper" ? { ...ASR_CAPS } : { ...LLM_CAPS }, encoder: null,
 });
 const entry = (id: string, role: "asr" | "llm", recommended: boolean): ModelEntry => ({
   id, runtime: role === "asr" ? "whisper" : "llama", role, label: id, description: "", languages: [], url: "", sha256: "",
@@ -55,3 +56,30 @@ describe("freshId", () => {
     expect(freshId("本機", [])).toBe("engine");
   });
 });
+
+describe("installed models by use", () => {
+  const speech = (encoder: string | null): InstalledModel => ({ ...file("custom/asr.gguf", "llama", true), capabilities: { ...ASR_CAPS, language_hint: false }, encoder });
+  const both: InstalledModel = { ...file("custom/omni.gguf", "llama", true), capabilities: { ...ASR_CAPS, chat: true }, encoder: "/models/custom/mmproj-omni.gguf" };
+
+  it("lists a model under each role its file serves", () => {
+    expect(modelServes(file("w", "whisper"), "asr")).toBe(true);
+    expect(modelServes(file("w", "whisper"), "llm")).toBe(false);
+    expect(modelServes(file("g", "llama"), "llm")).toBe(true);
+    expect(modelServes(speech("/e"), "llm")).toBe(false);
+    expect(modelServes(both, "asr") && modelServes(both, "llm")).toBe(true);
+  });
+
+  it("a speech model without its encoder cannot run", () => {
+    expect(encoderMissing(speech(null))).toBe(true);
+    expect(encoderMissing(speech("/models/custom/mmproj-asr.gguf"))).toBe(false);
+    expect(encoderMissing(file("w", "whisper"))).toBe(false);
+    expect(encoderMissing(file("g", "llama"))).toBe(false);
+    expect(runnable([speech(null), both]).map((m) => m.id)).toEqual(["custom/omni.gguf"]);
+  });
+
+  it("a catalogue model's size counts its encoder", () => {
+    expect(entryBytes(entry("e", "asr", false))).toBe(1);
+    expect(entryBytes({ ...entry("q", "asr", false), runtime: "llama", mmproj: { url: "", sha256: "", size_bytes: 9 } })).toBe(10);
+  });
+});
+

@@ -13,6 +13,7 @@ use arcvox_core::ProviderFactory;
 use async_trait::async_trait;
 
 use crate::llama::LlamaLlmProvider;
+use crate::llama_asr::LlamaAsrProvider;
 use crate::whisper::WhisperAsrProvider;
 
 pub struct EmbeddedFactory {
@@ -43,10 +44,27 @@ fn model_error(cfg: &ProviderConfig, e: ModelError) -> ProviderError {
     }
 }
 
+fn encoder_missing(cfg: &ProviderConfig) -> ProviderError {
+    ProviderError::new(
+        ErrorCode::ModelMissing,
+        format!("{}: no audio encoder beside the model", cfg.label),
+    )
+    .with_hint("put the model's mmproj file beside it in Settings > Engines and models")
+}
+
 fn fail(failure: ProbeFailure) -> ProbeResult {
     ProbeResult {
         ok: false,
         failure: Some(failure),
+    }
+}
+
+impl EmbeddedFactory {
+    /// A llama.cpp engine that transcribes and has no audio encoder to hear through.
+    fn needs_encoder(&self, cfg: &ProviderConfig) -> bool {
+        cfg.runtime == Some(Runtime::Llama)
+            && cfg.capabilities.transcribe
+            && !matches!(self.store.resolve_encoder(cfg), Ok(Some(_)))
     }
 }
 
@@ -63,16 +81,32 @@ impl ProviderFactory for EmbeddedFactory {
         cfg: &ProviderConfig,
         general: &General,
     ) -> Result<Arc<dyn AsrProvider>, ProviderError> {
-        if cfg.runtime != Some(Runtime::Whisper) {
-            return Err(wrong_runtime(cfg, "whisper", "speech recognition"));
-        }
+        let timeout = Duration::from_secs(general.asr_timeout_secs);
         let path = self.store.resolve(cfg).map_err(|e| model_error(cfg, e))?;
-        Ok(Arc::new(WhisperAsrProvider::new(
-            path,
-            cfg.label.clone(),
-            Duration::from_secs(general.asr_timeout_secs),
-            self.use_gpu,
-        )))
+        match cfg.runtime {
+            Some(Runtime::Whisper) => Ok(Arc::new(WhisperAsrProvider::new(
+                path,
+                cfg.label.clone(),
+                timeout,
+                self.use_gpu,
+            ))),
+            // A llama.cpp model hears through its audio encoder.
+            Some(Runtime::Llama) => {
+                let encoder = self
+                    .store
+                    .resolve_encoder(cfg)
+                    .map_err(|e| model_error(cfg, e))?
+                    .ok_or_else(|| encoder_missing(cfg))?;
+                Ok(Arc::new(LlamaAsrProvider::new(
+                    path,
+                    encoder,
+                    cfg.label.clone(),
+                    timeout,
+                    self.use_gpu,
+                )))
+            }
+            None => Err(wrong_runtime(cfg, "whisper or llama", "speech recognition")),
+        }
     }
 
     fn llm(
@@ -92,7 +126,7 @@ impl ProviderFactory for EmbeddedFactory {
     }
 
     fn ready(&self, cfg: &ProviderConfig) -> bool {
-        self.store.resolve(cfg).is_ok()
+        self.store.resolve(cfg).is_ok() && !self.needs_encoder(cfg)
     }
 
     async fn probe(&self, cfg: &ProviderConfig) -> ProbeResult {
@@ -107,6 +141,9 @@ impl ProviderFactory for EmbeddedFactory {
                 })
             }
         };
+        if self.needs_encoder(cfg) {
+            return fail(ProbeFailure::ModelMissing);
+        }
         match arcvox_core::models::magic::detect(&path) {
             Ok(Some(rt)) if Some(rt) == cfg.runtime => ProbeResult {
                 ok: true,
@@ -138,12 +175,51 @@ mod tests {
     }
 
     #[test]
-    fn asr_requires_whisper_runtime() {
+    fn a_llama_model_without_an_audio_encoder_cannot_transcribe() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store(tmp.path());
+        let f = EmbeddedFactory::new(s.clone(), false);
+        let p = s.model_path("w");
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, b"GGUF0000").unwrap();
+        let mut cfg = ProviderConfig::embedded("e", "E", Runtime::Llama, "w");
+        cfg.capabilities.transcribe = true;
+        let err = f.asr(&cfg, &General::default()).err().unwrap();
+        assert_eq!(err.code, ErrorCode::ModelMissing);
+        assert!(err.message.contains("audio encoder"));
+        assert!(!f.ready(&cfg));
+    }
+
+    #[test]
+    fn a_custom_speech_model_with_its_encoder_makes_a_provider() {
+        use arcvox_core::models::gguf::testing::{encoder, speech_model};
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store(tmp.path());
+        let f = EmbeddedFactory::new(s.clone(), false);
+        let custom = s.models_dir().join("custom");
+        std::fs::create_dir_all(&custom).unwrap();
+        std::fs::write(custom.join("asr.gguf"), speech_model(1024)).unwrap();
+        std::fs::write(custom.join("mmproj-asr.gguf"), encoder(Some(1024))).unwrap();
+        let m = s
+            .installed()
+            .into_iter()
+            .find(|m| m.id == "custom/asr.gguf")
+            .unwrap();
+        let mut cfg = ProviderConfig::embedded("custom/asr.gguf", "Q", Runtime::Llama, "x");
+        cfg.model_id = None;
+        cfg.model_path = Some(m.path);
+        cfg.capabilities = m.capabilities;
+        assert!(f.asr(&cfg, &General::default()).is_ok());
+        assert!(f.ready(&cfg));
+    }
+
+    #[test]
+    fn llm_requires_llama_runtime() {
         let tmp = tempfile::tempdir().unwrap();
         let f = EmbeddedFactory::new(store(tmp.path()), false);
-        let cfg = ProviderConfig::embedded("e", "E", Runtime::Llama, "w");
+        let cfg = ProviderConfig::embedded("e", "E", Runtime::Whisper, "w");
         assert_eq!(
-            f.asr(&cfg, &General::default()).err().unwrap().code,
+            f.llm(&cfg, &General::default()).err().unwrap().code,
             ErrorCode::InvalidConfig
         );
     }

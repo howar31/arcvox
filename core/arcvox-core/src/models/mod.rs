@@ -2,6 +2,8 @@
 //! custom imports. Model files never live under the install directory.
 
 pub mod download;
+pub mod gguf;
+pub mod kind;
 pub mod magic;
 pub mod manifest;
 pub mod store;

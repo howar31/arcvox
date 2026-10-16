@@ -1,6 +1,5 @@
 //! Catalogue model downloads: resumable, checksummed, cancellable.
 
-use super::manifest::ModelEntry;
 use super::ModelError;
 use serde::Serialize;
 use std::path::Path;
@@ -16,11 +15,12 @@ pub struct DownloadProgress {
     pub error: Option<String>,
 }
 
-/// Streams `entry.url` into `part`, continuing from its current length when the
+/// Streams `url` into `part`, continuing from its current length when the
 /// server honours the range request. Progress is reported after every chunk.
 pub(crate) async fn fetch_to(
     client: &reqwest::Client,
-    entry: &ModelEntry,
+    url: &str,
+    size_bytes: u64,
     part: &Path,
     cancel: Arc<AtomicBool>,
     mut on_progress: impl FnMut(u64, u64),
@@ -31,11 +31,11 @@ pub(crate) async fn fetch_to(
         .await
         .map(|m| m.len())
         .unwrap_or(0);
-    if existing > 0 && existing >= entry.size_bytes {
+    if existing > 0 && existing >= size_bytes {
         // Nothing left to fetch: the caller verifies the checksum, and a wrong file is dropped there.
         return Ok(());
     }
-    let mut req = client.get(&entry.url);
+    let mut req = client.get(url);
     if existing > 0 {
         req = req.header(reqwest::header::RANGE, format!("bytes={existing}-"));
     }
@@ -65,7 +65,7 @@ pub(crate) async fn fetch_to(
     } else {
         return Err(ModelError::Http(format!("status {status}")));
     };
-    let total = entry.size_bytes;
+    let total = size_bytes;
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
         if cancel.load(Ordering::SeqCst) {

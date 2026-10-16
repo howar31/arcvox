@@ -6,7 +6,7 @@
     modelsInstalled, modelsManifest, modelsManifestNow, nativeInstallLanguage, nativeStatus, onModelDownloadProgress, onNativeInstallProgress, openFolder,
     probeProvider, setDefaultEngine, type DownloadProgress, type InstalledModel, type ManifestView, type ModelEntry, type ModelsDir, type NativeStatusView, type ProviderConfig,
   } from "../../lib/api";
-  import { enginesOf, hasRole, recommendedMissing, runtimeFor, type Role } from "../../lib/engines";
+  import { encoderMissing, enginesOf, entryBytes, hasRole, modelServes, recommendedMissing, runnable, type Role } from "../../lib/engines";
   import { t } from "../../lib/i18n";
   import { defaultProfile, modelDescription, modelLabel, namedBy, usedBy } from "../../lib/labels";
   import { describeProbe, NATIVE_DICTATION } from "../../lib/providerForm";
@@ -67,7 +67,8 @@
   const defaultId = $derived(config.value?.default_engines[role] ?? "");
   /** Which engines can run now: a local one by its file, a platform service by its status, a network one at its word. */
   const usable = $derived.by(() => {
-    const files = usableWith(installedKnown ? new Set(installed.map((m) => m.id)) : null, new Set(installed.map((m) => m.path)));
+    const ok = runnable(installed);
+    const files = usableWith(installedKnown ? new Set(ok.map((m) => m.id)) : null, new Set(ok.map((m) => m.path)));
     return (p: ProviderConfig) => (p.kind === "native" ? (nativeStates[p.id]?.status ?? "ready") === "ready" : files(p));
   });
   async function pickDefault(select: HTMLSelectElement) {
@@ -96,7 +97,7 @@
     const engineOf = (id: string) => providers.find((p) => p.id === id && p.kind === "embedded") ?? null;
     const rows: LocalRow[] = [];
     const seen = new Set<string>();
-    for (const m of installed.filter((x) => x.runtime === runtimeFor(role))) {
+    for (const m of installed.filter((x) => modelServes(x, role))) {
       const entry = manifest?.models.find((e) => e.id === m.id) ?? null;
       seen.add(m.id);
       rows.push({
@@ -262,7 +263,7 @@
   }
   const percent = (received: number, total: number): number => (total > 0 ? Math.min(100, Math.floor((received / total) * 100)) : 0);
   const entryMeta = (m: ModelEntry): string =>
-    t("engines.model_meta", { size: formatBytes(m.size_bytes), license: m.license, languages: m.languages.join(t("engines.list_sep")) });
+    t("engines.model_meta", { size: formatBytes(entryBytes(m)), license: m.license, languages: m.languages.join(t("engines.list_sep")) });
 </script>
 
 {#snippet description()}{t("engines.description_before")}<PageLink page="flow" label={t("nav.flow")} />{t("engines.description_after")}{/snippet}
@@ -301,7 +302,8 @@
   {#each locals as r (r.id)}
     <Row>
       {#snippet leading()}
-        {@const lamp = light(r.id, r.state === "installed", r.state === "error" || r.state === "gone" || failed(r.id))}
+        {@const deaf = r.model !== null && encoderMissing(r.model)}
+        {@const lamp = light(r.id, r.state === "installed" && !deaf, r.state === "error" || r.state === "gone" || deaf || failed(r.id))}
         <Ring tone={lamp.tone} title={lamp.title} />
       {/snippet}
       <!-- Words only for what the ring cannot say; a dimmed row is one nobody depends on yet. -->
@@ -313,7 +315,8 @@
           {#if r.state === "downloading"}<Tag tone="warn">{t("engines.downloading")}</Tag>
           {:else if r.state === "error"}<Tag tone="live" title={r.error}>{t("engines.download_failed")}</Tag>
           {:else if r.state === "gone"}<Tag tone="live" title={t("engines.tip.file_missing")}>{t("engines.file_missing")}</Tag>
-          {:else if r.state === "missing" && r.engine}<Tag tone="live" title={t("engines.tip.not_downloaded")}>{t("engines.not_downloaded")}</Tag>{/if}
+          {:else if r.state === "missing" && r.engine}<Tag tone="live" title={t("engines.tip.not_downloaded")}>{t("engines.not_downloaded")}</Tag>
+          {:else if r.model && encoderMissing(r.model)}<Tag tone="live" title={t("engines.tip.encoder_missing")}>{t("engines.encoder_missing")}</Tag>{/if}
           {#if r.engine && !hasRole(r.engine)}<Tag tone="warn">{t("engines.no_role")}</Tag>{/if}
         </div>
         {#if r.meta}<small class="line" title={r.meta}>{r.meta}</small>{/if}
@@ -323,7 +326,7 @@
         {@render probeLine(r.id)}
       </div>
       {#if r.state === "installed"}
-        {#if r.engine}<button type="button" class="btn quiet" onclick={() => test(r.engine!)} disabled={rowProbes[r.id]?.state === "wait"}>{t("engines.test")}</button>{/if}
+        {#if r.engine && !(r.model && encoderMissing(r.model))}<button type="button" class="btn quiet" onclick={() => test(r.engine!)} disabled={rowProbes[r.id]?.state === "wait"}>{t("engines.test")}</button>{/if}
         <button type="button" class="btn quiet danger" onclick={() => { deleting = r.model; }}>{t("engines.delete_model")}</button>
       {:else if r.state === "downloading"}
         {@const pct = percent(r.received, r.total)}

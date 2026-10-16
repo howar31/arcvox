@@ -120,7 +120,7 @@ pub async fn models_delete(id: String, state: State<'_, AppState>) -> CmdResult<
 }
 
 #[tauri::command]
-pub fn models_import(path: String, state: State<'_, AppState>) -> CmdResult<InstalledModel> {
+pub fn models_import(path: String, state: State<'_, AppState>) -> CmdResult<()> {
     let path = PathBuf::from(path);
     if !path.is_file() {
         return Err(CmdError::with(
@@ -129,10 +129,10 @@ pub fn models_import(path: String, state: State<'_, AppState>) -> CmdResult<Inst
             &[("path", path.display().to_string())],
         ));
     }
-    let model = state.models.import(&path)?;
+    state.models.import(&path)?;
     state.sync_engines();
     state.refresh_problems();
-    Ok(model)
+    Ok(())
 }
 
 /// The folder the model files are kept in.
@@ -433,9 +433,8 @@ mod tests {
         );
         let source = tmp.path().join("x.gguf");
         std::fs::write(&source, b"GGUF\x03\x00\x00\x00weights").unwrap();
-        let installed = store.import(&source).unwrap();
-        assert_eq!(installed.id, "custom/x.gguf");
-        let file = dirs.models_dir().join("custom").join("x.gguf");
+        let file = store.import(&source).unwrap();
+        assert_eq!(file, dirs.models_dir().join("custom").join("x.gguf"));
         assert!(file.is_file());
 
         let llm_id = engine.config().current().default_engines.llm.clone();

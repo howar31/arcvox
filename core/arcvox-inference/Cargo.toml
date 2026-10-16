@@ -16,7 +16,7 @@ cli = ["reqwest", "serde_json"]
 [dependencies]
 arcvox-core = { path = "../arcvox-core" }
 whisper-rs = { version = "=0.16.0", features = ["tracing_backend"] }
-llama-cpp-2 = "=0.1.157"
+llama-cpp-2 = { version = "=0.1.157", features = ["mtmd"] }
 encoding_rs = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 async-trait = "0.1"
@@ -30,6 +30,7 @@ path = "src/bin/arcvox_eval.rs"
 required-features = ["cli"]
 
 [dev-dependencies]
+arcvox-core = { path = "../arcvox-core", features = ["test-util"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 hound = "3"
 tempfile = "3"

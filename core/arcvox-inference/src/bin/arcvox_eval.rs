@@ -391,7 +391,11 @@ async fn run(args: &Args) -> Result<(), String> {
                     manifest
                         .get(id)
                         .filter(|e| e.role == ModelRole::Asr)
-                        .map(|e| ProviderConfig::embedded(id, &e.label, e.runtime, id))
+                        .map(|e| {
+                            let mut made = ProviderConfig::embedded(id, &e.label, e.runtime, id);
+                            made.capabilities = e.capabilities();
+                            made
+                        })
                 });
                 let cfg = match made {
                     Some(Some(ref cfg)) => cfg,
