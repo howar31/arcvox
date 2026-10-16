@@ -2,6 +2,7 @@
   import { tick } from "svelte";
   import type { Profile } from "../../../lib/api";
   import { t } from "../../../lib/i18n";
+  import { placeMenu, type Placement } from "../../../lib/popover";
   import Icon from "../../../lib/ui/Icon.svelte";
   import Bang from "../../../lib/ui/Bang.svelte";
   import Tag from "../../../lib/ui/Tag.svelte";
@@ -30,6 +31,9 @@
   let root: HTMLDivElement | undefined = $state();
   let button: HTMLButtonElement | undefined = $state();
   let list: HTMLDivElement | undefined = $state();
+  // Where the open list sits in the window; null while its natural height is being measured.
+  let place = $state<Placement | null>(null);
+  let measuring = $state(false);
 
   const isDefault = $derived(profiles.find((p) => p.id === current)?.is_default ?? false);
   const shown = $derived.by(() => {
@@ -42,7 +46,14 @@
   async function show() {
     query = "";
     open = true;
+    // The list is measured at its final width before it is placed.
+    const anchor = button!.getBoundingClientRect();
+    const view = { width: window.innerWidth, height: window.innerHeight };
+    place = { ...placeMenu(anchor, 0, view, 420), top: null, bottom: null };
+    measuring = true;
     await tick();
+    if (list) place = placeMenu(anchor, list.offsetHeight, view, 420);
+    measuring = false;
     const field = list?.querySelector("input");
     if (field) field.focus();
     else (options().find((o) => o.getAttribute("aria-selected") === "true") ?? options()[0])?.focus();
@@ -52,6 +63,11 @@
     if (!open) return;
     open = false;
     if (refocus) button?.focus();
+  }
+  /** The list is fixed in the window: a scroll elsewhere would leave it behind, so it closes. */
+  function onscroll(e: Event) {
+    if (list && e.target instanceof Node && list.contains(e.target)) return;
+    hide(false);
   }
   function pick(id: string) {
     hide();
@@ -73,10 +89,14 @@
     const outside = (e: Event) => { if (root && !root.contains(e.target as Node)) hide(false); };
     const blur = () => hide(false);
     document.addEventListener("pointerdown", outside, true);
+    document.addEventListener("scroll", onscroll, true);
     window.addEventListener("blur", blur);
+    window.addEventListener("resize", blur);
     return () => {
       document.removeEventListener("pointerdown", outside, true);
+      document.removeEventListener("scroll", onscroll, true);
       window.removeEventListener("blur", blur);
+      window.removeEventListener("resize", blur);
     };
   });
 </script>
@@ -91,7 +111,12 @@
   </button>
   {#if open}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="menu" bind:this={list} {onkeydown}>
+    <div
+      class="menu" bind:this={list} {onkeydown}
+      style:top={place?.top != null ? `${place.top}px` : null} style:bottom={place?.bottom != null ? `${place.bottom}px` : null}
+      style:left={place ? `${place.left}px` : null} style:width={place ? `${place.width}px` : null} style:max-height={place?.maxHeight != null ? `${place.maxHeight}px` : null}
+      style:visibility={measuring ? "hidden" : null}
+    >
       {#if profiles.length >= SEARCH_FROM}
         <input type="search" bind:value={query} placeholder={t("flow.search")} aria-label={t("flow.search")} />
       {/if}
@@ -126,9 +151,9 @@
   .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .count { display: inline-flex; align-items: center; gap: 7px; margin-left: auto; flex: none; color: var(--ink-3); font-size: var(--text-sm); font-weight: 400; white-space: nowrap; }
   .current :global(svg) { flex: none; color: var(--ink-3); }
-  .menu { position: absolute; top: 50px; left: 0; z-index: 20; display: flex; flex-direction: column; width: max(100%, 420px); max-width: calc(100vw - 2 * var(--page-x) - 248px); max-height: 340px; padding: 6px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); }
+  .menu { position: fixed; z-index: 20; display: flex; flex-direction: column; padding: 6px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); }
   .menu input { flex: none; width: 100%; margin-bottom: 4px; }
-  .options { overflow-y: auto; min-height: 0; }
+  .options { overflow-y: auto; overscroll-behavior: contain; min-height: 0; }
   .option { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 8px 12px 8px 8px; border: 0; border-radius: 9px; background: none; color: var(--ink); text-align: left; font-size: var(--text-control); cursor: default; }
   .option:hover, .option:focus-visible { background: var(--sunken); }
   .option.on { background: var(--accent-soft); }

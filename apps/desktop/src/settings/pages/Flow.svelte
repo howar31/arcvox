@@ -479,6 +479,7 @@
         {@render fallbackNote("asr")}
         <EnginePicker
           engines={asrChoices} selected={draft.asr_provider ?? FOLLOW} label={t("flow.asr_engines")} {manifest} {installed} models={models ?? []} follow={followChoice("asr")} suggested={suggested.asr}
+          defaultId={config.value?.default_engines.asr} onmanage={() => guard.request(() => go("engines", "asr"))}
           stale={stale(draft.asr_provider, asrChoices)} onpick={(id) => { draft!.asr_provider = id === FOLLOW ? null : id; }}
         />
         {#if lines.asr.missing}
@@ -503,6 +504,7 @@
         <EnginePicker
           engines={llmChoices} selected={hasLlmStep(draft) ? (draft.llm_provider ?? FOLLOW) : null} label={t("flow.llm_engines")} {manifest} {installed} models={models ?? []}
           follow={followChoice("llm")} suggested={suggested.llm} none={{ name: t("home.no_rewrite"), help: t("home.no_rewrite_meta") }}
+          defaultId={config.value?.default_engines.llm} onmanage={() => guard.request(() => go("engines", "llm"))}
           stale={stale(draft.llm_provider, llmChoices)} onpick={(id) => (draft = withLlm(snapshot(), id))}
         />
         {#if lines.llm.missing}
