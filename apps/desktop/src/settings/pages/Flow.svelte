@@ -493,7 +493,8 @@
               <option value="">{t("profiles.lang.auto")}</option>
             </select>
           </Row>
-          <Row label={t("flow.asr_hint")} help={t("flow.asr_hint_help")}>
+          <Row label={t("flow.asr_hint")}>
+            {#snippet help()}{t("flow.asr_hint_help_before")}<button type="button" class="stage-link" onclick={() => (stage = "rules")}>{t("flow.stage.rules")}</button>{t("flow.asr_hint_help_after")}{/snippet}
             <Switch bind:checked={draft.asr_dictionary_hint} label={t("flow.asr_hint")} />
           </Row>
         </Group>
@@ -533,7 +534,8 @@
           </Group>
 
           <Group title={t("flow.llm_rules")}>
-            <Row label={t("flow.llm_terms")} help={t("flow.llm_terms_help")}>
+            <Row label={t("flow.llm_terms")}>
+              {#snippet help()}{t("flow.llm_terms_help_before")}<button type="button" class="stage-link" onclick={() => (stage = "rules")}>{t("flow.stage.rules")}</button>{t("flow.llm_terms_help_after")}{/snippet}
               <Switch bind:checked={draft.llm_dictionary_terms} label={t("flow.llm_terms")} />
             </Row>
             <Row label={t("flow.llm_title")} help={t("flow.llm_title_help")}>
@@ -654,6 +656,9 @@
   .right :global(.section:first-of-type h2) { margin-top: var(--gap-group); }
 
   .bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: var(--gap-group) 4px 12px; min-height: 20px; }
+  /* A stage named inside a help sentence, as a link that selects it on the rail. */
+  .stage-link { border: 0; background: none; padding: 0; font: inherit; color: var(--accent); cursor: default; }
+  .stage-link:hover { color: var(--ink); }
   .missing { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 4px 0; color: var(--warn); font-size: var(--text-sm); }
   .fallback { margin: 0 0 12px; padding: 12px 14px; border-radius: var(--radius); background: color-mix(in srgb, var(--warn) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); font-size: var(--text-sm); }
   .fallback p { margin: 0; color: var(--ink); }
