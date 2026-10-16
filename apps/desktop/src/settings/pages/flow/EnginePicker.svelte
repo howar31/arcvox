@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ManifestView, ProviderConfig } from "../../../lib/api";
+  import type { InstalledModel, ManifestView, ProviderConfig } from "../../../lib/api";
   import { t } from "../../../lib/i18n";
   import { engineDescription, engineKind, type Installed } from "../../../lib/stages";
   import Tag from "../../../lib/ui/Tag.svelte";
@@ -8,7 +8,7 @@
    * A list of engines to choose one from. `follow`, when given, adds a first choice that follows the
    * default engine (selected as ""); `none` adds a last choice that selects no engine (selected as null).
    */
-  let { engines, selected, onpick, label, manifest, installed, follow, none, stale, suggested }: {
+  let { engines, selected, onpick, label, manifest, installed, models = [], follow, none, stale, suggested }: {
     engines: ProviderConfig[];
     selected: string | null;
     onpick: (id: string | null) => void;
@@ -16,6 +16,8 @@
     label: string;
     manifest: ManifestView | null;
     installed: Installed;
+    /** The installed model files, for what a file of the user's own says about itself. */
+    models?: InstalledModel[];
     follow?: { name: string; help: string };
     none?: { name: string; help: string };
     /** Shown as the selected row when the stored engine is not in `engines`. */
@@ -44,7 +46,7 @@
       <span class="dot" class:on={selected === p.id}></span>
       <span class="text">
         <span class="name">{p.label}{#if p.id === suggested}<Tag tone="accent" title={t("flow.suggested_tip")}>{t("flow.suggested")}</Tag>{/if}</span>
-        <small class:warn={kind.missing}>{#if p.kind !== "http"}{kind.meta}<span class="sep" aria-hidden="true">·</span>{/if}{engineDescription(p, manifest)}</small>
+        <small class:warn={kind.missing}>{#if p.kind !== "http"}{kind.meta}<span class="sep" aria-hidden="true">·</span>{/if}{engineDescription(p, manifest, models)}</small>
       </span>
     </button>
   {/each}

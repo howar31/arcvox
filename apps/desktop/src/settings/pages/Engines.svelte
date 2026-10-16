@@ -6,7 +6,7 @@
     modelsInstalled, modelsManifest, modelsManifestNow, nativeInstallLanguage, nativeStatus, onModelDownloadProgress, onNativeInstallProgress, openFolder,
     probeProvider, setDefaultEngine, type DownloadProgress, type InstalledModel, type ManifestView, type ModelEntry, type ModelsDir, type NativeStatusView, type ProviderConfig,
   } from "../../lib/api";
-  import { encoderMissing, enginesOf, entryBytes, hasRole, modelServes, recommendedMissing, runnable, type Role } from "../../lib/engines";
+  import { encoderMissing, enginesOf, entryBytes, factsLine, hasRole, modelServes, recommendedMissing, runnable, type Role } from "../../lib/engines";
   import { t } from "../../lib/i18n";
   import { defaultProfile, modelDescription, modelLabel, namedBy, usedBy } from "../../lib/labels";
   import { describeProbe, NATIVE_DICTATION } from "../../lib/providerForm";
@@ -101,8 +101,8 @@
       seen.add(m.id);
       rows.push({
         id: m.id, label: modelLabel(manifest, m), engine: engineOf(m.id), model: m, state: "installed", received: 0, total: 0, error: "",
-        desc: entry ? modelDescription(entry) : "",
-        meta: entry ? entryMeta(entry) : t("engines.imported_meta", { size: formatBytes(m.size_bytes) }),
+        desc: entry ? modelDescription(entry) : m.capabilities.transcribe && m.capabilities.chat ? t("engines.both_roles") : "",
+        meta: entry ? entryMeta(entry) : [formatBytes(m.size_bytes), factsLine(m)].filter(Boolean).join(t("engines.fact_sep")),
       });
     }
     for (const e of (manifest?.models ?? []).filter((x) => x.role === role)) {

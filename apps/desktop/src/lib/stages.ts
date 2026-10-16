@@ -1,4 +1,5 @@
-import type { InsertMethod, ManifestView, Profile, ProviderConfig } from "./api";
+import type { InsertMethod, InstalledModel, ManifestView, Profile, ProviderConfig } from "./api";
+import { ownModelDescription } from "./engines";
 import { scriptAt, scriptLabel } from "./flowEdit";
 import { t } from "./i18n";
 import { modelDescription } from "./labels";
@@ -8,7 +9,8 @@ import { baseName, NATIVE_FM } from "./providerForm";
 export interface StageLine { name: string; meta: string; known: boolean; missing: boolean }
 
 /** Which models are installed; `ids` is null while that is not known yet. */
-export interface Installed { ids: Set<string> | null; paths: Set<string> }
+/** The model files that can run, by id and path; `deaf` holds the ids and paths of speech models present without their audio encoder. */
+export interface Installed { ids: Set<string> | null; paths: Set<string>; deaf?: Set<string> }
 
 /** The capture stage: the microphone in use and where it is. */
 export function micLine(mic: string, available: string[]): StageLine {
@@ -24,6 +26,7 @@ export function engineKind(p: ProviderConfig, installed: Installed): { meta: str
   if (m.kind === "builtin") return { meta: t("home.meta.builtin"), missing: false };
   if (m.kind === "external") return { meta: m.detail ?? t("home.meta.external"), missing: false };
   if (installed.ids === null) return { meta: t("home.meta.local"), missing: false };
+  if (!m.ready && (installed.deaf?.has(p.id) || (p.model_path && installed.deaf?.has(p.model_path)))) return { meta: t("home.meta.local_no_encoder"), missing: true };
   return { meta: t(m.ready ? "home.meta.local_ready" : "home.meta.local_missing"), missing: !m.ready };
 }
 
@@ -43,7 +46,7 @@ export function outputLine(profile: Profile, method: InsertMethod = "paste"): St
 }
 
 /** One sentence about what an engine is. */
-export function engineDescription(p: ProviderConfig, manifest: ManifestView | null): string {
+export function engineDescription(p: ProviderConfig, manifest: ManifestView | null, models: InstalledModel[] = []): string {
   if (p.kind === "native") return t(p.native_id === NATIVE_FM ? "engines.desc.apple_foundation_models" : "engines.desc.apple_dictation");
   if (p.kind === "http") {
     const host = engineMeta(p, new Set()).detail ?? "";
@@ -53,6 +56,10 @@ export function engineDescription(p: ProviderConfig, manifest: ManifestView | nu
     const entry = manifest?.models.find((m) => m.id === p.model_id);
     return (entry && modelDescription(entry)) || p.model_id;
   }
-  if (p.model_path) return t("engines.desc.custom", { file: baseName(p.model_path) });
+  if (p.model_path) {
+    // A file of the user's own: what its structure says, else its name.
+    const own = models.find((m) => m.path === p.model_path);
+    return (own && ownModelDescription(own)) || t("engines.desc.custom", { file: baseName(p.model_path) });
+  }
   return t("engines.desc.no_model");
 }
