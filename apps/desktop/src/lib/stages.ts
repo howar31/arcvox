@@ -20,14 +20,27 @@ export function micLine(mic: string, available: string[]): StageLine {
   return { name, meta, known: true, missing: absent };
 }
 
-/** An engine's kind and readiness in words. */
-export function engineKind(p: ProviderConfig, installed: Installed): { meta: string; missing: boolean } {
+/** Why a local model cannot run: its file is not downloaded, or its audio encoder is missing. */
+export type EngineReason = "download" | "encoder";
+
+/** An engine's kind and readiness in words; `reason` says why it cannot run. */
+export function engineKind(p: ProviderConfig, installed: Installed): { meta: string; missing: boolean; reason?: EngineReason } {
   const m = engineMeta(p, installed.ids ?? new Set(), installed.ids ? installed.paths : undefined);
   if (m.kind === "builtin") return { meta: t("home.meta.builtin"), missing: false };
   if (m.kind === "external") return { meta: m.detail ?? t("home.meta.external"), missing: false };
   if (installed.ids === null) return { meta: t("home.meta.local"), missing: false };
-  if (!m.ready && (installed.deaf?.has(p.id) || (p.model_path && installed.deaf?.has(p.model_path)))) return { meta: t("home.meta.local_no_encoder"), missing: true };
-  return { meta: t(m.ready ? "home.meta.local_ready" : "home.meta.local_missing"), missing: !m.ready };
+  if (!m.ready && (installed.deaf?.has(p.id) || (p.model_path && installed.deaf?.has(p.model_path)))) return { meta: t("home.meta.local_no_encoder"), missing: true, reason: "encoder" };
+  return m.ready ? { meta: t("home.meta.local_ready"), missing: false } : { meta: t("home.meta.local_missing"), missing: true, reason: "download" };
+}
+
+/** The engines to choose from, in the Engines page's groups; in each group the ones that can run come first. */
+export function engineGroups(engines: ProviderConfig[], installed: Installed): { kind: ProviderConfig["kind"]; engines: ProviderConfig[] }[] {
+  return (["embedded", "native", "http"] as const)
+    .map((kind) => {
+      const ofKind = engines.filter((p) => p.kind === kind);
+      return { kind, engines: [...ofKind.filter((p) => !engineKind(p, installed).missing), ...ofKind.filter((p) => engineKind(p, installed).missing)] };
+    })
+    .filter((g) => g.engines.length > 0);
 }
 
 /** A stage served by an engine; a null id is the rewrite stage turned off. */
