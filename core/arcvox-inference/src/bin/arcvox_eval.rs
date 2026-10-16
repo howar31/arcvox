@@ -14,9 +14,9 @@ use arcvox_core::config::ProviderConfig;
 use arcvox_core::config::{ConfigStore, Profile};
 use arcvox_core::dictionary::asr_hint;
 use arcvox_core::eval::{
-    categories, compare, diff, guess_tags, parse_seed_tsv, pick_slice, pick_spread, seed_tsv,
-    summarize, Cer, Change, DiffOp, ItemResult, Marks, Report, SeedRow, Stage, Summary, Tally,
-    Totals,
+    categories, compare, diff, guess_tags, parse_seed_tsv, pick_examples, pick_slice, pick_spread,
+    seed_tsv, summarize, Cer, Change, DiffOp, ExamplePick, ItemResult, Marks, Report, SeedRow,
+    Stage, Summary, Tally, Totals,
 };
 use arcvox_core::history::HistoryStore;
 use arcvox_core::models::{Manifest, ModelRole, ModelStore};
@@ -42,6 +42,7 @@ arcvox-eval <command> [options]
   run      --data <name|dir> --set <set.tsv> --out <run.json> --stage asr|llm|full
            [--asr id,id] [--llm id,id] [--profile id] [--base-prompt file]
            [--style file] [--asr-sample file] [--name text]
+           [--examples pool.tsv] [--examples-k 3] [--examples-pick similar|random]
            asr: every recording through each ASR provider, scored against `spoken`;
                 --asr also takes the id of an installed catalogue model that has
                 no engine yet (an engine is made for the run only).
@@ -67,6 +68,11 @@ arcvox-eval <command> [options]
   --base-prompt and --style try a base prompt and a profile writing style
   from files in place of the installed ones; --asr-sample gives the speech
   engine a sample of writing, placed before the dictionary terms.
+  --examples (llm stage) shows the rewrite model, before each row, up to
+  --examples-k spoken/final pairs taken from the pool: the rows whose spoken
+  text shares the most character pairs with the row (similar, default) or a
+  fixed arbitrary choice per row (random). A pool row with the row's own id
+  is never shown, so the set under test may be its own pool.
 ";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -327,6 +333,7 @@ async fn run(args: &Args) -> Result<(), String> {
         .flag("asr-sample")
         .map(|p| std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}")))
         .transpose()?;
+    let examples = load_examples(args)?;
 
     let client = reqwest::Client::new();
     let models = Arc::new(ModelStore::new(
@@ -355,6 +362,13 @@ async fn run(args: &Args) -> Result<(), String> {
         format!(
             "speech sample: {}",
             args.flag("asr-sample").unwrap_or("none")
+        ),
+        format!(
+            "examples: {}",
+            examples
+                .as_ref()
+                .map(|e| e.describe(args.flag("examples").unwrap_or("")))
+                .unwrap_or_else(|| "none".to_string())
         ),
         format!("set: {} ({} rows)", args.required("set")?, rows.len()),
     ];
@@ -457,6 +471,10 @@ async fn run(args: &Args) -> Result<(), String> {
                 )?;
                 for (n, row) in rows.iter().enumerate() {
                     progress(n, rows.len(), id, &row.id);
+                    let ctx = match &examples {
+                        Some(e) => e.for_row(&ctx, row),
+                        None => ctx.clone(),
+                    };
                     let tx = closed_events();
                     let t0 = Instant::now();
                     let r = pipeline
@@ -559,6 +577,66 @@ async fn run(args: &Args) -> Result<(), String> {
     print_summary(&report);
     println!("\nsaved to {}", out.display());
     Ok(())
+}
+
+/// The pool the rewrite model's examples are picked from, per row.
+struct Examples {
+    pool: Vec<SeedRow>,
+    k: usize,
+    pick: ExamplePick,
+}
+
+impl Examples {
+    fn describe(&self, path: &str) -> String {
+        format!(
+            "{path} ({} rows), {} per row, {}",
+            self.pool.len(),
+            self.k,
+            match self.pick {
+                ExamplePick::Similar => "the most similar spoken text",
+                ExamplePick::Random => "a fixed arbitrary choice",
+            }
+        )
+    }
+
+    /// The context with the row's own examples in the profile; the steps
+    /// stay the pipeline's, only the prompt reads the profile's examples.
+    fn for_row(&self, ctx: &PipelineContext, row: &SeedRow) -> PipelineContext {
+        let mut profile = (*ctx.profile).clone();
+        profile.few_shot = pick_examples(&self.pool, &row.id, &row.spoken, self.k, self.pick);
+        PipelineContext {
+            profile: Arc::new(profile),
+            ..ctx.clone()
+        }
+    }
+}
+
+fn load_examples(args: &Args) -> Result<Option<Examples>, String> {
+    let Some(path) = args.flag("examples") else {
+        if args.flag("examples-k").is_some() || args.flag("examples-pick").is_some() {
+            return Err("--examples-k and --examples-pick need --examples".into());
+        }
+        return Ok(None);
+    };
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+    let pool = parse_seed_tsv(&text)?;
+    if pool.is_empty() {
+        return Err(format!("{path}: the example pool is empty"));
+    }
+    let k = match args.flag("examples-k") {
+        Some(v) => v
+            .parse::<usize>()
+            .ok()
+            .filter(|k| *k > 0)
+            .ok_or_else(|| format!("--examples-k must be a number above 0, not `{v}`"))?,
+        None => 3,
+    };
+    let pick = match args.flag("examples-pick") {
+        Some(v) => ExamplePick::parse(v)
+            .ok_or_else(|| format!("--examples-pick must be similar or random, not `{v}`"))?,
+        None => ExamplePick::Similar,
+    };
+    Ok(Some(Examples { pool, k, pick }))
 }
 
 /// The profile with its writing style replaced by `style`, when given.
