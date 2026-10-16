@@ -641,8 +641,9 @@
   .gt .r { font-weight: 400; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   /* The rail can only stick while its container is taller than it, so the split reaches the bottom of the
      scroll area even when the selected stage's settings are short: it takes the page's bottom padding as its own. */
-  .split { display: grid; grid-template-columns: 236px minmax(0, 1fr); gap: 16px; align-items: start; min-height: calc(100vh - 28px); margin-bottom: -80px; }
-  .railwrap { position: sticky; top: 28px; }
+  /* Either column may be the taller one; each carries the page's bottom padding so the split ends with the content. */
+  .split { display: grid; grid-template-columns: 236px minmax(0, 1fr); gap: 16px; align-items: start; margin-bottom: -80px; }
+  .railwrap { position: sticky; top: 28px; padding-bottom: 80px; }
   .right { display: flex; flex-direction: column; min-width: 0; padding-bottom: 80px; }
   .right .ttl { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 2px 4px 10px; }
   .right .ttl b { font: 700 19px/1.3 var(--font-round); flex: none; }
