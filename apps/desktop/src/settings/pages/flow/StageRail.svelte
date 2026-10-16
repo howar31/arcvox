@@ -1,6 +1,7 @@
 <script lang="ts">
   /** The nine stages as a column of cells: name, current setting, what it did last time. A chevron under the number column leads to the next cell. */
   import type { StageId } from "../../../lib/flowLast";
+  import Bang from "../../../lib/ui/Bang.svelte";
 
   export interface Cell {
     id: StageId;
@@ -16,6 +17,8 @@
     /** The setting names something missing (a model not downloaded, an engine gone). */
     warn: boolean;
     unknown: boolean;
+    /** Set when the stage runs on another engine than the one the profile names: the problem mark, with this text. */
+    problem?: string;
   }
 
   let { cells, selected, onpick, label }: { cells: Cell[]; selected: StageId; onpick: (id: StageId) => void; label: string } = $props();
@@ -26,7 +29,7 @@
     <button type="button" class="blk" class:on={selected === c.id} class:off={!c.open} role="tab" aria-selected={selected === c.id} onclick={() => onpick(c.id)}>
       <span class="num">{i + 1}</span>
       <span class="t">
-        <b>{c.name}</b>
+        <b>{c.name}{#if c.problem}<Bang title={c.problem} />{/if}</b>
         <span class="setting" class:warn={c.warn && c.open} class:unknown={c.unknown} title={c.setting}>{c.setting}</span>
         <!-- The last-run line carries the stage's time, faint, at the cell's right; the name row stays whole. -->
         <span class="last"><i>{c.line}</i>{#if c.time}<em class="time">{c.time}</em>{/if}</span>
@@ -59,7 +62,7 @@
   .blk.off .num { background: transparent; border: 1px dashed var(--line-strong); color: var(--ink-3); line-height: 24px; }
   .blk.off.on .num { background: var(--accent); border: 0; color: var(--accent-ink); line-height: 26px; }
   .t { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-  .t b { font-weight: 600; font-size: 15px; line-height: 1.35; }
+  .t b { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 15px; line-height: 1.35; }
   .last { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
   .time { flex: none; font-style: normal; font-size: 11px; color: var(--ink-3); opacity: 0.75; white-space: nowrap; }
   .t .setting { color: var(--ink-2); font-size: var(--text-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

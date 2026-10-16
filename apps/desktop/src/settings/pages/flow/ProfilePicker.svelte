@@ -3,10 +3,11 @@
   import type { Profile } from "../../../lib/api";
   import { t } from "../../../lib/i18n";
   import Icon from "../../../lib/ui/Icon.svelte";
+  import Bang from "../../../lib/ui/Bang.svelte";
   import Tag from "../../../lib/ui/Tag.svelte";
 
   /** The profile being edited, as a button that opens the list of all profiles. */
-  let { profiles, current, name, applies, onpick, onmanage, onadd }: {
+  let { profiles, current, name, applies, onpick, onmanage, onadd, faulty = new Set() }: {
     profiles: Profile[];
     current: string;
     /** The name shown for the current profile, which may be an unsaved edit. */
@@ -17,6 +18,8 @@
     onmanage: () => void;
     /** Opens the choice of a blank profile or a preset. */
     onadd: () => void;
+    /** Profiles running on the default engine because an engine they name cannot run. */
+    faulty?: Set<string>;
   } = $props();
 
   // The list gets a search field from this many profiles on.
@@ -82,7 +85,8 @@
   <button type="button" class="current" bind:this={button} aria-haspopup="listbox" aria-expanded={open} aria-label={t("flow.profiles") + " " + name} onclick={() => (open ? hide() : show())}>
     <span class="label">{name}</span>
     {#if isDefault}<Tag tone="accent">{t("profiles.default")}</Tag>{/if}
-    <span class="count">{t("flow.count", { count: String(profiles.length) })}</span>
+    <!-- The closed list says, beside its count, when any profile in it runs on the default engine. -->
+    <span class="count">{#if faulty.size > 0}<Bang title={t("flow.profiles_fallback", { count: String(faulty.size) })} />{/if}{t("flow.count", { count: String(profiles.length) })}</span>
     <Icon name="chevron-down" size={14} />
   </button>
   {#if open}
@@ -96,7 +100,7 @@
           <button type="button" class="option" class:on={p.id === current} role="option" aria-selected={p.id === current} onclick={() => pick(p.id)}>
             <span class="tick">{#if p.id === current}<Icon name="check" size={14} />{/if}</span>
             <span class="text">
-              <span class="line"><span class="label">{p.id === current ? name : p.name}</span>{#if p.is_default}<Tag tone="accent">{t("profiles.default")}</Tag>{/if}</span>
+              <span class="line"><span class="label">{p.id === current ? name : p.name}</span>{#if p.is_default}<Tag tone="accent">{t("profiles.default")}</Tag>{/if}{#if faulty.has(p.id)}<Bang title={t("flow.profile_fallback")} />{/if}</span>
               <span class="where">{applies(p)}</span>
             </span>
           </button>
@@ -120,7 +124,7 @@
   .current { display: flex; align-items: center; gap: 10px; width: 100%; height: 44px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font-size: var(--text); font-weight: 600; cursor: default; }
   .current:hover, .current[aria-expanded="true"] { background: var(--sunken); }
   .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .count { margin-left: auto; flex: none; color: var(--ink-3); font-size: var(--text-sm); font-weight: 400; white-space: nowrap; }
+  .count { display: inline-flex; align-items: center; gap: 7px; margin-left: auto; flex: none; color: var(--ink-3); font-size: var(--text-sm); font-weight: 400; white-space: nowrap; }
   .current :global(svg) { flex: none; color: var(--ink-3); }
   .menu { position: absolute; top: 50px; left: 0; z-index: 20; display: flex; flex-direction: column; width: max(100%, 420px); max-width: calc(100vw - 2 * var(--page-x) - 248px); max-height: 340px; padding: 6px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); }
   .menu input { flex: none; width: 100%; margin-bottom: 4px; }

@@ -52,10 +52,8 @@
   // The installed model waiting for the delete confirmation.
   let deleting = $state<InstalledModel | null>(null);
 
-  const roles = $derived([
-    { value: "asr" as Role, label: t("engines.role.asr") },
-    { value: "llm" as Role, label: t("engines.role.llm") },
-  ]);
+  // A tab carries the problem mark while a ring in it is red.
+  const roles = $derived((["asr", "llm"] as Role[]).map((r) => ({ value: r, label: t(`engines.role.${r}`), problem: roleProblem(r) ? t("engines.tab_problem") : undefined })));
   const engines = $derived(enginesOf(config.value, role));
   const builtins = $derived(engines.filter((p) => p.kind === "native"));
   const externals = $derived(engines.filter((p) => p.kind === "http"));
@@ -90,8 +88,9 @@
     engine: ProviderConfig | null; model: InstalledModel | null;
     state: "installed" | "downloading" | "missing" | "error" | "gone"; received: number; total: number; error: string;
   };
-  const locals = $derived.by((): LocalRow[] => {
+  function rowsFor(role: Role): LocalRow[] {
     if (!manifest || !installedKnown) return [];
+    const engines = enginesOf(config.value, role);
     const providers = config.value?.providers ?? [];
     const engineOf = (id: string) => providers.find((p) => p.id === id && p.kind === "embedded") ?? null;
     const rows: LocalRow[] = [];
@@ -117,7 +116,8 @@
     }
     const rank = (r: LocalRow) => (r.state === "installed" ? 0 : r.state === "downloading" ? 1 : r.state === "gone" ? 2 : 3);
     return rows.sort((a, b) => rank(a) - rank(b));
-  });
+  }
+  const locals = $derived(rowsFor(role));
 
   async function refreshInstalled() {
     try { installed = await modelsInstalled(); installedKnown = true; } catch (e) { toast.error(errorMessage(e)); }
@@ -149,9 +149,9 @@
     return () => { disposed = true; unlistenModels?.(); unlistenNative?.(); };
   });
 
-  // The platform services report their status when they appear on the page.
+  // The platform services report their status as the page opens, for both tabs' marks.
   $effect(() => {
-    for (const p of builtins) {
+    for (const p of (config.value?.providers ?? []).filter((x) => x.kind === "native")) {
       if (!p.native_id || nativeStates[p.id]) continue;
       nativeStatus(p.native_id, defaultHint)
         .then((s) => { nativeStates = { ...nativeStates, [p.id]: s }; })
@@ -175,6 +175,22 @@
    * a profile depends on it and it cannot work, a download or a test failed, a file is gone.
    */
   type Light = { tone: "accent" | "ok" | "off" | "live"; title: string };
+  /** Whether a local model's ring is red. */
+  function rowFault(r: LocalRow): boolean {
+    const deaf = r.model !== null && encoderMissing(r.model);
+    return light(r.id, r.state === "installed" && !deaf, r.state === "error" || r.state === "gone" || deaf || failed(r.id)).tone === "live";
+  }
+  /** Whether a ring is red anywhere on the role's tab: a local model, a platform service or a network engine. */
+  function roleProblem(r: Role): boolean {
+    if (rowsFor(r).some(rowFault)) return true;
+    return enginesOf(config.value, r).some((p) => {
+      if (p.kind === "native") {
+        const s = nativeStates[p.id]?.status;
+        return light(p.id, (s ?? "ready") === "ready", s === "failed" || failed(p.id)).tone === "live";
+      }
+      return p.kind === "http" && light(p.id, true, failed(p.id)).tone === "live";
+    });
+  }
   function light(id: string, ready: boolean, fault: boolean): Light {
     const inUse = usedBy(config.value, id, usable).length > 0;
     // A profile that names the engine depends on it, also while it runs on the default.
