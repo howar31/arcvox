@@ -197,8 +197,10 @@ export const permissions = () => invoke<Permissions>("system_permissions");
 export const requestAccessibility = () => invoke<boolean>("system_request_accessibility");
 export const requestMicrophone = () => invoke<MicAccess>("system_request_microphone");
 /** The settings pages that have a problem to show. */
-export const problemPages = () => invoke<string[]>("system_problem_pages");
-export const onProblemPages = (cb: (pages: string[]) => void) => listen<string[]>("problem-pages", (e) => cb(e.payload));
+/** A settings page with a problem, at its worst problem's level: dictation fails, or it goes on and asks for attention. */
+export interface PageProblem { page: string; level: "fails" | "attention" }
+export const problemPages = () => invoke<PageProblem[]>("system_problem_pages");
+export const onProblemPages = (cb: (pages: PageProblem[]) => void) => listen<PageProblem[]>("problem-pages", (e) => cb(e.payload));
 export const openPrivacyPane = (pane: "accessibility" | "microphone" | "files") => invoke<void>("system_open_privacy_pane", { pane });
 export const runningApps = () => invoke<RunningApp[]>("system_running_apps");
 export const appNames = (bundleIds: string[]) => invoke<Record<string, string | null>>("system_app_names", { bundleIds });

@@ -196,7 +196,7 @@ pub fn system_permissions(state: State<'_, AppState>) -> Permissions {
 
 /// The settings pages that have a problem to show, read afresh.
 #[tauri::command]
-pub fn system_problem_pages(state: State<'_, AppState>) -> Vec<&'static str> {
+pub fn system_problem_pages(state: State<'_, AppState>) -> Vec<crate::ui::tray::PageProblem> {
     state.refresh_problems();
     state.ui.tray().problem_pages()
 }

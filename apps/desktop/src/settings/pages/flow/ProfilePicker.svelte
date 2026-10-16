@@ -86,7 +86,7 @@
     <span class="label">{name}</span>
     {#if isDefault}<Tag tone="accent">{t("profiles.default")}</Tag>{/if}
     <!-- The closed list says, beside its count, when any profile in it runs on the default engine. -->
-    <span class="count">{#if faulty.size > 0}<Bang title={t("flow.profiles_fallback", { count: String(faulty.size) })} />{/if}{t("flow.count", { count: String(profiles.length) })}</span>
+    <span class="count">{#if faulty.size > 0}<Bang tone="warn" title={t("flow.profiles_fallback", { count: String(faulty.size) })} />{/if}{t("flow.count", { count: String(profiles.length) })}</span>
     <Icon name="chevron-down" size={14} />
   </button>
   {#if open}
@@ -100,7 +100,7 @@
           <button type="button" class="option" class:on={p.id === current} role="option" aria-selected={p.id === current} onclick={() => pick(p.id)}>
             <span class="tick">{#if p.id === current}<Icon name="check" size={14} />{/if}</span>
             <span class="text">
-              <span class="line"><span class="label">{p.id === current ? name : p.name}</span>{#if p.is_default}<Tag tone="accent">{t("profiles.default")}</Tag>{/if}{#if faulty.has(p.id)}<Bang title={t("flow.profile_fallback")} />{/if}</span>
+              <span class="line"><span class="label">{p.id === current ? name : p.name}</span>{#if p.is_default}<Tag tone="accent">{t("profiles.default")}</Tag>{/if}{#if faulty.has(p.id)}<Bang tone="warn" title={t("flow.profile_fallback")} />{/if}</span>
               <span class="where">{applies(p)}</span>
             </span>
           </button>
