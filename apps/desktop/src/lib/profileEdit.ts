@@ -63,3 +63,13 @@ export function slugId(name: string, taken: string[]): string {
   while (used.has(`${stem}-${n}`)) n++;
   return `${stem}-${n}`;
 }
+
+/** A profile name not taken yet: the text itself, else the text with 2, 3, ... after it. */
+export function freshName(text: string, taken: string[]): string {
+  const base = text.trim();
+  const used = new Set(taken.map((n) => n.trim()));
+  if (!used.has(base)) return base;
+  let n = 2;
+  while (used.has(`${base} ${n}`)) n++;
+  return `${base} ${n}`;
+}

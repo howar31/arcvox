@@ -1,4 +1,4 @@
-// The stage the profiles page shows first: the one it showed when it was left.
+// What the profiles page shows first: the profile and the stage it showed when it was left.
 
 import { STAGE_IDS, type StageId } from "./flowLast";
 
@@ -14,4 +14,15 @@ export function storedStage(): StageId {
 
 export function rememberStage(stage: StageId): void {
   try { localStorage.setItem(KEY, stage); } catch { /* The stage is not remembered. */ }
+}
+
+const PROFILE_KEY = "arcvox.flow.profile";
+
+/** The profile shown when the page was left; null when none was remembered. */
+export function storedProfile(): string | null {
+  try { return localStorage.getItem(PROFILE_KEY); } catch { return null; }
+}
+
+export function rememberProfile(id: string): void {
+  try { localStorage.setItem(PROFILE_KEY, id); } catch { /* The profile is not remembered. */ }
 }

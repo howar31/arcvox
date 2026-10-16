@@ -63,10 +63,10 @@ describe("labels", () => {
   it("describes catalogue models in the interface language and falls back to the catalogue text", () => {
     const entry = { id: "gemma-3-4b-it-q4_k_m", description: "General purpose rewriting model." };
     setLanguage("zh-TW");
-    expect(modelDescription(entry)).toBe("通用的文字改寫模型，適用 Gemma 使用條款");
+    expect(modelDescription(entry)).toBe("通用的文字改寫模型");
     expect(modelDescription({ id: "future-model", description: "Some future model." })).toBe("Some future model.");
     setLanguage("en");
-    expect(modelDescription(entry)).toBe("General purpose rewriting model. Subject to the Gemma Terms of Use.");
+    expect(modelDescription(entry)).toBe("General purpose rewriting model.");
     expect(modelDescription({ id: "future-model", description: "" })).toBe("");
   });
 });

@@ -34,6 +34,11 @@ export function totalSeconds(asrMs: number, llmMs: number | null): string | null
   return llmMs === null ? null : seconds(asrMs + llmMs);
 }
 
+/** How long processing took, as seconds with one decimal: recognition plus rewriting, or recognition alone when nothing was rewritten. */
+export function spentSeconds(asrMs: number, llmMs: number | null): string | null {
+  return seconds(asrMs + (llmMs ?? 0));
+}
+
 /** A clip length as minutes and seconds, m:ss. */
 export function clipLength(ms: number): string {
   const total = Math.floor(ms / 1000);
