@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { rememberStage, storedStage } from "./stageMemory";
+import { rememberProfile, rememberStage, storedProfile, storedStage } from "./stageMemory";
 
 // The tests run without a browser; a map stands in for the page's storage.
 const store = new Map<string, string>();
@@ -22,5 +22,16 @@ describe("stage memory", () => {
   it("ignores a value that is not a stage", () => {
     localStorage.setItem("arcvox.flow.stage", "bogus");
     expect(storedStage()).toBe("asr");
+  });
+});
+
+describe("profile memory", () => {
+  it("has no profile until one is shown", () => {
+    expect(storedProfile()).toBeNull();
+  });
+  it("gives back the profile shown last", () => {
+    rememberProfile("mail");
+    rememberProfile("code");
+    expect(storedProfile()).toBe("code");
   });
 });

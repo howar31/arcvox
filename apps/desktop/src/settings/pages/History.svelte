@@ -6,7 +6,7 @@
   } from "../../lib/api";
   import { failureText } from "../../lib/failure";
   import { formatDateTime, formatDay, formatTime } from "../../lib/format";
-  import { clipLength, groupByDay, PAGE_SIZE, periodRange, rawState, redoneTag, seconds, totalSeconds, type PeriodSel } from "../../lib/historyView";
+  import { clipLength, groupByDay, PAGE_SIZE, periodRange, rawState, redoneTag, seconds, spentSeconds, totalSeconds, type PeriodSel } from "../../lib/historyView";
   import { resolveEngines } from "../../lib/resolve";
   import { t } from "../../lib/i18n";
   import { isImeKey } from "../../lib/ime";
@@ -428,6 +428,7 @@
               <span class="body">
                 <span class="final" class:none={shown === ""}>{shown !== "" ? shown : u.error_code === "cancelled" ? t("history.cancelled") : t("history.failed")}</span>
                 <span class="meta">
+                  {#if u.error === null}<span class="num">{t("history.spent", { secs: spentSeconds(u.asr_ms, u.llm_ms) ?? "" })}</span>{/if}
                   {#if u.app_name}<span>{u.app_name}</span>{/if}
                   {#if u.profile_id}<span>{who.name}{#if who.deleted}<span class="deleted">{t("history.deleted_profile")}</span>{/if}</span>{/if}
                   {#if u.error_code === "cancelled"}<Tag>{t("history.cancelled_tag")}</Tag>{:else if u.error !== null}<Tag tone="live">{t("history.failed_tag")}</Tag>{/if}

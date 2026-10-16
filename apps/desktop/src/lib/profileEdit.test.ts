@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Profile, ProviderConfig, StepSpec } from "./api";
-import { appsSummary, engineMeta, slugId, withLlm } from "./profileEdit";
+import { appsSummary, engineMeta, freshName, slugId, withLlm } from "./profileEdit";
 
 const profile = (steps: StepSpec[], llm: string | null = "llm-a"): Profile => ({
   id: "p", name: "P", is_default: true, matcher: { app_ids: [], url_patterns: [] }, asr_provider: null, llm_provider: llm,
@@ -95,5 +95,14 @@ describe("slugId", () => {
   it("never returns the reserved id new", () => {
     expect(slugId("New", [])).toBe("new-2");
     expect(slugId("  new!", ["new-2"])).toBe("new-3");
+  });
+});
+
+describe("freshName", () => {
+  it("keeps a free name and numbers a taken one", () => {
+    expect(freshName("休閒", ["Default"])).toBe("休閒");
+    expect(freshName("休閒", ["休閒"])).toBe("休閒 2");
+    expect(freshName("休閒", ["休閒", "休閒 2"])).toBe("休閒 3");
+    expect(freshName(" 正式 ", ["正式"])).toBe("正式 2");
   });
 });

@@ -2,16 +2,16 @@
   import { onMount, untrack } from "svelte";
   import {
     errorMessage, historyLast, listMicrophones, modelsInstalled, modelsManifestNow, onHistoryChanged, profilesAddPreset,
-    profilesPresets, upsertProfile, type InstalledModel, type LastRun, type ManifestView, type PresetView, type Profile,
+    profilesPresets, setDefaultProfile, upsertProfile, type InstalledModel, type LastRun, type ManifestView, type PresetView, type Profile,
   } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { appliesDictionary, PUNCTUATION_CONFIGS, RULE_KEYS, rulesAt, SCRIPT_CONFIGS, SCRIPT_GROUPS, scriptAt, scriptLabel, selectedProfile, withDictionary, withRule, withScriptAt, withScriptPunctuation, type RuleKey, type ScriptPass } from "../../lib/flowEdit";
   import { cellLine, cellTime, runHeadline, STAGE_IDS, stageOpen, type StageId } from "../../lib/flowLast";
-  import { rememberStage, storedStage } from "../../lib/stageMemory";
+  import { rememberProfile, rememberStage, storedProfile, storedStage } from "../../lib/stageMemory";
   import { guard } from "../../lib/guard.svelte";
   import { t } from "../../lib/i18n";
   import { isImeKey } from "../../lib/ime";
-  import { appsSummary, withLlm } from "../../lib/profileEdit";
+  import { appsSummary, freshName, withLlm } from "../../lib/profileEdit";
   import { FOLLOW, hasLlmStep, isFallback, resolveEngines, usableWith } from "../../lib/resolve";
   import { runnable } from "../../lib/engines";
   import { go } from "../../lib/route";
@@ -100,7 +100,9 @@
 
   // The default profile first, the others in their stored order.
   const profiles = $derived([...(config.value?.profiles ?? [])].sort((a, b) => Number(b.is_default) - Number(a.is_default)));
-  const source = $derived(selectedProfile(config.value, arg));
+  // Without a profile in the address, the one shown when the page was left; a deleted one gives way to the default.
+  const source = $derived(selectedProfile(config.value, arg ?? storedProfile()));
+  $effect(() => { if (source) rememberProfile(source.id); });
   const providers = $derived(config.value?.providers ?? []);
   const asrChoices = $derived(providers.filter((p) => p.capabilities.transcribe));
   const llmChoices = $derived(providers.filter((p) => p.capabilities.chat));
@@ -278,15 +280,36 @@
     newApp = ""; newUrl = ""; newRaw = ""; newRefined = "";
   }
 
-  /** Adds a copy of a template and shows it. */
-  async function create(presetId: string) {
-    if (!config.value) return;
+  // The add dialog: the template, the new profile's name and whether it becomes the default.
+  let addPreset = $state("");
+  let addName = $state("");
+  // Set once the name is typed; until then the name follows the chosen template.
+  let addRenamed = $state(false);
+  let addDefault = $state(false);
+  const takenNames = () => (config.value?.profiles ?? []).map((p) => p.name);
+  function openAdd() {
+    revert();
+    addPreset = presets[0]?.id ?? "";
+    addName = addPreset ? freshName(t(`profiles.preset.${addPreset}`), takenNames()) : "";
+    addRenamed = false;
+    addDefault = false;
+    adding = true;
+  }
+  function choosePreset(id: string) {
+    addPreset = id;
+    if (!addRenamed) addName = freshName(t(`profiles.preset.${id}`), takenNames());
+  }
+
+  /** Adds a copy of the chosen template under the given name, makes it the default when asked, and shows it. */
+  async function create() {
+    if (!config.value || !addPreset || !addName.trim()) return;
     busy = true;
     const before = new Set(config.value.profiles.map((p) => p.id));
     try {
-      const next = await profilesAddPreset(presetId, t(`profiles.preset.${presetId}`));
-      config.value = next;
+      let next = await profilesAddPreset(addPreset, addName.trim());
       const created = next.profiles.find((p) => !before.has(p.id));
+      if (created && addDefault) next = await setDefaultProfile(created.id);
+      config.value = next;
       adding = false;
       toast.ok(t("common.saved"));
       if (created) go("flow", created.id);
@@ -315,7 +338,7 @@
     <ProfilePicker
       {profiles} current={source.id} name={draft.name.trim() || source.name} {applies}
       onpick={(id) => guard.request(() => go("flow", id))}
-      onadd={() => guard.request(() => { revert(); adding = true; })}
+      onadd={() => guard.request(openAdd)}
       onmanage={() => guard.request(() => (managing = true))}
     />
   </div>
@@ -514,14 +537,28 @@
 <ManageProfiles bind:open={managing} {profiles} {applies} {presets} />
 
 <Modal bind:open={adding} title={t("flow.add")}>
-  <div class="choices" class:busy inert={busy} aria-busy={busy}>
-    {#each presets as p (p.id)}
-      <Row label={t(`profiles.preset.${p.id}`)} help={t(`profiles.preset.${p.id}.desc`)} onclick={() => create(p.id)} />
-    {/each}
+  <div class:busy inert={busy} aria-busy={busy}>
+    <div class="templates" role="radiogroup" aria-label={t("flow.add_template")}>
+      {#each presets as p (p.id)}
+        <label class="template" class:on={addPreset === p.id}>
+          <input type="radio" name="preset" value={p.id} checked={addPreset === p.id} onchange={() => choosePreset(p.id)} />
+          <span><b>{t(`profiles.preset.${p.id}`)}</b><small>{t(`profiles.preset.${p.id}.desc`)}</small></span>
+        </label>
+      {/each}
+    </div>
+    <div class="choices">
+      <Row label={t("flow.add_name")}>
+        <input class="field" type="text" bind:value={addName} oninput={() => (addRenamed = true)} aria-label={t("flow.add_name")} />
+      </Row>
+      <Row label={t("flow.add_default")} help={t(addDefault ? "flow.add_default_on" : "flow.add_default_off")}>
+        <Switch bind:checked={addDefault} label={t("flow.add_default")} />
+      </Row>
+    </div>
   </div>
   {#snippet actions()}
     {#if busy}<span class="adding" role="status">{t("profiles.adding")}</span>{/if}
     <button type="button" class="btn" disabled={busy} onclick={() => (adding = false)}>{t("common.cancel")}</button>
+    <button type="button" class="btn primary" disabled={busy || !addPreset || !addName.trim()} onclick={create}>{t("flow.add_create")}</button>
   {/snippet}
 </Modal>
 
@@ -560,7 +597,15 @@
   .icon-btn:hover { color: var(--ink); }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; }
   .end-chips { flex: 0 1 auto; justify-content: flex-end; max-width: 70%; }
-  .choices.busy { opacity: .55; }
+  .busy { opacity: .55; }
+  .templates { display: flex; flex-direction: column; gap: 8px; }
+  .template { display: flex; align-items: flex-start; gap: 12px; padding: 11px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--ink); cursor: default; }
+  .template.on { border-color: var(--accent); background: var(--accent-soft); }
+  .template input { appearance: none; flex: none; width: 16px; height: 16px; margin: 4px 0 0; border: 1.5px solid var(--ink-3); border-radius: 50%; }
+  .template input:checked { border: 5px solid var(--accent); }
+  .template input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .template b { display: block; font-weight: 600; }
+  .template small { display: block; color: var(--ink-2); font-size: var(--text-sm); }
   .adding { margin-right: auto; align-self: center; color: var(--ink-2); font-size: var(--text-sm); }
   .choices { margin-top: 8px; border: 1px solid var(--line); border-radius: var(--radius-group); background: var(--surface); color: var(--ink); }
 </style>

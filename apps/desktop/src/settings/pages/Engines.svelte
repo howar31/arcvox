@@ -62,8 +62,6 @@
   const missingRecommended = $derived(recommendedMissing(manifest, installed));
   const busy = $derived(Object.values(progress).some((p) => !p.done));
   const defaultHint = $derived(defaultProfile(config.value)?.language_hint ?? null);
-  // The engines that can serve the role, for the default pair's picker.
-  const choices = $derived(engines.filter((p) => (role === "asr" ? p.capabilities.transcribe : p.capabilities.chat)));
   const defaultId = $derived(config.value?.default_engines[role] ?? "");
   /** Which engines can run now: a local one by its file, a platform service by its status, a network one at its word. */
   const usable = $derived.by(() => {
@@ -71,13 +69,14 @@
     const files = usableWith(installedKnown ? new Set(ok.map((m) => m.id)) : null, new Set(ok.map((m) => m.path)));
     return (p: ProviderConfig) => (p.kind === "native" ? (nativeStates[p.id]?.status ?? "ready") === "ready" : files(p));
   });
-  async function pickDefault(select: HTMLSelectElement) {
-    const id = select.value;
+  /** Whether the engine can become the role's default now: it serves the role and can run. */
+  const canBeDefault = (p: ProviderConfig): boolean =>
+    p.id !== defaultId && (role === "asr" ? p.capabilities.transcribe : p.capabilities.chat) && usable(p);
+  async function makeDefault(p: ProviderConfig) {
     try {
-      await setDefaultEngine(role, id);
+      config.value = await setDefaultEngine(role, p.id);
       toast.ok(t("common.saved"));
     } catch (e) {
-      select.value = defaultId;
       toast.error(errorMessage(e));
     }
   }
@@ -190,7 +189,6 @@
   function usersLine(id: string): string {
     const users = usedBy(config.value, id, usable);
     const names = users.map((u) => (u.isDefault ? t("engines.default_user", { name: u.name }) : u.name)).join(t("engines.list_sep"));
-    if (id === defaultId) return users.length === 0 ? t("engines.default_not_in_use") : t("engines.default_in_use", { names });
     if (users.length > 0) return t("engines.in_use", { names });
     const wanted = namedBy(config.value, id).map((u) => u.name).join(t("engines.list_sep"));
     return wanted ? t("engines.named_not_in_use", { names: wanted }) : t("engines.not_in_use");
@@ -281,15 +279,13 @@
   {#if probe}<small class="probe {probe.state}" role="status">{probe.text}</small>{/if}
 {/snippet}
 
-<!-- The one engine of the role every profile falls back on. -->
-<Group title={t("engines.default_group")}>
-  <Row label={t("engines.default_engine." + role)} help={t("engines.default_help")}>
-    <select class="field" value={defaultId} aria-label={t("engines.default_engine." + role)} onchange={(e) => pickDefault(e.currentTarget)}>
-      {#each choices as p (p.id)}<option value={p.id}>{p.label}</option>{/each}
-      {#if defaultId && !choices.some((p) => p.id === defaultId)}<option value={defaultId} disabled>{defaultId}</option>{/if}
-    </select>
-  </Row>
-</Group>
+<!-- The role's default engine is marked beside its name in the lists; any other engine that can run is made the default from its row. -->
+{#snippet defaultTag(p: ProviderConfig | null)}
+  {#if p && p.id === defaultId}<Tag tone="ok" title={t("engines.default_help")}>{t("engines.default_tag")}</Tag>{/if}
+{/snippet}
+{#snippet defaultButton(p: ProviderConfig | null)}
+  {#if p && canBeDefault(p)}<button type="button" class="btn quiet" onclick={() => makeDefault(p)}>{t("engines.make_default")}</button>{/if}
+{/snippet}
 
 <!-- Every installed model is an engine of its own; a file still to download is listed with it. -->
 <Group title={t("engines.local_models")}>
@@ -312,6 +308,7 @@
           <span class="name">{r.label}</span>
           {#if r.model?.custom}<Tag title={t("engines.tip.imported")}>{t("engines.tag.imported")}</Tag>{/if}
           {#if recommended(r.id)}<Tag tone="accent" title={t("engines.tip.recommended")}>{t("engines.recommended")}</Tag>{/if}
+          {@render defaultTag(r.engine)}
           {#if r.state === "downloading"}<Tag tone="warn">{t("engines.downloading")}</Tag>
           {:else if r.state === "error"}<Tag tone="live" title={r.error}>{t("engines.download_failed")}</Tag>
           {:else if r.state === "gone"}<Tag tone="live" title={t("engines.tip.file_missing")}>{t("engines.file_missing")}</Tag>
@@ -326,6 +323,7 @@
         {@render probeLine(r.id)}
       </div>
       {#if r.state === "installed"}
+        {#if !(r.model && encoderMissing(r.model))}{@render defaultButton(r.engine)}{/if}
         {#if r.engine && !(r.model && encoderMissing(r.model))}<button type="button" class="btn quiet" onclick={() => test(r.engine!)} disabled={rowProbes[r.id]?.state === "wait"}>{t("engines.test")}</button>{/if}
         <button type="button" class="btn quiet danger" onclick={() => { deleting = r.model; }}>{t("engines.delete_model")}</button>
       {:else if r.state === "downloading"}
@@ -364,6 +362,7 @@
         <div class="info">
           <div class="title">
             <span class="name">{p.label}</span>
+            {@render defaultTag(p)}
             {#if s && s.status !== "ready"}<Tag tone={s.status === "failed" ? "live" : "warn"} title={s.reason ?? undefined}>{t("engines.native." + s.status)}</Tag>{/if}
           </div>
           <small>{engineDescription(p, manifest)}</small>
@@ -375,6 +374,7 @@
             {installing ? t("engines.installing", { percent: `${Math.round(installFraction * 100)}%` }) : t("engines.install_language")}
           </button>
         {/if}
+        {@render defaultButton(p)}
         <button type="button" class="btn quiet" onclick={() => test(p)} disabled={rowProbes[p.id]?.state === "wait"}>{t("engines.test")}</button>
       </Row>
     {/each}
@@ -395,12 +395,14 @@
       <div class="info">
         <div class="title">
           <span class="name">{p.label}</span>
+          {@render defaultTag(p)}
           {#if !hasRole(p)}<Tag tone="warn">{t("engines.no_role")}</Tag>{/if}
         </div>
         <small>{engineDescription(p, manifest)}</small>
         <small>{usersLine(p.id)}</small>
         {@render probeLine(p.id)}
       </div>
+      {@render defaultButton(p)}
       <button type="button" class="btn quiet" onclick={() => test(p)} disabled={rowProbes[p.id]?.state === "wait"}>{t("engines.test")}</button>
       <button type="button" class="btn quiet" onclick={() => openForm(p)}>{t("common.edit")}</button>
     </Row>

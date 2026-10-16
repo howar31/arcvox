@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Utterance } from "./api";
-import { clipLength, groupByDay, periodLabel, periodRange, rawState, redoneTag, seconds, totalSeconds } from "./historyView";
+import { clipLength, groupByDay, periodLabel, periodRange, rawState, redoneTag, seconds, spentSeconds, totalSeconds } from "./historyView";
 import { setLanguage } from "./i18n";
 
 const at = (d: Date) => Math.floor(d.getTime() / 1000);
@@ -128,5 +128,12 @@ describe("periodLabel", () => {
     expect(periodLabel({ kind: "range", from: "2026-10-03", to: "2026-10-03", hourFrom: 14, hourTo: 16 })).toBe("10/3 14:00 到 17:00");
     setLanguage("en");
     expect(periodLabel({ kind: "yesterday" })).toBe("Yesterday");
+  });
+});
+
+describe("spentSeconds", () => {
+  it("adds the rewrite when it ran and is recognition alone otherwise", () => {
+    expect(spentSeconds(1200, 1100)).toBe("2.3");
+    expect(spentSeconds(1200, null)).toBe("1.2");
   });
 });
