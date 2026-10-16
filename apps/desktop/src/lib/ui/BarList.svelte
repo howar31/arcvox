@@ -4,6 +4,7 @@
    * side. The note column has one width, so every bar starts and ends on the same lines; when the
    * bars would be too short to compare, only the names and notes are shown.
    */
+  import { tip } from "../tip";
   let { rows, columns = 1 }: { rows: { label: string; value: number; note: string; muted?: boolean }[]; columns?: number } = $props();
   const max = $derived(Math.max(1, ...rows.map((r) => r.value)));
   let width = $state(0);
@@ -15,7 +16,7 @@
 <div class="bars" class:nobars={!bars} style:grid-template-columns="repeat({columns}, minmax(0, 1fr))" bind:clientWidth={width}>
   {#each rows as r, i (i)}
     <div class="bar">
-      <span class="label" class:muted={r.muted} title={r.label}>{r.label}</span>
+      <span class="label" class:muted={r.muted} use:tip={r.label}>{r.label}</span>
       {#if bars}<span class="track"><i style:width="{Math.max(r.value > 0 ? 2 : 0, (r.value / max) * 100)}%"></i></span>{/if}
       <span class="note num">{r.note}</span>
     </div>

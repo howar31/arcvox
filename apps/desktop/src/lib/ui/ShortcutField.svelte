@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../tip";
   import { onMount } from "svelte";
   import { errorMessage, onShortcutCapture, shortcutCapture, shortcutCheck } from "../api";
   import { t } from "../i18n";
@@ -65,7 +66,7 @@
   {#each value as keys, i (keys.join("+"))}
     <span class="combo">
       {#each keys as k, j (k)}{#if j > 0}<span class="plus" aria-hidden="true">+</span>{/if}<kbd>{keyLabel(k)}</kbd>{/each}
-      <button type="button" class="x" disabled={value.length === 1} aria-label={t("common.remove") + " " + shortcutLabel(keys)} title={t("common.remove")} onclick={() => { value.splice(i, 1); refused = ""; }}><Icon name="x" size={12} /></button>
+      <button type="button" class="x" disabled={value.length === 1} aria-label={t("common.remove") + " " + shortcutLabel(keys)} use:tip={t("common.remove")} onclick={() => { value.splice(i, 1); refused = ""; }}><Icon name="x" size={12} /></button>
     </span>
   {/each}
   {#if capturing}

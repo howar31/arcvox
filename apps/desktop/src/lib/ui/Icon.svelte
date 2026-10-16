@@ -18,6 +18,7 @@
     search: '<circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2 13.5 13.5"/>',
     speed: '<path d="M2.5 11a5.5 5.5 0 1 1 11 0"/><path d="M8 11l2.5-3.5"/>',
     about: '<circle cx="8" cy="8" r="5.5"/><path d="M8 7.5V11M8 5.2v.1"/>',
+    info: '<circle cx="8" cy="8" r="6"/><path d="M8 7.3V11.2M8 5v.1"/>',
     plus: '<path d="M8 3v10M3 8h10"/>',
     check: '<path d="M3.5 8.5l3 3 6-7"/>',
     x: '<path d="M4 4l8 8M12 4l-8 8"/>',

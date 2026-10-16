@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../../lib/tip";
   import { onMount } from "svelte";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import {
@@ -20,6 +21,7 @@
   import Fold from "../../lib/ui/Fold.svelte";
   import Group from "../../lib/ui/Group.svelte";
   import Icon from "../../lib/ui/Icon.svelte";
+  import InfoTip from "../../lib/ui/InfoTip.svelte";
   import PageLink from "../../lib/ui/PageLink.svelte";
   import Modal from "../../lib/ui/Modal.svelte";
   import PageHead from "../../lib/ui/PageHead.svelte";
@@ -368,7 +370,7 @@
           {:else if r.model && encoderMissing(r.model)}<Tag tone={rowLevel(r) ?? "warn"} title={t("engines.tip.encoder_missing")}>{t("engines.encoder_missing")}</Tag>{/if}
           {#if r.engine && !hasRole(r.engine)}<Tag tone="warn">{t("engines.no_role")}</Tag>{/if}
         </div>
-        {#if r.meta}<small class="line" title={r.meta}>{r.meta}</small>{/if}
+        {#if r.meta}<small class="line" use:tip={r.meta}>{r.meta}</small>{/if}
         {#if r.desc}<small>{r.desc}</small>{/if}
         {#if r.engine}<small>{usersLine(r.id)}</small>{/if}
         {#if r.state === "error"}<small class="probe bad">{r.error}</small>{/if}
@@ -420,7 +422,7 @@
     {/if}
   {/if}
   <div class="rowfoot">
-    {#if folder}<p>{t(folder.is_default ? "engines.folder_help_default" : "engines.folder_help", { dir: folder.path })}</p>{/if}
+    {#if folder}<p>{t(folder.is_default ? "engines.folder_help_default" : "engines.folder_help", { dir: folder.path })}<InfoTip info={t("engines.folder_info")} /></p>{/if}
     <p class="links">
       <button type="button" class="link" onclick={openCustomFolder}>{t("engines.open_folder")}</button>
       <button type="button" class="link" onclick={importFile}>{t("engines.import")}</button>
@@ -548,6 +550,7 @@
   .rowfoot { padding: 10px var(--row-x, 20px) 12px; border-top: 1px solid var(--line); background: var(--sunken); color: var(--ink-2); font-size: var(--text-sm); }
   .rowfoot p { margin: 0; overflow-wrap: anywhere; }
   .rowfoot .links { margin-top: 2px; }
+  .rowfoot :global(.info-btn) { margin-left: 2px; }
   .rowfoot .links .link { margin: 0 14px 0 0; }
   .pills { display: flex; gap: 6px; margin-right: 6px; }
   .pill { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 15px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink-2); font-size: var(--text-sm); cursor: default; }

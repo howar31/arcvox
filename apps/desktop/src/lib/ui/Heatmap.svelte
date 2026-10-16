@@ -3,6 +3,7 @@
    * One square per day, seven to a column, oldest first; `titles` name each day for pointers and
    * screen readers. `months` gives one label per column (the month's name where it begins, "" elsewhere).
    */
+  import { tip } from "../tip";
   let { levels, titles, months = [] }: { levels: (0 | 1 | 2 | 3 | 4)[]; titles: string[]; months?: string[] } = $props();
 </script>
 
@@ -13,7 +14,7 @@
     </div>
   {/if}
   <div class="heat" role="img" aria-label={titles.filter((_, i) => levels[i] > 0).join("; ")}>
-    {#each levels as level, i (i)}<i class="l{level}" title={titles[i]}></i>{/each}
+    {#each levels as level, i (i)}<i class="l{level}" use:tip={titles[i]}></i>{/each}
   </div>
 </div>
 

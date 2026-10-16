@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../../lib/tip";
   import { tick, untrack } from "svelte";
   import { errorMessage, setDictionary, type DictionaryEntry } from "../../lib/api";
   import { addAliases, dropBlank, isSnippet, trimEntries } from "../../lib/dictionary";
@@ -145,7 +146,7 @@
 
   {#if items.length}
     <div bind:this={list}>
-      <Group help={t("dictionary.snippet_help")}>
+      <Group help={t("dictionary.snippet_help")} info={t("dictionary.snippet_info")}>
         {#each items as item, i (item.key)}
           <Row>
             <div class="entry">
@@ -160,7 +161,7 @@
                   aria-invalid={problem && blocks(item) ? "true" : undefined}
                 ></textarea>
                 {#if isSnippet(item.term)}<span class="tag"><Tag tone="accent">{t("dictionary.snippet")}</Tag></span>{/if}
-                <button type="button" class="btn quiet icon-btn" aria-label={removeLabel(item)} title={t("common.remove")} onclick={() => items!.splice(i, 1)}><Icon name="trash" /></button>
+                <button type="button" class="btn quiet icon-btn" aria-label={removeLabel(item)} use:tip={t("common.remove")} onclick={() => items!.splice(i, 1)}><Icon name="trash" /></button>
               </div>
               <div class="line second">
                 <span class="sub lead">{t("dictionary.aliases")}</span>

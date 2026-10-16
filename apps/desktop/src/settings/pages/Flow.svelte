@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../../lib/tip";
   import { onMount, untrack } from "svelte";
   import {
     errorMessage, historyLast, listMicrophones, modelsDownload, modelsInstalled, modelsManifestNow, onHistoryChanged, onModelDownloadProgress, openFolder, profilesAddPreset,
@@ -23,6 +24,7 @@
   import Icon from "../../lib/ui/Icon.svelte";
   import Modal from "../../lib/ui/Modal.svelte";
   import PageHead from "../../lib/ui/PageHead.svelte";
+  import InfoTip from "../../lib/ui/InfoTip.svelte";
   import PageLink from "../../lib/ui/PageLink.svelte";
   import Row from "../../lib/ui/Row.svelte";
   import SaveBar from "../../lib/ui/SaveBar.svelte";
@@ -419,7 +421,7 @@
       <Row label={t("profiles.apps_label")}>
         <div class="chips end-chips">
           {#each draft.matcher.app_ids as id, i (i)}
-            <Chip onremove={() => draft!.matcher.app_ids.splice(i, 1)}><span title={id}>{appName(id)}</span></Chip>
+            <Chip onremove={() => draft!.matcher.app_ids.splice(i, 1)}><span use:tip={id}>{appName(id)}</span></Chip>
           {:else}
             <span class="sub">{t("profiles.no_apps")}</span>
           {/each}
@@ -494,7 +496,7 @@
             </select>
           </Row>
           <Row label={t("flow.asr_hint")}>
-            {#snippet help()}{t("flow.asr_hint_help_before")}<button type="button" class="stage-link" onclick={() => (stage = "rules")}>{t("flow.stage.rules")}</button>{t("flow.asr_hint_help_after")}{/snippet}
+            {#snippet help()}{t("flow.asr_hint_help_before").slice(0, -1)}<span class="nobr">{t("flow.asr_hint_help_before").slice(-1)}<button type="button" class="stage-link" onclick={() => (stage = "rules")}>{t("flow.stage.rules")}</button>{t("flow.asr_hint_help_after")}</span>{/snippet}
             <Switch bind:checked={draft.asr_dictionary_hint} label={t("flow.asr_hint")} />
           </Row>
         </Group>
@@ -514,9 +516,9 @@
         {#if hasLlmStep(draft)}<Fold>
           <div class="bar"><h2>{t("profiles.prompt_addition")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("prompt"))}>{t("flow.see_prompt")}</button></div>
           <textarea rows="4" bind:value={draft.prompt_addition} aria-label={t("profiles.prompt_addition")}></textarea>
-          <p class="help">{t("profiles.prompt_help")}</p>
+          <p class="help">{t("profiles.prompt_help")}<InfoTip info={t("profiles.prompt_info")} /></p>
 
-          <Group title={t("profiles.few_shot")} help={t("profiles.few_shot_help")}>
+          <Group title={t("profiles.few_shot")} help={t("profiles.few_shot_help")} info={t("profiles.few_shot_info")}>
             {#each draft.few_shot as ex, i (i)}
               <Row>
                 <span class="pair-text">{ex.raw}</span>
@@ -533,9 +535,9 @@
             </Row>
           </Group>
 
-          <Group title={t("flow.llm_rules")}>
+          <Group title={t("flow.llm_rules")} info={t("flow.llm_rules_info")}>
             <Row label={t("flow.llm_terms")}>
-              {#snippet help()}{t("flow.llm_terms_help_before")}<button type="button" class="stage-link" onclick={() => (stage = "rules")}>{t("flow.stage.rules")}</button>{t("flow.llm_terms_help_after")}{/snippet}
+              {#snippet help()}{t("flow.llm_terms_help_before").slice(0, -1)}<span class="nobr">{t("flow.llm_terms_help_before").slice(-1)}<button type="button" class="stage-link" onclick={() => (stage = "rules")}>{t("flow.stage.rules")}</button>{t("flow.llm_terms_help_after")}</span>{/snippet}
               <Switch bind:checked={draft.llm_dictionary_terms} label={t("flow.llm_terms")} />
             </Row>
             <Row label={t("flow.llm_title")} help={t("flow.llm_title_help")}>
@@ -551,7 +553,7 @@
         {@const script = scriptAt(draft, pass)}
         {@const noRewrite = pass === 2 && !stageOpen("llm", draft)}
         <Group title={t("flow.stage.opencc")}>
-          <Row label={t("flow.script")} help={t(pass === 1 ? "flow.script_help" : noRewrite ? "flow.script_help2_off" : "flow.script_help2")}>
+          <Row label={t("flow.script")} help={t(pass === 1 ? "flow.script_help" : noRewrite ? "flow.script_help2_off" : "flow.script_help2")} info={pass === 1 ? t("flow.script_info") : undefined}>
             <!-- Sixteen fixed conversions: a list, grouped by the script they produce. A configuration set
                  outside this page is listed by its name and kept until another choice is made. The second
                  pass follows the rewrite; without one it cannot be set. -->
@@ -591,7 +593,8 @@
         </Group>
       {:else if stage === "insert"}
         <Group title={t("flow.stage.insert")}>
-          <Row label={t("flow.insert_row")} help={t("flow.insert_help")}>
+          <Row label={t("flow.insert_row")}>
+            {#snippet help()}{t("flow.insert_help_before").slice(0, -1)}<span class="nobr">{t("flow.insert_help_before").slice(-1)}<PageLink page="recording" label={t("nav.recording")} />{t("flow.insert_help_after")}</span>{/snippet}
             <button type="button" class="btn quiet" onclick={() => guard.request(() => go("recording"))}>{t("flow.to_recording")}</button>
           </Row>
         </Group>
@@ -623,7 +626,7 @@
       <Row label={t("flow.add_name")}>
         <input class="field" type="text" bind:value={addName} oninput={() => (addRenamed = true)} aria-label={t("flow.add_name")} />
       </Row>
-      <Row label={t("flow.add_default")} help={t(addDefault ? "flow.add_default_on" : "flow.add_default_off")}>
+      <Row label={t("flow.add_default")} help={t(addDefault ? "flow.add_default_on" : "flow.add_default_off")} info={addDefault ? t("flow.add_default_on_info") : undefined}>
         <Switch bind:checked={addDefault} label={t("flow.add_default")} />
       </Row>
     </div>
@@ -657,6 +660,7 @@
 
   .bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: var(--gap-group) 4px 12px; min-height: 20px; }
   /* A stage named inside a help sentence, as a link that selects it on the rail. */
+  .help :global(.info-btn) { margin-left: 2px; }
   .stage-link { border: 0; background: none; padding: 0; font: inherit; color: var(--accent); cursor: default; }
   .stage-link:hover { color: var(--ink); }
   .missing { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 4px 0; color: var(--warn); font-size: var(--text-sm); }

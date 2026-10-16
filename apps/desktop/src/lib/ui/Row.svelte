@@ -1,15 +1,18 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
   import Icon from "./Icon.svelte";
+  import InfoTip from "./InfoTip.svelte";
   import ResetButton from "./ResetButton.svelte";
   import type { Reset } from "../reset";
 
-  let { label, tag, help, leading, children, onclick, external = false, reset }: {
+  let { label, tag, help, info, leading, children, onclick, external = false, reset }: {
     label?: string;
     /** A tag beside the label, where every page puts the tag of a name. */
     tag?: Snippet;
     /** A line under the label: text, or content with a link in it. */
     help?: string | Snippet;
+    /** The second layer of the help, on the card of the ⓘ beside the label: limits, consequences, where else to look. */
+    info?: string | Snippet;
     leading?: Snippet;
     children?: Snippet;
     /** Makes the whole row a button that ends in a chevron. */
@@ -19,13 +22,14 @@
     /** Set while the row's value differs from its default. */
     reset?: Reset;
   } = $props();
+
 </script>
 
 {#snippet body()}
   {#if leading}{@render leading()}{/if}
   {#if label || help}
     <span class="label">
-      {#if label}<span class="text" class:tagged={tag}>{label}{#if tag}{@render tag()}{/if}</span>{/if}
+      {#if label}<span class="text" class:tagged={tag || info}>{label}{#if tag}{@render tag()}{/if}{#if info}<InfoTip {info} />{/if}</span>{/if}
       {#if typeof help === "string"}<small>{help}</small>{:else if help}<small>{@render help()}</small>{/if}
     </span>
   {/if}
