@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../../lib/tip";
   import { onMount, untrack } from "svelte";
   import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -180,7 +181,7 @@
   const sizes = $derived((["x_small", "small", "medium", "large", "x_large"] as const).map((value) => ({ value, label: t(`general.widget_size_${value}`) })));
 
   const languages = $derived([{ value: "system" as const, label: t("general.lang_system") }, { value: "zh-tw" as const, label: "正體中文" }, { value: "en" as const, label: "English" }]);
-  const methods = $derived((["paste", "type", "ax", "copy"] as const).map((value) => ({ value, label: t(`general.method_${value}`), help: t(`general.method_${value}_help`) })));
+  const methods = $derived((["paste", "type", "ax", "copy"] as const).map((value) => ({ value, label: t(`general.method_${value}`), help: t(`general.method_${value}_help`), info: value === "copy" ? undefined : t(`general.method_${value}_info`) })));
 
   // The way back to the default, for each setting that has one and differs from it.
   const unit = (name: string) => (v: unknown) => `${v} ${t(name)}`;
@@ -395,7 +396,7 @@
   </Group>
 
   <Group title={t("general.widget")} onreset={widgetResets}>
-    <Row label={t("general.widget_position")} help={t("general.widget_position_help")}>
+    <Row label={t("general.widget_position")} help={t("general.widget_position_help")} info={t("general.widget_position_info")}>
       <button type="button" class="btn" aria-pressed={placing} onclick={() => setPlacing(!placing)}>{t(placing ? "general.widget_done" : "general.widget_show")}</button>
       <button type="button" class="btn quiet" onclick={resetWidget}>{t("general.widget_reset")}</button>
     </Row>
@@ -420,7 +421,7 @@
           {/if}
         </select>
       </Row>
-      <Row label={t("general.widget_idle")} help={t("general.widget_idle_help")} reset={resets.idle}>
+      <Row label={t("general.widget_idle")} reset={resets.idle}>
         <Segmented options={idles} bind:value={draft.widget_idle} label={t("general.widget_idle")} />
       </Row>
       {#if draft.widget_idle !== "hidden"}<Fold>
@@ -442,7 +443,7 @@
           </Row>
         </Fold>{/if}
       </Fold>{/if}
-      <Row label={t("general.show_transcript")} help={t(draft.show_transcript ? "general.show_transcript_help" : "general.show_transcript_off")} reset={resets.transcript}>
+      <Row label={t("general.show_transcript")} help={t(draft.show_transcript ? "general.show_transcript_help" : "general.show_transcript_off")} info={draft.show_transcript ? t("general.show_transcript_info") : undefined} reset={resets.transcript}>
         <Switch bind:checked={draft.show_transcript} label={t("general.show_transcript")} />
       </Row>
     {/if}
@@ -473,7 +474,7 @@
       <Row label={t("general.double_tap_window")} reset={resets.doubleTap}>
         <NumberField bind:value={draft.hotkey.double_tap_window_ms} min={150} max={1000} unit={t("common.ms")} label={t("general.double_tap_window")} />
       </Row>
-      <Row label={t("general.escape_processing")} help={t(draft.hotkey.escape_cancels_processing ? "general.escape_processing_on" : "general.escape_processing_off")} reset={resets.escape}>
+      <Row label={t("general.escape_processing")} help={t(draft.hotkey.escape_cancels_processing ? "general.escape_processing_on" : "general.escape_processing_off")} info={t(draft.hotkey.escape_cancels_processing ? "general.escape_processing_on_info" : "general.escape_processing_off_info")} reset={resets.escape}>
         <Switch bind:checked={draft.hotkey.escape_cancels_processing} label={t("general.escape_processing")} />
       </Row>
     </Group>
@@ -522,14 +523,14 @@
     <Group title={t("general.insertion")} help={t("general.insertion_note")}>
       {#each Object.entries(draft.insertion.per_app) as [bundle, method] (bundle)}
         <Row>
-          <span class="bundle" title={bundle}>{appName(bundle)}</span>
+          <span class="bundle" use:tip={bundle}>{appName(bundle)}</span>
           <select class="method" value={method} onchange={(e) => setMethod(bundle, e.currentTarget.value)} aria-label={t("general.method")}>
             <option value="paste">{t("general.method_paste")}</option>
             <option value="type">{t("general.method_type")}</option>
             <option value="ax">{t("general.method_ax")}</option>
             <option value="copy">{t("general.method_copy")}</option>
           </select>
-          <button type="button" class="btn quiet icon-btn" onclick={() => { delete draft!.insertion.per_app[bundle]; }} aria-label={t("common.remove")} title={t("common.remove")}><Icon name="trash" /></button>
+          <button type="button" class="btn quiet icon-btn" onclick={() => { delete draft!.insertion.per_app[bundle]; }} aria-label={t("common.remove")} use:tip={t("common.remove")}><Icon name="trash" /></button>
         </Row>
       {/each}
       <AddPerApp onadd={addApp} bind:value={newApp} />
@@ -543,7 +544,7 @@
       <Row label={t("general.history_retention")} help={t("general.retention_zero_help")} reset={resets.historyDays}>
         <NumberField bind:value={general.history_retention_days} min={0} unit={t("common.days")} label={t("general.history_retention")} />
       </Row>
-      <Row label={t("general.stage_retention")} help={t("general.stage_retention_help")} reset={resets.stageDays}>
+      <Row label={t("general.stage_retention")} help={t("general.stage_retention_help")} info={t("general.stage_retention_info")} reset={resets.stageDays}>
         <NumberField bind:value={general.stage_retention_days} min={0} unit={t("common.days")} label={t("general.stage_retention")} />
       </Row>
       <Row label={t("general.keep_recordings")} help={t(general.keep_recordings ? "general.keep_recordings_on" : "general.keep_recordings_off")} reset={resets.keepRecordings}>
@@ -577,7 +578,7 @@
   {/if}
 
   {#if draft}
-    <Group title={t("general.context")} help={t("general.context_help")} onreset={together([resets.ctxApp, resets.ctxTitle, resets.ctxUrl, resets.ctxSelected, resets.ctxClipboard])}>
+    <Group title={t("general.context")} help={t("general.context_help")} info={t("general.context_info")} onreset={together([resets.ctxApp, resets.ctxTitle, resets.ctxUrl, resets.ctxSelected, resets.ctxClipboard])}>
       <Row label={t("general.ctx_app_name")} reset={resets.ctxApp}><Switch bind:checked={draft.context.app_name} label={t("general.ctx_app_name")} /></Row>
       <Row label={t("general.ctx_window_title")} reset={resets.ctxTitle}><Switch bind:checked={draft.context.window_title} label={t("general.ctx_window_title")} /></Row>
       <Row label={t("general.ctx_url")} reset={resets.ctxUrl}><Switch bind:checked={draft.context.url} label={t("general.ctx_url")} /></Row>
@@ -597,10 +598,10 @@
       <Row label={t("general.retry_count")} help={t("general.retry_count_help")} reset={resets.retry}>
         <NumberField bind:value={general.retry_count} min={0} max={5} unit={t("common.times")} label={t("general.retry_count")} />
       </Row>
-      <Row label={t("general.llm_preload")} help={t(general.llm_preload_on_record ? "general.llm_preload_on" : "general.llm_preload_off")} reset={resets.preload}>
+      <Row label={t("general.llm_preload")} help={t(general.llm_preload_on_record ? "general.llm_preload_on" : "general.llm_preload_off")} info={t(general.llm_preload_on_record ? "general.llm_preload_on_info" : "general.llm_preload_off_info")} reset={resets.preload}>
         <Switch bind:checked={general.llm_preload_on_record} label={t("general.llm_preload")} />
       </Row>
-      <Row label={t("general.llm_idle_unload")} help={t("general.llm_idle_unload_help")} reset={resets.idleUnload}>
+      <Row label={t("general.llm_idle_unload")} help={t("general.llm_idle_unload_help")} info={t("general.llm_idle_unload_info")} reset={resets.idleUnload}>
         <NumberField bind:value={general.llm_idle_unload_secs} min={0} unit={t("common.seconds")} label={t("general.llm_idle_unload")} />
       </Row>
     </Group>

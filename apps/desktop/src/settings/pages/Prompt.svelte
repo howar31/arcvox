@@ -76,8 +76,8 @@
 </script>
 
 {#if saved !== null}
-  {#snippet note()}{t("prompt.note_before")}<PageLink page="flow" stage="rules" label={t("nav.flow")} />{t("prompt.note_after")}{/snippet}
-  <PageHead title={t("nav.prompt")} description={note} crumb={{ label: t("nav.flow"), page: "flow" }}>
+  {#snippet noteInfo()}{t("prompt.note_info_before").slice(0, -1)}<span class="nobr">{t("prompt.note_info_before").slice(-1)}<PageLink page="flow" stage="rules" label={t("nav.flow")} />{t("prompt.note_info_after")}</span>{/snippet}
+  <PageHead title={t("nav.prompt")} description={t("prompt.note")} info={noteInfo} crumb={{ label: t("nav.flow"), page: "flow" }}>
     {#snippet actions()}
       {#if restorable}<button type="button" class="btn" disabled={saving} onclick={() => (confirmRestore = true)}>{t("prompt.restore")}</button>{/if}
     {/snippet}

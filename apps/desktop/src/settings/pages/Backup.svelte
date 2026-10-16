@@ -8,6 +8,7 @@
   import { isImeKey } from "../../lib/ime";
   import { client } from "../../lib/store.svelte";
   import Group from "../../lib/ui/Group.svelte";
+  import PageLink from "../../lib/ui/PageLink.svelte";
   import Icon from "../../lib/ui/Icon.svelte";
   import Modal from "../../lib/ui/Modal.svelte";
   import PageHead from "../../lib/ui/PageHead.svelte";
@@ -149,7 +150,7 @@
 
 <PageHead title={t("nav.backup")} />
 
-<Group title={t("backup.transfer")} help={t("backup.transfer_note")}>
+<Group title={t("backup.transfer")} help={t("backup.transfer_note")} info={t("backup.transfer_info")}>
   <Row label={t("backup.kind.settings")} help={t("backup.kind.settings_help")}>
     <span class="buttons">
       <button type="button" class="btn" onclick={() => fileDialogs?.openExport("settings")}>{t("backup.export")}</button>
@@ -173,7 +174,7 @@
 {#snippet folderTag()}<Tag tone="live">{t(folder === "missing" ? "backup.folder_tag_missing" : "backup.folder_tag_not_writable")}</Tag>{/snippet}
 
 {#if backup}
-  <Group title={t("backup.folder")} help={t("backup.folder_note")}>
+  <Group title={t("backup.folder")} help={t("backup.folder_note")} info={t("backup.folder_info")}>
     <Row label={t("backup.folder_path")} tag={backup.folder && folder && folder !== "usable" ? folderTag : undefined} help={backup.folder ?? t("backup.folder_none")}>
       <span class="buttons">
         {#if backup.folder && view.fix === "create"}
@@ -188,7 +189,7 @@
     <Row label={t("backup.items")} help={itemsSummary(backup.categories)}>
       <button type="button" class="btn" onclick={() => recordDialogs?.openItems()}>{t("backup.items_change")}</button>
     </Row>
-    <Row label={t("backup.auto")} help={t(backup.auto ? "backup.auto_help" : "backup.auto_off")}>
+    <Row label={t("backup.auto")} help={t(backup.auto ? "backup.auto_help" : "backup.auto_off")} info={backup.auto ? t("backup.auto_info") : undefined}>
       <Switch checked={backup.auto} disabled={!backup.folder} label={t("backup.auto")} onchange={(on) => saveBackup({ auto: on })} />
     </Row>
     <Row label={t("backup.recreate")} help={t(backup.recreate ? "backup.recreate_on" : "backup.recreate_off")}>
@@ -220,7 +221,8 @@
   </Group>
 {/if}
 
-<Group title={t("backup.devices")} help={t("backup.devices_note")}>
+{#snippet devicesInfo()}{t("backup.devices_info_before").slice(0, -1)}<span class="nobr">{t("backup.devices_info_before").slice(-1)}<PageLink page="home" label={t("nav.home")} />{t("backup.devices_info_mid")}<PageLink page="history" label={t("nav.history")} />{t("backup.devices_info_after")}</span>{/snippet}
+<Group title={t("backup.devices")} help={t("backup.devices_note")} info={devicesInfo}>
   {#each devices as d (d.id)}
     <Row>
       {#snippet leading()}<span class="device"><Icon name="device" size={18} /></span>{/snippet}

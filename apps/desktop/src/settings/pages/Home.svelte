@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../../lib/tip";
   import { onMount, tick, untrack } from "svelte";
   import {
     errorMessage, formatBytes, getStats, historyStorage, listMicrophones, modelsInstalled,
@@ -498,7 +499,7 @@
   {#if !rows}
     <p class="none">{t(id === "speed" ? "home.empty.speed" : "home.empty.block")}</p>
   {:else if w === 1}
-    <dl class="kv">{#each rows as r (r.label)}<dt title={r.label}>{r.label}</dt><dd title={r.value}>{r.value}</dd>{/each}</dl>
+    <dl class="kv">{#each rows as r (r.label)}<dt use:tip={r.label}>{r.label}</dt><dd use:tip={r.value}>{r.value}</dd>{/each}</dl>
   {:else}
     <div class="cells" style:--n={w === 2 ? 3 : 5}>{#each rows as r (r.label)}<div title="{r.label}: {r.value}"><b class="num">{r.value}</b><span>{r.label}</span></div>{/each}</div>
   {/if}
@@ -521,7 +522,7 @@
     <div class="tile">
       <div class="label">{tile.label}</div>
       <div class="value num">{#each tile.parts as p, i (i)}<span>{p.value}</span>{#if p.unit}<small>{p.unit}</small>{/if}{/each}</div>
-      {#if tile.detail}<div class="detail" title={tile.detail}>{tile.detail}</div>{/if}
+      {#if tile.detail}<div class="detail" use:tip={tile.detail}>{tile.detail}</div>{/if}
       {#if tile.compare}<div class="compare" class:down={tile.compare.includes("-")}>{tile.compare}</div>{/if}
       {#if tile.spark && tile.spark.length > 1}
         <div class="spark"><Columns values={tile.spark} /></div>
@@ -530,7 +531,7 @@
     </div>
   {:else if id === "days"}
     <h2>{t("home.days.title")}<em>{t("home.days.range", { n: String(weeks) })}</em></h2>
-    {#if card.w >= 2}<p class="sub" title={t("home.days.sub")}>{t("home.days.sub")}</p>{/if}
+    {#if card.w >= 2}<p class="sub" use:tip={t("home.days.sub")}>{t("home.days.sub")}</p>{/if}
     <div class="heatwrap">
       <div class="heatroom" bind:clientWidth={heatWidth}><Heatmap levels={heat.levels} titles={heat.titles} months={heat.months} /></div>
       {#if card.w >= 2}
@@ -543,29 +544,29 @@
     </div>
   {:else if id === "daily"}
     <h2>{t(daily?.weekly ? "home.daily.title_weekly" : "home.daily.title")}{#if daily && card.w >= 2}<em>{t("home.daily.peak", { n: num(daily.peak.chars), date: dateOf(daily.peak.day) })}</em>{/if}</h2>
-    <p class="sub" title={t(daily?.weekly ? "home.daily.sub_weekly" : "home.daily.sub")}>{t(daily?.weekly ? "home.daily.sub_weekly" : "home.daily.sub")}</p>
+    <p class="sub" use:tip={t(daily?.weekly ? "home.daily.sub_weekly" : "home.daily.sub")}>{t(daily?.weekly ? "home.daily.sub_weekly" : "home.daily.sub")}</p>
     {#if daily}<div class="chart"><Columns values={daily.values} labels={dailyLabels(card.w)} titles={daily.titles} /></div>{:else}<p class="none">{t("home.empty.block")}</p>{/if}
   {:else if id === "apps"}
     <h2>{t("home.apps.title")}{#if stats?.apps.length}<em>{t("home.apps.total", { n: String(stats.apps.length) })}</em>{/if}</h2>
-    <p class="sub" title={t("home.apps.sub")}>{t("home.apps.sub")}</p>
+    <p class="sub" use:tip={t("home.apps.sub")}>{t("home.apps.sub")}</p>
     {@render listCard(appRows(card.w, card.h), card.w, card.h)}
   {:else if id === "profiles"}
     <h2>{t("home.profiles.title")}</h2>
-    <p class="sub" title={t("home.profiles.sub")}>{t("home.profiles.sub")}</p>
+    <p class="sub" use:tip={t("home.profiles.sub")}>{t("home.profiles.sub")}</p>
     {@render listCard(profileRows, card.w, card.h)}
   {:else if id === "hours"}
     <h2>{t("home.hours.title")}</h2>
-    <p class="sub" title={t("home.hours.sub")}>{t("home.hours.sub")}</p>
+    <p class="sub" use:tip={t("home.hours.sub")}>{t("home.hours.sub")}</p>
     {#if empty || !stats}<p class="none">{t("home.empty.block")}</p>{:else}
       <div class="chart"><Columns values={stats.hours} labels={hourLabels(card.w)} titles={stats.hours.map((n, h) => t("home.hours.cell", { h: String(h), n: num(n) }))} /></div>
     {/if}
   {:else if id === "lang"}
     <h2>{t("home.lang.title")}</h2>
-    <p class="sub" title={t("home.lang.sub")}>{t("home.lang.sub")}</p>
+    <p class="sub" use:tip={t("home.lang.sub")}>{t("home.lang.sub")}</p>
     {@render listCard(scriptRows, card.w, card.h)}
   {:else}
     <h2>{t(TITLE[id])}</h2>
-    <p class="sub" title={t(`home.${id}.sub`)}>{t(`home.${id}.sub`)}</p>
+    <p class="sub" use:tip={t(`home.${id}.sub`)}>{t(`home.${id}.sub`)}</p>
     {@render figureList(id, card.w)}
   {/if}
 {/snippet}
@@ -592,9 +593,9 @@
       >
         {@render body(card)}
         {#if editing}
-          <div class="tools"><button type="button" class="tool" title={t("home.card.hide")} aria-label={t("home.card.hide")} onclick={() => hide(card.id)}>×</button></div>
+          <div class="tools"><button type="button" class="tool" use:tip={t("home.card.hide")} aria-label={t("home.card.hide")} onclick={() => hide(card.id)}>×</button></div>
           {#if resizable(card.id)}
-            <div class="handle" title={t("home.card.handle")}><span class="grip"><i></i><i></i><i></i><i></i><i></i><i></i></span></div>
+            <div class="handle" use:tip={t("home.card.handle")}><span class="grip"><i></i><i></i><i></i><i></i><i></i><i></i></span></div>
           {/if}
           {#if picker === card.id}
             <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -607,7 +608,7 @@
                   class="size {state}"
                   class:on={w <= shown.w && h <= shown.h}
                   class:preview={pickerHover !== null}
-                  title={t(`home.size.${state}`, { w: String(w), h: String(h) })}
+                  use:tip={t(`home.size.${state}`, { w: String(w), h: String(h) })}
                   aria-label={t(`home.size.${state}`, { w: String(w), h: String(h) })}
                   disabled={state === "blocked" || state === "unsupported"}
                   onmouseenter={() => { pickerHover = state === "blocked" || state === "unsupported" ? null : { w, h }; }}

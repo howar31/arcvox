@@ -3,6 +3,7 @@
    * The results a dictation had, one line each: the one in use first and shown whole, the others folded to
    * one line until pressed. Beyond a few, the rest wait behind a button.
    */
+  import { tip } from "../../../lib/tip";
   import type { Attempt } from "../../../lib/api";
   import { t } from "../../../lib/i18n";
   import Icon from "../../../lib/ui/Icon.svelte";
@@ -81,7 +82,7 @@
         {#if confirming === a.id}
           <button type="button" class="btn sm danger sure" onclick={() => remove(a)}>{t("history.delete_attempt_confirm")}</button>
         {:else}
-          <button type="button" class="x" aria-label={t("history.delete_attempt")} title={t("history.delete_attempt")} onclick={() => askDelete(a)}><Icon name="x" size={12} /></button>
+          <button type="button" class="x" aria-label={t("history.delete_attempt")} use:tip={t("history.delete_attempt")} onclick={() => askDelete(a)}><Icon name="x" size={12} /></button>
         {/if}
       {/if}
       {#if open && !a.chosen && a.error === null}

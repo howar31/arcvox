@@ -3,12 +3,13 @@
    * Values as vertical columns against the largest, with a few labels spread underneath. Without
    * `height` the columns take the height their flex parent gives them.
    */
+  import { tip } from "../tip";
   let { values, height, labels = [], titles = [] }: { values: number[]; height?: number; labels?: string[]; titles?: string[] } = $props();
   const max = $derived(Math.max(1, ...values));
 </script>
 
 <div class="cols" class:fill={height === undefined} style:height={height === undefined ? undefined : `${height}px`}>
-  {#each values as v, i (i)}<i style:height="{v > 0 ? Math.max(3, (v / max) * 100) : 0}%" title={titles[i]}></i>{/each}
+  {#each values as v, i (i)}<i style:height="{v > 0 ? Math.max(3, (v / max) * 100) : 0}%" use:tip={titles[i]}></i>{/each}
 </div>
 {#if labels.length}<div class="axis">{#each labels as l, i (i)}<span>{l}</span>{/each}</div>{/if}
 

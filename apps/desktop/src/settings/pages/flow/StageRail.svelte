@@ -1,5 +1,6 @@
 <script lang="ts">
   /** The nine stages as a column of cells: name, current setting, what it did last time. A chevron under the number column leads to the next cell. */
+  import { tip } from "../../../lib/tip";
   import type { StageId } from "../../../lib/flowLast";
   import Bang from "../../../lib/ui/Bang.svelte";
 
@@ -30,7 +31,7 @@
       <span class="num">{i + 1}</span>
       <span class="t">
         <b>{c.name}{#if c.problem}<Bang tone="warn" title={c.problem} />{/if}</b>
-        <span class="setting" class:warn={c.warn && c.open} class:unknown={c.unknown} title={c.setting}>{c.setting}</span>
+        <span class="setting" class:warn={c.warn && c.open} class:unknown={c.unknown} use:tip={c.setting}>{c.setting}</span>
         <!-- The last-run line carries the stage's time, faint, at the cell's right; the name row stays whole. -->
         <span class="last"><i>{c.line}</i>{#if c.time}<em class="time">{c.time}</em>{/if}</span>
       </span>

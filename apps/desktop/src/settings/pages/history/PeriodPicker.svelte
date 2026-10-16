@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../../../lib/tip";
   import { errorMessage, historyDays, historyHours, type DayCount } from "../../../lib/api";
   import { periodLabel, periodRange, type PeriodSel } from "../../../lib/historyView";
   import { t } from "../../../lib/i18n";
@@ -168,7 +169,7 @@
             {#each hours as n, h (h)}
               <button
                 type="button" class="h" class:l1={n > 0 && n < hourMax * 0.25} class:l2={n >= hourMax * 0.25 && n < hourMax * 0.6} class:l3={n >= hourMax * 0.6}
-                class:in={hourSpan && h >= hourSpan[0] && h <= hourSpan[1]} title={`${h}:00 ${t("history.period.rows", { n: String(n) })}`}
+                class:in={hourSpan && h >= hourSpan[0] && h <= hourSpan[1]} use:tip={`${h}:00 ${t("history.period.rows", { n: String(n) })}`} aria-label={`${h}:00 ${t("history.period.rows", { n: String(n) })}`}
                 onmousedown={(e) => { e.preventDefault(); dragging = true; pickHour(h, e.shiftKey); }}
                 onmouseenter={() => { if (dragging) pickHour(h, true); }}
               ></button>

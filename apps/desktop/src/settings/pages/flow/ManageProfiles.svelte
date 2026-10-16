@@ -1,5 +1,6 @@
 <script lang="ts">
   /** Every profile in one list: tick several and delete them together; rename, reset, make default or delete one in its row. */
+  import { tip } from "../../../lib/tip";
   import { tick } from "svelte";
   import { deleteProfile, errorMessage, resetProfile, setDefaultProfile, upsertProfile, type PresetView, type Profile } from "../../../lib/api";
   import { t } from "../../../lib/i18n";
@@ -115,7 +116,7 @@
         <!-- The name and its line pick the row too; the box stays the control for the keyboard. -->
         <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
         <div class="row" class:on class:pickable={!p.is_default} onclick={(e) => { if (!(e.target as HTMLElement).closest("button, input")) toggle(p); }}>
-          <button type="button" class="cb" class:on role="checkbox" aria-checked={on} aria-label={p.name} disabled={p.is_default} title={p.is_default ? t("flow.manage_default_locked") : undefined} onclick={() => toggle(p)}></button>
+          <button type="button" class="cb" class:on role="checkbox" aria-checked={on} aria-label={p.name} disabled={p.is_default} use:tip={p.is_default ? t("flow.manage_default_locked") : undefined} onclick={() => toggle(p)}></button>
           <div class="text">
             {#if renaming === p.id}
               <input

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../../lib/tip";
   import { onMount } from "svelte";
   import {
     chooseAttempt, clearHistory, clearHistoryRange, clearRecordingsRange, deleteAttempt, historyAttempts, historyStages, clearRecordings, deleteHistory, deleteRecording, errorMessage, formatBytes, historyStorage, listHistory, onHistoryChanged, openRecordingsDir, reprocessHistory, revealRecording, widgetCopy,
@@ -431,7 +432,7 @@
         <div class="entry" class:open={open === u.id}>
           <div class="line">
             <button type="button" class="main" aria-expanded={open === u.id} onclick={() => toggle(u.id)}>
-              <span class="time" title={formatDateTime(u.ts)}>{formatTime(u.ts)}</span>
+              <span class="time" use:tip={formatDateTime(u.ts)}>{formatTime(u.ts)}</span>
               <span class="body">
                 <span class="final" class:none={shown === ""}>{shown !== "" ? shown : u.error_code === "cancelled" ? t("history.cancelled") : t("history.failed")}</span>
                 <span class="meta">
@@ -448,7 +449,7 @@
               {#if u.has_audio}
                 <button type="button" class="play" aria-label={t("history.play")} onclick={() => toggle(u.id, true)}><Icon name="play" size={12} /><span class="num">{clipLength(u.audio_ms ?? 0)}</span></button>
               {/if}
-              <button type="button" class="btn quiet icon-btn" aria-label={t("widget.copy")} title={t("widget.copy")} disabled={shown === ""} onclick={() => copy(shown)}><Icon name="copy" /></button>
+              <button type="button" class="btn quiet icon-btn" aria-label={t("widget.copy")} use:tip={t("widget.copy")} disabled={shown === ""} onclick={() => copy(shown)}><Icon name="copy" /></button>
             </span>
           </div>
           {#if open === u.id}<Fold>
@@ -534,7 +535,7 @@
     </Group>
   {/each}
   {#if scrolled}
-    <button type="button" class="top" aria-label={t("history.to_top")} title={t("history.to_top")} onclick={toTop}><Icon name="arrow-up" /></button>
+    <button type="button" class="top" aria-label={t("history.to_top")} use:tip={t("history.to_top")} onclick={toTop}><Icon name="arrow-up" /></button>
   {/if}
   {#if rows.length}
     {#if exhausted}

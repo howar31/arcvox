@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tip } from "../../lib/tip";
   import { onMount } from "svelte";
   import { benchClipFromHistory, benchClipStatus, benchHistoryCandidates, benchRecordStart, benchRecordStop, errorMessage, onBenchLevel, type ClipCandidate, type ClipStatus, type ProviderConfig } from "../../lib/api";
   import { bench } from "../../lib/bench.svelte";
@@ -227,8 +228,8 @@
             <Tag>{t(`speed.role.${run.role}`)}</Tag>
             <Tag>{run.cold ? t("speed.cold") : t("speed.warm")}</Tag>
           </div>
-          {#if run.error}<small class="out error" title={run.error}>{run.error}</small>
-          {:else}<small class="out" title={run.output}>{run.output}</small>{/if}
+          {#if run.error}<small class="out error" use:tip={run.error}>{run.error}</small>
+          {:else}<small class="out" use:tip={run.output}>{run.output}</small>{/if}
         </div>
         <span class="val num"><span class="sr-only">{t("speed.col.load")} </span>{secs(run.load_ms)}</span>
         <span class="val num"><span class="sr-only">{t("speed.col.infer")} </span>{secs(run.infer_ms)}</span>
