@@ -9,6 +9,7 @@
   import { pause } from "../lib/pause.svelte";
   import Icon from "../lib/ui/Icon.svelte";
   import Mark from "../lib/ui/Mark.svelte";
+  import Bang from "../lib/ui/Bang.svelte";
   import Ring from "../lib/ui/Ring.svelte";
   import Modal from "../lib/ui/Modal.svelte";
   import Toasts from "../lib/ui/Toasts.svelte";
@@ -132,7 +133,7 @@
               class:on={current === p}
               aria-current={current === p ? "page" : undefined}
               onclick={() => guard.request(() => go(p))}
-            ><Icon name={p} size={18} /><span>{t(`nav.${p}`)}</span>{#if problems.includes(p)}<span class="bang" role="img" aria-label={t("shell.page_problem")} title={t("shell.page_problem")}>!</span>{/if}</button>
+            ><Icon name={p} size={18} /><span>{t(`nav.${p}`)}</span>{#if problems.includes(p)}<span class="mark"><Bang title={t("shell.page_problem")} /></span>{/if}</button>
           {/each}
         {/each}
       </nav>
@@ -195,8 +196,8 @@
   .nav span { overflow: hidden; text-overflow: ellipsis; }
   .nav :global(.icon) { opacity: .75; }
   /* Out of the row's flow and close to its edge: the name starts where the others do, and the longest names keep their full length. */
-  .nav:has(.bang) { position: relative; padding-right: 28px; }
-  .nav .bang { position: absolute; right: 7px; top: 50%; transform: translateY(-50%); width: 16px; height: 16px; border-radius: 50%; background: var(--live); color: #fff; font: 700 11px/16px var(--font-round); text-align: center; overflow: visible; }
+  .nav:has(.mark) { position: relative; padding-right: 28px; }
+  .nav .mark { position: absolute; right: 7px; top: 50%; transform: translateY(-50%); display: flex; }
   .nav:hover { background: var(--line); }
   .nav.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   .nav.on :global(.icon) { opacity: 1; }

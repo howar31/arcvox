@@ -91,15 +91,16 @@ fn fix_msg(state: UiState) -> Option<Msg> {
 pub enum Notice {
     MicrophoneDenied,
     MicrophoneRestricted,
-    /// A profile, by name, that runs on the default engine because the one
-    /// it names is gone or cannot run.
-    ProfileOnDefault(String),
+    /// A profile, by name and id, that runs on the default engine because
+    /// the one it names is gone or cannot run.
+    ProfileOnDefault(String, String),
     /// The default speech engine cannot run.
     DefaultAsrNotReady,
     /// The default rewrite engine cannot run.
     DefaultLlmNotReady,
-    /// An engine, by name, whose own model file is gone.
-    ModelFileMissing(String),
+    /// An engine, by name, whose own model file is gone, and the Engines
+    /// tab it is listed on (`asr` or `llm`).
+    ModelFileMissing(String, &'static str),
     BackupFolderMissing,
     BackupFolderNotWritable,
 }
@@ -110,10 +111,10 @@ impl Notice {
         let (msg, name) = match self {
             Notice::MicrophoneDenied => (Msg::TrayMicrophoneDenied, None),
             Notice::MicrophoneRestricted => (Msg::TrayMicrophoneRestricted, None),
-            Notice::ProfileOnDefault(n) => (Msg::TrayProfileOnDefault, Some(n)),
+            Notice::ProfileOnDefault(n, _) => (Msg::TrayProfileOnDefault, Some(n)),
             Notice::DefaultAsrNotReady => (Msg::TrayDefaultAsrNotReady, None),
             Notice::DefaultLlmNotReady => (Msg::TrayDefaultLlmNotReady, None),
-            Notice::ModelFileMissing(n) => (Msg::TrayModelFileMissing, Some(n)),
+            Notice::ModelFileMissing(n, _) => (Msg::TrayModelFileMissing, Some(n)),
             Notice::BackupFolderMissing => (Msg::TrayBackupFolderMissing, None),
             Notice::BackupFolderNotWritable => (Msg::TrayBackupFolderNotWritable, None),
         };
@@ -129,10 +130,10 @@ impl Notice {
             Notice::MicrophoneDenied | Notice::MicrophoneRestricted => {
                 (ID_FIX_PERMISSIONS, Msg::TrayFixPermissions)
             }
-            Notice::ProfileOnDefault(_) => (ID_FIX_FLOW, Msg::TrayFixFlow),
+            Notice::ProfileOnDefault(..) => (ID_FIX_FLOW, Msg::TrayFixFlow),
             Notice::DefaultAsrNotReady
             | Notice::DefaultLlmNotReady
-            | Notice::ModelFileMissing(_) => (ID_FIX_ENGINES, Msg::TrayFixEngine),
+            | Notice::ModelFileMissing(..) => (ID_FIX_ENGINES, Msg::TrayFixEngine),
             Notice::BackupFolderMissing | Notice::BackupFolderNotWritable => {
                 (ID_FIX_BACKUP, Msg::TrayFixBackup)
             }
@@ -146,6 +147,18 @@ impl Notice {
             ID_FIX_FLOW => "flow",
             ID_FIX_ENGINES => "engines",
             _ => "backup",
+        }
+    }
+
+    /// Where the fix item leads: the page, opened at the profile or the
+    /// Engines tab the problem is in.
+    pub fn target(&self) -> String {
+        match self {
+            Notice::ProfileOnDefault(_, id) => format!("flow/{id}"),
+            Notice::DefaultAsrNotReady => "engines/asr".into(),
+            Notice::DefaultLlmNotReady => "engines/llm".into(),
+            Notice::ModelFileMissing(_, role) => format!("engines/{role}"),
+            _ => self.page().into(),
         }
     }
 
@@ -558,6 +571,15 @@ impl<R: Runtime> Tray<R> {
         self.notices.lock().unwrap().clone()
     }
 
+    /// Where the fix item `fix_id` leads: the first problem it serves, or
+    /// `page` when none is listed.
+    pub fn fix_target(&self, fix_id: &str, page: &str) -> String {
+        self.notices()
+            .iter()
+            .find(|n| n.fix().0 == fix_id)
+            .map_or_else(|| page.to_string(), Notice::target)
+    }
+
     fn show_icon(&self, state: UiState) {
         let noticed = !self.notices.lock().unwrap().is_empty();
         let goal = Goal::of(state, noticed);
@@ -711,21 +733,35 @@ const SETTINGS_PAGES: &[&str] = &[
     "about",
 ];
 
-/// A page, or a page and one of its sections as `page@section`, when both
-/// are safe to put into the script that selects them.
+/// A page, a page and its argument as `page/arg` (a profile id, an
+/// Engines tab), or a page and one of its sections as `page@section`, when
+/// every part is safe to put into the script that selects them.
 fn target(page: &str) -> Option<String> {
-    let (name, section) = match page.split_once('@') {
-        Some((name, section)) => (name, Some(section)),
+    let (route, section) = match page.split_once('@') {
+        Some((route, section)) => (route, Some(section)),
         None => (page, None),
+    };
+    let (name, arg) = match route.split_once('/') {
+        Some((name, arg)) => (name, Some(arg)),
+        None => (route, None),
     };
     if !SETTINGS_PAGES.contains(&name) {
         return None;
     }
+    let safe = |s: &str, extra: &[char]| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || extra.contains(&c))
+    };
+    let mut out = name.to_string();
+    match arg {
+        None => {}
+        Some(a) if safe(a, &['-', '_']) => out = format!("{out}/{a}"),
+        Some(_) => return None,
+    }
     match section {
-        None => Some(name.to_string()),
-        Some(s) if !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase() || c == '-') => {
-            Some(format!("{name}@{s}"))
-        }
+        None => Some(out),
+        Some(s) if safe(s, &['-']) => Some(format!("{out}@{s}")),
         Some(_) => None,
     }
 }
@@ -801,11 +837,15 @@ mod tests {
         let all = [
             (Notice::MicrophoneDenied, ID_FIX_PERMISSIONS, "general"),
             (Notice::MicrophoneRestricted, ID_FIX_PERMISSIONS, "general"),
-            (Notice::ProfileOnDefault("Mail".into()), ID_FIX_FLOW, "flow"),
+            (
+                Notice::ProfileOnDefault("Mail".into(), "mail".into()),
+                ID_FIX_FLOW,
+                "flow",
+            ),
             (Notice::DefaultAsrNotReady, ID_FIX_ENGINES, "engines"),
             (Notice::DefaultLlmNotReady, ID_FIX_ENGINES, "engines"),
             (
-                Notice::ModelFileMissing("Own".into()),
+                Notice::ModelFileMissing("Own".into(), "llm"),
                 ID_FIX_ENGINES,
                 "engines",
             ),
@@ -822,23 +862,45 @@ mod tests {
                 assert!(lines.insert(line));
             }
         }
-        assert!(Notice::ProfileOnDefault("Mail".into())
+        assert!(Notice::ProfileOnDefault("Mail".into(), "mail".into())
             .line(Language::En)
             .contains("Mail"));
         assert_eq!(
-            Notice::ModelFileMissing(String::new()).fix().1,
+            Notice::ModelFileMissing(String::new(), "asr").fix().1,
             Msg::TrayFixEngine
         );
+    }
+
+    #[test]
+    fn a_fix_leads_to_the_profile_or_the_tab_with_the_problem() {
+        assert_eq!(
+            Notice::ProfileOnDefault("Mail".into(), "mail-2".into()).target(),
+            "flow/mail-2"
+        );
+        assert_eq!(Notice::DefaultLlmNotReady.target(), "engines/llm");
+        assert_eq!(
+            Notice::ModelFileMissing("Own".into(), "asr").target(),
+            "engines/asr"
+        );
+        assert_eq!(Notice::BackupFolderMissing.target(), "backup");
+        assert_eq!(target("flow/mail-2").as_deref(), Some("flow/mail-2"));
+        assert_eq!(
+            target("engines/llm@default").as_deref(),
+            Some("engines/llm@default")
+        );
+        assert_eq!(target("flow/x'y"), None);
+        assert_eq!(target("flow/"), None);
+        assert_eq!(target("nowhere/a"), None);
     }
 
     #[test]
     fn notices_with_the_same_fix_share_its_item() {
         let all = [
             Notice::MicrophoneDenied,
-            Notice::ProfileOnDefault("A".into()),
-            Notice::ProfileOnDefault("B".into()),
+            Notice::ProfileOnDefault("A".into(), "a".into()),
+            Notice::ProfileOnDefault("B".into(), "b".into()),
             Notice::DefaultAsrNotReady,
-            Notice::ModelFileMissing("C".into()),
+            Notice::ModelFileMissing("C".into(), "asr"),
             Notice::BackupFolderMissing,
         ];
         let sizes: Vec<usize> = runs(&all).iter().map(Vec::len).collect();
@@ -850,8 +912,8 @@ mod tests {
     fn a_page_with_a_problem_is_named_once() {
         let all = [
             Notice::MicrophoneDenied,
-            Notice::ProfileOnDefault("A".into()),
-            Notice::ProfileOnDefault("B".into()),
+            Notice::ProfileOnDefault("A".into(), "a".into()),
+            Notice::ProfileOnDefault("B".into(), "b".into()),
             Notice::BackupFolderNotWritable,
         ];
         assert_eq!(

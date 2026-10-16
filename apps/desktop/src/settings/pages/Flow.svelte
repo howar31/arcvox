@@ -12,7 +12,7 @@
   import { t } from "../../lib/i18n";
   import { isImeKey } from "../../lib/ime";
   import { appsSummary, freshName, withLlm } from "../../lib/profileEdit";
-  import { FOLLOW, hasLlmStep, isFallback, resolveEngines, usableWith } from "../../lib/resolve";
+  import { anyFallback, FOLLOW, hasLlmStep, isFallback, resolveEngines, usableWith } from "../../lib/resolve";
   import { encoderMissing, runnable } from "../../lib/engines";
   import { go } from "../../lib/route";
   import { engineLine, micLine, outputLine, type StageLine } from "../../lib/stages";
@@ -113,6 +113,11 @@
   });
   // The engines the draft runs with now: its own when they can run, else the default pair.
   const resolved = $derived(draft ? resolveEngines(config.value, draft, usableWith(installed.ids, installed.paths)) : null);
+  // The stored profiles that run on the default engine because an engine they name cannot run.
+  const faulty = $derived.by(() => {
+    const usable = usableWith(installed.ids, installed.paths);
+    return new Set(profiles.filter((p) => anyFallback(resolveEngines(config.value, p, usable))).map((p) => p.id));
+  });
   const defaultName = (role: "asr" | "llm") => providers.find((p) => p.id === config.value?.default_engines[role])?.label ?? config.value?.default_engines[role] ?? "";
   const followChoice = (role: "asr" | "llm") => ({ name: t("flow.follow_default"), help: t("flow.follow_default_help", { name: defaultName(role) }) });
   // The engine the draft's template was tuned with; none for an untuned template or a profile without one.
@@ -190,7 +195,7 @@
     const ruleCount = on ? RULE_KEYS.filter((k) => k !== "dictionary" && on[k]).length : 0;
     const rules = !on || (!on.dictionary && ruleCount === 0) ? t("flow.rules_none") : on.dictionary ? t("flow.rules_meta", { n: String(ruleCount) }) : t("flow.rules_meta_nodict", { n: String(ruleCount) });
     const cell = (id: StageId, name: string, setting: string, warn = false, unknown = false): Cell =>
-      ({ id, name, setting, line: runLines[id], time: runTimes[id], open: stageOpen(id, draft!), warn, unknown });
+      ({ id, name, setting, line: runLines[id], time: runTimes[id], open: stageOpen(id, draft!), warn, unknown, problem: problemOf(id) });
     return [
       cell("capture", t("home.stage.capture"), lines.mic.name, lines.mic.missing),
       cell("trim", t("flow.stage.trim"), t("flow.trim_meta")),
@@ -204,6 +209,24 @@
     ];
   });
   const current = $derived(cells.find((c) => c.id === stage));
+  /** The problem mark of an engine stage that runs on the default because the engine named for it cannot run. */
+  function problemOf(id: StageId): string | undefined {
+    const c = id === "asr" ? resolved?.asr : id === "llm" ? resolved?.llm : null;
+    return c && isFallback(c) ? t("flow.profile_fallback") : undefined;
+  }
+  // Opening a profile with a problem shows the stage it is in: from the list, a link or the menu bar.
+  let shownProfile: string | null = null;
+  $effect(() => {
+    const p = source;
+    // Wait for the model files: before they are read every engine counts as able to run.
+    if (!p || p.id === shownProfile || installed.ids === null) return;
+    shownProfile = p.id;
+    untrack(() => {
+      const r = resolveEngines(config.value, p, usableWith(installed.ids, installed.paths));
+      if (isFallback(r.asr)) stage = "asr";
+      else if (isFallback(r.llm)) stage = "llm";
+    });
+  });
   // The right column's title repeats the setting, and for an engine adds whether it is ready.
   const titleMeta = $derived.by(() => {
     if (!current || !lines) return "";
@@ -327,9 +350,9 @@
 {#snippet fallbackNote(role: "asr" | "llm")}
   {@const fb = onDefault(role)}
   {#if fb}
-    <p class="missing">
+    <p class="missing fallback">
       <span>{t("flow.on_default", { wanted: fb.wanted, using: fb.using })}</span>
-      {#if fb.modelId}<button type="button" class="btn" onclick={() => guard.request(() => go("engines", role))}>{t("flow.to_download")}</button>{/if}
+      <button type="button" class="btn" onclick={() => guard.request(() => go("engines", role))}>{t(fb.modelId ? "flow.to_download" : "flow.to_engines")}</button>
     </p>
   {/if}
 {/snippet}
@@ -337,7 +360,7 @@
 {#if config.value && draft && source && lines}
   <div class="pick">
     <ProfilePicker
-      {profiles} current={source.id} name={draft.name.trim() || source.name} {applies}
+      {profiles} current={source.id} name={draft.name.trim() || source.name} {applies} {faulty}
       onpick={(id) => guard.request(() => go("flow", id))}
       onadd={() => guard.request(openAdd)}
       onmanage={() => guard.request(() => (managing = true))}
@@ -409,11 +432,12 @@
         </Group>
       {:else if stage === "asr"}
         <div class="bar"><h2>{t("flow.asr_engines")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("engines", "asr"))}>{t("flow.manage")}</button></div>
+        <!-- The reason for the stage's problem mark, above the engines to choose from. -->
+        {@render fallbackNote("asr")}
         <EnginePicker
           engines={asrChoices} selected={draft.asr_provider ?? FOLLOW} label={t("flow.asr_engines")} {manifest} {installed} models={models ?? []} follow={followChoice("asr")} suggested={suggested.asr}
           stale={stale(draft.asr_provider, asrChoices)} onpick={(id) => { draft!.asr_provider = id === FOLLOW ? null : id; }}
         />
-        {@render fallbackNote("asr")}
         {#if lines.asr.missing}
           <p class="missing"><span>{t("flow.model_missing")}</span><button type="button" class="btn" onclick={() => guard.request(() => go("engines", "asr"))}>{t("flow.to_download")}</button></p>
         {/if}
@@ -431,12 +455,13 @@
         </Group>
       {:else if stage === "llm"}
         <div class="bar"><h2>{t("flow.llm_engines")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("engines", "llm"))}>{t("flow.manage")}</button></div>
+        <!-- The reason for the stage's problem mark, above the engines to choose from. -->
+        {@render fallbackNote("llm")}
         <EnginePicker
           engines={llmChoices} selected={hasLlmStep(draft) ? (draft.llm_provider ?? FOLLOW) : null} label={t("flow.llm_engines")} {manifest} {installed} models={models ?? []}
           follow={followChoice("llm")} suggested={suggested.llm} none={{ name: t("home.no_rewrite"), help: t("home.no_rewrite_meta") }}
           stale={stale(draft.llm_provider, llmChoices)} onpick={(id) => (draft = withLlm(snapshot(), id))}
         />
-        {@render fallbackNote("llm")}
         {#if lines.llm.missing}
           <p class="missing"><span>{t("flow.model_missing")}</span><button type="button" class="btn" onclick={() => guard.request(() => go("engines", "llm"))}>{t("flow.to_download")}</button></p>
         {/if}
@@ -584,6 +609,7 @@
 
   .bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: var(--gap-group) 4px 12px; min-height: 20px; }
   .missing { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 4px 0; color: var(--warn); font-size: var(--text-sm); }
+  .missing.fallback { margin: 0 4px 10px; color: var(--live); }
   .bar h2 { margin: 0; font: 600 var(--text-sm)/1 var(--font); color: var(--ink-2); }
   .bar .btn { margin: -10px -8px -10px 0; }
   .field { width: 240px; flex: none; }

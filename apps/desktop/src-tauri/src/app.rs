@@ -97,11 +97,20 @@ pub fn tray_action(app: &tauri::AppHandle<Wry>, id: &str) {
         tray::ID_PAUSE => set_pause(&state, !state.ui.is_paused()),
         tray::ID_FIX => match state.ui.tray().state() {
             UiState::NoAccessibility => tray::open_settings(app, Some(tray::PERMISSIONS_PAGE)),
-            _ => tray::open_settings(app, Some("engines")),
+            _ => tray::open_settings(
+                app,
+                Some(&state.ui.tray().fix_target(tray::ID_FIX_ENGINES, "engines")),
+            ),
         },
         tray::ID_FIX_PERMISSIONS => tray::open_settings(app, Some(tray::PERMISSIONS_PAGE)),
-        tray::ID_FIX_FLOW => tray::open_settings(app, Some("flow")),
-        tray::ID_FIX_ENGINES => tray::open_settings(app, Some("engines")),
+        tray::ID_FIX_FLOW => tray::open_settings(
+            app,
+            Some(&state.ui.tray().fix_target(tray::ID_FIX_FLOW, "flow")),
+        ),
+        tray::ID_FIX_ENGINES => tray::open_settings(
+            app,
+            Some(&state.ui.tray().fix_target(tray::ID_FIX_ENGINES, "engines")),
+        ),
         tray::ID_FIX_BACKUP => tray::open_settings(app, Some("backup")),
         tray::ID_COPY_LAST => {
             let engine = state.engine.lock().unwrap().clone();

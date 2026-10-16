@@ -15,7 +15,10 @@ pub fn notices(config: &Config, usable: impl Fn(&ProviderConfig) -> bool) -> Vec
     let mut out = Vec::new();
     for profile in &config.profiles {
         if config.resolve_engines(profile, &usable).any_fallback() {
-            out.push(Notice::ProfileOnDefault(profile.name.clone()));
+            out.push(Notice::ProfileOnDefault(
+                profile.name.clone(),
+                profile.id.0.clone(),
+            ));
         }
     }
     for (role, id) in [
@@ -31,7 +34,12 @@ pub fn notices(config: &Config, usable: impl Fn(&ProviderConfig) -> bool) -> Vec
     }
     for p in &config.providers {
         if p.model_id.is_none() && p.model_path.is_some() && !usable(p) {
-            out.push(Notice::ModelFileMissing(p.label.clone()));
+            let tab = if p.capabilities.transcribe {
+                "asr"
+            } else {
+                "llm"
+            };
+            out.push(Notice::ModelFileMissing(p.label.clone(), tab));
         }
     }
     out
@@ -85,7 +93,7 @@ mod tests {
     fn a_profile_whose_named_engine_cannot_run_is_on_the_default() {
         assert_eq!(
             notices(&config(), have(&["own"])),
-            vec![Notice::ProfileOnDefault("Default".into())]
+            vec![Notice::ProfileOnDefault("Default".into(), "a".into())]
         );
     }
 
@@ -95,7 +103,7 @@ mod tests {
         c.providers.retain(|p| p.id.0 != "local");
         assert_eq!(
             notices(&c, have(&["own"])),
-            vec![Notice::ProfileOnDefault("Default".into())]
+            vec![Notice::ProfileOnDefault("Default".into(), "a".into())]
         );
     }
 
@@ -108,14 +116,14 @@ mod tests {
         assert!(!found.contains(&Notice::DefaultLlmNotReady));
         // The follower runs on the default too, but that is the pair's
         // problem, not the profile's.
-        assert!(!found.contains(&Notice::ProfileOnDefault("Follower".into())));
+        assert!(!found.contains(&Notice::ProfileOnDefault("Follower".into(), "b".into())));
     }
 
     #[test]
     fn an_engine_whose_own_file_is_gone_is_named_even_when_no_profile_uses_it() {
         assert_eq!(
             notices(&config(), have(&["local"])),
-            vec![Notice::ModelFileMissing("Own file".into())]
+            vec![Notice::ModelFileMissing("Own file".into(), "asr")]
         );
     }
 }
