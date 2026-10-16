@@ -30,6 +30,20 @@
       "min_ram_gb": 8
     },
     {
+      "id": "whisper-large-v3-q5_0",
+      "runtime": "whisper",
+      "role": "asr",
+      "label": "Whisper large-v3 (q5_0)",
+      "description": "The largest multilingual Whisper model: Chinese, English, Japanese and more; Chinese output is mostly Simplified.",
+      "languages": ["zh", "en", "ja"],
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3-q5_0.bin",
+      "sha256": "d75795ecff3f83b5faa89d1900604ad8c780abd5739fae406de19f23ecd98ad1",
+      "size_bytes": 1081140203,
+      "license": "MIT",
+      "recommended": false,
+      "min_ram_gb": 8
+    },
+    {
       "id": "breeze-asr-26-q5_0",
       "runtime": "whisper",
       "role": "asr",
@@ -94,6 +108,48 @@
       "license": "Gemma Terms of Use",
       "recommended": true,
       "min_ram_gb": 8
+    },
+    {
+      "id": "gemma-3-12b-it-q4_k_m",
+      "runtime": "llama",
+      "role": "llm",
+      "label": "Gemma 3 12B (Q4_K_M)",
+      "description": "Mid-size Gemma 3 model for general rewriting.",
+      "languages": ["zh-TW", "en", "ja"],
+      "url": "https://huggingface.co/bartowski/google_gemma-3-12b-it-GGUF/resolve/648e3a36a77c8a9f12d86e741f9dcb9089c769c4/google_gemma-3-12b-it-Q4_K_M.gguf",
+      "sha256": "fc57f67efa46d711c346e587cbef7d049e95f3df8db2eb2271153343ef0acc7b",
+      "size_bytes": 7300575264,
+      "license": "Gemma Terms of Use",
+      "recommended": false,
+      "min_ram_gb": 16
+    },
+    {
+      "id": "gemma-3-27b-it-q4_k_m",
+      "runtime": "llama",
+      "role": "llm",
+      "label": "Gemma 3 27B (Q4_K_M)",
+      "description": "The largest Gemma 3 model for general rewriting; needs 24 GB of memory.",
+      "languages": ["zh-TW", "en", "ja"],
+      "url": "https://huggingface.co/bartowski/google_gemma-3-27b-it-GGUF/resolve/4a05c54413bd0d87d77a97af403266f69cec0ee6/google_gemma-3-27b-it-Q4_K_M.gguf",
+      "sha256": "4e83142e3ad3719ac61334f70a956dcc60bbba8adb29de5114161310bb9f7170",
+      "size_bytes": 16546404992,
+      "license": "Gemma Terms of Use",
+      "recommended": false,
+      "min_ram_gb": 24
+    },
+    {
+      "id": "qwen3-8b-q4_k_m",
+      "runtime": "llama",
+      "role": "llm",
+      "label": "Qwen3 8B (Q4_K_M)",
+      "description": "General purpose model of the Qwen3 family, with a reasoning mode.",
+      "languages": ["zh", "en", "ja"],
+      "url": "https://huggingface.co/bartowski/Qwen_Qwen3-8B-GGUF/resolve/0b69f75b7472688e6808490aa2b85efdb81b5ce7/Qwen_Qwen3-8B-Q4_K_M.gguf",
+      "sha256": "54fffa050078e984116639c83dfb64b5aa6d4cd474e018b076777c632bbccccd",
+      "size_bytes": 5027784224,
+      "license": "Apache-2.0",
+      "recommended": false,
+      "min_ram_gb": 16
     },
     {
       "id": "breeze2-3b-instruct-q4_k_m",
