@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::watch;
 
-use crate::config::base_prompt::DEFAULT_BASE_PROMPT;
-use crate::config::model::{Config, FirstRunDefaults, SCHEMA_VERSION};
+use crate::config::base_prompt::{is_earlier_shipped, DEFAULT_BASE_PROMPT};
+use crate::config::model::{Config, FirstRunDefaults, FACTORY_PRESET, SCHEMA_VERSION};
 use crate::config::validate::{validate, ConfigError};
 use crate::paths::DataDir;
 
@@ -65,6 +65,8 @@ impl ConfigStore {
         let prompt_path = dirs.base_prompt_path();
         if !prompt_path.exists() {
             write_atomic(&prompt_path, DEFAULT_BASE_PROMPT.as_bytes())?;
+        } else if refresh_base_prompt(&prompt_path)? {
+            tracing::info!("base prompt brought up to the shipped text");
         }
         let (tx, _rx) = watch::channel(Arc::new(config));
         Ok(Self {
@@ -210,11 +212,65 @@ fn migrate(value: serde_json::Value) -> Result<serde_json::Value, MigrateError> 
         .unwrap_or(0) as u32;
     match version {
         SCHEMA_VERSION => Ok(value),
-        1 => Ok(v2_to_v3(v1_to_v2(value))),
-        2 => Ok(v2_to_v3(value)),
+        1 => Ok(v3_to_v4(v2_to_v3(v1_to_v2(value)))),
+        2 => Ok(v3_to_v4(v2_to_v3(value))),
+        3 => Ok(v3_to_v4(value)),
         v if v > SCHEMA_VERSION => Err(MigrateError::Unsupported(v)),
         v => Err(MigrateError::NoPath(v)),
     }
+}
+
+/// Version 4: a rules step carries its trailing-stop flag.
+fn v3_to_v4(mut value: serde_json::Value) -> serde_json::Value {
+    if let Some(profiles) = value.get_mut("profiles") {
+        fill_trailing_stop(profiles);
+    }
+    value["schema_version"] = serde_json::json!(4);
+    value
+}
+
+/// Gives every rules step in `profiles` (a JSON array of profiles as an
+/// older build wrote them) its trailing-stop flag when it has none. A step
+/// written before the flag existed has none, and the user never set it, so
+/// it takes the value of the profile's template (the casual one drops the
+/// stop; a profile without a recorded template is a casual one). A step
+/// that names the flag keeps it. Used by the schema migration and by the
+/// settings file import, which reads profiles an older build wrote too.
+pub fn fill_trailing_stop(profiles: &mut serde_json::Value) {
+    let Some(profiles) = profiles.as_array_mut() else {
+        return;
+    };
+    for profile in profiles {
+        let preset_id = profile
+            .get("preset")
+            .and_then(|v| v.as_str())
+            .unwrap_or(FACTORY_PRESET);
+        let Some(preset) = crate::profile::preset(preset_id) else {
+            continue;
+        };
+        let Some(steps) = profile.get_mut("steps").and_then(|s| s.as_array_mut()) else {
+            continue;
+        };
+        for step in steps {
+            if step.get("step").and_then(|v| v.as_str()) == Some("rules")
+                && step.get("trailing_stop").is_none()
+            {
+                step["trailing_stop"] = serde_json::Value::from(preset.trailing_stop);
+            }
+        }
+    }
+}
+
+/// Replaces a stored base prompt that is still an earlier shipped text with
+/// the current one, and says whether it did. An edited prompt is left as it
+/// is: the settings UI shows the difference and offers the shipped text.
+fn refresh_base_prompt(path: &Path) -> Result<bool, StoreError> {
+    let stored = std::fs::read_to_string(path).map_err(|e| io_err(path, e))?;
+    if !is_earlier_shipped(&stored) {
+        return Ok(false);
+    }
+    write_atomic(path, DEFAULT_BASE_PROMPT.as_bytes())?;
+    Ok(true)
 }
 
 /// Version 3: a profile's engines may be left out to follow the default
@@ -275,12 +331,17 @@ fn load_existing(path: &Path) -> Result<Config, StoreError> {
         }
     };
 
-    let config: Config = match serde_json::from_value(migrated) {
+    let mut config: Config = match serde_json::from_value(migrated) {
         Ok(c) => c,
         Err(e) => return mark_broken(e.to_string()),
     };
 
     validate(&config)?;
+    // Like a migration: published in memory, written with the next update.
+    let moved = config.refresh_template_styles();
+    if !moved.is_empty() {
+        tracing::info!(profiles = ?moved, "writing style brought up to the template's");
+    }
     Ok(config)
 }
 
@@ -416,6 +477,146 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(dirs.config_path()).unwrap()).unwrap();
         assert_eq!(on_disk["schema_version"], serde_json::json!(SCHEMA_VERSION));
         assert_eq!(on_disk["profiles"][0]["steps"][1]["config"], "s2tw");
+    }
+
+    #[test]
+    fn version_three_rules_step_without_the_flag_takes_the_template_s_trailing_stop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = DataDir::custom(tmp.path());
+        dirs.ensure().unwrap();
+        let mut v = serde_json::to_value(Config::first_run()).unwrap();
+        v["schema_version"] = serde_json::json!(3);
+        // Four profiles as an older build wrote them: a casual one, one from
+        // before presets were recorded, a formal one, and a casual one
+        // whose user turned the stop rule off after the flag existed.
+        let mut make = |id: &str, preset: Option<&str>, rules: serde_json::Value| {
+            let mut p = v["profiles"][0].clone();
+            p["id"] = serde_json::json!(id);
+            p["is_default"] = serde_json::json!(id == "a");
+            match preset {
+                Some(x) => p["preset"] = serde_json::json!(x),
+                None => {
+                    p.as_object_mut().unwrap().remove("preset");
+                }
+            }
+            p["steps"] = serde_json::json!([{ "step": "asr" }, { "step": "llm" }, rules]);
+            p
+        };
+        let profiles = serde_json::json!([
+            make("a", Some("casual"), serde_json::json!({ "step": "rules" })),
+            make("b", None, serde_json::json!({ "step": "rules" })),
+            make("c", Some("formal"), serde_json::json!({ "step": "rules" })),
+            make(
+                "d",
+                Some("casual"),
+                serde_json::json!({ "step": "rules", "trailing_stop": false })
+            ),
+        ]);
+        v["profiles"] = profiles;
+        std::fs::write(dirs.config_path(), serde_json::to_string(&v).unwrap()).unwrap();
+        let store = ConfigStore::open(&dirs).unwrap();
+        let c = store.current();
+        assert_eq!(c.schema_version, SCHEMA_VERSION);
+        let stop = |id: &str| {
+            c.profiles
+                .iter()
+                .find(|p| p.id.0 == id)
+                .and_then(|p| {
+                    p.steps.iter().find_map(|s| match s {
+                        StepSpec::Rules { trailing_stop, .. } => Some(*trailing_stop),
+                        _ => None,
+                    })
+                })
+                .unwrap()
+        };
+        assert!(stop("a"), "casual drops the stop");
+        assert!(stop("b"), "no recorded template reads as casual");
+        assert!(!stop("c"), "formal keeps the stop");
+        assert!(!stop("d"), "a flag the user wrote stays");
+    }
+
+    #[test]
+    fn opening_brings_an_unedited_old_profile_to_the_template_s_style() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = DataDir::custom(tmp.path());
+        dirs.ensure().unwrap();
+        let mut v = serde_json::to_value(Config::first_run()).unwrap();
+        v["schema_version"] = serde_json::json!(3);
+        let p = v["profiles"][0].as_object_mut().unwrap();
+        p.remove("preset_revision");
+        p["prompt_addition"] = serde_json::json!("");
+        let raw = serde_json::to_string(&v).unwrap();
+        std::fs::write(dirs.config_path(), &raw).unwrap();
+        let store = ConfigStore::open(&dirs).unwrap();
+        let casual = crate::profile::preset("casual").unwrap();
+        assert_eq!(
+            store.current().profiles[0].prompt_addition,
+            casual.prompt_addition()
+        );
+        assert_eq!(
+            store.current().profiles[0].preset_revision,
+            casual.revision()
+        );
+        assert_eq!(
+            std::fs::read_to_string(dirs.config_path()).unwrap(),
+            raw,
+            "open does not rewrite the file; the next update does"
+        );
+    }
+
+    /// The shape the first release wrote: schema 1, a profile without a
+    /// recorded template or revision, an empty style, and a rules step
+    /// without flags.
+    #[test]
+    fn a_first_release_file_reads_as_a_current_casual_profile() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = DataDir::custom(tmp.path());
+        dirs.ensure().unwrap();
+        let mut v = serde_json::to_value(Config::first_run()).unwrap();
+        v["schema_version"] = serde_json::json!(1);
+        v.as_object_mut().unwrap().remove("default_engines");
+        let p = v["profiles"][0].as_object_mut().unwrap();
+        p.remove("preset");
+        p.remove("preset_revision");
+        p["prompt_addition"] = serde_json::json!("");
+        p["steps"] = serde_json::json!([
+            { "step": "asr" }, { "step": "opencc", "config": "s2twp" }, { "step": "llm" },
+            { "step": "opencc", "config": "s2twp" }, { "step": "rules" }
+        ]);
+        std::fs::write(dirs.config_path(), serde_json::to_string(&v).unwrap()).unwrap();
+        let store = ConfigStore::open(&dirs).unwrap();
+        let c = store.current();
+        let casual = crate::profile::preset("casual").unwrap();
+        let p = &c.profiles[0];
+        assert_eq!(p.prompt_addition, casual.prompt_addition());
+        assert_eq!(p.preset_revision, casual.revision());
+        assert!(p.moved_template().is_none());
+        assert!(matches!(
+            p.steps.last(),
+            Some(StepSpec::Rules {
+                trailing_stop: true,
+                dictionary: true,
+                question_mark: true,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn an_earlier_shipped_base_prompt_is_replaced_and_an_edited_one_kept() {
+        use crate::config::base_prompt::EARLIER_BASE_PROMPTS;
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = DataDir::custom(tmp.path());
+        dirs.ensure().unwrap();
+        for earlier in EARLIER_BASE_PROMPTS {
+            std::fs::write(dirs.base_prompt_path(), earlier).unwrap();
+            let store = ConfigStore::open(&dirs).unwrap();
+            assert_eq!(store.base_prompt().unwrap(), DEFAULT_BASE_PROMPT);
+        }
+        let edited = format!("{}\n7. 多一條。\n", EARLIER_BASE_PROMPTS[0]);
+        std::fs::write(dirs.base_prompt_path(), &edited).unwrap();
+        let store = ConfigStore::open(&dirs).unwrap();
+        assert_eq!(store.base_prompt().unwrap(), edited);
     }
 
     #[test]

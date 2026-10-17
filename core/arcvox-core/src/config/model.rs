@@ -8,7 +8,7 @@ use url::Url;
 
 use crate::types::{ProfileId, ProviderId};
 
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 pub const MODEL_ID_DEFAULT_ASR: &str = "breeze-asr-25-q5_0";
 pub const MODEL_ID_DEFAULT_LLM: &str = "gemma-3-4b-it-q4_k_m";
@@ -342,6 +342,12 @@ pub struct Profile {
     /// it to. None for profiles from before presets were recorded.
     #[serde(default)]
     pub preset: Option<String>,
+    /// The revision of the template's writing style the profile last took
+    /// (`ProfilePreset::revision`). Below the template's current revision
+    /// the template has moved on since; 0 for a profile written before
+    /// revisions were recorded.
+    #[serde(default)]
+    pub preset_revision: u32,
     /// The dictionary's hinted terms are given to the recognition engine.
     #[serde(default = "default_true")]
     pub asr_dictionary_hint: bool,

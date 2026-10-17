@@ -3,7 +3,7 @@
   import { onMount, untrack } from "svelte";
   import {
     errorMessage, historyLast, listMicrophones, modelsDownload, modelsInstalled, modelsManifestNow, onHistoryChanged, onModelDownloadProgress, openFolder, profilesAddPreset,
-    profilesPresets, setDefaultProfile, upsertProfile, type InstalledModel, type LastRun, type ManifestView, type PresetView, type Profile,
+    profilesPresets, profilesTemplateStyle, setDefaultProfile, upsertProfile, type InstalledModel, type LastRun, type ManifestView, type PresetView, type Profile,
   } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { appliesDictionary, PUNCTUATION_CONFIGS, RULE_KEYS, rulesAt, SCRIPT_CONFIGS, SCRIPT_GROUPS, scriptAt, scriptLabel, selectedProfile, withDictionary, withRule, withScriptAt, withScriptPunctuation, type RuleKey, type ScriptPass } from "../../lib/flowEdit";
@@ -120,6 +120,27 @@
     const usable = usableWith(installed.ids, installed.paths);
     return new Set(profiles.filter((p) => anyFallback(resolveEngines(config.value, p, usable))).map((p) => p.id));
   });
+  // The template a profile follows (the factory one when none is recorded), and whether its writing style has moved on since the profile last took it.
+  const templateOf = (p: Profile) => presets.find((x) => x.id === (p.preset ?? "casual")) ?? null;
+  const styleMoved = (p: Profile) => { const tpl = templateOf(p); return !!tpl && p.preset_revision < tpl.revision; };
+  // The stored profiles with a writing style of their own whose template's style has moved on.
+  const moved = $derived(new Set(profiles.filter(styleMoved).map((p) => p.id)));
+  const movedTemplate = $derived(draft && styleMoved(draft) ? templateOf(draft) : null);
+  // The first press of "take the new style" asks; the second replaces the profile's own text.
+  let sureTake = $state(false);
+  $effect(() => { source?.id; stage; sureTake = false; });
+  async function settleStyle(take: boolean) {
+    if (!source) return;
+    busy = true;
+    try {
+      await profilesTemplateStyle(source.id, take);
+      sureTake = false;
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      busy = false;
+    }
+  }
   const defaultName = (role: "asr" | "llm") => providers.find((p) => p.id === config.value?.default_engines[role])?.label ?? config.value?.default_engines[role] ?? "";
   const followChoice = (role: "asr" | "llm") => ({ name: t("flow.follow_default"), help: t("flow.follow_default_help", { name: defaultName(role) }) });
   // The engine the draft's template was tuned with; none for an untuned template or a profile without one.
@@ -240,10 +261,11 @@
     ];
   });
   const current = $derived(cells.find((c) => c.id === stage));
-  /** The problem mark of an engine stage that runs on the default because the engine named for it cannot run. */
+  /** The problem mark of an engine stage that runs on the default because the engine named for it cannot run, or of the rewrite stage whose template style has moved on. */
   function problemOf(id: StageId): string | undefined {
     const c = id === "asr" ? resolved?.asr : id === "llm" ? resolved?.llm : null;
-    return c && isFallback(c) ? t("flow.profile_fallback") : undefined;
+    if (c && isFallback(c)) return t("flow.profile_fallback");
+    return id === "llm" && movedTemplate ? t("flow.style_moved") : undefined;
   }
   // Opening a profile with a problem shows the stage it is in: from the list, a link or the menu bar.
   let shownProfile: string | null = null;
@@ -255,7 +277,7 @@
     untrack(() => {
       const r = resolveEngines(config.value, p, usableWith(installed.ids, installed.paths));
       if (isFallback(r.asr)) stage = "asr";
-      else if (isFallback(r.llm)) stage = "llm";
+      else if (isFallback(r.llm) || styleMoved(p)) stage = "llm";
     });
   });
   // The right column's title repeats the setting, and for an engine adds whether it is ready.
@@ -405,7 +427,7 @@
 {#if config.value && draft && source && lines}
   <div class="pick">
     <ProfilePicker
-      {profiles} current={source.id} name={draft.name.trim() || source.name} {applies} {faulty}
+      {profiles} current={source.id} name={draft.name.trim() || source.name} {applies} {faulty} {moved}
       onpick={(id) => guard.request(() => go("flow", id))}
       onadd={() => guard.request(openAdd)}
       onmanage={() => guard.request(() => (managing = true))}
@@ -515,6 +537,20 @@
         {/if}
         {#if hasLlmStep(draft)}<Fold>
           <div class="bar"><h2>{t("profiles.prompt_addition")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("prompt"))}>{t("flow.see_prompt")}</button></div>
+          <!-- The reason for the stage's problem mark when the template's style moved on: the profile keeps its own text until the user decides. -->
+          {#if movedTemplate}
+            <div class="fallback">
+              <p><b>{t("flow.style_moved_note", { preset: t(`profiles.preset.${movedTemplate.id}`) })}</b> {t("flow.style_moved_then")}</p>
+              <div class="acts">
+                <button type="button" class="btn quiet" disabled={busy} onclick={() => guard.request(() => settleStyle(false))}>{t("flow.style_keep")}</button>
+                {#if sureTake}
+                  <button type="button" class="btn primary" disabled={busy} onclick={() => guard.request(() => settleStyle(true))}>{t("flow.style_take_confirm")}</button>
+                {:else}
+                  <button type="button" class="btn" disabled={busy} onclick={() => (sureTake = true)}>{t("flow.style_take")}</button>
+                {/if}
+              </div>
+            </div>
+          {/if}
           <textarea rows="4" bind:value={draft.prompt_addition} aria-label={t("profiles.prompt_addition")}></textarea>
           <p class="help">{t("profiles.prompt_help")}<InfoTip info={t("profiles.prompt_info")} /></p>
 

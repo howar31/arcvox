@@ -94,6 +94,10 @@ pub enum Notice {
     /// A profile, by name and id, that runs on the default engine because
     /// the one it names is gone or cannot run.
     ProfileOnDefault(String, String),
+    /// A profile, by name and id, with a writing style of its own whose
+    /// template's style has moved on since; the user takes the new one or
+    /// keeps their own.
+    ProfileStyleMoved(String, String),
     /// The default speech engine cannot run.
     DefaultAsrNotReady,
     /// The default rewrite engine cannot run.
@@ -112,6 +116,7 @@ impl Notice {
             Notice::MicrophoneDenied => (Msg::TrayMicrophoneDenied, None),
             Notice::MicrophoneRestricted => (Msg::TrayMicrophoneRestricted, None),
             Notice::ProfileOnDefault(n, _) => (Msg::TrayProfileOnDefault, Some(n)),
+            Notice::ProfileStyleMoved(n, _) => (Msg::TrayProfileStyleMoved, Some(n)),
             Notice::DefaultAsrNotReady => (Msg::TrayDefaultAsrNotReady, None),
             Notice::DefaultLlmNotReady => (Msg::TrayDefaultLlmNotReady, None),
             Notice::ModelFileMissing(n, _) => (Msg::TrayModelFileMissing, Some(n)),
@@ -130,7 +135,9 @@ impl Notice {
             Notice::MicrophoneDenied | Notice::MicrophoneRestricted => {
                 (ID_FIX_PERMISSIONS, Msg::TrayFixPermissions)
             }
-            Notice::ProfileOnDefault(..) => (ID_FIX_FLOW, Msg::TrayFixFlow),
+            Notice::ProfileOnDefault(..) | Notice::ProfileStyleMoved(..) => {
+                (ID_FIX_FLOW, Msg::TrayFixFlow)
+            }
             Notice::DefaultAsrNotReady
             | Notice::DefaultLlmNotReady
             | Notice::ModelFileMissing(..) => (ID_FIX_ENGINES, Msg::TrayFixEngine),
@@ -160,6 +167,7 @@ impl Notice {
             | Notice::DefaultAsrNotReady
             | Notice::DefaultLlmNotReady => Level::Fails,
             Notice::ProfileOnDefault(..)
+            | Notice::ProfileStyleMoved(..)
             | Notice::ModelFileMissing(..)
             | Notice::BackupFolderMissing
             | Notice::BackupFolderNotWritable => Level::Attention,
@@ -170,7 +178,9 @@ impl Notice {
     /// Engines tab the problem is in.
     pub fn target(&self) -> String {
         match self {
-            Notice::ProfileOnDefault(_, id) => format!("flow/{id}"),
+            Notice::ProfileOnDefault(_, id) | Notice::ProfileStyleMoved(_, id) => {
+                format!("flow/{id}")
+            }
             Notice::DefaultAsrNotReady => "engines/asr".into(),
             Notice::DefaultLlmNotReady => "engines/llm".into(),
             Notice::ModelFileMissing(_, role) => format!("engines/{role}"),
@@ -877,6 +887,11 @@ mod tests {
                 ID_FIX_FLOW,
                 "flow",
             ),
+            (
+                Notice::ProfileStyleMoved("Mail".into(), "mail".into()),
+                ID_FIX_FLOW,
+                "flow",
+            ),
             (Notice::DefaultAsrNotReady, ID_FIX_ENGINES, "engines"),
             (Notice::DefaultLlmNotReady, ID_FIX_ENGINES, "engines"),
             (
@@ -910,6 +925,10 @@ mod tests {
     fn a_fix_leads_to_the_profile_or_the_tab_with_the_problem() {
         assert_eq!(
             Notice::ProfileOnDefault("Mail".into(), "mail-2".into()).target(),
+            "flow/mail-2"
+        );
+        assert_eq!(
+            Notice::ProfileStyleMoved("Mail".into(), "mail-2".into()).target(),
             "flow/mail-2"
         );
         assert_eq!(Notice::DefaultLlmNotReady.target(), "engines/llm");
