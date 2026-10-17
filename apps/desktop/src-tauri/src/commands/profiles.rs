@@ -370,7 +370,7 @@ mod tests {
     fn presets_list_every_builtin_preset() {
         let views = preset_views();
         let ids: Vec<&str> = views.iter().map(|v| v.id.as_str()).collect();
-        assert_eq!(ids, ["casual", "formal", "verbatim", "blank"]);
+        assert_eq!(ids, ["casual", "formal", "verbatim", "polished", "blank"]);
         // The formal template names its applications.
         assert!(views
             .iter()
