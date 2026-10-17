@@ -24,6 +24,8 @@ export interface Profile {
   language_hint: string | null; prompt_addition: string; few_shot: Example[]; steps: StepSpec[];
   /** The built-in preset the profile was made from; a reset returns to it. */
   preset: string | null;
+  /** The revision of the template's writing style the profile last took; below `PresetView.revision` the template has moved on since. */
+  preset_revision: number;
   /** The dictionary's hinted terms are given to the recognition engine. */
   asr_dictionary_hint: boolean;
   /** What the rewrite model is told besides the utterance, and whether a much shorter rewrite is refused. */
@@ -322,13 +324,15 @@ export function onNativeInstallProgress(cb: (fraction: number) => void): Promise
 }
 
 /** `suggested_*` are the engines the template was tuned with; null for an untuned template. */
-export interface PresetView { id: string; app_ids: string[]; suggested_asr: string | null; suggested_llm: string | null }
+export interface PresetView { id: string; app_ids: string[]; suggested_asr: string | null; suggested_llm: string | null; revision: number }
 export interface ClipStatus { present: boolean; secs: number; recorded_at: number | null }
 export interface ClipCandidate { id: number; ts: number; raw_text: string }
 export type BenchRole = "asr" | "llm";
 export interface BenchRun { provider_id: string; role: BenchRole; cold: boolean; load_ms: number; infer_ms: number; output: string; error: string | null }
 export const profilesPresets = () => invoke<PresetView[]>("profiles_presets");
 export const profilesAddPreset = (presetId: string, name: string) => invoke<Config>("profiles_add_preset", { presetId, name });
+/** Settles a profile whose template's writing style moved on: take the template's current style, or keep the profile's own. */
+export const profilesTemplateStyle = (id: string, take: boolean) => invoke<Config>("profiles_template_style", { id, take });
 export const benchClipStatus = () => invoke<ClipStatus>("bench_clip_status");
 export const benchRecordStart = () => invoke<void>("bench_record_start");
 export const benchRecordStop = () => invoke<ClipStatus>("bench_record_stop");

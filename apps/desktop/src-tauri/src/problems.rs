@@ -8,14 +8,23 @@ use crate::ui::tray::Notice;
 use crate::ui::TauriUi;
 
 /// One notice for every profile that runs on the default instead of the
-/// engine it names, one for each engine of the default pair that cannot
-/// run, and one for every engine whose own file is gone. `usable` says
-/// whether an engine can run now.
+/// engine it names, one for every profile with a writing style of its own
+/// whose template's style has moved on since, one for each engine of the
+/// default pair that cannot run, and one for every engine whose own file is
+/// gone. `usable` says whether an engine can run now.
 pub fn notices(config: &Config, usable: impl Fn(&ProviderConfig) -> bool) -> Vec<Notice> {
     let mut out = Vec::new();
     for profile in &config.profiles {
         if config.resolve_engines(profile, &usable).any_fallback() {
             out.push(Notice::ProfileOnDefault(
+                profile.name.clone(),
+                profile.id.0.clone(),
+            ));
+        }
+    }
+    for profile in &config.profiles {
+        if profile.moved_template().is_some() {
+            out.push(Notice::ProfileStyleMoved(
                 profile.name.clone(),
                 profile.id.0.clone(),
             ));
@@ -70,8 +79,8 @@ mod tests {
                 { "id": "own", "label": "Own file", "kind": "embedded", "model_path": "/models/own.bin", "runtime": "whisper", "capabilities": { "transcribe": true } },
             ],
             "profiles": [
-                { "id": "a", "name": "Default", "is_default": true, "asr_provider": "local", "llm_provider": "remote", "steps": [{ "step": "asr" }, { "step": "llm" }] },
-                { "id": "b", "name": "Follower", "steps": [{ "step": "asr" }] },
+                { "id": "a", "name": "Default", "is_default": true, "preset": "blank", "asr_provider": "local", "llm_provider": "remote", "steps": [{ "step": "asr" }, { "step": "llm" }] },
+                { "id": "b", "name": "Follower", "preset": "blank", "steps": [{ "step": "asr" }] },
             ],
             "dictionary": [],
             "default_engines": { "asr": "remote", "llm": "remote" }
@@ -117,6 +126,21 @@ mod tests {
         // The follower runs on the default too, but that is the pair's
         // problem, not the profile's.
         assert!(!found.contains(&Notice::ProfileOnDefault("Follower".into(), "b".into())));
+    }
+
+    #[test]
+    fn a_profile_with_its_own_style_is_named_once_its_template_moved_on() {
+        let mut c = config();
+        c.profiles[1].preset = Some("casual".into());
+        c.profiles[1].preset_revision = 0;
+        c.profiles[1].prompt_addition = "我的寫法".into();
+        let found = notices(&c, have(&["local", "own"]));
+        assert_eq!(
+            found,
+            vec![Notice::ProfileStyleMoved("Follower".into(), "b".into())]
+        );
+        c.profiles[1].preset_revision = arcvox_core::profile::preset("casual").unwrap().revision();
+        assert!(notices(&c, have(&["local", "own"])).is_empty());
     }
 
     #[test]

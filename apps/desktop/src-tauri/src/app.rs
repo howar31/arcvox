@@ -205,6 +205,7 @@ pub fn run() {
             crate::commands::profiles::profiles_reset,
             crate::commands::profiles::profiles_presets,
             crate::commands::profiles::profiles_add_preset,
+            crate::commands::profiles::profiles_template_style,
             crate::commands::dictionary::dictionary_set,
             crate::commands::prompt::prompt_get,
             crate::commands::prompt::prompt_set,

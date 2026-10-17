@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::config::base_prompt::is_earlier_shipped;
+use crate::config::store::fill_trailing_stop;
 use crate::config::validate::fits;
 use crate::config::{
     Config, DefaultEngines, DictionaryEntry, EngineRole, General, Profile, ProviderConfig,
@@ -187,7 +189,12 @@ impl Picked {
         };
         let mut picked = Picked::default();
         if let Some(v) = get("profiles") {
-            picked.profiles = Some(section("profiles", v)?);
+            // Profiles an older build wrote: a rules step without its
+            // trailing-stop flag takes the template's value, as the
+            // schema migration gives it.
+            let mut v = v.clone();
+            fill_trailing_stop(&mut v);
+            picked.profiles = Some(section("profiles", &v)?);
         }
         if let Some(v) = get("providers") {
             picked.providers = Some(section("providers", v)?);
@@ -407,10 +414,17 @@ impl Engine {
                 };
             }
             repair(c, &mut repaired);
+            // Profiles from an older build may still carry a shipped style.
+            c.refresh_template_styles();
         })?;
         notes.extend(repaired);
         if let Some(text) = prompt {
-            self.config().set_base_prompt(&text)?;
+            // A base prompt an older build shipped was never edited.
+            if is_earlier_shipped(&text) {
+                self.config().restore_base_prompt()?;
+            } else {
+                self.config().set_base_prompt(&text)?;
+            }
         }
         if engines_changed {
             for e in &next.providers {
@@ -938,5 +952,40 @@ mod tests {
             }]
         );
         assert!(outcome.applied.is_empty());
+    }
+
+    /// A settings file an older build wrote: profiles without a revision or
+    /// a style, a rules step without flags, and the base prompt it shipped.
+    #[tokio::test]
+    async fn an_older_build_s_file_imports_as_current_shipped_content() {
+        use crate::config::base_prompt::{DEFAULT_BASE_PROMPT, EARLIER_BASE_PROMPTS};
+        use crate::config::StepSpec;
+        let tmp = tempfile::tempdir().unwrap();
+        let b = engine(&tmp.path().join("b")).await;
+        let mut old = serde_json::to_value(&b.config().current().profiles[0]).unwrap();
+        let o = old.as_object_mut().unwrap();
+        o.remove("preset");
+        o.remove("preset_revision");
+        o["prompt_addition"] = json!("");
+        o["steps"] = json!([{ "step": "asr" }, { "step": "llm" }, { "step": "rules" }]);
+        let mut file = SettingsFile::new("0.1.0", "macos", "Anna");
+        file.sections.insert("profiles".into(), json!([old]));
+        file.sections
+            .insert("base_prompt".into(), json!(EARLIER_BASE_PROMPTS[1]));
+        b.settings_import(&SettingsFile::parse(&file.to_bytes()).unwrap(), &all())
+            .await
+            .unwrap();
+        let casual = crate::profile::preset("casual").unwrap();
+        let p = b.config().current().profiles[0].clone();
+        assert_eq!(p.prompt_addition, casual.prompt_addition());
+        assert_eq!(p.preset_revision, casual.revision());
+        assert!(matches!(
+            p.steps.last(),
+            Some(StepSpec::Rules {
+                trailing_stop: true,
+                ..
+            })
+        ));
+        assert_eq!(b.config().base_prompt().unwrap(), DEFAULT_BASE_PROMPT);
     }
 }

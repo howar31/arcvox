@@ -76,6 +76,32 @@ pub fn reset(
     Ok((*next).clone())
 }
 
+/// Settles a profile whose template's writing style has moved on since the
+/// profile last took it: `take` puts the template's current style into the
+/// profile, else the profile keeps its own style and the question is
+/// closed. A profile that is current already is left as it is.
+pub fn template_style(engine: &Engine, id: &ProfileId, take: bool) -> CmdResult<Config> {
+    let current = engine.config().current();
+    if !current.profiles.iter().any(|p| &p.id == id) {
+        return Err(CmdError::new(
+            "unknown_profile",
+            format!("unknown profile {}", id.0),
+        ));
+    }
+    let next = engine.config().update(|c| {
+        if let Some(p) = c.profiles.iter_mut().find(|p| &p.id == id) {
+            if let Some(preset) = p.moved_template() {
+                if take {
+                    p.take_template_style(preset);
+                } else {
+                    p.keep_own_style(preset);
+                }
+            }
+        }
+    })?;
+    Ok((*next).clone())
+}
+
 pub fn set_default(engine: &Engine, id: &ProfileId) -> CmdResult<Config> {
     let next = engine.config().update(|c| {
         for p in c.profiles.iter_mut() {
@@ -95,6 +121,9 @@ pub struct PresetView {
     /// marks as suggested; None for an untuned template.
     pub suggested_asr: Option<String>,
     pub suggested_llm: Option<String>,
+    /// The revision of the template's writing style; a profile whose
+    /// `preset_revision` is lower has not taken the current one.
+    pub revision: u32,
 }
 
 pub fn preset_views() -> Vec<PresetView> {
@@ -107,6 +136,7 @@ pub fn preset_views() -> Vec<PresetView> {
                 app_ids: p.app_ids.iter().map(|a| a.to_string()).collect(),
                 suggested_asr: tuned.map(|(asr, _)| asr.to_string()),
                 suggested_llm: tuned.map(|(_, llm)| llm.to_string()),
+                revision: p.revision(),
             }
         })
         .collect()
@@ -184,6 +214,15 @@ pub fn profiles_reset(
 #[tauri::command]
 pub fn profiles_set_default(state: State<'_, AppState>, id: ProfileId) -> CmdResult<Config> {
     set_default(&engine(&state)?, &id)
+}
+
+#[tauri::command]
+pub fn profiles_template_style(
+    state: State<'_, AppState>,
+    id: ProfileId,
+    take: bool,
+) -> CmdResult<Config> {
+    template_style(&engine(&state)?, &id, take)
 }
 
 #[cfg(test)]
@@ -296,7 +335,7 @@ mod tests {
         let chat = c.profiles.iter().find(|p| p.id.0 == "verbatim").unwrap();
         assert_eq!(
             chat.prompt_addition,
-            preset("verbatim").unwrap().prompt_addition
+            preset("verbatim").unwrap().prompt_addition()
         );
         assert!(chat.llm_window_title);
         // A profile whose preset is gone is refused unless a preset is named.
@@ -315,7 +354,7 @@ mod tests {
         let chat = c.profiles.iter().find(|p| p.id.0 == "verbatim").unwrap();
         assert_eq!(
             chat.prompt_addition,
-            preset("casual").unwrap().prompt_addition
+            preset("casual").unwrap().prompt_addition()
         );
         assert_eq!(chat.preset.as_deref(), Some("casual"));
         assert_eq!(chat.name, "逐字");

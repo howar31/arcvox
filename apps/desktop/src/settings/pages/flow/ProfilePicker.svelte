@@ -8,7 +8,7 @@
   import Tag from "../../../lib/ui/Tag.svelte";
 
   /** The profile being edited, as a button that opens the list of all profiles. */
-  let { profiles, current, name, applies, onpick, onmanage, onadd, faulty = new Set() }: {
+  let { profiles, current, name, applies, onpick, onmanage, onadd, faulty = new Set(), moved = new Set() }: {
     profiles: Profile[];
     current: string;
     /** The name shown for the current profile, which may be an unsaved edit. */
@@ -21,6 +21,8 @@
     onadd: () => void;
     /** Profiles running on the default engine because an engine they name cannot run. */
     faulty?: Set<string>;
+    /** The stored profiles with a writing style of their own whose template's style has moved on. */
+    moved?: Set<string>;
   } = $props();
 
   // The list gets a search field from this many profiles on.
@@ -105,8 +107,8 @@
   <button type="button" class="current" bind:this={button} aria-haspopup="listbox" aria-expanded={open} aria-label={t("flow.profiles") + " " + name} onclick={() => (open ? hide() : show())}>
     <span class="label">{name}</span>
     {#if isDefault}<Tag tone="accent">{t("profiles.default")}</Tag>{/if}
-    <!-- The closed list says, beside its count, when any profile in it runs on the default engine. -->
-    <span class="count">{#if faulty.size > 0}<Bang tone="warn" title={t("flow.profiles_fallback", { count: String(faulty.size) })} />{/if}{t("flow.count", { count: String(profiles.length) })}</span>
+    <!-- The closed list says, beside its count, when any profile in it runs on the default engine or keeps a style its template has moved past. -->
+    <span class="count">{#if faulty.size > 0 || moved.size > 0}<Bang tone="warn" title={[faulty.size > 0 ? t("flow.profiles_fallback", { count: String(faulty.size) }) : "", moved.size > 0 ? t("flow.profiles_style_moved", { count: String(moved.size) }) : ""].filter(Boolean).join(" ")} />{/if}{t("flow.count", { count: String(profiles.length) })}</span>
     <Icon name="chevron-down" size={14} />
   </button>
   {#if open}
@@ -125,7 +127,7 @@
           <button type="button" class="option" class:on={p.id === current} role="option" aria-selected={p.id === current} onclick={() => pick(p.id)}>
             <span class="tick">{#if p.id === current}<Icon name="check" size={14} />{/if}</span>
             <span class="text">
-              <span class="line"><span class="label">{p.id === current ? name : p.name}</span>{#if p.is_default}<Tag tone="accent">{t("profiles.default")}</Tag>{/if}{#if faulty.has(p.id)}<Bang tone="warn" title={t("flow.profile_fallback")} />{/if}</span>
+              <span class="line"><span class="label">{p.id === current ? name : p.name}</span>{#if p.is_default}<Tag tone="accent">{t("profiles.default")}</Tag>{/if}{#if faulty.has(p.id)}<Bang tone="warn" title={t("flow.profile_fallback")} />{:else if moved.has(p.id)}<Bang tone="warn" title={t("flow.style_moved")} />{/if}</span>
               <span class="where">{applies(p)}</span>
             </span>
           </button>

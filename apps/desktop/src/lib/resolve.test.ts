@@ -10,7 +10,7 @@ const engine = (id: string, extra: Partial<ProviderConfig> = {}): ProviderConfig
 });
 const profile = (asr: string | null, llm: string | null, rewrites = true): Profile => ({
   id: "p", name: "P", is_default: false, matcher: { app_ids: [], url_patterns: [] }, asr_provider: asr, llm_provider: llm,
-  language_hint: null, prompt_addition: "", few_shot: [], preset: null, asr_dictionary_hint: true, llm_dictionary_terms: true,
+  language_hint: null, prompt_addition: "", few_shot: [], preset: null, preset_revision: 0, asr_dictionary_hint: true, llm_dictionary_terms: true,
   llm_window_title: true, llm_short_fallback: true, steps: rewrites ? [{ step: "asr" }, { step: "llm" }] : [{ step: "asr" }],
 });
 const cfg = {
