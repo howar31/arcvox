@@ -77,7 +77,7 @@ pub struct ProfilePreset {
 
 /// The order the templates are offered in: the tuned ones, then the
 /// untuned one for those who start from nothing.
-static PRESETS: [ProfilePreset; 4] = [
+static PRESETS: [ProfilePreset; 5] = [
     ProfilePreset {
         id: "casual",
         asr: None,
@@ -100,8 +100,11 @@ static PRESETS: [ProfilePreset; 4] = [
         tuned: true,
         language_hint: Some("zh-TW"),
         app_ids: &["com.apple.mail", "com.microsoft.Outlook"],
+        // The first sentence was a placeholder; the second names the
+        // marks and the particles so a small model has something to follow.
         additions: &[
             "這是正式的書面文字。使用完整句子與書面用語，句尾加句點，依語意分段；稱呼與結尾問候語依原稿保留，不自行增加。",
+            "這是正式的書面文字：用完整的句子，整段以句號結束；口語的語氣詞（啦、喔、欸、嘛）不寫出來，其餘用詞照原稿；稱呼與結尾問候語依原稿保留，不自行增加；內容較長時依語意分段。",
         ],
         trailing_stop: false,
     },
@@ -112,10 +115,26 @@ static PRESETS: [ProfilePreset; 4] = [
         tuned: true,
         language_hint: Some("zh-TW"),
         app_ids: &[],
+        // The second sentence says outright what the base prompt's
+        // self-correction rule must not do here.
         additions: &[
             "逐字記錄：每個字都照原稿保留，不吸收自我修正、不刪語助詞與重複、不改用詞、不翻譯；只加入標點與分段。",
+            "這是逐字稿：原稿說了什麼就寫什麼。說錯後改口的話，前後兩段都保留；語助詞、重複的字也保留；不刪字、不換字、不翻譯；只修正同音錯字，加入標點，內容較長時分段。",
         ],
         trailing_stop: false,
+    },
+    // Rewords for the reader: tone changed, meaning kept.
+    ProfilePreset {
+        id: "polished",
+        asr: None,
+        llm: None,
+        tuned: true,
+        language_hint: Some("zh-TW"),
+        app_ids: &[],
+        additions: &[
+            "這是要給對方看的訊息：意思照原稿，但用詞要得體。生氣、責備、諷刺、粗話改成平和的說法；命令改成請求；保留對方能理解的重點，不加客套話，不加沒說過的內容。",
+        ],
+        trailing_stop: true,
     },
     // Every option at its untuned default: where the other templates start
     // from, for a user who wants to tune everything alone.
@@ -357,7 +376,7 @@ mod tests {
     #[test]
     fn presets_have_unique_ids_and_apps() {
         let ids: Vec<&str> = presets().iter().map(|p| p.id).collect();
-        assert_eq!(ids, ["casual", "formal", "verbatim", "blank"]);
+        assert_eq!(ids, ["casual", "formal", "verbatim", "polished", "blank"]);
         for p in presets() {
             if p.id == "blank" {
                 assert!(
@@ -379,6 +398,8 @@ mod tests {
         }
         assert!(!preset("formal").app_ids.is_empty());
         assert!(preset("verbatim").app_ids.is_empty());
+        assert!(preset("polished").app_ids.is_empty());
+        assert!(preset("polished").trailing_stop, "written for chat replies");
         assert_eq!(
             preset("casual").tuned_with(),
             Some((MODEL_ID_DEFAULT_ASR, MODEL_ID_DEFAULT_LLM))
@@ -527,7 +548,8 @@ mod tests {
             "a profile at revision 1 never took the empty style"
         );
         assert!(!casual.shipped_since(0, "mine"));
-        assert_eq!(preset("formal").revision(), 0);
+        assert_eq!(preset("formal").revision(), 1);
+        assert_eq!(preset("verbatim").revision(), 1);
         assert_eq!(preset("blank").revision(), 0);
     }
 
@@ -599,7 +621,6 @@ mod tests {
     fn templates_that_never_changed_and_unknown_ones_move_nothing() {
         let mut c = Config::first_run();
         c.profiles = vec![
-            old_profile(Some("formal"), preset("formal").prompt_addition()),
             old_profile(Some("blank"), ""),
             old_profile(Some("mail"), "這是一封電子郵件的內容。"),
         ];
@@ -611,5 +632,31 @@ mod tests {
             );
         }
         assert!(c.refresh_template_styles().is_empty());
+    }
+
+    #[test]
+    fn the_formal_and_verbatim_placeholders_give_way_to_the_written_styles() {
+        let mut c = Config::first_run();
+        c.profiles = vec![
+            old_profile(Some("formal"), preset("formal").additions[0]),
+            old_profile(Some("verbatim"), preset("verbatim").additions[0]),
+        ];
+        let changed = c.refresh_template_styles();
+        assert_eq!(changed.len(), 2);
+        assert_eq!(
+            c.profiles[0].prompt_addition,
+            preset("formal").prompt_addition()
+        );
+        assert_eq!(
+            c.profiles[1].prompt_addition,
+            preset("verbatim").prompt_addition()
+        );
+        assert!(
+            preset("formal").prompt_addition().contains("以句號結束"),
+            "formal keeps the stop"
+        );
+        assert!(preset("verbatim")
+            .prompt_addition()
+            .contains("前後兩段都保留"));
     }
 }
