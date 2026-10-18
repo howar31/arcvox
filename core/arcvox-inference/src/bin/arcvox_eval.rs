@@ -19,6 +19,7 @@ use arcvox_core::eval::{
     Stage, Summary, Tally, Totals,
 };
 use arcvox_core::history::HistoryStore;
+use arcvox_core::learn::{self, Pair, Source};
 use arcvox_core::models::{Manifest, ModelRole, ModelStore};
 use arcvox_core::pipeline::Pipeline;
 use arcvox_core::providers::registry::ProviderRegistry;
@@ -62,6 +63,17 @@ arcvox-eval <command> [options]
   compare  <before.json> <after.json> [--limit 20]
            Words and punctuation tallied apart, overall and per category;
            the changed items worst first.
+  suggest  --data <name|dir> [--set <set.tsv>] [--days N] [--limit 50]
+           [--min-heard 1] [--min-final 2] [--min 3] [--max-tokens 8]
+           Dictionary candidates: replacements that recur between what was
+           heard and what was kept. Sources: the history's raw transcript
+           against its final text (pipeline), a final text the user edited
+           (final), and with --set the set's `spoken` against the history
+           row's raw transcript (heard) and the set's `final` against its
+           `spoken` (final). A term needs --min-heard heard rows, or
+           --min-final final rows, or --min pipeline rows; --days keeps the
+           history rows of the last N days. Pairs the dictionary covers are
+           skipped; candidates differing only in casing or spacing come last.
 
   --data names the application whose data to read (default \"Arcvox\") or a
   folder laid out like a custom data directory. Nothing in it is written.
@@ -166,6 +178,7 @@ async fn dispatch(args: Args) -> Result<(), String> {
         "slice" => slice(&args),
         "summary" => summary(&args),
         "compare" => compare_runs(&args),
+        "suggest" => suggest(&args),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
             Ok(())
@@ -1107,4 +1120,149 @@ mod tests {
         assert_eq!(swapped.id, p.id);
         assert_eq!(swapped.steps, p.steps);
     }
+}
+
+fn suggest(args: &Args) -> Result<(), String> {
+    let dirs = data_dir(args)?;
+    let (store, recordings) = read_config(&dirs)?;
+    let history = HistoryStore::open_read_only(&dirs.history_path(), &recordings)
+        .map_err(|e| e.to_string())?;
+    let number = |name: &str, default: usize| -> Result<usize, String> {
+        args.flag(name)
+            .map(|v| v.parse().map_err(|_| format!("--{name} must be a number")))
+            .transpose()
+            .map(|v| v.unwrap_or(default))
+    };
+    let limit = number("limit", 50)?;
+    let since = match number("days", 0)? {
+        0 => 0,
+        days => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            now - days as i64 * 86_400
+        }
+    };
+    let opts = learn::Options {
+        min_heard: number("min-heard", 1)? as u32,
+        min_final: number("min-final", 2)? as u32,
+        min_pipeline: number("min", 3)? as u32,
+        max_tokens: number("max-tokens", 8)?,
+        known: store
+            .current()
+            .dictionary
+            .iter()
+            .map(|e| (e.term.clone(), e.aliases.clone()))
+            .collect(),
+        ..learn::Options::default()
+    };
+
+    let rows = history
+        .list(usize::MAX, None, false)
+        .map_err(|e| e.to_string())?;
+    let mut pairs: Vec<Pair> = Vec::new();
+    let mut raw_by_id: BTreeMap<String, String> = BTreeMap::new();
+    let mut edited = 0usize;
+    for u in &rows {
+        if u.error.is_some() || u.raw_text.trim().is_empty() || u.ts < since {
+            continue;
+        }
+        let id = u.id.0.to_string();
+        raw_by_id.insert(id.clone(), u.raw_text.clone());
+        pairs.push(Pair {
+            id: id.clone(),
+            from: u.raw_text.clone(),
+            to: u.final_text.clone(),
+            source: Source::Pipeline,
+        });
+        if u.final_text != u.refined_text {
+            edited += 1;
+            pairs.push(Pair {
+                id,
+                from: u.refined_text.clone(),
+                to: u.final_text.clone(),
+                source: Source::Final,
+            });
+        }
+    }
+    let mut set_rows = 0usize;
+    if let Some(path) = args.flag("set") {
+        let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+        for row in parse_seed_tsv(&text)? {
+            set_rows += 1;
+            if let Some(raw) = raw_by_id.get(&row.id) {
+                pairs.push(Pair {
+                    id: format!("set:{}", row.id),
+                    from: raw.clone(),
+                    to: row.spoken.clone(),
+                    source: Source::Heard,
+                });
+            }
+            pairs.push(Pair {
+                id: format!("set:{}", row.id),
+                from: row.spoken,
+                to: row.final_text,
+                source: Source::Final,
+            });
+        }
+    }
+
+    let found = learn::suggest(&pairs, &opts);
+    let forms = found.iter().filter(|s| s.form_only).count();
+    println!(
+        "{} history rows ({} with an edited final text), {} set rows; {} candidates ({} casing or spacing only), {} shown; a term needs {} heard, {} final or {} pipeline rows",
+        raw_by_id.len(),
+        edited,
+        set_rows,
+        found.len(),
+        forms,
+        found.len().min(limit),
+        opts.min_heard,
+        opts.min_final,
+        opts.min_pipeline
+    );
+    for (n, s) in found.iter().take(limit).enumerate() {
+        println!();
+        println!(
+            "{:>3}. {}{}{}   heard {} | final {} | pipeline {}",
+            n + 1,
+            s.term,
+            if s.known_term {
+                " (in the dictionary)"
+            } else {
+                ""
+            },
+            if s.form_only {
+                " (casing or spacing)"
+            } else {
+                ""
+            },
+            s.counts.heard,
+            s.counts.finals,
+            s.counts.pipeline
+        );
+        let aliases: Vec<String> = s
+            .aliases
+            .iter()
+            .map(|a| {
+                let mut parts = Vec::new();
+                if a.counts.heard > 0 {
+                    parts.push(format!("heard {}", a.counts.heard));
+                }
+                if a.counts.finals > 0 {
+                    parts.push(format!("final {}", a.counts.finals));
+                }
+                if a.counts.pipeline > 0 {
+                    parts.push(format!("pipeline {}", a.counts.pipeline));
+                }
+                format!("{} ({})", a.text, parts.join(", "))
+            })
+            .collect();
+        println!("     <- {}", aliases.join("; "));
+        for e in &s.excerpts {
+            println!("        {e}");
+        }
+    }
+    Ok(())
 }

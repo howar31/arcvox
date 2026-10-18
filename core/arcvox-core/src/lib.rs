@@ -10,6 +10,7 @@ pub mod engine;
 pub mod eval;
 pub mod history;
 pub(crate) mod journal;
+pub mod learn;
 pub mod models;
 pub mod paths;
 pub mod pipeline;
