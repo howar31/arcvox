@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tip } from "../../lib/tip";
-  import { tick, untrack } from "svelte";
-  import { errorMessage, setDictionary, type DictionaryEntry } from "../../lib/api";
+  import { onMount, tick, untrack } from "svelte";
+  import { dictionarySuggestions, errorMessage, setDictionary, type DictionaryEntry, type Suggestion } from "../../lib/api";
   import { addAliases, dropBlank, isSnippet, trimEntries } from "../../lib/dictionary";
   import { guard } from "../../lib/guard.svelte";
   import { isImeKey } from "../../lib/ime";
@@ -9,8 +9,10 @@
   import { config } from "../../lib/store.svelte";
   import Chip from "../../lib/ui/Chip.svelte";
   import Empty from "../../lib/ui/Empty.svelte";
+  import Fold from "../../lib/ui/Fold.svelte";
   import Group from "../../lib/ui/Group.svelte";
   import Icon from "../../lib/ui/Icon.svelte";
+  import InfoTip from "../../lib/ui/InfoTip.svelte";
   import PageHead from "../../lib/ui/PageHead.svelte";
   import Row from "../../lib/ui/Row.svelte";
   import SaveBar from "../../lib/ui/SaveBar.svelte";
@@ -47,10 +49,53 @@
     });
   });
 
+  // Suggestions: terms the dictations the user corrected were heard as something else.
+  const OPEN_KEY = "dictionary.suggestions.open";
+  let suggestions = $state<Suggestion[] | null>(null);
+  let suggestionsOpen = $state(storedOpen());
+  let showAll = $state(false);
+  // Acted on in this draft: taken into the list, or turned down. Saved with the list.
+  let taken = $state<string[]>([]);
+  let turnedDown = $state<string[]>([]);
+  const visible = $derived((suggestions ?? []).filter((s) => !taken.includes(s.term) && !turnedDown.includes(s.term)));
+  const shown = $derived(showAll ? visible : visible.slice(0, 4));
+
+  function storedOpen(): boolean {
+    try { return localStorage.getItem(OPEN_KEY) !== "0"; } catch { return true; }
+  }
+  function toggleSuggestions() {
+    suggestionsOpen = !suggestionsOpen;
+    try { localStorage.setItem(OPEN_KEY, suggestionsOpen ? "1" : "0"); } catch { /* The state is not remembered. */ }
+  }
+  async function loadSuggestions() {
+    try { suggestions = await dictionarySuggestions(); } catch (e) { suggestions = []; toast.error(errorMessage(e)); }
+  }
+  onMount(() => { void loadSuggestions(); });
+
+  /** The excerpt's pieces: the term is between 【 and 】. */
+  function pieces(excerpt: string): { text: string; mark: boolean }[] {
+    return excerpt.split(/(【[^】]*】)/).filter(Boolean).map((p) => (p.startsWith("【") ? { text: p.slice(1, -1), mark: true } : { text: p, mark: false }));
+  }
+
+  /** Takes a suggestion into the list: the aliases onto the entry that has the term, else a new entry at the top. */
+  function accept(s: Suggestion) {
+    if (!items) return;
+    const existing = items.find((item) => item.term.trim().toLowerCase() === s.term.toLowerCase());
+    if (existing) {
+      for (const a of s.add_aliases) if (!existing.aliases.includes(a)) existing.aliases.push(a);
+    } else {
+      items.unshift({ term: s.term, aliases: [...s.add_aliases], asr_hint: true, key: nextKey++, pending: "" });
+    }
+    taken.push(s.term);
+  }
+  function dismiss(s: Suggestion) {
+    turnedDown.push(s.term);
+  }
+
   // Alias text typed but not yet turned into a chip counts as a change, so leaving the page asks first.
   const dirty = $derived(
     items !== null && stored !== null &&
-      (JSON.stringify(toEntries(items)) !== JSON.stringify(stored) || items.some((item) => item.pending.trim() !== "")),
+      (JSON.stringify(toEntries(items)) !== JSON.stringify(stored) || items.some((item) => item.pending.trim() !== "") || turnedDown.length > 0),
   );
 
   /** An entry with aliases but no term blocks the save. */
@@ -111,6 +156,8 @@
     if (!stored) return;
     items = toItems($state.snapshot(stored) as DictionaryEntry[]);
     synced = JSON.stringify(stored);
+    taken = [];
+    turnedDown = [];
   }
 
   async function save() {
@@ -122,8 +169,12 @@
     if (entries.some((e) => e.term === "")) { problem = t("dictionary.term_required"); return; }
     saving = true;
     try {
-      const next = await setDictionary(entries);
+      const dismissed = [...(config.value?.dictionary_dismissed ?? []), ...turnedDown.filter((d) => !(config.value?.dictionary_dismissed ?? []).includes(d))];
+      const next = await setDictionary(entries, dismissed);
       config.value = next;
+      taken = [];
+      turnedDown = [];
+      void loadSuggestions();
       // Edits made while the save was running stay in the editor.
       if (items && JSON.stringify(toEntries(items)) === JSON.stringify(sent) && !items.some((item) => item.pending.trim())) {
         items = toItems(structuredClone(next.dictionary));
@@ -143,6 +194,44 @@
       <button type="button" class="btn primary" onclick={add}><Icon name="plus" size={14} />{t("dictionary.add")}</button>
     {/snippet}
   </PageHead>
+
+  {#if visible.length}
+    <section class="sg" aria-label={t("dictionary.suggestions")}>
+      <div class="sg-head" class:open={suggestionsOpen}>
+        <button type="button" class="toggle" aria-expanded={suggestionsOpen} onclick={toggleSuggestions}>
+          <span class="chev"><Icon name="chevron-right" size={14} /></span>
+          <span class="title">{t("dictionary.suggestions")}</span>
+          <small>{t("dictionary.suggestions_count", { n: String(visible.length) })}</small>
+        </button>
+        <InfoTip info={t("dictionary.suggestions_info")} />
+      </div>
+      {#if suggestionsOpen}
+        <Fold>
+          {#each shown as s (s.term)}
+            <div class="sr">
+              <div class="body">
+                <div class="line">
+                  <b>{s.term}</b>
+                  <span class="heard">{t("dictionary.heard_as")}{#each s.aliases as a (a.text)}<span class="alias">{a.text}</span>{/each}</span>
+                  <Tag>{t("dictionary.rows", { n: String(s.rows) })}</Tag>
+                  {#if s.known_term}<Tag tone="accent">{t("dictionary.new_alias")}</Tag>{:else if !s.add_aliases.length}<Tag tone="warn">{t("dictionary.hint_only")}</Tag>{/if}
+                </div>
+                {#if s.excerpts[0]}<div class="excerpt">{#each pieces(s.excerpts[0]) as p, i (i)}{#if p.mark}<mark>{p.text}</mark>{:else}{p.text}{/if}{/each}</div>{/if}
+              </div>
+              <div class="acts">
+                <button type="button" class="btn primary small" onclick={() => accept(s)}>{t("dictionary.accept")}</button>
+                <button type="button" class="btn quiet small" onclick={() => dismiss(s)}>{t("dictionary.dismiss")}</button>
+              </div>
+            </div>
+          {/each}
+          {#if visible.length > shown.length}
+            <button type="button" class="more" onclick={() => (showAll = true)}>{t("dictionary.more_suggestions", { n: String(visible.length - shown.length) })}</button>
+          {/if}
+        </Fold>
+      {/if}
+    </section>
+    <p class="help">{t("dictionary.suggestions_help")}</p>
+  {/if}
 
   {#if items.length}
     <div bind:this={list}>
@@ -201,6 +290,28 @@
 {/if}
 
 <style>
+  .sg { margin-top: 22px; border: 1px solid var(--line); border-radius: var(--radius-group); background: var(--surface); }
+  .sg-head { display: flex; align-items: center; gap: 4px; padding-right: 12px; }
+  .toggle { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; min-height: 44px; padding: 0 16px; border: 0; border-radius: var(--radius-group); background: none; color: var(--ink); text-align: left; font-size: var(--text-control); cursor: default; }
+  .toggle:hover { background: var(--sunken); }
+  .open .toggle { border-radius: var(--radius-group) var(--radius-group) 0 0; }
+  .toggle:focus-visible { outline-offset: -2px; }
+  .chev { display: inline-grid; place-items: center; width: 14px; color: var(--ink-3); transition: transform .2s; }
+  .open .chev { transform: rotate(90deg); }
+  .toggle .title { font-weight: 600; }
+  .toggle small { color: var(--ink-2); font-size: var(--text-sm); }
+  .sr { display: flex; align-items: flex-start; gap: 12px; padding: 11px 16px; border-top: 1px solid var(--line); }
+  .sr .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+  .sr .line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: var(--text-control); }
+  .sr b { font-weight: 600; }
+  .heard { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); }
+  .alias { color: var(--ink-2); }
+  .excerpt { color: var(--ink-2); font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .excerpt mark { background: var(--accent-soft); color: var(--ink); border-radius: 4px; padding: 0 2px; }
+  .acts { flex: none; display: flex; gap: 4px; margin-top: 1px; }
+  .btn.small { height: 28px; padding: 0 10px; font-size: var(--text-sm); }
+  .more { display: block; width: 100%; padding: 10px 16px; border: 0; border-top: 1px solid var(--line); background: none; color: var(--accent); text-align: left; font-size: var(--text-control); cursor: default; }
+  .more:hover { background: var(--sunken); }
   .entry { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; padding: 2px 0; }
   .line { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
   .second { align-items: center; }

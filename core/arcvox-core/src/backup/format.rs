@@ -53,6 +53,9 @@ pub struct HistoryLine {
     pub refined_text: String,
     #[serde(default)]
     pub final_text: String,
+    /// What was said, as the user corrected it; absent while uncorrected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heard_text: Option<String>,
     #[serde(default)]
     pub degraded: bool,
     #[serde(default)]

@@ -24,6 +24,8 @@ pub enum StoreError {
     Broken { backup: PathBuf, reason: String },
     #[error("config schema_version {0} is newer than this build supports ({SCHEMA_VERSION})")]
     UnsupportedSchema(u32),
+    #[error("{path} could not be read: {reason}")]
+    Unreadable { path: PathBuf, reason: String },
     #[error(transparent)]
     Invalid(#[from] ConfigError),
 }
@@ -78,6 +80,34 @@ impl ConfigStore {
 
     pub fn current(&self) -> Arc<Config> {
         self.tx.borrow().clone()
+    }
+
+    /// The config as the file holds it, for a reader outside the app:
+    /// nothing is created, moved or rewritten, and a file this build
+    /// cannot read is reported and left where it is.
+    pub fn read_only(dirs: &DataDir) -> Result<Config, StoreError> {
+        let path = dirs.config_path();
+        let unreadable = |reason: String| StoreError::Unreadable {
+            path: path.clone(),
+            reason,
+        };
+        let raw = std::fs::read_to_string(&path).map_err(|e| io_err(&path, e))?;
+        let value: serde_json::Value =
+            serde_json::from_str(&raw).map_err(|e| unreadable(e.to_string()))?;
+        let migrated = match migrate(value) {
+            Ok(v) => v,
+            Err(MigrateError::Unsupported(v)) => return Err(StoreError::UnsupportedSchema(v)),
+            Err(MigrateError::NoPath(v)) => {
+                return Err(unreadable(format!(
+                    "schema_version {v} has no migration path"
+                )));
+            }
+        };
+        let mut config: Config =
+            serde_json::from_value(migrated).map_err(|e| unreadable(e.to_string()))?;
+        validate(&config)?;
+        config.refresh_template_styles();
+        Ok(config)
     }
 
     pub fn subscribe(&self) -> watch::Receiver<Arc<Config>> {
@@ -441,6 +471,31 @@ mod tests {
             "broken file must be moved, not overwritten"
         );
         assert_eq!(std::fs::read_to_string(backup).unwrap(), raw);
+    }
+
+    #[test]
+    fn a_read_only_load_leaves_a_file_it_cannot_read_in_place() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = DataDir::custom(tmp.path());
+        dirs.ensure().unwrap();
+        let mut value: serde_json::Value = serde_json::to_value(Config::first_run()).unwrap();
+        value["from_a_later_build"] = serde_json::json!(1);
+        let raw = serde_json::to_string(&value).unwrap();
+        std::fs::write(dirs.config_path(), &raw).unwrap();
+        let err = ConfigStore::read_only(&dirs).unwrap_err();
+        assert!(matches!(err, StoreError::Unreadable { .. }), "{err}");
+        assert_eq!(std::fs::read_to_string(dirs.config_path()).unwrap(), raw);
+        assert!(std::fs::read_dir(tmp.path().join("config"))
+            .unwrap()
+            .all(|e| !e.unwrap().file_name().to_string_lossy().contains("broken")));
+
+        std::fs::write(
+            dirs.config_path(),
+            serde_json::to_string(&Config::first_run()).unwrap(),
+        )
+        .unwrap();
+        let config = ConfigStore::read_only(&dirs).unwrap();
+        assert_eq!(config.profiles.len(), 1);
     }
 
     #[test]

@@ -26,6 +26,9 @@ pub struct Config {
     /// The engines a profile uses when it names none of its own.
     #[serde(default)]
     pub default_engines: DefaultEngines,
+    /// Suggested terms the user turned down, never suggested again.
+    #[serde(default)]
+    pub dictionary_dismissed: Vec<String>,
 }
 
 /// The one pair of engines every profile falls back on: the one used when
@@ -411,6 +414,7 @@ impl Config {
             profiles: vec![profile],
             dictionary: Vec::new(),
             default_engines: DefaultEngines::default(),
+            dictionary_dismissed: Vec::new(),
         }
     }
 

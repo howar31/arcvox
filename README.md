@@ -27,6 +27,8 @@ The Profiles page lists the nine stages a dictation passes through, from capture
 
 A dictionary term can span several lines. When one of its aliases is spoken, the whole term is inserted as written. For terms of this kind, their aliases are sent as the speech hint in place of the text, and the term is left out of the term list given to the language model.
 
+The Dictionary page also suggests terms. When dictations the user corrected show the same text heard as something else, the kept text is offered as a term with the heard text as its alias, with the number of corrected dictations and a line from one of them; adding it puts it into the list, and an ignored suggestion is not shown again. A Chinese word corrected once is offered without its alias, as a recognition hint only, because an alias is replaced wherever it appears. Nothing is added to the dictionary by itself.
+
 The Speed test page, opened from the link at the foot of the Engines page, records a sentence, or uses a kept history recording, and runs it through the selected engines with a cold run and a warm run each. It measures speed only. Results are not saved.
 
 ## Permissions and password fields

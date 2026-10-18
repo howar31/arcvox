@@ -126,6 +126,8 @@ impl From<arcvox_core::config::StoreError> for CmdError {
                 &[("backup", backup.display().to_string()), ("reason", reason)],
             ),
             E::UnsupportedSchema(_) => CmdError::new("config_newer", message),
+            // Only a reader outside the application reads without side effects.
+            E::Unreadable { .. } => CmdError::plain(message),
             E::Invalid(e) => e.into(),
         }
     }

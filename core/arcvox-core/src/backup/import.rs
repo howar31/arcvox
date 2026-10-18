@@ -347,6 +347,26 @@ mod tests {
     }
 
     #[test]
+    fn the_heard_text_travels_with_the_row() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = store_of("dev-a", "Anna");
+        let id = a.insert(utt(OCT, "first", None)).unwrap();
+        a.set_heard(id, Some("what was said")).unwrap();
+        write(&a, tmp.path(), text_only(), Path::new(""));
+        let b = HistoryStore::open_in_memory().unwrap();
+        import(&b, tmp.path(), &["dev-a"], text_only(), Path::new(""));
+        let rows = b.list_recent(10).unwrap();
+        assert_eq!(rows[0].heard_text.as_deref(), Some("what was said"));
+
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        a.set_heard(id, None).unwrap();
+        let newer = tmp.path().join("newer");
+        write(&a, &newer, text_only(), Path::new(""));
+        import(&b, &newer, &["dev-a"], text_only(), Path::new(""));
+        assert_eq!(b.list_recent(10).unwrap()[0].heard_text, None);
+    }
+
+    #[test]
     fn an_updated_row_keeps_the_stages_of_its_reruns() {
         let tmp = tempfile::tempdir().unwrap();
         let a = store_of("dev-a", "Anna");

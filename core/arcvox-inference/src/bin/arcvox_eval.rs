@@ -10,15 +10,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
+use arcvox_core::config::base_prompt::DEFAULT_BASE_PROMPT;
 use arcvox_core::config::ProviderConfig;
-use arcvox_core::config::{ConfigStore, Profile};
+use arcvox_core::config::{Config, ConfigStore, Profile};
+use arcvox_core::device::Device;
 use arcvox_core::dictionary::asr_hint;
 use arcvox_core::eval::{
     categories, compare, diff, guess_tags, parse_seed_tsv, pick_examples, pick_slice, pick_spread,
     seed_tsv, summarize, Cer, Change, DiffOp, ExamplePick, ItemResult, Marks, Report, SeedRow,
     Stage, Summary, Tally, Totals,
 };
-use arcvox_core::history::HistoryStore;
+use arcvox_core::history::{DeviceRef, HistoryStore};
 use arcvox_core::learn::{self, Pair, Source};
 use arcvox_core::models::{Manifest, ModelRole, ModelStore};
 use arcvox_core::pipeline::Pipeline;
@@ -26,6 +28,7 @@ use arcvox_core::providers::registry::ProviderRegistry;
 use arcvox_core::providers::AsrHint;
 use arcvox_core::steps::asr::{asr_prompt, ASR_HINT_BUDGET_BYTES};
 use arcvox_core::steps::PipelineContext;
+use arcvox_core::types::HistoryId;
 use arcvox_core::types::{Context, ProviderId};
 use arcvox_core::{DataDir, MemorySecretStore};
 use arcvox_inference::factory::EmbeddedFactory;
@@ -63,6 +66,11 @@ arcvox-eval <command> [options]
   compare  <before.json> <after.json> [--limit 20]
            Words and punctuation tallied apart, overall and per category;
            the changed items worst first.
+  import   --data <name|dir> --set <set.tsv> [--heard-only]
+           Writes the set's corrections into the history rows with the same
+           ids: `spoken` as the corrected transcript and `final` as the
+           corrected result (left out with --heard-only), where they differ
+           from the row. A copy of the database is made beside it first.
   suggest  --data <name|dir> [--set <set.tsv>] [--days N] [--limit 50]
            [--min-heard 1] [--min-final 2] [--min 3] [--max-tokens 8]
            Dictionary candidates: replacements that recur between what was
@@ -179,6 +187,7 @@ async fn dispatch(args: Args) -> Result<(), String> {
         "summary" => summary(&args),
         "compare" => compare_runs(&args),
         "suggest" => suggest(&args),
+        "import" => import_set(&args),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
             Ok(())
@@ -196,21 +205,33 @@ fn data_dir(args: &Args) -> Result<DataDir, String> {
     DataDir::resolve(name).ok_or_else(|| "no home directory".to_string())
 }
 
-fn read_config(dirs: &DataDir) -> Result<(ConfigStore, PathBuf), String> {
+/// The installation's config and recordings folder, read without touching
+/// anything: this command never creates, moves or rewrites a file of the
+/// application's.
+fn read_config(dirs: &DataDir) -> Result<(Config, PathBuf), String> {
     if !dirs.config_path().is_file() {
         return Err(format!(
             "no configuration at {}; is --data right?",
             dirs.config_path().display()
         ));
     }
-    let store = ConfigStore::open(dirs).map_err(|e| e.to_string())?;
-    let recordings = store
-        .current()
+    let config = ConfigStore::read_only(dirs).map_err(|e| e.to_string())?;
+    let recordings = config
         .general
         .recordings_dir
         .clone()
         .unwrap_or_else(|| dirs.recordings_dir());
-    Ok((store, recordings))
+    Ok((config, recordings))
+}
+
+/// The base prompt as the installation holds it, the shipped text when it
+/// was never written.
+fn read_base_prompt(dirs: &DataDir) -> Result<String, String> {
+    match std::fs::read_to_string(dirs.base_prompt_path()) {
+        Ok(s) => Ok(s),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(DEFAULT_BASE_PROMPT.to_string()),
+        Err(e) => Err(format!("{}: {e}", dirs.base_prompt_path().display())),
+    }
 }
 
 fn export(args: &Args) -> Result<(), String> {
@@ -314,8 +335,7 @@ fn now_iso() -> String {
 
 async fn run(args: &Args) -> Result<(), String> {
     let dirs = data_dir(args)?;
-    let (store, _) = read_config(&dirs)?;
-    let config = store.current();
+    let (config, _) = read_config(&dirs)?;
     let rows = load_set(args)?;
     let out = PathBuf::from(args.required("out")?);
     let stage = match args.required("stage")? {
@@ -326,7 +346,7 @@ async fn run(args: &Args) -> Result<(), String> {
     };
     let base_prompt = match args.flag("base-prompt") {
         Some(p) => std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?,
-        None => store.base_prompt().map_err(|e| e.to_string())?,
+        None => read_base_prompt(&dirs)?,
     };
     let profile: Profile = match args.flag("profile") {
         Some(id) => config
@@ -1124,7 +1144,7 @@ mod tests {
 
 fn suggest(args: &Args) -> Result<(), String> {
     let dirs = data_dir(args)?;
-    let (store, recordings) = read_config(&dirs)?;
+    let (config, recordings) = read_config(&dirs)?;
     let history = HistoryStore::open_read_only(&dirs.history_path(), &recordings)
         .map_err(|e| e.to_string())?;
     let number = |name: &str, default: usize| -> Result<usize, String> {
@@ -1149,8 +1169,7 @@ fn suggest(args: &Args) -> Result<(), String> {
         min_final: number("min-final", 2)? as u32,
         min_pipeline: number("min", 3)? as u32,
         max_tokens: number("max-tokens", 8)?,
-        known: store
-            .current()
+        known: config
             .dictionary
             .iter()
             .map(|e| (e.term.clone(), e.aliases.clone()))
@@ -1161,30 +1180,23 @@ fn suggest(args: &Args) -> Result<(), String> {
     let rows = history
         .list(usize::MAX, None, false)
         .map_err(|e| e.to_string())?;
-    let mut pairs: Vec<Pair> = Vec::new();
+    let rows: Vec<_> = rows
+        .into_iter()
+        .filter(|u| u.error.is_none() && !u.raw_text.trim().is_empty() && u.ts >= since)
+        .collect();
+    let mut pairs: Vec<Pair> = learn::pairs_of(&rows);
+    let edited = pairs.iter().filter(|p| p.source == Source::Final).count();
+    let heard = pairs.iter().filter(|p| p.source == Source::Heard).count();
     let mut raw_by_id: BTreeMap<String, String> = BTreeMap::new();
-    let mut edited = 0usize;
     for u in &rows {
-        if u.error.is_some() || u.raw_text.trim().is_empty() || u.ts < since {
-            continue;
-        }
         let id = u.id.0.to_string();
         raw_by_id.insert(id.clone(), u.raw_text.clone());
         pairs.push(Pair {
-            id: id.clone(),
+            id,
             from: u.raw_text.clone(),
             to: u.final_text.clone(),
             source: Source::Pipeline,
         });
-        if u.final_text != u.refined_text {
-            edited += 1;
-            pairs.push(Pair {
-                id,
-                from: u.refined_text.clone(),
-                to: u.final_text.clone(),
-                source: Source::Final,
-            });
-        }
     }
     let mut set_rows = 0usize;
     if let Some(path) = args.flag("set") {
@@ -1211,8 +1223,9 @@ fn suggest(args: &Args) -> Result<(), String> {
     let found = learn::suggest(&pairs, &opts);
     let forms = found.iter().filter(|s| s.form_only).count();
     println!(
-        "{} history rows ({} with an edited final text), {} set rows; {} candidates ({} casing or spacing only), {} shown; a term needs {} heard, {} final or {} pipeline rows",
+        "{} history rows ({} with a corrected transcript, {} with a corrected result), {} set rows; {} candidates ({} casing or spacing only), {} shown; a term needs {} heard, {} final or {} pipeline rows",
         raw_by_id.len(),
+        heard,
         edited,
         set_rows,
         found.len(),
@@ -1264,5 +1277,78 @@ fn suggest(args: &Args) -> Result<(), String> {
             println!("        {e}");
         }
     }
+    Ok(())
+}
+
+fn import_set(args: &Args) -> Result<(), String> {
+    let dirs = data_dir(args)?;
+    let (_, recordings) = read_config(&dirs)?;
+    let path = args.required("set")?;
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+    let set = parse_seed_tsv(&text)?;
+    let heard_only = args.flag("heard-only").is_some();
+
+    let dir = dirs
+        .device_path()
+        .parent()
+        .ok_or("the data directory has no parent")?
+        .to_path_buf();
+    let device = Device::load_or_create(&dir, None, "Device").map_err(|e| e.to_string())?;
+    let platform = std::env::consts::OS;
+    let device_ref = DeviceRef {
+        id: &device.id,
+        name: &device.name,
+        platform,
+    };
+    let history = HistoryStore::open(&dirs.history_path(), &recordings, &device_ref)
+        .map_err(|e| e.to_string())?;
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let copy = dirs
+        .history_path()
+        .with_file_name(format!("history-before-import-{stamp}.sqlite"));
+    history.copy_to(&copy).map_err(|e| e.to_string())?;
+    println!("copy of the database: {}", copy.display());
+
+    let (mut heard, mut finals, mut missing, mut same) = (0usize, 0usize, 0usize, 0usize);
+    for row in &set {
+        let Ok(id) = row.id.parse::<i64>() else {
+            missing += 1;
+            continue;
+        };
+        let Some(u) = history.get(HistoryId(id)).map_err(|e| e.to_string())? else {
+            missing += 1;
+            continue;
+        };
+        let mut touched = false;
+        if row.spoken != u.raw_text && u.heard_text.as_deref() != Some(row.spoken.as_str()) {
+            history
+                .set_heard(u.id, Some(&row.spoken))
+                .map_err(|e| e.to_string())?;
+            heard += 1;
+            touched = true;
+        }
+        if !heard_only && row.final_text != u.final_text {
+            history
+                .set_final(u.id, &row.final_text)
+                .map_err(|e| e.to_string())?;
+            finals += 1;
+            touched = true;
+        }
+        if !touched {
+            same += 1;
+        }
+    }
+    println!(
+        "{} set rows: {} corrected transcripts written, {} corrected results written, {} rows already so, {} rows not in the history",
+        set.len(),
+        heard,
+        finals,
+        same,
+        missing
+    );
     Ok(())
 }

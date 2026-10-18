@@ -45,6 +45,13 @@ export type EngineRole = "asr" | "llm";
 export interface Config {
   schema_version: number; general: General; providers: ProviderConfig[]; profiles: Profile[]; dictionary: DictionaryEntry[];
   default_engines: DefaultEngines;
+  /** Suggested terms the user turned down. */
+  dictionary_dismissed: string[];
+}
+/** A dictionary candidate from the dictations the user corrected. */
+export interface Suggestion {
+  term: string; aliases: { text: string; rows: number }[]; rows: number; excerpts: string[];
+  known_term: boolean; add_aliases: string[]; form_only: boolean;
 }
 export interface ProbeResult { ok: boolean; failure: { kind: string; message?: string; reason?: string; status?: number } | null }
 export interface Utterance {
@@ -125,7 +132,8 @@ export const deleteProfile = (id: string) => invoke<Config>("profiles_delete", {
 export const setDefaultProfile = (id: string) => invoke<Config>("profiles_set_default", { id });
 /** Resets to the profile's own preset, or to `preset` when given (the standard one, when its own is gone). */
 export const resetProfile = (id: string, preset?: string) => invoke<Config>("profiles_reset", { id, preset: preset ?? null });
-export const setDictionary = (entries: DictionaryEntry[]) => invoke<Config>("dictionary_set", { entries });
+export const setDictionary = (entries: DictionaryEntry[], dismissed: string[]) => invoke<Config>("dictionary_set", { entries, dismissed });
+export const dictionarySuggestions = () => invoke<Suggestion[]>("dictionary_suggestions");
 export const getPrompt = () => invoke<string>("prompt_get");
 export const setPrompt = (text: string) => invoke<void>("prompt_set", { text });
 export const defaultPrompt = () => invoke<string>("prompt_default");

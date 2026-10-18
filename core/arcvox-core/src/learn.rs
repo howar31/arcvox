@@ -6,6 +6,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::history::Utterance;
+
 /// Where a pair of texts comes from. The user's own corrections weigh
 /// more than what the pipeline changed by itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -35,26 +37,48 @@ pub struct Counts {
     pub pipeline: u32,
     pub heard: u32,
     pub finals: u32,
+    /// Distinct rows the user corrected, of either kind: a row corrected
+    /// both ways counts once.
+    pub users: u32,
 }
 
 impl Counts {
-    fn add(&mut self, source: Source) {
-        match source {
-            Source::Pipeline => self.pipeline += 1,
-            Source::Heard => self.heard += 1,
-            Source::Final => self.finals += 1,
-        }
-    }
-
-    fn merge(&mut self, other: Counts) {
-        self.pipeline += other.pipeline;
-        self.heard += other.heard;
-        self.finals += other.finals;
-    }
-
     /// Rows corrected by the user, of either kind.
     pub fn user(&self) -> u32 {
-        self.heard + self.finals
+        self.users
+    }
+}
+
+/// The rows per source behind one alias or one term.
+#[derive(Debug, Clone, Default)]
+struct Rows {
+    pipeline: BTreeSet<String>,
+    heard: BTreeSet<String>,
+    finals: BTreeSet<String>,
+}
+
+impl Rows {
+    fn add(&mut self, source: Source, id: &str) {
+        match source {
+            Source::Pipeline => self.pipeline.insert(id.to_string()),
+            Source::Heard => self.heard.insert(id.to_string()),
+            Source::Final => self.finals.insert(id.to_string()),
+        };
+    }
+
+    fn merge(&mut self, other: &Rows) {
+        self.pipeline.extend(other.pipeline.iter().cloned());
+        self.heard.extend(other.heard.iter().cloned());
+        self.finals.extend(other.finals.iter().cloned());
+    }
+
+    fn counts(&self) -> Counts {
+        Counts {
+            pipeline: self.pipeline.len() as u32,
+            heard: self.heard.len() as u32,
+            finals: self.finals.len() as u32,
+            users: self.heard.union(&self.finals).count() as u32,
+        }
     }
 }
 
@@ -317,9 +341,9 @@ fn excerpt(to_tokens: &[String], at: (usize, usize), span: usize) -> String {
     text
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Tally {
-    rows: BTreeMap<Source, BTreeSet<String>>,
+    rows: Rows,
     excerpts: Vec<String>,
 }
 
@@ -344,33 +368,26 @@ pub fn suggest(pairs: &[Pair], opts: &Options) -> Vec<Suggestion> {
                 continue;
             }
             let tally = table.entry(term).or_default().entry(alias).or_default();
-            tally
-                .rows
-                .entry(pair.source)
-                .or_default()
-                .insert(pair.id.clone());
+            tally.rows.add(pair.source, &pair.id);
             if tally.excerpts.len() < opts.excerpts {
                 tally.excerpts.push(excerpt(&to_tokens, r.at, 6));
             }
         }
     }
+    let table: Table = merge_forms(table);
     let mut out: Vec<Suggestion> = table
         .into_iter()
         .map(|(term, aliases)| {
-            let mut counts = Counts::default();
+            let mut all = Rows::default();
             let mut aliases: Vec<(Alias, Vec<String>)> = aliases
                 .into_iter()
                 .map(|(text, tally)| {
-                    let mut c = Counts::default();
-                    for (source, rows) in &tally.rows {
-                        for _ in rows {
-                            c.add(*source);
-                        }
-                    }
-                    counts.merge(c);
-                    (Alias { text, counts: c }, tally.excerpts)
+                    all.merge(&tally.rows);
+                    let counts = tally.rows.counts();
+                    (Alias { text, counts }, tally.excerpts)
                 })
                 .collect();
+            let counts = all.counts();
             // Strongest alias first; its excerpts lead too.
             aliases.sort_by(|(x, _), (y, _)| {
                 (y.counts.user(), y.counts.pipeline, &x.text).cmp(&(
@@ -419,15 +436,127 @@ pub fn suggest(pairs: &[Pair], opts: &Options) -> Vec<Suggestion> {
     out
 }
 
+/// The letters of a text apart from ASCII case and spaces.
+fn form_of(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_whitespace())
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
 /// The same letters, apart from ASCII case and spaces.
 fn same_form(a: &str, b: &str) -> bool {
-    let fold = |s: &str| -> String {
-        s.chars()
-            .filter(|c| !c.is_whitespace())
-            .map(|c| c.to_ascii_lowercase())
-            .collect()
-    };
-    fold(a) == fold(b)
+    form_of(a) == form_of(b)
+}
+
+/// term -> alias -> the rows and excerpts behind the pair
+type Table = BTreeMap<String, BTreeMap<String, Tally>>;
+/// The writings of one word, each with its aliases.
+type Variants = Vec<(String, BTreeMap<String, Tally>)>;
+
+/// Terms that are one word in different casings or spacings become one
+/// suggestion: the writing most rows kept is the term, the other writings
+/// its aliases, and their aliases join it. The user wants one way of
+/// writing a word, and the replacement brings the others to it.
+fn merge_forms(table: Table) -> Table {
+    let mut groups: BTreeMap<String, Variants> = BTreeMap::new();
+    for (term, aliases) in table {
+        groups
+            .entry(form_of(&term))
+            .or_default()
+            .push((term, aliases));
+    }
+    let mut out = BTreeMap::new();
+    for (_, mut variants) in groups {
+        if variants.len() == 1 {
+            let (term, aliases) = variants.pop().expect("one variant");
+            out.insert(term, aliases);
+            continue;
+        }
+        let total = |aliases: &BTreeMap<String, Tally>| {
+            let mut rows = Rows::default();
+            for t in aliases.values() {
+                rows.merge(&t.rows);
+            }
+            rows.counts()
+        };
+        variants.sort_by(|(x, xa), (y, ya)| {
+            let (cx, cy) = (total(xa), total(ya));
+            (cy.user(), cy.pipeline, x).cmp(&(cx.user(), cx.pipeline, y))
+        });
+        let mut variants = variants.into_iter();
+        let (term, mut aliases) = variants.next().expect("two or more variants");
+        for (other, other_aliases) in variants {
+            let mut as_alias = Tally::default();
+            for t in other_aliases.values() {
+                as_alias.rows.merge(&t.rows);
+                for e in &t.excerpts {
+                    if !as_alias.excerpts.contains(e) {
+                        as_alias.excerpts.push(e.clone());
+                    }
+                }
+            }
+            aliases.insert(other, as_alias);
+            for (alias, t) in other_aliases {
+                let into = aliases.entry(alias).or_default();
+                into.rows.merge(&t.rows);
+                for e in t.excerpts {
+                    if !into.excerpts.contains(&e) {
+                        into.excerpts.push(e);
+                    }
+                }
+            }
+        }
+        out.insert(term, aliases);
+    }
+    out
+}
+
+/// The pairs a history row holds: the user's correction of what was heard
+/// (the raw transcript against it) and of the result (the pipeline's text
+/// against the final text, which differ only once the user changed it).
+/// The pipeline's own changes are not a source here: they do not recur.
+pub fn pairs_of(rows: &[Utterance]) -> Vec<Pair> {
+    let mut out = Vec::new();
+    for u in rows {
+        if u.error.is_some() {
+            continue;
+        }
+        let id = u.id.0.to_string();
+        if let Some(heard) = &u.heard_text {
+            if heard != &u.raw_text {
+                out.push(Pair {
+                    id: id.clone(),
+                    from: u.raw_text.clone(),
+                    to: heard.clone(),
+                    source: Source::Heard,
+                });
+            }
+        }
+        if u.final_text != u.refined_text {
+            out.push(Pair {
+                id,
+                from: u.refined_text.clone(),
+                to: u.final_text.clone(),
+                source: Source::Final,
+            });
+        }
+    }
+    out
+}
+
+/// The aliases an accepted suggestion brings along. A replacement never
+/// looks at its context, so a Chinese word heard once as another Chinese
+/// word stays a hint only: the heard word may be a word of its own. A
+/// term with Latin letters or digits takes every alias; a Chinese term
+/// takes the aliases two or more rows agree on.
+pub fn aliases_to_add(s: &Suggestion) -> Vec<String> {
+    let latin = s.term.chars().any(|c| c.is_ascii_alphanumeric());
+    s.aliases
+        .iter()
+        .filter(|a| latin || a.counts.user() + a.counts.pipeline >= 2)
+        .map(|a| a.text.clone())
+        .collect()
 }
 
 /// The dictionary already turns `alias` into `term`, or `alias` is a
@@ -585,5 +714,155 @@ mod thresholds {
         let out = suggest(&pairs, &Options::default());
         let terms: Vec<(&str, bool)> = out.iter().map(|s| (s.term.as_str(), s.form_only)).collect();
         assert_eq!(terms, [("Zephyr", false), ("CDN", true)]);
+    }
+}
+
+#[cfg(test)]
+mod from_rows {
+    use super::*;
+    use crate::history::{HistoryStore, NewUtterance};
+    use crate::types::ProfileId;
+
+    fn row(raw: &str, text: &str) -> NewUtterance {
+        NewUtterance {
+            ts: 100,
+            profile_id: ProfileId("default".into()),
+            app_name: None,
+            raw_text: raw.into(),
+            refined_text: text.into(),
+            final_text: text.into(),
+            degraded: false,
+            audio_path: None,
+            asr_ms: 1,
+            llm_ms: None,
+            audio_ms: None,
+            dict_fixes: 0,
+            snippets: 0,
+            llm_changed: false,
+            stages: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn rows_give_a_heard_pair_and_a_final_pair_only_when_corrected() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let a = s.insert(row("用賽佛寫", "用賽佛寫")).unwrap();
+        let b = s.insert(row("問一下", "問一下")).unwrap();
+        s.set_heard(a, Some("用 Zephyr 寫")).unwrap();
+        s.set_final(b, "問一下 Zephyr").unwrap();
+        let rows = s.list_recent(10).unwrap();
+        let pairs = pairs_of(&rows);
+        assert_eq!(pairs.len(), 2);
+        let heard = pairs.iter().find(|p| p.source == Source::Heard).unwrap();
+        assert_eq!(
+            (heard.from.as_str(), heard.to.as_str()),
+            ("用賽佛寫", "用 Zephyr 寫")
+        );
+        let fin = pairs.iter().find(|p| p.source == Source::Final).unwrap();
+        assert_eq!(
+            (fin.from.as_str(), fin.to.as_str()),
+            ("問一下", "問一下 Zephyr")
+        );
+    }
+
+    #[test]
+    fn a_chinese_term_heard_once_brings_no_alias() {
+        let alias = |text: &str, user: u32| Alias {
+            text: text.into(),
+            counts: Counts {
+                heard: user,
+                users: user,
+                ..Counts::default()
+            },
+        };
+        let chinese = Suggestion {
+            term: "權限".into(),
+            aliases: vec![alias("全線", 3), alias("程序", 1)],
+            counts: Counts::default(),
+            excerpts: Vec::new(),
+            known_term: false,
+            form_only: false,
+        };
+        assert_eq!(aliases_to_add(&chinese), ["全線"]);
+        let latin = Suggestion {
+            term: "phase".into(),
+            aliases: vec![alias("face", 1)],
+            ..chinese.clone()
+        };
+        assert_eq!(aliases_to_add(&latin), ["face"]);
+        let once = Suggestion {
+            aliases: vec![alias("風暴", 1)],
+            ..chinese
+        };
+        assert!(aliases_to_add(&once).is_empty(), "a hint only");
+    }
+}
+
+#[cfg(test)]
+mod distinct_rows {
+    use super::*;
+
+    #[test]
+    fn a_row_corrected_both_ways_counts_once() {
+        let pairs = vec![
+            Pair {
+                id: "1".into(),
+                from: "問謝佛".into(),
+                to: "問 Zephyr".into(),
+                source: Source::Heard,
+            },
+            Pair {
+                id: "1".into(),
+                from: "問謝佛".into(),
+                to: "問 Zephyr".into(),
+                source: Source::Final,
+            },
+            Pair {
+                id: "2".into(),
+                from: "問謝佛".into(),
+                to: "問 Zephyr".into(),
+                source: Source::Final,
+            },
+        ];
+        let out = suggest(&pairs, &Options::default());
+        assert_eq!(out.len(), 1);
+        let c = out[0].counts;
+        assert_eq!((c.heard, c.finals, c.user()), (1, 2, 2));
+        assert_eq!(out[0].aliases[0].counts.user(), 2);
+    }
+}
+
+#[cfg(test)]
+mod forms {
+    use super::*;
+
+    fn pair(id: &str, from: &str, to: &str) -> Pair {
+        Pair {
+            id: id.into(),
+            from: from.into(),
+            to: to.into(),
+            source: Source::Heard,
+        }
+    }
+
+    #[test]
+    fn casing_variants_of_a_term_become_one_suggestion() {
+        let pairs = vec![
+            pair("1", "用 sefirkit 吧", "用 Zephyr Kit 吧"),
+            pair("2", "用 sefirkit 吧", "用 Zephyr Kit 吧"),
+            pair("3", "看 sefirkit 的", "看 zephyr kit 的"),
+        ];
+        let out = suggest(&pairs, &Options::default());
+        assert_eq!(out.len(), 1, "{out:?}");
+        let s = &out[0];
+        assert_eq!(s.term, "Zephyr Kit");
+        assert_eq!(s.counts.user(), 3);
+        let aliases: Vec<(&str, u32)> = s
+            .aliases
+            .iter()
+            .map(|a| (a.text.as_str(), a.counts.user()))
+            .collect();
+        assert_eq!(aliases, [("sefirkit", 3), ("zephyr kit", 1)]);
+        assert!(!s.form_only);
     }
 }

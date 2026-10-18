@@ -163,6 +163,10 @@ pub struct Utterance {
     pub raw_text: String,
     pub refined_text: String,
     pub final_text: String,
+    /// What was said, as the user corrected it against the raw transcript;
+    /// None while nobody corrected it. The text a correction gives, not the
+    /// rewrite's result.
+    pub heard_text: Option<String>,
     pub degraded: bool,
     pub audio_path: Option<PathBuf>,
     pub asr_ms: u64,
@@ -367,7 +371,8 @@ CREATE TABLE IF NOT EXISTS utterances (
     degraded INTEGER NOT NULL DEFAULT 0,
     audio_path TEXT,
     asr_ms INTEGER NOT NULL DEFAULT 0,
-    llm_ms INTEGER
+    llm_ms INTEGER,
+    heard_text TEXT
 );
 CREATE INDEX IF NOT EXISTS utterances_ts ON utterances(ts);
 CREATE TABLE IF NOT EXISTS attempts (
@@ -507,6 +512,10 @@ pub(crate) fn upgrade(
         (
             "updated",
             "ALTER TABLE utterances ADD COLUMN updated INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "heard_text",
+            "ALTER TABLE utterances ADD COLUMN heard_text TEXT",
         ),
     ] {
         if !has_column(conn, "utterances", name)? {
@@ -690,6 +699,14 @@ impl HistoryStore {
     /// Calls `f` after every change written to the store, whichever
     /// method wrote it, on the thread that wrote it. Reads never call it.
     /// `f` must not use the store: the write still holds it.
+    /// A consistent copy of the database in one file at `path` (the
+    /// write-ahead log included), made by the database itself.
+    pub fn copy_to(&self, path: &Path) -> Result<(), HistoryError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("VACUUM INTO ?1", params![path.to_string_lossy()])?;
+        Ok(())
+    }
+
     pub fn watch(&self, f: impl Fn() + Send + Sync + 'static) {
         self.conn.lock().unwrap().commit_hook(Some(move || {
             f();
@@ -1176,6 +1193,15 @@ impl HistoryStore {
         Ok(())
     }
 
+    /// Records the user's correction of what was said; None takes it away.
+    pub fn set_heard(&self, id: HistoryId, text: Option<&str>) -> Result<(), HistoryError> {
+        self.conn.lock().unwrap().execute(
+            "UPDATE utterances SET heard_text = ?1, updated = ?3 WHERE id = ?2",
+            params![text, id.0, now_ms()],
+        )?;
+        Ok(())
+    }
+
     /// `set_final`, and the insertion stage of the dictation's own run is
     /// written (replacing an earlier one). A row deleted while the text was
     /// being put in is passed over, as `set_final` passes it over.
@@ -1296,7 +1322,7 @@ impl HistoryStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT origin_id, ts, updated, profile_id, app_name, raw_text, refined_text, final_text, degraded,
-                    asr_ms, llm_ms, audio_ms, dict_fixes, snippets, error, error_code, audio_path, id
+                    asr_ms, llm_ms, audio_ms, dict_fixes, snippets, error, error_code, audio_path, id, heard_text
              FROM utterances
              WHERE device_id = ?1 AND origin_id IS NOT NULL AND (error_code IS NULL OR error_code != ?2)
              ORDER BY origin_id",
@@ -1319,6 +1345,7 @@ impl HistoryStore {
                 snippets: r.get::<_, i64>(13)? as u32,
                 error: r.get(14)?,
                 error_code: r.get(15)?,
+                heard_text: r.get(18)?,
                 audio: None,
                 attempts: Vec::new(),
                 stages: Vec::new(),
@@ -1410,8 +1437,8 @@ impl HistoryStore {
                 None => {
                     tx.execute(
                         "INSERT INTO utterances (ts, profile_id, app_name, raw_text, refined_text, final_text, degraded, audio_path,
-                            asr_ms, llm_ms, audio_ms, dict_fixes, snippets, error, error_code, device_id, origin_id, updated)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                            asr_ms, llm_ms, audio_ms, dict_fixes, snippets, error, error_code, device_id, origin_id, updated, heard_text)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
                         params![
                             l.ts,
                             l.profile_id,
@@ -1431,6 +1458,7 @@ impl HistoryStore {
                             device,
                             l.origin_id,
                             l.updated,
+                            l.heard_text,
                         ],
                     )?;
                     let new_id = tx.last_insert_rowid();
@@ -1449,7 +1477,7 @@ impl HistoryStore {
                         tx.execute(
                             "UPDATE utterances SET ts = ?1, profile_id = ?2, app_name = ?3, raw_text = ?4, refined_text = ?5,
                                 final_text = ?6, degraded = ?7, asr_ms = ?8, llm_ms = ?9, audio_ms = ?10, dict_fixes = ?11,
-                                snippets = ?12, error = ?13, error_code = ?14, updated = ?15 WHERE id = ?16",
+                                snippets = ?12, error = ?13, error_code = ?14, updated = ?15, heard_text = ?17 WHERE id = ?16",
                             params![
                                 l.ts,
                                 l.profile_id,
@@ -1467,6 +1495,7 @@ impl HistoryStore {
                                 l.error_code,
                                 l.updated,
                                 id,
+                                l.heard_text,
                             ],
                         )?;
                         // The line is the newer state of the row: its
@@ -2194,7 +2223,7 @@ fn touch_in(tx: &Connection, id: HistoryId) -> rusqlite::Result<()> {
 }
 
 const SELECT: &str = "SELECT id, ts, profile_id, app_name, raw_text, refined_text, final_text, degraded, audio_path, asr_ms, llm_ms, audio_ms, error, error_code,
-    (SELECT COUNT(*) FROM attempts a WHERE a.utterance_id = utterances.id AND a.origin = 0) FROM utterances";
+    (SELECT COUNT(*) FROM attempts a WHERE a.utterance_id = utterances.id AND a.origin = 0), heard_text FROM utterances";
 
 const SELECT_ATTEMPT: &str = "SELECT id, utterance_id, ts, profile_id, asr_label, llm_label, raw_text, final_text, degraded, asr_ms, llm_ms,
     dict_fixes, snippets, llm_changed, error, error_code, origin, chosen FROM attempts";
@@ -2332,6 +2361,7 @@ fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Utterance> {
         error: r.get(12)?,
         error_code: r.get(13)?,
         redone: r.get::<_, i64>(14)? as u32,
+        heard_text: r.get(15)?,
     })
 }
 
@@ -2666,6 +2696,34 @@ mod tests {
         let id = s.insert(new(1, None)).unwrap();
         s.delete(id).unwrap();
         assert_eq!(s.get(id).unwrap(), None);
+    }
+
+    #[test]
+    fn a_copy_holds_the_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = HistoryStore::open(&tmp.path().join("h.sqlite"), tmp.path(), &TEST_REF).unwrap();
+        s.insert(new(100, None)).unwrap();
+        let copy = tmp.path().join("copy.sqlite");
+        s.copy_to(&copy).unwrap();
+        let c = HistoryStore::open_read_only(&copy, tmp.path()).unwrap();
+        assert_eq!(c.list_recent(10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_heard_text_is_absent_until_corrected_and_can_be_taken_away() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let id = s.insert(new(100, None)).unwrap();
+        assert_eq!(s.get(id).unwrap().unwrap().heard_text, None);
+        s.set_heard(id, Some("heard")).unwrap();
+        let got = s.get(id).unwrap().unwrap();
+        assert_eq!(got.heard_text.as_deref(), Some("heard"));
+        assert_eq!(got.raw_text, "raw");
+        assert_eq!(
+            s.list_recent(1).unwrap()[0].heard_text.as_deref(),
+            Some("heard")
+        );
+        s.set_heard(id, None).unwrap();
+        assert_eq!(s.get(id).unwrap().unwrap().heard_text, None);
     }
 
     #[test]
