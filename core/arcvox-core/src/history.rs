@@ -271,6 +271,31 @@ pub struct Storage {
     pub text_bytes: u64,
     /// Text and details kept for the stages of the rows.
     pub stage_bytes: u64,
+    /// Stage records of the rows.
+    pub stages: u64,
+    /// Results of reruns kept for the rows.
+    pub attempts: u64,
+    /// Hourly statistics buckets, of the whole database (they have no row).
+    pub stats_hours: u64,
+    /// What the database file takes, of the whole database.
+    pub db_bytes: u64,
+}
+
+/// What a dictation's insert writes: nothing at all without `row`; the
+/// stages and the statistics each on their own switch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Keep {
+    pub row: bool,
+    pub stages: bool,
+    pub stats: bool,
+}
+
+impl Keep {
+    pub const ALL: Keep = Keep {
+        row: true,
+        stages: true,
+        stats: true,
+    };
 }
 
 /// What moving the recordings to another folder did.
@@ -801,7 +826,7 @@ impl HistoryStore {
         u: NewUtterance,
         keep: impl FnOnce() -> bool,
     ) -> Result<Option<HistoryId>, HistoryError> {
-        self.insert_replacing(u, None, keep)
+        self.insert_replacing(u, None, keep, Keep::ALL)
     }
 
     /// `insert_if`, and when the row is kept, the row `replaces` goes in the
@@ -809,40 +834,53 @@ impl HistoryStore {
     /// processed.
     pub fn insert_replacing(
         &self,
-        u: NewUtterance,
+        mut u: NewUtterance,
         replaces: Option<HistoryId>,
         keep: impl FnOnce() -> bool,
+        policy: Keep,
     ) -> Result<Option<HistoryId>, HistoryError> {
+        if !policy.stages {
+            u.stages.clear();
+        }
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
         if let Some(old) = replaces {
             tx.execute("DELETE FROM utterances WHERE id = ?1", params![old.0])?;
         }
-        let id = insert_row(&tx, &u, &self.device_id)?;
-        let added = stats::add(
-            &tx,
-            &stats::Sample {
-                device_id: &self.device_id,
-                ts: u.ts,
-                app_name: u.app_name.as_deref().unwrap_or(""),
-                profile_id: &u.profile_id.0,
-                text: &u.final_text,
-                audio_ms: u.audio_ms,
-                asr_ms: u.asr_ms,
-                llm_ms: u.llm_ms,
-                changed: u.llm_changed,
-                degraded: u.degraded,
-                dict_fixes: u.dict_fixes,
-                snippets: u.snippets,
-            },
-        );
+        // Without a row the dictation still counts in the statistics; the
+        // row that held the recording goes either way.
+        let id = policy
+            .row
+            .then(|| insert_row(&tx, &u, &self.device_id))
+            .transpose()?;
+        let added = if policy.stats {
+            stats::add(
+                &tx,
+                &stats::Sample {
+                    device_id: &self.device_id,
+                    ts: u.ts,
+                    app_name: u.app_name.as_deref().unwrap_or(""),
+                    profile_id: &u.profile_id.0,
+                    text: &u.final_text,
+                    audio_ms: u.audio_ms,
+                    asr_ms: u.asr_ms,
+                    llm_ms: u.llm_ms,
+                    changed: u.llm_changed,
+                    degraded: u.degraded,
+                    dict_fixes: u.dict_fixes,
+                    snippets: u.snippets,
+                },
+            )
+        } else {
+            Ok(())
+        };
         match added {
             Ok(()) => {
                 if !keep() {
                     return Ok(None);
                 }
                 tx.commit()?;
-                Ok(Some(HistoryId(id)))
+                Ok(id.map(HistoryId))
             }
             Err(e) => {
                 drop(tx);
@@ -852,6 +890,9 @@ impl HistoryStore {
                 }
                 if let Some(old) = replaces {
                     conn.execute("DELETE FROM utterances WHERE id = ?1", params![old.0])?;
+                }
+                if !policy.row {
+                    return Ok(None);
                 }
                 Ok(Some(HistoryId(insert_row(&conn, &u, &self.device_id)?)))
             }
@@ -1788,6 +1829,28 @@ impl HistoryStore {
     }
 
     /// Empties the statistics buckets; history rows are not touched.
+    /// Drops every stage record; the rows keep their texts. Returns how
+    /// many went.
+    pub fn clear_stages(&self) -> Result<usize, HistoryError> {
+        let n = self
+            .conn
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM stages", [])?;
+        Ok(n)
+    }
+
+    /// Drops every rerun result; the result each row uses is on the row
+    /// and stays. Returns how many went.
+    pub fn clear_attempts(&self) -> Result<usize, HistoryError> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM stages WHERE attempt_id IS NOT NULL", [])?;
+        let n = tx.execute("DELETE FROM attempts", [])?;
+        tx.commit()?;
+        Ok(n)
+    }
+
     pub fn reset_stats(&self) -> Result<(), HistoryError> {
         self.conn
             .lock()
@@ -1824,10 +1887,31 @@ impl HistoryStore {
             params![since, until],
             |r| r.get(0),
         )?;
+        let stages: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM stages s JOIN utterances u ON u.id = s.utterance_id WHERE u.ts >= ?1 AND u.ts < ?2",
+            params![since, until],
+            |r| r.get(0),
+        )?;
+        let attempts: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM attempts a JOIN utterances u ON u.id = a.utterance_id WHERE u.ts >= ?1 AND u.ts < ?2",
+            params![since, until],
+            |r| r.get(0),
+        )?;
+        let stats_hours: i64 =
+            conn.query_row("SELECT COUNT(*) FROM stats_hourly", [], |r| r.get(0))?;
+        let db_bytes: i64 = conn.query_row(
+            "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()",
+            [],
+            |r| r.get(0),
+        )?;
         let mut out = Storage {
             rows: rows as u64,
             text_bytes: text_bytes as u64,
             stage_bytes: stage_bytes as u64,
+            stages: stages as u64,
+            attempts: attempts as u64,
+            stats_hours: stats_hours as u64,
+            db_bytes: db_bytes as u64,
             ..Storage::default()
         };
         let mut stmt = conn.prepare(
@@ -3747,16 +3831,17 @@ INSERT INTO stats_meta (key, value) VALUES ('backfilled', '1');
         let b = s.insert(new(200, Some(stray.clone()))).unwrap();
         s.insert(new(300, None)).unwrap();
         assert_eq!(s.list(10, None, true).unwrap().len(), 2);
+        let storage = s.storage(dir.path()).unwrap();
         assert_eq!(
-            s.storage(dir.path()).unwrap(),
-            Storage {
-                rows: 3,
-                recordings: 1,
-                recording_bytes: 100,
-                text_bytes: s.storage(dir.path()).unwrap().text_bytes,
-                stage_bytes: 0
-            }
+            (
+                storage.rows,
+                storage.recordings,
+                storage.recording_bytes,
+                storage.stage_bytes
+            ),
+            (3, 1, 100, 0)
         );
+        assert!(storage.text_bytes > 0 && storage.db_bytes > 0);
         assert_eq!(s.recording_path(b, dir.path()).unwrap(), None);
         assert!(!s.delete_recording(b, dir.path()).unwrap());
         assert!(stray.exists());
@@ -3841,7 +3926,12 @@ INSERT INTO stats_meta (key, value) VALUES ('backfilled', '1');
         let path = PathBuf::from("/rec/a.wav");
         let holding = s.insert_failed(held(&path)).unwrap();
         let id = s
-            .insert_replacing(new(100, Some(path.clone())), Some(holding), || true)
+            .insert_replacing(
+                new(100, Some(path.clone())),
+                Some(holding),
+                || true,
+                Keep::ALL,
+            )
             .unwrap()
             .unwrap();
         let rows = s.list_recent(10).unwrap();
@@ -3852,12 +3942,77 @@ INSERT INTO stats_meta (key, value) VALUES ('backfilled', '1');
     }
 
     #[test]
+    fn without_history_the_dictation_leaves_no_row_but_still_counts() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let path = PathBuf::from("/rec/a.wav");
+        let holding = s.insert_failed(held(&path)).unwrap();
+        let before = s.storage(Path::new("/rec")).unwrap().stats_hours;
+        let policy = Keep {
+            row: false,
+            stages: true,
+            stats: true,
+        };
+        let kept = s
+            .insert_replacing(new(100, Some(path)), Some(holding), || true, policy)
+            .unwrap();
+        assert_eq!(kept, None);
+        assert!(s.list_recent(10).unwrap().is_empty());
+        assert!(s.storage(Path::new("/rec")).unwrap().stats_hours > before);
+    }
+
+    #[test]
+    fn stages_and_statistics_follow_their_own_switches() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let mut u = new(100, None);
+        u.stages = vec![StageRecord {
+            position: 3,
+            kind: StageKind::Asr,
+            text: Some("x".into()),
+            ms: None,
+            detail: serde_json::json!({}),
+        }];
+        let policy = Keep {
+            row: true,
+            stages: false,
+            stats: false,
+        };
+        let id = s
+            .insert_replacing(u, None, || true, policy)
+            .unwrap()
+            .unwrap();
+        assert!(s.stages(id).unwrap().is_empty());
+        let storage = s.storage(Path::new("/rec")).unwrap();
+        assert_eq!(
+            (storage.rows, storage.stages, storage.stats_hours),
+            (1, 0, 0)
+        );
+    }
+
+    #[test]
+    fn clearing_stages_and_reruns_leaves_the_rows() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let mut u = new(100, None);
+        u.stages = vec![StageRecord {
+            position: 3,
+            kind: StageKind::Asr,
+            text: Some("x".into()),
+            ms: None,
+            detail: serde_json::json!({}),
+        }];
+        let id = s.insert(u).unwrap();
+        assert_eq!(s.clear_stages().unwrap(), 1);
+        assert!(s.stages(id).unwrap().is_empty());
+        assert_eq!(s.clear_attempts().unwrap(), 0);
+        assert_eq!(s.list_recent(10).unwrap().len(), 1);
+    }
+
+    #[test]
     fn a_withdrawn_result_leaves_the_holding_row() {
         let s = HistoryStore::open_in_memory().unwrap();
         let path = PathBuf::from("/rec/a.wav");
         let holding = s.insert_failed(held(&path)).unwrap();
         let kept = s
-            .insert_replacing(new(100, Some(path)), Some(holding), || false)
+            .insert_replacing(new(100, Some(path)), Some(holding), || false, Keep::ALL)
             .unwrap();
         assert_eq!(kept, None);
         let rows = s.list_recent(10).unwrap();

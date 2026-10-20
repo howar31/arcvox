@@ -19,7 +19,8 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use crate::platform::{
-    CaptureSink, ClipboardSnapshot, FrontmostApp, MicAccess, ModifierEvent, Platform, PlatformError,
+    AxText, CaptureSink, ClipboardSnapshot, FrontmostApp, MicAccess, ModifierEvent, Platform,
+    PlatformError,
 };
 use crate::shortcut::Shortcut;
 
@@ -139,6 +140,14 @@ impl Platform for MacPlatform {
 
     fn ax_insert(&self, pid: i32, text: &str) -> Result<(), PlatformError> {
         ax::insert_at_selection(pid, text)
+    }
+
+    fn ax_caret(&self, pid: i32) -> Option<usize> {
+        ax::caret(pid)
+    }
+
+    fn ax_text(&self, pid: i32) -> AxText {
+        ax::text(pid)
     }
 
     fn accessibility_trusted(&self, prompt: bool) -> bool {

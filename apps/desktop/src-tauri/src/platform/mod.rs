@@ -87,6 +87,17 @@ pub enum CaptureEvent {
 
 pub type CaptureSink = Arc<dyn Fn(CaptureEvent) + Send + Sync>;
 
+/// What the focused element of an application holds, read through
+/// Accessibility.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AxText {
+    /// The application has no focused element now.
+    Gone,
+    /// The focused element gives no text value (a terminal, a canvas).
+    Unsupported,
+    Text(String),
+}
+
 pub trait Platform: Send + Sync {
     /// Starts delivering the recording shortcut's transitions and key
     /// presses. Must be called on the main thread. Returns an error when
@@ -131,6 +142,16 @@ pub trait Platform: Send + Sync {
     fn post_paste(&self);
     fn type_unicode(&self, text: &str);
     fn ax_insert(&self, pid: i32, text: &str) -> Result<(), PlatformError>;
+    /// Where the caret stands in the focused text element of `pid`, in
+    /// UTF-16 units from the start of its value; None when the element
+    /// gives no selection range.
+    fn ax_caret(&self, _pid: i32) -> Option<usize> {
+        None
+    }
+    /// The value of the focused text element of `pid`.
+    fn ax_text(&self, _pid: i32) -> AxText {
+        AxText::Unsupported
+    }
     fn accessibility_trusted(&self, prompt: bool) -> bool;
     /// Whether the system lets the process watch the keyboard without
     /// letting it act on it: a permission of its own on macOS, which is not
@@ -169,6 +190,10 @@ pub mod fake {
         pub calls: Mutex<Vec<String>>,
         /// Every value `set_escape_cancels` was given, in order.
         pub escape_cancels: Mutex<Vec<bool>>,
+        /// What `ax_caret` answers.
+        pub ax_caret: Mutex<Option<usize>>,
+        /// What `ax_text` answers; None is `AxText::Unsupported`.
+        pub ax_text: Mutex<Option<String>>,
     }
 
     impl FakePlatform {
@@ -267,6 +292,16 @@ pub mod fake {
             match self.ax_insert_failure.lock().unwrap().clone() {
                 Some(e) => Err(e),
                 None => Ok(()),
+            }
+        }
+        fn ax_caret(&self, _pid: i32) -> Option<usize> {
+            *self.ax_caret.lock().unwrap()
+        }
+        fn ax_text(&self, _pid: i32) -> AxText {
+            self.record("ax_text".into());
+            match self.ax_text.lock().unwrap().clone() {
+                Some(t) => AxText::Text(t),
+                None => AxText::Unsupported,
             }
         }
         fn accessibility_trusted(&self, _prompt: bool) -> bool {

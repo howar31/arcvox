@@ -85,7 +85,14 @@ function texts(packages: ThirdPartyPackage[]): Record<string, string> {
   return result;
 }
 
-const packages = sortPackages([...rustPackages(), ...npmPackages()]);
+// Data tables built into the core, with the licence each source carries.
+const DATA_PACKAGES: ThirdPartyPackage[] = [
+  { name: "Unihan Database", version: "18.0.0", source: "data", license: "Unicode-3.0", copyright: ["Copyright © 1991-2026 Unicode, Inc."] },
+  { name: "jieba dictionary", version: "0.42.1", source: "data", license: "MIT", copyright: ["Copyright (c) 2013 Sun Junyi"] },
+  { name: "jieba-tw dictionary", version: "0.39.1", source: "data", license: "MIT", copyright: ["Copyright (c) 2013 Sun Junyi"] },
+];
+
+const packages = sortPackages([...rustPackages(), ...npmPackages(), ...DATA_PACKAGES]);
 const data: ThirdPartyData = { packages, texts: texts(packages) };
 mkdirSync(dirname(out), { recursive: true });
 writeFileSync(out, JSON.stringify(data));

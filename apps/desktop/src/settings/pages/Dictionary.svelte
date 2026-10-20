@@ -77,12 +77,17 @@
     return excerpt.split(/(【[^】]*】)/).filter(Boolean).map((p) => (p.startsWith("【") ? { text: p.slice(1, -1), mark: true } : { text: p, mark: false }));
   }
 
-  /** Takes a suggestion into the list: the aliases onto the entry that has the term, else a new entry at the top. */
+  const form = (s: string) => s.replace(/\s+/g, "").toLowerCase();
+
+  /** Takes a suggestion into the list: onto the entry that has the term (in any casing or spacing) or the
+      entry it is a letter or two away from, as aliases, with this spelling itself when it differs; else a
+      new entry at the top. */
   function accept(s: Suggestion) {
     if (!items) return;
-    const existing = items.find((item) => item.term.trim().toLowerCase() === s.term.toLowerCase());
+    const existing = items.find((item) => form(item.term) === form(s.term)) ?? (s.near_term ? items.find((item) => item.term.trim() === s.near_term) : undefined);
     if (existing) {
-      for (const a of s.add_aliases) if (!existing.aliases.includes(a)) existing.aliases.push(a);
+      const aliases = existing.term.trim() === s.term ? s.add_aliases : [s.term, ...s.add_aliases];
+      for (const a of aliases) if (!existing.aliases.includes(a) && a !== existing.term.trim()) existing.aliases.push(a);
     } else {
       items.unshift({ term: s.term, aliases: [...s.add_aliases], asr_hint: true, key: nextKey++, pending: "" });
     }
@@ -214,7 +219,7 @@
                   <b>{s.term}</b>
                   <span class="heard">{t("dictionary.heard_as")}{#each s.aliases as a (a.text)}<span class="alias">{a.text}</span>{/each}</span>
                   <Tag>{t("dictionary.rows", { n: String(s.rows) })}</Tag>
-                  {#if s.known_term}<Tag tone="accent">{t("dictionary.new_alias")}</Tag>{:else if !s.add_aliases.length}<Tag tone="warn">{t("dictionary.hint_only")}</Tag>{/if}
+                  {#if s.known_term}<Tag tone="accent">{t("dictionary.new_alias")}</Tag>{:else if s.near_term}<Tag tone="accent">{t("dictionary.near_term", { term: s.near_term })}</Tag>{:else if !s.add_aliases.length}<Tag tone="warn">{t(s.sound_alike ? "dictionary.sound_alike" : "dictionary.hint_only")}</Tag>{/if}
                 </div>
                 {#if s.excerpts[0]}<div class="excerpt">{#each pieces(s.excerpts[0]) as p, i (i)}{#if p.mark}<mark>{p.text}</mark>{:else}{p.text}{/if}{/each}</div>{/if}
               </div>

@@ -49,7 +49,7 @@ ${mitTerms}`;
   const crumbs = $derived([{ label: t("nav.about"), page: "about" as const }, { label: t("about.licenses"), page: "licenses" as const }]);
 
   function sourceLabel(p: ThirdPartyPackage): string {
-    return t(p.source === "rust" ? "licenses.source_rust" : "licenses.source_npm");
+    return t(p.source === "rust" ? "licenses.source_rust" : p.source === "npm" ? "licenses.source_npm" : "licenses.source_data");
   }
   function subtitle(p: ThirdPartyPackage): string {
     return p === APP ? p.license : `${p.version} · ${sourceLabel(p)} · ${p.license}`;

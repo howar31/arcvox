@@ -2,14 +2,13 @@
   import { tip } from "../../lib/tip";
   import { onMount } from "svelte";
   import {
-    chooseAttempt, clearHistory, clearHistoryRange, clearRecordingsRange, deleteAttempt, historyAttempts, historyStages, clearRecordings, deleteHistory, deleteRecording, errorMessage, formatBytes, historyStorage, listHistory, onHistoryChanged, openRecordingsDir, reprocessHistory, revealRecording, widgetCopy,
+    chooseAttempt, clearHistoryRange, clearRecordingsRange, deleteAttempt, historyAttempts, historyStages, deleteHistory, deleteRecording, errorMessage, formatBytes, historyStorage, listHistory, onHistoryChanged, openRecordingsDir, reprocessHistory, revealRecording, widgetCopy,
     type Attempt, type HistoryStorage, type Stage, type Utterance,
   } from "../../lib/api";
   import { storedOpen, rememberOpen, type DetailBlock } from "../../lib/detailMemory";
   import { failureText } from "../../lib/failure";
-  import { changedStages } from "../../lib/flowLast";
   import { formatDateTime, formatDay, formatTime } from "../../lib/format";
-  import { clipLength, groupByDay, PAGE_SIZE, periodRange, rawState, redoneTag, seconds, spentSeconds, totalSeconds, type PeriodSel } from "../../lib/historyView";
+  import { clipLength, corrected, groupByDay, PAGE_SIZE, periodRange, redoneTag, seconds, spentSeconds, totalSeconds, type PeriodSel } from "../../lib/historyView";
   import { resolveEngines } from "../../lib/resolve";
   import { t } from "../../lib/i18n";
   import { isImeKey } from "../../lib/ime";
@@ -29,7 +28,7 @@
   import DetailFold from "./history/DetailFold.svelte";
   import PeriodPicker from "./history/PeriodPicker.svelte";
   import Player from "./history/Player.svelte";
-  import StageChanges from "./history/StageChanges.svelte";
+  import TextFlow from "./history/TextFlow.svelte";
 
   /** How long typing pauses before the search runs. */
   const SEARCH_DELAY_MS = 250;
@@ -37,8 +36,6 @@
   let rows = $state<Utterance[] | null>(null);
   let storage = $state<HistoryStorage | null>(null);
   let now = $state(new Date());
-  let confirmClear = $state(false);
-  let confirmRecordings = $state(false);
   let confirmPeriod = $state(false);
   let confirmPeriodRecordings = $state(false);
   // Set when the list could not be read and nothing has been shown yet.
@@ -77,7 +74,7 @@
   let stages = $state<Record<number, Stage[]>>({});
   let fresh = $state<Record<number, number>>({});
   // Which blocks of an expanded row are open, for every row; remembered across visits.
-  let opened = $state<Record<DetailBlock, boolean>>({ stages: storedOpen("stages"), attempts: storedOpen("attempts") });
+  let opened = $state<Record<DetailBlock, boolean>>({ attempts: storedOpen("attempts") });
   function setOpen(block: DetailBlock, open: boolean) {
     opened[block] = open;
     rememberOpen(block, open);
@@ -335,25 +332,6 @@
   async function reveal(id: number) {
     try { await revealRecording(id); } catch (e) { toast.error(errorMessage(e)); }
   }
-  async function clearAll() {
-    confirmClear = false;
-    try {
-      await clearHistory();
-      toast.ok(t("history.cleared"));
-    } catch (e) {
-      toast.error(errorMessage(e));
-    }
-    open = null;
-  }
-  async function clearAllRecordings() {
-    confirmRecordings = false;
-    try {
-      const n = await clearRecordings();
-      toast.ok(t("history.recordings_cleared", { n: String(n) }));
-    } catch (e) {
-      toast.error(errorMessage(e));
-    }
-  }
   /** Removes the rows of the chosen period with their recordings; the list starts over with one page. */
   async function clearPeriod() {
     confirmPeriod = false;
@@ -381,7 +359,7 @@
 </script>
 
 <div class="host" bind:this={host}></div>
-{#snippet retentionLine()}{retention}{t("history.retention_edit_before")}<PageLink page="data" label={t("nav.data")} />{t("history.retention_edit_after")}{/snippet}
+{#snippet retentionLine()}{retention}{t("history.retention_edit_before")}<PageLink page="storage" label={t("nav.storage")} />{t("history.retention_edit_after")}{/snippet}
 <PageHead title={t("nav.history")} description={retention === undefined ? undefined : retentionLine} />
 
 {#if failed}
@@ -403,8 +381,6 @@
         <button type="button" class="btn quiet danger" disabled={!storage.rows} onclick={() => (confirmPeriod = true)}>{t("history.clear_period")}</button>
       {:else}
         <button type="button" class="btn quiet" onclick={openFolder}>{t("general.recordings_dir_open")}</button>
-        {#if storage.recordings > 0}<button type="button" class="btn quiet danger" onclick={() => (confirmRecordings = true)}>{t("history.clear_recordings")}</button>{/if}
-        <button type="button" class="btn quiet danger" disabled={!storage.rows} onclick={() => (confirmClear = true)}>{t("history.clear_all")}</button>
       {/if}
     </div>
   {/if}
@@ -441,6 +417,7 @@
                   {#if u.profile_id}<span>{who.name}{#if who.deleted}<span class="deleted">{t("history.deleted_profile")}</span>{/if}</span>{/if}
                   {#if u.error_code === "cancelled"}<Tag>{t("history.cancelled_tag")}</Tag>{:else if u.error !== null}<Tag tone="live">{t("history.failed_tag")}</Tag>{/if}
                   {#if u.degraded}<Tag tone="warn">{t("history.not_rewritten")}</Tag>{/if}
+                  {#if corrected(u)}<Tag tone="accent">{t("history.corrected")}</Tag>{/if}
                   {#if redoneTag(u.redone)}<Tag tone="accent">{redoneTag(u.redone)}</Tag>{/if}
                 </span>
               </span>
@@ -467,10 +444,8 @@
                   <div class="label">{t("history.error_detail")}</div>
                   <div class="tech">{u.error}</div>
                 {/if}
-              {:else if rawState(u) !== "none"}
-                {@const raw = rawState(u)}
-                <div class="label">{t("history.raw_label")}{#if raw !== "changed"}<span class="same" class:kept={raw === "same"} class:bad={raw === "failed"}>{t(raw === "same" ? "history.raw_same" : raw === "failed" ? "history.not_rewritten" : "history.rewrite_off")}</span>{/if}</div>
-                <div class="raw">{u.raw_text.trim()}</div>
+              {:else}
+                <TextFlow {u} stages={stages[u.id] ?? null} />
               {/if}
               {#if u.has_audio}
                 {@const failedRow = u.error !== null}
@@ -489,12 +464,6 @@
                     <span class="hint">{t(failedRow ? "history.retry_help" : "history.reprocess_help")}</span>
                   </div>
                 {/if}
-              {/if}
-              {#if stages[u.id]?.length}
-                {@const changed = changedStages(stages[u.id]).length}
-                <DetailFold title={t("history.stages")} small={changed ? t("history.stages_count", { n: String(changed) }) : t("history.stages_none")} open={opened.stages} ontoggle={(v) => setOpen("stages", v)}>
-                  <StageChanges stages={stages[u.id]} />
-                </DetailFold>
               {/if}
               {#if attempts[u.id]?.length}
                 <DetailFold title={t("history.attempts")} small={t("history.attempts_count", { n: String(attempts[u.id].length) })} right={inUse(u)} open={opened.attempts} ontoggle={(v) => setOpen("attempts", v)}>
@@ -549,14 +518,6 @@
   {/if}
 {/if}
 
-<Modal bind:open={confirmClear} title={t("history.confirm_clear")}>
-  <p>{t("history.clear_body")}</p>
-  {#snippet actions()}
-    <button type="button" class="btn" onclick={() => (confirmClear = false)}>{t("common.cancel")}</button>
-    <button type="button" class="btn danger" onclick={clearAll}>{t("history.clear_all")}</button>
-  {/snippet}
-</Modal>
-
 <Modal bind:open={confirmPeriod} title={t("history.clear_period_title")}>
   <p>{t("history.clear_period_body", { n: (storage?.rows ?? 0).toLocaleString() })}</p>
   {#snippet actions()}
@@ -570,14 +531,6 @@
   {#snippet actions()}
     <button type="button" class="btn" onclick={() => (confirmPeriodRecordings = false)}>{t("common.cancel")}</button>
     <button type="button" class="btn danger" onclick={clearPeriodRecordings}>{t("history.clear_period_recordings")}</button>
-  {/snippet}
-</Modal>
-
-<Modal bind:open={confirmRecordings} title={t("history.clear_recordings_title")}>
-  <p>{t("history.clear_recordings_body")}</p>
-  {#snippet actions()}
-    <button type="button" class="btn" onclick={() => (confirmRecordings = false)}>{t("common.cancel")}</button>
-    <button type="button" class="btn danger" onclick={clearAllRecordings}>{t("history.clear_recordings")}</button>
   {/snippet}
 </Modal>
 
@@ -626,9 +579,6 @@
   .detail { padding: 0 var(--row-x) 18px calc(var(--row-x) + 68px); }
   .label { margin: 10px 0 5px; font-size: var(--text-xs); font-weight: 600; color: var(--ink-2); }
   .detail > .label:first-child { margin-top: 0; }
-  .same { margin-left: 10px; font-weight: 400; }
-  .same.bad { color: var(--warn); }
-  .same.kept { color: var(--ok); }
   .raw { color: var(--ink-2); line-height: 1.55; overflow-wrap: anywhere; white-space: pre-line; -webkit-user-select: text; user-select: text; }
   .final.none { color: var(--ink-2); }
   .problem { color: var(--live); line-height: 1.55; overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }

@@ -72,7 +72,8 @@ arcvox-eval <command> [options]
            corrected result (left out with --heard-only), where they differ
            from the row. A copy of the database is made beside it first.
   suggest  --data <name|dir> [--set <set.tsv>] [--days N] [--limit 50]
-           [--min-heard 1] [--min-final 2] [--min 3] [--max-tokens 8]
+           [--min-heard 1] [--min-final 1] [--min 3] [--max-tokens 8]
+           [--region tw|cn]
            Dictionary candidates: replacements that recur between what was
            heard and what was kept. Sources: the history's raw transcript
            against its final text (pipeline), a final text the user edited
@@ -82,6 +83,10 @@ arcvox-eval <command> [options]
            --min-final final rows, or --min pipeline rows; --days keeps the
            history rows of the last N days. Pairs the dictionary covers are
            skipped; candidates differing only in casing or spacing come last.
+           Each alias is marked by kind: latin, non-word, misheard (a
+           Chinese word that sounds like the term); a changed wording is
+           left out. --region picks whose readings of a character apply
+           (default: the default profile's main language).
 
   --data names the application whose data to read (default \"Arcvox\") or a
   folder laid out like a custom data directory. Nothing in it is written.
@@ -1164,11 +1169,24 @@ fn suggest(args: &Args) -> Result<(), String> {
             now - days as i64 * 86_400
         }
     };
+    let region = match args.flag("region") {
+        Some("cn") => learn::zh::Region::Mainland,
+        Some("tw") => learn::zh::Region::Taiwan,
+        Some(other) => return Err(format!("--region must be tw or cn, not `{other}`")),
+        None => learn::zh::Region::of_language(
+            config
+                .profiles
+                .iter()
+                .find(|p| p.is_default)
+                .and_then(|p| p.language_hint.as_deref()),
+        ),
+    };
     let opts = learn::Options {
         min_heard: number("min-heard", 1)? as u32,
-        min_final: number("min-final", 2)? as u32,
+        min_final: number("min-final", 1)? as u32,
         min_pipeline: number("min", 3)? as u32,
         max_tokens: number("max-tokens", 8)?,
+        region,
         known: config
             .dictionary
             .iter()
@@ -1269,7 +1287,13 @@ fn suggest(args: &Args) -> Result<(), String> {
                 if a.counts.pipeline > 0 {
                     parts.push(format!("pipeline {}", a.counts.pipeline));
                 }
-                format!("{} ({})", a.text, parts.join(", "))
+                let kind = match a.kind {
+                    learn::AliasKind::Latin => "latin",
+                    learn::AliasKind::NonWord => "non-word",
+                    learn::AliasKind::Misheard => "misheard",
+                    learn::AliasKind::Rephrase => "rephrase",
+                };
+                format!("{} [{kind}] ({})", a.text, parts.join(", "))
             })
             .collect();
         println!("     <- {}", aliases.join("; "));

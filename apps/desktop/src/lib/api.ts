@@ -33,7 +33,7 @@ export interface Profile {
 }
 export interface DictionaryEntry { term: string; aliases: string[]; asr_hint: boolean }
 export interface General {
-  history_retention_days: number; stage_retention_days: number; keep_recordings: boolean; recording_retention_days: number; context_limit_bytes: number;
+  keep_history: boolean; history_retention_days: number; keep_stages: boolean; stage_retention_days: number; keep_recordings: boolean; recording_retention_days: number; keep_stats: boolean; context_limit_bytes: number;
   asr_timeout_secs: number; llm_timeout_secs: number; llm_temperature: number; llm_max_tokens: number | null;
   llm_idle_unload_secs: number; llm_preload_on_record: boolean; retry_count: number; typing_chars_per_min: number;
   /** The folder recordings are kept in; null for the default one. Changed with `setRecordingsDir` only. */
@@ -51,7 +51,9 @@ export interface Config {
 /** A dictionary candidate from the dictations the user corrected. */
 export interface Suggestion {
   term: string; aliases: { text: string; rows: number }[]; rows: number; excerpts: string[];
-  known_term: boolean; add_aliases: string[]; form_only: boolean;
+  known_term: boolean; near_term: string | null; add_aliases: string[]; form_only: boolean;
+  /** Every heard text is a Chinese word that sounds like the term. */
+  sound_alike: boolean;
 }
 export interface ProbeResult { ok: boolean; failure: { kind: string; message?: string; reason?: string; status?: number } | null }
 export interface Utterance {
@@ -89,6 +91,10 @@ export interface ClientSettings {
   microphone: string;
   context: { app_name: boolean; window_title: boolean; url: boolean; selected_text: boolean; clipboard: boolean };
   insertion: { default: InsertMethod; keep_on_clipboard: boolean; per_app: Record<string, InsertMethod> };
+  /** `read_back`: after an insertion the field is read back and the user's changes kept as the final text. */
+  learning: { read_back: boolean };
+  /** Switches that write more to the log, for looking into the app's workings; all off by default. */
+  dev: { log_read_back: boolean };
   max_utterance_secs: number;
   auto_stop: { enabled: boolean; silence_secs: number };
   show_transcript: boolean;
@@ -155,7 +161,15 @@ export const deleteRecording = (id: number) => invoke<void>("history_delete_reco
 /** Deletes every recording and returns how many files were removed. */
 export const clearRecordings = () => invoke<number>("history_clear_recordings");
 export const revealRecording = (id: number) => invoke<void>("history_reveal_recording", { id });
-export interface HistoryStorage { rows: number; recordings: number; recording_bytes: number; text_bytes: number; stage_bytes: number }
+export interface HistoryStorage {
+  rows: number; recordings: number; recording_bytes: number; text_bytes: number; stage_bytes: number;
+  /** Stage records and rerun results of the rows; the statistics buckets and the database size are of the whole database. */
+  stages: number; attempts: number; stats_hours: number; db_bytes: number;
+}
+/** Drops every stage record; returns how many went. */
+export const clearStages = () => invoke<number>("history_clear_stages");
+/** Drops every rerun result; returns how many went. */
+export const clearAttempts = () => invoke<number>("history_clear_attempts");
 /** What the rows take: all of them, or those from `since` up to `until` (unix seconds). */
 export const historyStorage = (since: number | null = null, until: number | null = null) => invoke<HistoryStorage>("history_storage", { since, until });
 /** Removes the rows in the range with their recordings; returns how many rows went. */

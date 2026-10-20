@@ -8,6 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::history::Utterance;
 
+pub mod zh;
+
 /// Where a pair of texts comes from. The user's own corrections weigh
 /// more than what the pipeline changed by itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -82,11 +84,49 @@ impl Rows {
     }
 }
 
+/// What a heard text is, next to the term it stood for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AliasKind {
+    /// Either side has Latin letters or digits: judged by spelling.
+    Latin,
+    /// Chinese, and no word the dictionaries know: misheard, and safe to
+    /// replace wherever it appears.
+    NonWord,
+    /// A Chinese word that sounds like the term, or that a corrected
+    /// transcript shows: misheard, but a word of its own too.
+    Misheard,
+    /// A Chinese word that sounds unlike the term, seen only in a
+    /// corrected result: the user changed the wording.
+    Rephrase,
+}
+
 /// A text that was heard in place of the term.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Alias {
     pub text: String,
     pub counts: Counts,
+    pub kind: AliasKind,
+}
+
+impl Alias {
+    fn classify(text: &str, term: &str, counts: &Counts, region: zh::Region) -> AliasKind {
+        if !zh::is_chinese(text) || !zh::is_chinese(term) {
+            // A Latin pair from one corrected result that is not spelled
+            // alike (quick for fast) is a change of wording too.
+            let result_once = counts.heard == 0 && counts.pipeline == 0 && counts.finals == 1;
+            if result_once && !spelled_alike(text, term) {
+                AliasKind::Rephrase
+            } else {
+                AliasKind::Latin
+            }
+        } else if !zh::is_word(text) {
+            AliasKind::NonWord
+        } else if counts.heard > 0 || zh::sound_alike(text, term, region) {
+            AliasKind::Misheard
+        } else {
+            AliasKind::Rephrase
+        }
+    }
 }
 
 /// A dictionary candidate: the text kept, with the texts heard for it.
@@ -99,6 +139,10 @@ pub struct Suggestion {
     pub excerpts: Vec<String>,
     /// The term is in the dictionary already; the aliases are new.
     pub known_term: bool,
+    /// A dictionary term this one is a letter or two away from (zephir
+    /// kit beside Zephyr Kit): accepting folds this spelling and its
+    /// aliases into that entry rather than making a second one.
+    pub near_term: Option<String>,
     /// Every alias is the term in another casing or spacing: a form to
     /// fix, not a word heard wrong.
     pub form_only: bool,
@@ -127,19 +171,22 @@ pub struct Options {
     /// Dictionary terms with their aliases: a pair already covered is
     /// skipped.
     pub known: Vec<(String, Vec<String>)>,
+    /// Whose readings of a character apply.
+    pub region: zh::Region,
 }
 
 impl Default for Options {
     fn default() -> Self {
         Options {
             min_heard: 1,
-            min_final: 2,
+            min_final: 1,
             min_pipeline: 3,
             max_tokens: 8,
             excerpts: 3,
             max_changed: 0.5,
             rewrite_len: 8,
             known: Vec::new(),
+            region: zh::Region::Taiwan,
         }
     }
 }
@@ -377,16 +424,24 @@ pub fn suggest(pairs: &[Pair], opts: &Options) -> Vec<Suggestion> {
     let table: Table = merge_forms(table);
     let mut out: Vec<Suggestion> = table
         .into_iter()
-        .map(|(term, aliases)| {
+        .filter_map(|(term, aliases)| {
             let mut all = Rows::default();
             let mut aliases: Vec<(Alias, Vec<String>)> = aliases
                 .into_iter()
-                .map(|(text, tally)| {
-                    all.merge(&tally.rows);
+                .filter_map(|(text, tally)| {
                     let counts = tally.rows.counts();
-                    (Alias { text, counts }, tally.excerpts)
+                    let kind = Alias::classify(&text, &term, &counts, opts.region);
+                    // A changed wording is no dictation error: not a suggestion.
+                    if kind == AliasKind::Rephrase {
+                        return None;
+                    }
+                    all.merge(&tally.rows);
+                    Some((Alias { text, counts, kind }, tally.excerpts))
                 })
                 .collect();
+            if aliases.is_empty() {
+                return None;
+            }
             let counts = all.counts();
             // Strongest alias first; its excerpts lead too.
             aliases.sort_by(|(x, _), (y, _)| {
@@ -405,19 +460,27 @@ pub fn suggest(pairs: &[Pair], opts: &Options) -> Vec<Suggestion> {
                 }
             }
             let aliases: Vec<Alias> = aliases.into_iter().map(|(a, _)| a).collect();
-            let known_term = opts
-                .known
-                .iter()
-                .any(|(t, _)| t.eq_ignore_ascii_case(&term));
+            // The same word in another casing or spacing is the same term.
+            let known_term = opts.known.iter().any(|(t, _)| same_form(t, &term));
+            let near_term = (!known_term)
+                .then(|| {
+                    opts.known
+                        .iter()
+                        .map(|(t, _)| t)
+                        .find(|t| spelled_near(t, &term))
+                        .cloned()
+                })
+                .flatten();
             let form_only = aliases.iter().all(|a| same_form(&a.text, &term));
-            Suggestion {
+            Some(Suggestion {
                 term,
                 aliases,
                 counts,
                 excerpts,
                 known_term,
+                near_term,
                 form_only,
-            }
+            })
         })
         .filter(|s| {
             s.counts.heard >= opts.min_heard
@@ -546,17 +609,185 @@ pub fn pairs_of(rows: &[Utterance]) -> Vec<Pair> {
 }
 
 /// The aliases an accepted suggestion brings along. A replacement never
-/// looks at its context, so a Chinese word heard once as another Chinese
-/// word stays a hint only: the heard word may be a word of its own. A
-/// term with Latin letters or digits takes every alias; a Chinese term
-/// takes the aliases two or more rows agree on.
+/// looks at its context, so a heard text that is a word of its own
+/// (統一 for 同意) stays a hint only until two or more rows agree on it; a
+/// heard text that is no word (車師 for 測試) is safe to replace from one
+/// row. With Latin letters or digits, an alias comes along when a
+/// corrected transcript shows it, two or more rows agree on it, or it is
+/// spelled close to the term; a corrected result alone may be a change of
+/// mind (quick to fast), not a slip of the ear.
 pub fn aliases_to_add(s: &Suggestion) -> Vec<String> {
-    let latin = s.term.chars().any(|c| c.is_ascii_alphanumeric());
     s.aliases
         .iter()
-        .filter(|a| latin || a.counts.user() + a.counts.pipeline >= 2)
+        .filter(|a| {
+            let agreed = a.counts.user() + a.counts.pipeline >= 2;
+            match a.kind {
+                AliasKind::Latin => agreed || a.counts.heard > 0 || spelled_alike(&a.text, &s.term),
+                AliasKind::NonWord => true,
+                AliasKind::Misheard => agreed,
+                AliasKind::Rephrase => false,
+            }
+        })
         .map(|a| a.text.clone())
         .collect()
+}
+
+/// Whether two Latin texts are one letter apart, or two when longer than
+/// eight letters: the same word, spelled a little differently.
+fn spelled_near(a: &str, b: &str) -> bool {
+    if !a.chars().any(|c| c.is_ascii_alphabetic()) || !b.chars().any(|c| c.is_ascii_alphabetic()) {
+        return false;
+    }
+    let fold = |s: &str| -> Vec<char> {
+        s.chars()
+            .filter(|c| !c.is_whitespace())
+            .map(|c| c.to_ascii_lowercase())
+            .collect()
+    };
+    let (x, y) = (fold(a), fold(b));
+    let longest = x.len().max(y.len());
+    let allowed = if longest > 8 { 2 } else { 1 };
+    longest >= 3 && crate::eval::edit_distance(&x, &y) <= allowed
+}
+
+/// Whether two texts share most of their letters: the edit distance over
+/// their lower-cased characters, spaces left out, is at most half the
+/// longer one.
+fn spelled_alike(a: &str, b: &str) -> bool {
+    let fold = |s: &str| -> Vec<char> {
+        s.chars()
+            .filter(|c| !c.is_whitespace())
+            .map(|c| c.to_ascii_lowercase())
+            .collect()
+    };
+    let (x, y) = (fold(a), fold(b));
+    let longest = x.len().max(y.len());
+    longest > 0 && crate::eval::edit_distance(&x, &y) * 2 <= longest
+}
+
+/// What a field held where a text was put in, read back later.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadBack {
+    /// The text is there as it was put in.
+    Unchanged,
+    /// The text where it was put in, as the user changed it.
+    Corrected(String),
+    /// Too little of the text is left to tell what became of it.
+    TooDifferent,
+}
+
+/// The piece of a field that lines up with a text put in earlier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Alignment {
+    /// The field's text where the inserted text was, trimmed.
+    pub span: String,
+    /// Characters changed, added or dropped between the two.
+    pub changes: usize,
+    /// How many changes still count as a correction of the text.
+    pub allowed: usize,
+}
+
+impl Alignment {
+    /// A span changed more than a correction would be.
+    pub fn too_different(&self) -> bool {
+        self.changes > self.allowed
+    }
+}
+
+/// Finds `inserted` in `field` around `at` (the caret before the
+/// insertion, in characters) and reports how it reads now. Only the span
+/// that lines up with the inserted text is returned, never the field.
+/// A span that differs by more than the allowed changes is not a
+/// correction; see `align`.
+pub fn read_back(inserted: &str, field: &str, at: usize, max_changed: f64) -> ReadBack {
+    match align(inserted, field, at, max_changed) {
+        None => ReadBack::TooDifferent,
+        Some(a) if a.too_different() => ReadBack::TooDifferent,
+        Some(a) if a.span == inserted.trim() => ReadBack::Unchanged,
+        Some(a) => ReadBack::Corrected(a.span),
+    }
+}
+
+/// The substring of `field` closest to `inserted`, with how far apart
+/// they are: of the substrings starting within a few characters of the
+/// caret `at`, the one closest by edit distance is taken. The changes
+/// allowed are `max_changed` of the longer length, at least three so a
+/// short text may have a word of two characters and its punctuation
+/// corrected, and at most half the length so a text replaced outright
+/// does not pass. None when the inserted text is blank or the field
+/// holds nothing near the caret.
+pub fn align(inserted: &str, field: &str, at: usize, max_changed: f64) -> Option<Alignment> {
+    let inserted = inserted.trim();
+    if inserted.is_empty() {
+        return None;
+    }
+    let field: Vec<char> = field.chars().collect();
+    let wanted: Vec<char> = inserted.chars().collect();
+    let n = wanted.len();
+    let lo = at.saturating_sub(4).min(field.len());
+    let hi = (at + n + n / 2 + 20).min(field.len());
+    let allowed_for = |longest: usize| -> usize {
+        let share = (longest as f64 * max_changed).floor() as usize;
+        share.max(3).min(longest / 2)
+    };
+    if field[lo..hi].iter().collect::<String>().contains(inserted) {
+        return Some(Alignment {
+            span: inserted.to_string(),
+            changes: 0,
+            allowed: allowed_for(n),
+        });
+    }
+    let (start, end, changes) = best_span(&wanted, &field, lo, hi)?;
+    let span: String = field[start..end].iter().collect();
+    let span = span.trim().to_string();
+    let longest = n.max(span.chars().count());
+    Some(Alignment {
+        span,
+        changes,
+        allowed: allowed_for(longest),
+    })
+}
+
+/// The substring of `field[lo..hi]` closest to `wanted`: for each start
+/// within `lo..lo + 9`, one edit-distance pass against the rest of the
+/// window gives the distance to every end at once; the smallest wins,
+/// ties going to the length nearest the wanted one.
+fn best_span(
+    wanted: &[char],
+    field: &[char],
+    lo: usize,
+    hi: usize,
+) -> Option<(usize, usize, usize)> {
+    let n = wanted.len();
+    let mut best: Option<(usize, usize, usize)> = None;
+    for start in lo..(lo + 9).min(hi) {
+        let window = &field[start..hi];
+        let m = window.len();
+        // prev[j] is the distance between all of `wanted` and window[..j].
+        let mut prev: Vec<usize> = (0..=m).collect();
+        let mut cur = vec![0usize; m + 1];
+        for i in 1..=n {
+            cur[0] = i;
+            for j in 1..=m {
+                let cost = usize::from(wanted[i - 1] != window[j - 1]);
+                cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
+            }
+            std::mem::swap(&mut prev, &mut cur);
+        }
+        let gap = |a: usize, b: usize| (a as i64 - b as i64).unsigned_abs();
+        for (j, &distance) in prev.iter().enumerate().skip(1) {
+            let better = match best {
+                None => true,
+                Some((bs, be, bd)) => {
+                    distance < bd || (distance == bd && gap(j, n) < gap(be - bs, n))
+                }
+            };
+            if better {
+                best = Some((start, start + j, distance));
+            }
+        }
+    }
+    best
 }
 
 /// The dictionary already turns `alias` into `term`, or `alias` is a
@@ -703,7 +934,7 @@ mod thresholds {
     }
 
     #[test]
-    fn a_corrected_result_needs_two_rows_and_casing_pairs_sort_last() {
+    fn a_changed_wording_is_left_out_and_casing_pairs_sort_last() {
         let pairs = vec![
             pair("1", "用別的方式", "用其他方式", Source::Final),
             pair("2", "清 cdn 快取", "清 CDN 快取", Source::Final),
@@ -767,13 +998,17 @@ mod from_rows {
 
     #[test]
     fn a_chinese_term_heard_once_brings_no_alias() {
-        let alias = |text: &str, user: u32| Alias {
-            text: text.into(),
-            counts: Counts {
+        let alias = |text: &str, user: u32| {
+            let counts = Counts {
                 heard: user,
                 users: user,
                 ..Counts::default()
-            },
+            };
+            Alias {
+                text: text.into(),
+                kind: Alias::classify(text, "權限", &counts, zh::Region::Taiwan),
+                counts,
+            }
         };
         let chinese = Suggestion {
             term: "權限".into(),
@@ -781,15 +1016,35 @@ mod from_rows {
             counts: Counts::default(),
             excerpts: Vec::new(),
             known_term: false,
+            near_term: None,
             form_only: false,
         };
         assert_eq!(aliases_to_add(&chinese), ["全線"]);
         let latin = Suggestion {
             term: "phase".into(),
-            aliases: vec![alias("face", 1)],
+            aliases: vec![Alias {
+                kind: AliasKind::Latin,
+                ..alias("face", 1)
+            }],
             ..chinese.clone()
         };
         assert_eq!(aliases_to_add(&latin), ["face"]);
+        // A corrected result alone: only an alias spelled like the term.
+        let from_result = |text: &str| Alias {
+            text: text.into(),
+            counts: Counts {
+                finals: 1,
+                users: 1,
+                ..Counts::default()
+            },
+            kind: AliasKind::Latin,
+        };
+        let result_only = Suggestion {
+            term: "fast".into(),
+            aliases: vec![from_result("quick"), from_result("fasst")],
+            ..chinese.clone()
+        };
+        assert_eq!(aliases_to_add(&result_only), ["fasst"]);
         let once = Suggestion {
             aliases: vec![alias("風暴", 1)],
             ..chinese
@@ -864,5 +1119,169 @@ mod forms {
             .collect();
         assert_eq!(aliases, [("sefirkit", 3), ("zephyr kit", 1)]);
         assert!(!s.form_only);
+    }
+}
+
+#[cfg(test)]
+mod read_back_tests {
+    use super::*;
+
+    #[test]
+    fn the_text_as_put_in_is_unchanged() {
+        let field = "前面的字。我明天會晚一點到。後面的字";
+        assert_eq!(
+            read_back("我明天會晚一點到。", field, 5, 0.3),
+            ReadBack::Unchanged
+        );
+    }
+
+    #[test]
+    fn a_changed_word_comes_back_as_the_span_alone() {
+        let field = "前面的字。我後天會晚一點到。後面的字";
+        assert_eq!(
+            read_back("我明天會晚一點到。", field, 5, 0.3),
+            ReadBack::Corrected("我後天會晚一點到。".into())
+        );
+        let field = "hello, see you at the Zephyr Kit meeting! bye";
+        assert_eq!(
+            read_back("see you at the zefir kit meeting!", field, 7, 0.3),
+            ReadBack::Corrected("see you at the Zephyr Kit meeting!".into())
+        );
+    }
+
+    #[test]
+    fn one_swapped_character_in_a_short_text_is_a_correction() {
+        assert_eq!(
+            read_back("漢字 整理後", "前面的字。漢字 整理好。後面的字", 5, 0.3),
+            ReadBack::Corrected("漢字 整理好".into())
+        );
+    }
+
+    #[test]
+    fn a_replaced_text_is_too_different_and_an_empty_field_too() {
+        let field = "前面的字。完全不同的一句話在這裡。後面的字";
+        assert_eq!(
+            read_back("我明天會晚一點到。", field, 5, 0.3),
+            ReadBack::TooDifferent
+        );
+        assert_eq!(
+            read_back("我明天會晚一點到。", "", 0, 0.3),
+            ReadBack::TooDifferent
+        );
+    }
+
+    #[test]
+    fn a_short_text_may_have_three_changes_but_not_half_of_it() {
+        // A word of two characters and its punctuation, in seven characters.
+        assert_eq!(
+            read_back("測試一下，停歇", "測試一下聽寫\n", 0, 0.3),
+            ReadBack::Corrected("測試一下聽寫".into())
+        );
+        let a = align("測試一下，停歇", "測試一下聽寫\n", 0, 0.3).unwrap();
+        assert_eq!((a.changes, a.allowed), (3, 3));
+        // Four changes in seven are too many.
+        assert_eq!(
+            read_back("測試一下，停歇", "測試看看聽寫\n", 0, 0.3),
+            ReadBack::TooDifferent
+        );
+        // Three changes in four is more than half.
+        assert_eq!(
+            read_back("收到謝謝", "好的再見", 0, 0.3),
+            ReadBack::TooDifferent
+        );
+        // A long text keeps the share.
+        let a = align("a".repeat(40).as_str(), &"a".repeat(40), 0, 0.3).unwrap();
+        assert_eq!(a.allowed, 12);
+    }
+
+    #[test]
+    fn the_caret_may_be_off_by_a_little() {
+        let field = "一二三四五六我後天會晚一點到七八九";
+        assert_eq!(
+            read_back("我明天會晚一點到", field, 9, 0.3),
+            ReadBack::Corrected("我後天會晚一點到".into())
+        );
+    }
+}
+
+#[cfg(test)]
+mod chinese_kinds {
+    use super::*;
+
+    fn pair(id: &str, from: &str, to: &str, source: Source) -> Pair {
+        Pair {
+            id: id.into(),
+            from: from.into(),
+            to: to.into(),
+            source,
+        }
+    }
+
+    #[test]
+    fn a_non_word_heard_once_brings_its_alias_and_a_word_does_not() {
+        let pairs = vec![
+            pair("1", "這是寒碾的", "這是慘烈的", Source::Final),
+            pair("2", "看風暴層", "看封包層", Source::Final),
+        ];
+        let out = suggest(&pairs, &Options::default());
+        let by_term = |t: &str| out.iter().find(|s| s.term == t).expect(t).clone();
+        let non_word = by_term("慘烈");
+        assert_eq!(non_word.aliases[0].kind, AliasKind::NonWord);
+        assert_eq!(aliases_to_add(&non_word), ["寒碾"]);
+        let word = by_term("封包");
+        assert_eq!(word.aliases[0].kind, AliasKind::Misheard);
+        assert!(aliases_to_add(&word).is_empty(), "a hint only");
+    }
+
+    #[test]
+    fn a_changed_wording_is_no_suggestion_unless_the_transcript_was_corrected() {
+        let pairs = vec![pair("1", "用別的方式", "用其他方式", Source::Final)];
+        assert!(suggest(&pairs, &Options::default()).is_empty());
+        let pairs = vec![pair("1", "用別的方式", "用其他方式", Source::Heard)];
+        let out = suggest(&pairs, &Options::default());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].aliases[0].kind, AliasKind::Misheard);
+    }
+}
+
+#[cfg(test)]
+mod near_terms {
+    use super::*;
+
+    #[test]
+    fn a_spelling_a_letter_away_from_a_dictionary_term_names_it() {
+        let pairs = vec![Pair {
+            id: "1".into(),
+            from: "用 zefirkit 寫".into(),
+            to: "用 zephyrkit 寫".into(),
+            source: Source::Heard,
+        }];
+        let opts = Options {
+            known: vec![("Zephyr Kit".into(), vec![])],
+            ..Options::default()
+        };
+        let out = suggest(&pairs, &opts);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].term, "zephyrkit");
+        assert!(out[0].known_term, "only case and spacing differ");
+        assert_eq!(out[0].near_term, None);
+
+        let pairs = vec![Pair {
+            id: "1".into(),
+            from: "用 zefirkit 寫".into(),
+            to: "用 zephir kit 寫".into(),
+            source: Source::Heard,
+        }];
+        let out = suggest(&pairs, &opts);
+        assert_eq!(out[0].term, "zephir kit");
+        assert!(!out[0].known_term);
+        assert_eq!(out[0].near_term.as_deref(), Some("Zephyr Kit"));
+        assert!(spelled_near("zephir kit", "Zephyr Kit"));
+        assert!(spelled_near("Slak", "Slack"));
+        assert!(
+            !spelled_near("form", "from"),
+            "a transposition is two edits"
+        );
+        assert!(!spelled_near("權限", "全線"));
     }
 }

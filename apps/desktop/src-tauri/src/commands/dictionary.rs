@@ -47,10 +47,16 @@ pub struct SuggestionDto {
     pub excerpts: Vec<String>,
     /// The term is in the dictionary; accepting adds the aliases to it.
     pub known_term: bool,
+    /// A dictionary term a letter or two away: accepting folds this
+    /// spelling and its aliases into that entry.
+    pub near_term: Option<String>,
     /// The aliases accepting brings along; empty for a term that is a
     /// recognition hint only.
     pub add_aliases: Vec<String>,
     pub form_only: bool,
+    /// Every heard text is a Chinese word that sounds like the term: a
+    /// hint only, since replacing a word hits the places it was meant.
+    pub sound_alike: bool,
 }
 
 /// The candidates from the history, the turned-down ones left out.
@@ -66,6 +72,13 @@ pub fn suggestions(engine: &Engine) -> CmdResult<Vec<SuggestionDto>> {
             .iter()
             .map(|e| (e.term.clone(), e.aliases.clone()))
             .collect(),
+        region: learn::zh::Region::of_language(
+            config
+                .profiles
+                .iter()
+                .find(|p| p.is_default)
+                .and_then(|p| p.language_hint.as_deref()),
+        ),
         ..learn::Options::default()
     };
     let pairs = learn::pairs_of(&rows);
@@ -87,9 +100,14 @@ pub fn suggestions(engine: &Engine) -> CmdResult<Vec<SuggestionDto>> {
                 })
                 .collect(),
             rows: s.counts.user(),
+            sound_alike: s
+                .aliases
+                .iter()
+                .all(|a| a.kind == learn::AliasKind::Misheard),
             term: s.term,
             excerpts: s.excerpts,
             known_term: s.known_term,
+            near_term: s.near_term,
             form_only: s.form_only,
         })
         .collect())

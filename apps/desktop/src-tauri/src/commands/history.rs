@@ -362,6 +362,10 @@ pub struct StorageDto {
     pub recording_bytes: u64,
     pub text_bytes: u64,
     pub stage_bytes: u64,
+    pub stages: u64,
+    pub attempts: u64,
+    pub stats_hours: u64,
+    pub db_bytes: u64,
 }
 
 /// Rows per local day, for the period picker's calendar.
@@ -404,7 +408,23 @@ pub fn history_storage(
         recording_bytes: s.recording_bytes,
         text_bytes: s.text_bytes,
         stage_bytes: s.stage_bytes,
+        stages: s.stages,
+        attempts: s.attempts,
+        stats_hours: s.stats_hours,
+        db_bytes: s.db_bytes,
     })
+}
+
+/// Drops every stage record; the rows keep their texts. Returns how many went.
+#[tauri::command]
+pub fn history_clear_stages(state: State<'_, AppState>) -> CmdResult<usize> {
+    Ok(engine(&state)?.history().clear_stages()?)
+}
+
+/// Drops every rerun result; the result each row uses stays. Returns how many went.
+#[tauri::command]
+pub fn history_clear_attempts(state: State<'_, AppState>) -> CmdResult<usize> {
+    Ok(engine(&state)?.history().clear_attempts()?)
 }
 
 /// Removes the rows between `since` and `until` with their recordings.

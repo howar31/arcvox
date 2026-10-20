@@ -53,6 +53,33 @@ pub struct ClientSettings {
     pub stats_layout: Option<Vec<StatsCard>>,
     /// The backup folder and what is kept up to date in it.
     pub backup: BackupSettings,
+    /// What the app learns from the user's corrections.
+    #[serde(default)]
+    pub learning: LearningSettings,
+    /// Switches for looking into the app's workings; all off by default.
+    #[serde(default)]
+    pub dev: DevSettings,
+}
+
+/// What the app learns from the user's corrections.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LearningSettings {
+    /// After the text is put in, the field is read back through
+    /// Accessibility and the user's changes to it are kept as the
+    /// dictation's final text. Off by default: it reads the field.
+    pub read_back: bool,
+}
+
+/// Switches for looking into the app's workings. Each one writes more to
+/// the log than the app otherwise does, so all are off by default.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DevSettings {
+    /// Every read-back logs the piece of the field it lined up with the
+    /// inserted text and how far apart the two were. The log then holds
+    /// dictated text.
+    pub log_read_back: bool,
 }
 
 /// The folder the app writes this device's history, statistics and
@@ -337,6 +364,8 @@ impl Default for ClientSettings {
             manifest_url: None,
             stats_layout: None,
             backup: BackupSettings::default(),
+            learning: LearningSettings::default(),
+            dev: DevSettings::default(),
         }
     }
 }

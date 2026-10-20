@@ -33,3 +33,9 @@ export function together(resets: (Reset | undefined)[]): (() => void) | undefine
   const changed = resets.filter((r) => r !== undefined);
   return changed.length ? () => changed.forEach((r) => r.run()) : undefined;
 }
+
+/** One reset for a row that holds several settings: the first changed one's hint, every changed one run. */
+export function anyOf(resets: (Reset | undefined)[]): Reset | undefined {
+  const changed = resets.filter((r) => r !== undefined);
+  return changed.length ? { hint: changed[0].hint, run: () => changed.forEach((r) => r.run()) } : undefined;
+}

@@ -33,6 +33,9 @@ pub struct Deps {
     pub vad_factory: Box<dyn Fn() -> Box<dyn Vad> + Send>,
     /// Tokio handle used for `record_final` and the event forwarder.
     pub runtime: tokio::runtime::Handle,
+    /// How long after an insertion the field is read back for the user's
+    /// changes, when the setting is on.
+    pub read_back_delay: std::time::Duration,
 }
 
 #[derive(Clone)]

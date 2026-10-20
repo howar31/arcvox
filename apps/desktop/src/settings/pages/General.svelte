@@ -3,11 +3,11 @@
   import { onMount, untrack } from "svelte";
   import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
-  import { errorMessage, formatBytes, historyStorage, openRecordingsDir, recordingsDir, resetStats, setRecordingsDir, type RecordingsDir, listDisplays, listMicrophones, onWidgetPlacing, onWidgetPreviewScene, widgetIsPlacing, widgetPreview, openPrivacyPane, permissions, requestAccessibility, requestMicrophone, updateGeneral, widgetPlacing, widgetResetPosition, type ClientSettings, type DisplayName, type General, type HistoryStorage, type InsertMethod, type Permissions } from "../../lib/api";
+  import { errorMessage, openRecordingsDir, recordingsDir, setRecordingsDir, type RecordingsDir, listDisplays, listMicrophones, onWidgetPlacing, onWidgetPreviewScene, widgetIsPlacing, widgetPreview, openPrivacyPane, permissions, requestAccessibility, requestMicrophone, updateGeneral, widgetPlacing, widgetResetPosition, type ClientSettings, type DisplayName, type General, type InsertMethod, type Permissions } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { t } from "../../lib/i18n";
   import { client, config, defaults } from "../../lib/store.svelte";
-  import { resetOf, together } from "../../lib/reset";
+  import { anyOf, resetOf, together } from "../../lib/reset";
   import { invalidFields } from "../../lib/numbers";
   import { guard } from "../../lib/guard.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
@@ -27,8 +27,8 @@
   import SaveBar from "../../lib/ui/SaveBar.svelte";
   import Icon from "../../lib/ui/Icon.svelte";
   import PageLink from "../../lib/ui/PageLink.svelte";
-  import Modal from "../../lib/ui/Modal.svelte";
   import AddPerApp from "./AddPerApp.svelte";
+  import StorageUsage from "./StorageUsage.svelte";
   import { DEMO, SCENES, lookOf, previewRequest, sceneFor, type Look, type Scene } from "../../lib/widgetPreview";
 
   import type { SettingsPage } from "../../lib/route";
@@ -142,11 +142,6 @@
     try { perms = await permissions(); } catch { perms = null; }
   }
 
-  // What the history takes on disk, and the confirmation of the statistics reset.
-  let storage = $state<HistoryStorage | null>(null);
-  let confirmStats = $state(false);
-  const loadStorage = () => historyStorage().then((s) => { storage = s; }).catch(() => { storage = null; });
-
   // The folder of the recordings. Changing it moves them at once; it is not part of what Save writes.
   let folder = $state<RecordingsDir | null>(null);
   let moving = $state(false);
@@ -161,7 +156,6 @@
       toast.ok(t(d.left ? "general.recordings_dir_left" : "general.recordings_dir_moved", counts));
     } catch (e) { toast.error(errorMessage(e)); }
     moving = false;
-    loadStorage();
   }
   async function chooseFolder() {
     const picked = await openDialog({ directory: true, multiple: false, defaultPath: folder?.path });
@@ -170,10 +164,6 @@
 
   async function openFolder() {
     try { await openRecordingsDir(); } catch (e) { toast.error(errorMessage(e)); }
-  }
-  async function resetStatistics() {
-    confirmStats = false;
-    try { await resetStats(); toast.ok(t("general.stats_reset_done")); } catch (e) { toast.error(errorMessage(e)); }
   }
 
   const scenes = $derived(SCENES.map((value) => ({ value, label: t(`general.preview_scene_${value}`) })));
@@ -205,6 +195,9 @@
     maxUtterance: ofClient("max_utterance_secs", unit("common.seconds")),
     autoStop: ofClient("auto_stop.enabled", onOff),
     autoStopSecs: ofClient("auto_stop.silence_secs", unit("common.seconds")),
+    keepHistory: ofGeneral("keep_history", onOff),
+    keepStages: ofGeneral("keep_stages", onOff),
+    keepStats: ofGeneral("keep_stats", onOff),
     historyDays: ofGeneral("history_retention_days", unit("common.days")),
     stageDays: ofGeneral("stage_retention_days", unit("common.days")),
     keepRecordings: ofGeneral("keep_recordings", onOff),
@@ -222,6 +215,8 @@
     preload: ofGeneral("llm_preload_on_record", onOff),
     method: ofClient("insertion.default", named("general.method_")),
     keepClipboard: ofClient("insertion.keep_on_clipboard", onOff),
+    readBack: ofClient("learning.read_back", onOff),
+    logReadBack: ofClient("dev.log_read_back", onOff),
   });
   // A group offers the resets of the rows it shows.
   const fadeShown = $derived(draft?.widget_idle !== "hidden");
@@ -239,7 +234,6 @@
     const scened = onWidgetPreviewScene((to) => { stopDemo(); scene = to; });
     widgetIsPlacing().then((on) => { placing = on; }).catch(() => {});
     reset();
-    loadStorage();
     loadFolder();
     listMicrophones().then((m) => (mics = m)).catch(() => {});
     checkAccess();
@@ -457,6 +451,14 @@
       </Row>
     </Group>
   {/if}
+
+  {#if draft}
+    <Group title={t("general.dev")} help={t("general.dev_help")} onreset={together([resets.logReadBack])}>
+      <Row label={t("general.log_read_back")} help={t(draft.dev.log_read_back ? "general.log_read_back_on" : "general.log_read_back_off")} reset={resets.logReadBack}>
+        <Switch bind:checked={draft.dev.log_read_back} label={t("general.log_read_back")} />
+      </Row>
+    </Group>
+  {/if}
 {:else if section === "recording"}
   {#if draft}
     <Group title={t("general.hotkey")} onreset={together([resets.shortcuts, resets.hold, resets.doubleTap, resets.escape])}>
@@ -537,53 +539,60 @@
     </Group>
   {/if}
 {:else if section === "data"}
-  {#if general}
-    {#snippet statsHelp()}{t("general.stats_help_before")}<PageLink page="home" label={t("nav.home")} />{t("general.stats_help_after")}{/snippet}
-    {#snippet storageHelp()}{#if storage}{t("general.storage_rows", { n: storage.rows.toLocaleString(), size: formatBytes(storage.text_bytes) })}{t("home.list_sep")}{t("general.storage_stages", { size: formatBytes(storage.stage_bytes) })}{t("home.list_sep")}{t("general.storage_recordings", { n: storage.recordings.toLocaleString(), size: formatBytes(storage.recording_bytes) })}<br />{/if}{t("general.storage_clear_before")}<PageLink page="history" label={t("nav.history")} />{t("general.storage_clear_after")}{/snippet}
-    <Group title={t("general.history")} onreset={together([resets.historyDays, resets.stageDays, resets.keepRecordings, resets.recordingDays])}>
-      <Row label={t("general.history_retention")} help={t("general.retention_zero_help")} reset={resets.historyDays}>
-        <NumberField bind:value={general.history_retention_days} min={0} unit={t("common.days")} label={t("general.history_retention")} />
-      </Row>
-      <Row label={t("general.stage_retention")} help={t("general.stage_retention_help")} info={t("general.stage_retention_info")} reset={resets.stageDays}>
-        <NumberField bind:value={general.stage_retention_days} min={0} unit={t("common.days")} label={t("general.stage_retention")} />
-      </Row>
-      <Row label={t("general.keep_recordings")} help={t(general.keep_recordings ? "general.keep_recordings_on" : "general.keep_recordings_off")} reset={resets.keepRecordings}>
-        <Switch bind:checked={general.keep_recordings} label={t("general.keep_recordings")} />
-      </Row>
-      {#if general.keep_recordings}<Fold>
-        <Row label={t("general.recording_retention")} help={t("general.retention_zero_help")} reset={resets.recordingDays}>
-          <NumberField bind:value={general.recording_retention_days} min={0} unit={t("common.days")} label={t("general.recording_retention")} />
-        </Row>
-      </Fold>{/if}
-      <!-- The folder matters only while recordings are kept; files already there follow the retention days. -->
-      {#if folder && general.keep_recordings}<Fold>
-        <div class="folder">
-          <div class="folder-head">
-            <span class="name">{t("general.recordings_dir")}</span>
-            <span class="folder-actions">
-              <button type="button" class="btn quiet" onclick={openFolder}>{t("general.recordings_dir_open")}</button>
-              <button type="button" class="btn quiet" disabled={moving || folder.is_default} onclick={() => moveRecordings(null)}>{t("general.recordings_dir_reset")}</button>
-              <button type="button" class="btn" disabled={moving} onclick={chooseFolder}>{t("general.recordings_dir_choose")}</button>
-            </span>
-          </div>
-          <small class="sub">{folder.is_default ? t("general.recordings_dir_default", { path: folder.path }) : folder.path}</small>
-        </div>
-      </Fold>{/if}
-      <Row label={t("general.storage")} help={storageHelp} />
-      <Row label={t("general.stats")} help={statsHelp}>
-        <button type="button" class="btn danger" onclick={() => (confirmStats = true)}>{t("general.stats_reset")}</button>
-      </Row>
-    </Group>
-
-  {/if}
-
   {#if draft}
+    {#snippet readBackIdle()}{t("storage.read_back_idle")}<PageLink page="storage" label={t("nav.storage")} />{t("common.period")}{/snippet}
+    {#snippet readBackIdleTag()}<Tag tone="warn">{t("storage.keep_no")}</Tag>{/snippet}
     <Group title={t("general.context")} help={t("general.context_help")} info={t("general.context_info")} onreset={together([resets.ctxApp, resets.ctxTitle, resets.ctxUrl, resets.ctxSelected, resets.ctxClipboard])}>
       <Row label={t("general.ctx_app_name")} reset={resets.ctxApp}><Switch bind:checked={draft.context.app_name} label={t("general.ctx_app_name")} /></Row>
       <Row label={t("general.ctx_window_title")} reset={resets.ctxTitle}><Switch bind:checked={draft.context.window_title} label={t("general.ctx_window_title")} /></Row>
       <Row label={t("general.ctx_url")} reset={resets.ctxUrl}><Switch bind:checked={draft.context.url} label={t("general.ctx_url")} /></Row>
       <Row label={t("general.ctx_selected_text")} reset={resets.ctxSelected}><Switch bind:checked={draft.context.selected_text} label={t("general.ctx_selected_text")} /></Row>
       <Row label={t("general.ctx_clipboard")} help={t("general.ctx_clipboard_help")} reset={resets.ctxClipboard}><Switch bind:checked={draft.context.clipboard} label={t("general.ctx_clipboard")} /></Row>
+    </Group>
+    <Group title={t("general.learning")} onreset={together([resets.readBack])}>
+      <Row label={t("general.read_back")} tag={general && !general.keep_history ? readBackIdleTag : undefined} help={general && !general.keep_history ? readBackIdle : t(draft.learning.read_back ? "general.read_back_on" : "general.read_back_off")} info={t("general.read_back_info")} reset={resets.readBack}>
+        <Switch bind:checked={draft.learning.read_back} label={t("general.read_back")} />
+      </Row>
+    </Group>
+  {/if}
+{:else if section === "storage"}
+  <StorageUsage />
+  {#if general}
+    {@const keepOpts = [{ value: "no", label: t("storage.keep_no") }, { value: "yes", label: t("storage.keep_yes") }]}
+    <Group title={t("storage.keep")} help={t("storage.keep_note")} onreset={together([resets.keepHistory, resets.historyDays, resets.keepRecordings, resets.recordingDays, resets.keepStages, resets.stageDays, resets.keepStats])}>
+      <Row label={t("storage.rows")} help={t(general.keep_history ? "storage.rows_on" : "storage.rows_off")} reset={anyOf([resets.keepHistory, resets.historyDays])}>
+        <Segmented options={keepOpts} bind:value={() => (general!.keep_history ? "yes" : "no"), (v) => (general!.keep_history = v === "yes")} label={t("storage.rows")} />
+        {#if general.keep_history}<NumberField bind:value={general.history_retention_days} min={0} unit={t("common.days")} label={t("general.history_retention")} />{/if}
+      </Row>
+      {#if general.keep_history}<Fold>
+        <div class="children">
+          <Row label={t("storage.stages")} help={t(general.keep_stages ? "storage.stages_on" : "storage.stages_off")} reset={anyOf([resets.keepStages, resets.stageDays])}>
+            <Segmented options={keepOpts} bind:value={() => (general!.keep_stages ? "yes" : "no"), (v) => (general!.keep_stages = v === "yes")} label={t("storage.stages")} />
+            {#if general.keep_stages}<NumberField bind:value={general.stage_retention_days} min={0} unit={t("common.days")} label={t("general.stage_retention")} />{/if}
+          </Row>
+          <Row label={t("storage.recordings")} help={t(general.keep_recordings ? "storage.recordings_on" : "storage.recordings_off")} reset={anyOf([resets.keepRecordings, resets.recordingDays])}>
+            <Segmented options={keepOpts} bind:value={() => (general!.keep_recordings ? "yes" : "no"), (v) => (general!.keep_recordings = v === "yes")} label={t("storage.recordings")} />
+            {#if general.keep_recordings}<NumberField bind:value={general.recording_retention_days} min={0} unit={t("common.days")} label={t("general.recording_retention")} />{/if}
+          </Row>
+          <!-- The folder matters only while recordings are kept; files already there follow the retention days. -->
+          {#if folder && general.keep_recordings}<Fold>
+            <div class="folder">
+              <div class="folder-head">
+                <span class="name">{t("general.recordings_dir")}</span>
+                <span class="folder-actions">
+                  <button type="button" class="btn quiet" onclick={openFolder}>{t("general.recordings_dir_open")}</button>
+                  <button type="button" class="btn quiet" disabled={moving || folder.is_default} onclick={() => moveRecordings(null)}>{t("general.recordings_dir_reset")}</button>
+                  <button type="button" class="btn" disabled={moving} onclick={chooseFolder}>{t("general.recordings_dir_choose")}</button>
+                </span>
+              </div>
+              <small class="sub">{folder.is_default ? t("general.recordings_dir_default", { path: folder.path }) : folder.path}</small>
+            </div>
+          </Fold>{/if}
+        </div>
+      </Fold>{/if}
+      <Row label={t("storage.stats")} help={t(general.keep_stats ? "storage.stats_on" : "storage.stats_off")} reset={resets.keepStats}>
+        <Segmented options={keepOpts} bind:value={() => (general!.keep_stats ? "yes" : "no"), (v) => (general!.keep_stats = v === "yes")} label={t("storage.stats")} />
+      </Row>
     </Group>
   {/if}
 {:else if section === "processing"}
@@ -611,14 +620,6 @@
 
 <SaveBar {dirty} {saving} message={problem} onsave={save} onrevert={reset} />
 
-<Modal bind:open={confirmStats} title={t("general.stats_reset_title")}>
-  <p>{t("general.stats_reset_body")}</p>
-  {#snippet actions()}
-    <button type="button" class="btn" onclick={() => (confirmStats = false)}>{t("common.cancel")}</button>
-    <button type="button" class="btn danger" onclick={resetStatistics}>{t("general.stats_reset")}</button>
-  {/snippet}
-</Modal>
-
 <style>
   .value { color: var(--ink-2); }
   .range { display: flex; align-items: center; gap: 12px; flex: none; }
@@ -635,6 +636,8 @@
   .default-method :global(.choices) { margin: 0 -12px; }
   .shortcuts .sub { display: block; margin-top: 2px; }
   /* The folder row: its label and buttons on top, the path below over the full width. */
+  .children :global(.item) { padding-left: calc(var(--row-x) + 24px); }
+  .children .folder { padding-left: calc(var(--row-x) + 24px); }
   .folder { padding: var(--row-y) var(--row-x); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin-bottom: -1px; }
   .folder-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; }
   .folder-actions { display: flex; align-items: center; gap: 8px; flex: none; }

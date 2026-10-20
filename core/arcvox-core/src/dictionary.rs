@@ -64,7 +64,9 @@ pub struct AliasCounts {
 /// in a single pass so replacement output is never re-scanned. At each
 /// position the longest matching alias wins, so `台北市` wins over `台北`
 /// when both are aliases. An alias edge that is an ASCII letter or digit
-/// only matches at a word boundary, so `js` leaves `json` alone.
+/// only matches at a word boundary, so `js` leaves `json` alone. ASCII
+/// letters match in either case, so `slake` catches `Slake` too; the
+/// term is written as the user wrote it.
 pub fn apply_aliases(entries: &[DictionaryEntry], text: &str) -> String {
     apply_aliases_counted(entries, text).0
 }
@@ -91,7 +93,7 @@ pub fn apply_aliases_counted(entries: &[DictionaryEntry], text: &str) -> (String
         let before = text[..i].chars().next_back();
         if let Some(&(alias, term, snippet)) = pairs
             .iter()
-            .find(|(alias, _, _)| rest.starts_with(alias) && at_boundary(alias, before, rest))
+            .find(|(alias, _, _)| starts_with_fold(rest, alias) && at_boundary(alias, before, rest))
         {
             out.push_str(term);
             if snippet {
@@ -112,6 +114,15 @@ pub fn apply_aliases_counted(entries: &[DictionaryEntry], text: &str) -> (String
     (out, counts)
 }
 
+/// Whether `text` begins with `prefix`, ASCII letters in either case.
+/// Folding ASCII case keeps every byte length, so the match covers
+/// exactly `prefix.len()` bytes of `text`.
+fn starts_with_fold(text: &str, prefix: &str) -> bool {
+    text.len() >= prefix.len()
+        && text.is_char_boundary(prefix.len())
+        && text.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
+}
+
 /// False when the alias starts or ends with an ASCII letter or digit and
 /// the neighbouring character in the text continues that word.
 fn at_boundary(alias: &str, before: Option<char>, rest: &str) -> bool {
@@ -125,6 +136,18 @@ fn at_boundary(alias: &str, before: Option<char>, rest: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_ascii_alias_matches_in_either_case_and_keeps_the_terms_writing() {
+        let d = vec![
+            entry("Slack", &["slake"], true),
+            entry("權限", &["全線"], true),
+        ];
+        assert_eq!(
+            apply_aliases(&d, "你看 Slake 和 SLAKE 的全線"),
+            "你看 Slack 和 Slack 的權限"
+        );
+    }
 
     #[test]
     fn ascii_alias_needs_a_word_boundary() {

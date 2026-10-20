@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Utterance } from "./api";
-import { clipLength, groupByDay, periodLabel, periodRange, rawState, redoneTag, seconds, spentSeconds, totalSeconds } from "./historyView";
+import { clipLength, corrected, groupByDay, periodLabel, periodRange, rawState, redoneTag, seconds, spentSeconds, totalSeconds } from "./historyView";
 import { setLanguage } from "./i18n";
 
 const at = (d: Date) => Math.floor(d.getTime() / 1000);
@@ -68,6 +68,17 @@ describe("rawState", () => {
   });
   it("reports an empty raw transcript as absent", () => {
     expect(rawState(u(1, new Date(), "  ", "typed"))).toBe("none");
+  });
+  it("compares the transcript with what the app put in, not with the user's correction", () => {
+    expect(rawState({ ...u(1, new Date(), "好 我等一下看", "好 我等一下看"), final_text: "好，我等一下看" })).toBe("same");
+  });
+});
+
+describe("corrected", () => {
+  it("marks a row whose final text differs from the text put in", () => {
+    expect(corrected({ ...u(1, new Date(), "测试一下", "測試一下，停歇"), final_text: "測試一下聽寫" })).toBe(true);
+    expect(corrected(u(1, new Date(), "测试一下", "測試一下，停歇"))).toBe(false);
+    expect(corrected({ ...u(1, new Date(), "x", "y"), final_text: "z", error: "failed", error_code: "provider_timeout" })).toBe(false);
   });
 });
 

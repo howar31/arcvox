@@ -5,8 +5,11 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
+use std::sync::{Arc, Mutex};
+
 use arcvox_core::history::Delivery;
-use arcvox_core::types::{ErrorCode, SessionId};
+use arcvox_core::learn;
+use arcvox_core::types::{ErrorCode, HistoryId, SessionId};
 use arcvox_core::{Engine, Event, Session, SessionRequest};
 use tokio_stream::StreamExt;
 
@@ -17,8 +20,8 @@ use crate::audio::{AudioHandle, AudioMsg};
 use crate::context::{self, Captured};
 use crate::hotkey::{Gesture, Input, Recognizer, KEY_ESCAPE};
 use crate::i18n::Msg;
-use crate::insert::{self, Outcome, ShowReason, Situation};
-use crate::platform::ModifierEvent;
+use crate::insert::{self, Outcome, Plan, ShowReason, Situation};
+use crate::platform::{AxText, ModifierEvent, Platform};
 use crate::settings::ClientSettings;
 use crate::vad;
 
@@ -114,6 +117,77 @@ pub struct Controller {
     /// The last value the platform was given for whether Escape cancels.
     escape_cancels: bool,
     tx: Sender<ControllerMsg>,
+    /// The last insertion whose field may still be read back, once more,
+    /// when the next recording starts: the user's changes are complete by
+    /// then. Filled by the task that recorded the final text.
+    read_back: Arc<Mutex<Option<ReadBackJob>>>,
+}
+
+/// An insertion to read back: the row it went to and where it was put.
+#[derive(Debug, Clone)]
+struct ReadBackJob {
+    id: HistoryId,
+    pid: i32,
+    /// The caret before the insertion, in UTF-16 units.
+    caret: usize,
+    text: String,
+    app: String,
+    /// The aligned piece of the field and its distance go to the log too
+    /// (the `dev.log_read_back` setting).
+    log_detail: bool,
+}
+
+/// Reads the field once and keeps the user's version of the text.
+async fn read_back_once(
+    platform: Arc<dyn Platform>,
+    engine: Engine,
+    job: ReadBackJob,
+    when: &'static str,
+) {
+    let read = {
+        let platform = platform.clone();
+        let pid = job.pid;
+        tokio::task::spawn_blocking(move || platform.ax_text(pid)).await
+    };
+    let outcome = match read {
+        Err(_) => "gone".to_string(),
+        Ok(AxText::Gone) => "gone".into(),
+        Ok(AxText::Unsupported) => "unsupported".into(),
+        Ok(AxText::Text(value)) if value.trim().is_empty() => "empty".into(),
+        Ok(AxText::Text(value)) => {
+            // The caret came in UTF-16 units; the alignment counts characters.
+            let mut units = 0usize;
+            let at = value
+                .chars()
+                .take_while(|c| {
+                    units += c.len_utf16();
+                    units <= job.caret
+                })
+                .count();
+            let aligned = learn::align(&job.text, &value, at, 0.3);
+            if job.log_detail {
+                match &aligned {
+                    Some(a) => tracing::info!(
+                        app = %job.app, when, span = %a.span, changes = a.changes, allowed = a.allowed,
+                        "read-back detail"
+                    ),
+                    None => {
+                        tracing::info!(app = %job.app, when, "read-back detail: nothing near the caret")
+                    }
+                }
+            }
+            match aligned {
+                None => "too_different".into(),
+                Some(a) if a.too_different() => "too_different".into(),
+                Some(a) if a.span == job.text.trim() => "unchanged".into(),
+                Some(a) => match engine.correct_final(job.id, &a.span).await {
+                    Ok(()) => "corrected".into(),
+                    Err(e) => format!("not recorded: {e}"),
+                },
+            }
+        }
+    };
+    tracing::info!(app = %job.app, when, outcome = %outcome, "read-back");
 }
 
 impl Controller {
@@ -135,6 +209,7 @@ impl Controller {
             state: State::Idle,
             escape_cancels: false,
             tx,
+            read_back: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -474,6 +549,15 @@ impl Controller {
                 arcvox_core::SAMPLE_RATE,
             ));
         }
+        // The last insertion's field, read back one last time before the
+        // next text arrives.
+        if let Some(job) = self.read_back.lock().unwrap().take() {
+            let platform = self.deps.platform.clone();
+            let engine = engine.clone();
+            self.deps.runtime.spawn(async move {
+                read_back_once(platform, engine, job, "next_recording").await;
+            });
+        }
         let captured = context::capture(self.deps.platform.as_ref(), &self.settings.context);
         let session = engine.start_session(SessionRequest {
             app: captured.app.clone(),
@@ -769,6 +853,11 @@ impl Controller {
             trusted: self.deps.platform.accessibility_trusted(false),
             method,
         });
+        // Where the text goes in, for reading the field back afterwards.
+        let caret = (self.settings.learning.read_back
+            && matches!(plan, Plan::Paste | Plan::Type | Plan::Ax { .. }))
+        .then(|| self.deps.platform.ax_caret(captured.target.pid))
+        .flatten();
         let outcome = insert::run(
             &plan,
             &text,
@@ -811,10 +900,33 @@ impl Controller {
                     .into(),
                     app_name: captured.app.app_name.clone(),
                 };
+                let read_back = matches!(outcome, Outcome::Inserted)
+                    .then_some(caret)
+                    .flatten()
+                    .map(|caret| ReadBackJob {
+                        id: HistoryId(0),
+                        pid: captured.target.pid,
+                        caret,
+                        text: text.clone(),
+                        app: captured.app.app_name.clone().unwrap_or_default(),
+                        log_detail: self.settings.dev.log_read_back,
+                    });
+                let platform = self.deps.platform.clone();
+                let pending = self.read_back.clone();
+                let delay = self.deps.read_back_delay;
                 self.deps.runtime.spawn(async move {
-                    if let Err(e) = engine.record_final(&id, &final_text, Some(delivery)).await {
-                        tracing::debug!(error = %e, "record_final failed");
-                    }
+                    let row = match engine.record_final(&id, &final_text, Some(delivery)).await {
+                        Ok(row) => row,
+                        Err(e) => {
+                            tracing::debug!(error = %e, "record_final failed");
+                            return;
+                        }
+                    };
+                    let Some(job) = read_back else { return };
+                    let job = ReadBackJob { id: row, ..job };
+                    *pending.lock().unwrap() = Some(job.clone());
+                    tokio::time::sleep(delay).await;
+                    read_back_once(platform, engine, job, "after_insert").await;
                 });
             }
         }
@@ -1117,6 +1229,7 @@ mod tests {
             ui: ui.clone(),
             vad_factory: Box::new(|| Box::new(PeakVad)),
             runtime: tokio::runtime::Handle::current(),
+            read_back_delay: Duration::from_millis(30),
         };
         let handle = spawn(deps, settings, Some(engine.clone()));
         let modifier = handle.modifier_sender();
@@ -1388,6 +1501,83 @@ mod tests {
         wait_state(&r, UiState::Idle, "idle").await;
         assert!(r.ui.messages.lock().unwrap().is_empty());
         assert!(!r.ui.log.lock().unwrap().iter().any(|l| l == "inserted"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_field_read_back_keeps_the_users_version_of_the_text() {
+        let mut s = fast_settings();
+        s.learning.read_back = true;
+        let r = rig(s).await;
+        // The caret stood after the first five characters; the user then
+        // changed the last word of the inserted text.
+        *r.platform.ax_caret.lock().unwrap() = Some(5);
+        *r.platform.ax_text.lock().unwrap() = Some("前面的字。漢字 整理好。後面的字".into());
+        mock_ok(&r, "汉字 原文", "汉字 整理後").await;
+        hold_and_speak(&r, 1.0).await;
+        wait_state(&r, UiState::Idle, "idle").await;
+        wait_for(
+            || {
+                r.engine
+                    .history()
+                    .list_recent(1)
+                    .unwrap()
+                    .first()
+                    .map(|u| u.final_text == "漢字 整理好")
+                    .unwrap_or(false)
+            },
+            "the corrected final text",
+        )
+        .await;
+        let row = r.engine.history().list_recent(1).unwrap().remove(0);
+        assert_eq!(
+            row.refined_text, "漢字 整理後",
+            "the pipeline's own text stays"
+        );
+        assert!(r.platform.calls().contains(&"ax_text".to_string()));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_field_without_text_leaves_the_record_as_it_was() {
+        let mut s = fast_settings();
+        s.learning.read_back = true;
+        let r = rig(s).await;
+        *r.platform.ax_caret.lock().unwrap() = Some(0);
+        mock_ok(&r, "汉字 原文", "汉字 整理後").await;
+        hold_and_speak(&r, 1.0).await;
+        wait_state(&r, UiState::Idle, "idle").await;
+        wait_for(
+            || r.platform.calls().contains(&"ax_text".to_string()),
+            "the read",
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let row = r.engine.history().list_recent(1).unwrap().remove(0);
+        assert_eq!(row.final_text, "漢字 整理後");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn with_the_setting_off_the_field_is_never_read() {
+        let r = rig(fast_settings()).await;
+        *r.platform.ax_caret.lock().unwrap() = Some(0);
+        *r.platform.ax_text.lock().unwrap() = Some("漢字 整理後了".into());
+        mock_ok(&r, "汉字 原文", "汉字 整理後").await;
+        hold_and_speak(&r, 1.0).await;
+        wait_state(&r, UiState::Idle, "idle").await;
+        wait_for(
+            || {
+                r.engine
+                    .history()
+                    .list_recent(1)
+                    .unwrap()
+                    .first()
+                    .map(|u| u.final_text == "漢字 整理後")
+                    .unwrap_or(false)
+            },
+            "record_final",
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        assert!(!r.platform.calls().contains(&"ax_text".to_string()));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2028,6 +2218,7 @@ mod tests {
                 ui: ui.clone(),
                 vad_factory: Box::new(|| Box::new(PeakVad)),
                 runtime: tokio::runtime::Handle::current(),
+                read_back_delay: Duration::from_millis(30),
             },
             fast_settings(),
             None,

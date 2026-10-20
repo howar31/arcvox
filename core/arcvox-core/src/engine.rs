@@ -815,6 +815,12 @@ impl Engine {
             },
         };
         let history = self.inner.history.clone();
+        let mut recorded = recorded;
+        if !self.inner.config.current().general.keep_stages {
+            if let crate::history::Outcome::Done { redo, .. } = &mut recorded {
+                redo.stages.clear();
+            }
+        }
         let stored =
             tokio::task::spawn_blocking(move || history.record_attempt(id, &recorded, false))
                 .await
@@ -833,12 +839,14 @@ impl Engine {
 
     /// Records what the user actually inserted for a finished session, and
     /// how it was delivered when the client says.
+    /// Records the text the dictation ended with and returns the row it
+    /// went to, for a correction that may follow.
     pub async fn record_final(
         &self,
         session_id: &SessionId,
         text: &str,
         delivery: Option<Delivery>,
-    ) -> Result<(), EngineError> {
+    ) -> Result<HistoryId, EngineError> {
         let history_id = self
             .inner
             .sessions
@@ -848,11 +856,21 @@ impl Engine {
             .ok_or_else(|| EngineError::UnknownSession(session_id.clone()))?;
         let history = self.inner.history.clone();
         let text = text.to_string();
+        let delivery = delivery.filter(|_| self.inner.config.current().general.keep_stages);
         tokio::task::spawn_blocking(move || match delivery {
             Some(d) => history.set_final_delivered(history_id, &text, &d),
             None => history.set_final(history_id, &text),
         })
         .await??;
+        Ok(history_id)
+    }
+
+    /// The text the user kept, found in the application after the
+    /// dictation: it replaces the row's final text.
+    pub async fn correct_final(&self, id: HistoryId, text: &str) -> Result<(), EngineError> {
+        let history = self.inner.history.clone();
+        let text = text.to_string();
+        tokio::task::spawn_blocking(move || history.set_final(id, &text)).await??;
         Ok(())
     }
 
@@ -1120,7 +1138,7 @@ async fn start_journal(
     req: &SessionRequest,
     path: &Path,
 ) -> Option<(HistoryId, crate::journal::Journal)> {
-    if !inner.config.current().general.keep_recordings {
+    if !inner.config.current().general.keeps_recordings() {
         return None;
     }
     let row = crate::history::FailedUtterance {
@@ -1191,7 +1209,7 @@ async fn hold(
     path: &Path,
     flags: &Arc<SessionFlags>,
 ) -> Option<HistoryId> {
-    if !inner.config.current().general.keep_recordings {
+    if !inner.config.current().general.keeps_recordings() {
         return None;
     }
     let samples = audio.lock().unwrap().clone();
@@ -1294,7 +1312,8 @@ async fn keep_failed(
     path: &Path,
 ) {
     let nothing_to_keep = matches!(err.code, ErrorCode::NoSpeech | ErrorCode::NoAudio)
-        || (flags.cancelled.load(Ordering::SeqCst) && !flags.keep.load(Ordering::SeqCst));
+        || (flags.cancelled.load(Ordering::SeqCst) && !flags.keep.load(Ordering::SeqCst))
+        || !config.general.keep_history;
     if let Some(id) = held {
         if nothing_to_keep {
             drop_held(inner, id, path).await;
@@ -1316,7 +1335,10 @@ async fn keep_failed(
         ts: crate::history::now_unix(),
         profile_id: profile.id.clone(),
         app_name: req.app.app_name.clone(),
-        audio_path: config.general.keep_recordings.then(|| path.to_path_buf()),
+        audio_path: config
+            .general
+            .keeps_recordings()
+            .then(|| path.to_path_buf()),
         audio_ms: clip_ms(clip),
         code: err.code,
         error: failure_text(err),
@@ -1368,9 +1390,12 @@ async fn store_cancelled(
     trimmed: bool,
     written: bool,
 ) {
-    if clip.duration_secs() < MIN_UTTERANCE_SECS {
+    // Too short to keep, or no history kept at all: nothing stays.
+    if clip.duration_secs() < MIN_UTTERANCE_SECS || !inner.config.current().general.keep_history {
         if let Some(id) = held {
             drop_held(inner, id, path).await;
+        } else if written {
+            let _ = std::fs::remove_file(path);
         }
         return;
     }
@@ -1393,7 +1418,7 @@ async fn store_cancelled(
         ts: crate::history::now_unix(),
         profile_id: profile.id.clone(),
         app_name: req.app.app_name.clone(),
-        audio_path: (inner.config.current().general.keep_recordings || written)
+        audio_path: (inner.config.current().general.keeps_recordings() || written)
             .then(|| path.to_path_buf()),
         audio_ms: clip_ms(clip),
         code: ErrorCode::Cancelled,
@@ -1634,7 +1659,7 @@ async fn run_session(
     // removes it with its row. Otherwise it is written now.
     let audio_path = if held.is_some() {
         Some(wav_path.clone())
-    } else if config.general.keep_recordings {
+    } else if config.general.keeps_recordings() {
         let bytes = encode_wav_pcm16(&clip);
         let p = wav_path.clone();
         match tokio::task::spawn_blocking(move || std::fs::write(&p, bytes)).await {
@@ -1729,6 +1754,7 @@ async fn run_session(
     };
     let history = inner.history.clone();
     let claim = flags.clone();
+    let policy = inner.config.current().general.keep();
     #[cfg(test)]
     let tail_delay_ms = inner.tail_delay_ms.load(Ordering::SeqCst);
     // The row is committed only if this task wins `done_sent`: the single
@@ -1744,11 +1770,16 @@ async fn run_session(
             std::thread::sleep(std::time::Duration::from_millis(tail_delay_ms));
         }
         let mut claimed = None;
-        let inserted = history.insert_replacing(new, held, || {
-            let won = !claim.done_sent.swap(true, Ordering::SeqCst);
-            claimed = Some(won);
-            won
-        });
+        let inserted = history.insert_replacing(
+            new,
+            held,
+            || {
+                let won = !claim.done_sent.swap(true, Ordering::SeqCst);
+                claimed = Some(won);
+                won
+            },
+            policy,
+        );
         (inserted, claimed)
     })
     .await

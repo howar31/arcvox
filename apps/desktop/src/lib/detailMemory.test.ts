@@ -12,14 +12,10 @@ beforeEach(() => {
 });
 
 describe("detail memory", () => {
-  it("keeps every block closed until one is opened", () => {
-    expect(storedOpen("stages")).toBe(false);
+  it("keeps a block closed until it is opened, and remembers the state", () => {
     expect(storedOpen("attempts")).toBe(false);
-  });
-  it("remembers each block on its own", () => {
     rememberOpen("attempts", true);
     expect(storedOpen("attempts")).toBe(true);
-    expect(storedOpen("stages")).toBe(false);
     rememberOpen("attempts", false);
     expect(storedOpen("attempts")).toBe(false);
   });

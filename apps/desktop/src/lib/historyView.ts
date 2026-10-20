@@ -56,9 +56,15 @@ export function redoneTag(redone: number): string | null {
 export function rawState(u: Utterance): "none" | "changed" | "same" | "failed" | "off" {
   const raw = u.raw_text.trim();
   if (raw === "") return "none";
-  if (raw !== u.final_text.trim()) return "changed";
+  if (raw !== u.refined_text.trim()) return "changed";
   if (u.degraded) return "failed";
   return u.llm_ms === null ? "off" : "same";
+}
+
+/** The user changed the text after it was put in (read back from the field, or imported): the
+ * final text is theirs, the refined text is what the app put in. */
+export function corrected(u: Utterance): boolean {
+  return u.error === null && u.refined_text.trim() !== "" && u.final_text.trim() !== u.refined_text.trim();
 }
 
 /** The time window the History page shows. A range covers whole local days from `from` through `to`

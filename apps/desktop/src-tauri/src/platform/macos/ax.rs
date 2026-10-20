@@ -4,12 +4,16 @@ use std::ptr;
 
 use accessibility_sys::{
     kAXErrorAttributeUnsupported, kAXErrorIllegalArgument, kAXErrorNoValue, kAXErrorSuccess,
-    kAXFocusedUIElementAttribute, kAXSelectedTextAttribute, kAXTrustedCheckOptionPrompt, AXError,
+    kAXFocusedUIElementAttribute, kAXSelectedTextAttribute, kAXSelectedTextRangeAttribute,
+    kAXTrustedCheckOptionPrompt, kAXValueAttribute, kAXValueTypeCFRange, AXError,
     AXIsProcessTrustedWithOptions, AXUIElementCopyAttributeValue, AXUIElementCreateApplication,
     AXUIElementGetTypeID, AXUIElementIsAttributeSettable, AXUIElementRef,
-    AXUIElementSetAttributeValue, AXUIElementSetMessagingTimeout,
+    AXUIElementSetAttributeValue, AXUIElementSetMessagingTimeout, AXValueGetType, AXValueGetValue,
+    AXValueRef,
 };
-use core_foundation::base::{CFGetTypeID, CFRelease, CFType, CFTypeRef, TCFType};
+use core_foundation::base::{CFGetTypeID, CFRange, CFRelease, CFType, CFTypeRef, TCFType};
+
+use crate::platform::AxText;
 use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::CFDictionary;
 use core_foundation::string::CFString;
@@ -194,6 +198,44 @@ pub fn selected_text(pid: i32) -> Option<String> {
     focused
         .attribute_string(kAXSelectedTextAttribute)
         .filter(|s| !s.is_empty())
+}
+
+/// Where the selection of the focused element of `pid` starts, in UTF-16
+/// units; None when the element reports no selection range.
+pub fn caret(pid: i32) -> Option<usize> {
+    let app = AxElement::application(pid);
+    let focused = app.focused_element()?;
+    let value = focused.copy_attribute(kAXSelectedTextRangeAttribute).ok()?;
+    let value_ref = value.as_CFTypeRef() as AXValueRef;
+    // SAFETY: `value` is a live CF object owned by this function; an
+    // AXValue of another type makes `AXValueGetValue` return false and
+    // leave `range` untouched.
+    unsafe {
+        if AXValueGetType(value_ref) != kAXValueTypeCFRange {
+            return None;
+        }
+        let mut range = CFRange::init(0, 0);
+        if !AXValueGetValue(
+            value_ref,
+            kAXValueTypeCFRange,
+            &mut range as *mut CFRange as *mut std::ffi::c_void,
+        ) {
+            return None;
+        }
+        usize::try_from(range.location).ok()
+    }
+}
+
+/// The text value of the focused element of `pid`.
+pub fn text(pid: i32) -> AxText {
+    let app = AxElement::application(pid);
+    let Some(focused) = app.focused_element() else {
+        return AxText::Gone;
+    };
+    match focused.attribute_string(kAXValueAttribute) {
+        Some(s) => AxText::Text(s),
+        None => AxText::Unsupported,
+    }
 }
 
 /// Replaces the selection (or inserts at the caret) in the focused element.

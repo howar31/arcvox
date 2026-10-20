@@ -1,6 +1,6 @@
 /** The third-party packages shipped in a build, as the About page lists them. */
 
-export type PackageSource = "rust" | "npm";
+export type PackageSource = "rust" | "npm" | "data";
 
 export interface ThirdPartyPackage {
   name: string;

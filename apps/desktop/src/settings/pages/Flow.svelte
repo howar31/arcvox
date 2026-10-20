@@ -40,8 +40,8 @@
   /** `arg` is the id of the profile to show; without it the default profile is shown. */
   let { arg }: { arg: string | null } = $props();
 
-  const LANGS = ["zh-TW", "en", "ja"];
-  const LANG_KEYS: Record<string, string> = { "zh-TW": "profiles.lang.zh_tw", en: "profiles.lang.en", ja: "profiles.lang.ja" };
+  const LANGS = ["zh-TW", "zh-CN", "en", "ja"];
+  const LANG_KEYS: Record<string, string> = { "zh-TW": "profiles.lang.zh_tw", "zh-CN": "profiles.lang.zh_cn", en: "profiles.lang.en", ja: "profiles.lang.ja" };
 
   // The stage shown first is the one shown when the page was left last.
   let stage = $state<StageId>(storedStage());

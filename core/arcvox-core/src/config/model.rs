@@ -137,12 +137,20 @@ impl FirstRunDefaults {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct General {
+    /// Whether a dictation leaves a history row at all. Off, nothing of a
+    /// dictation is kept: no row, so no recording, stages or reruns either;
+    /// the statistics still count it when they are kept.
+    pub keep_history: bool,
     pub history_retention_days: u32,
+    /// Whether what each stage of a dictation did is written.
+    pub keep_stages: bool,
     /// How long what each stage of a dictation did is kept; the row itself
     /// follows `history_retention_days`. 0 keeps it as long as the row.
     pub stage_retention_days: u32,
     pub keep_recordings: bool,
     pub recording_retention_days: u32,
+    /// Whether dictations are counted into the hourly statistics.
+    pub keep_stats: bool,
     pub context_limit_bytes: usize,
     pub asr_timeout_secs: u64,
     pub llm_timeout_secs: u64,
@@ -167,13 +175,33 @@ pub struct General {
     pub models_dir: Option<std::path::PathBuf>,
 }
 
+impl General {
+    /// Recordings are files of history rows: without rows there is nothing
+    /// to hang them on, so they are kept only while the history is.
+    pub fn keeps_recordings(&self) -> bool {
+        self.keep_history && self.keep_recordings
+    }
+
+    /// What a dictation's row insert writes.
+    pub fn keep(&self) -> crate::history::Keep {
+        crate::history::Keep {
+            row: self.keep_history,
+            stages: self.keep_stages,
+            stats: self.keep_stats,
+        }
+    }
+}
+
 impl Default for General {
     fn default() -> Self {
         Self {
+            keep_history: true,
             history_retention_days: 365,
+            keep_stages: true,
             stage_retention_days: 90,
             keep_recordings: false,
             recording_retention_days: 30,
+            keep_stats: true,
             context_limit_bytes: 4096,
             asr_timeout_secs: 30,
             llm_timeout_secs: 20,
