@@ -602,12 +602,18 @@ pub fn pairs_of(rows: &[Utterance]) -> Vec<Pair> {
                 });
             }
         }
-        if u.final_text != u.refined_text {
+        // The correction of the text the dictation put in, which a rerun
+        // chosen since keeps aside.
+        let (from, to) = match &u.origin_correction {
+            Some((from, to)) => (from, to),
+            None => (&u.refined_text, &u.final_text),
+        };
+        if from != to {
             out.push(Pair {
                 at: u.ts,
                 id,
-                from: u.refined_text.clone(),
-                to: u.final_text.clone(),
+                from: from.clone(),
+                to: to.clone(),
                 source: Source::Final,
             });
         }
@@ -753,6 +759,119 @@ pub fn align(inserted: &str, field: &str, at: usize, max_changed: f64) -> Option
         changes,
         allowed: allowed_for(longest),
     })
+}
+
+/// Finds `inserted` anywhere in `field`, for a field whose caret says
+/// nothing about where the text went (a terminal gives its whole screen
+/// and a caret that does not map to it). Runs of white space are folded
+/// first, since a terminal wraps lines and indents them; the span comes
+/// back folded the same way. Of the spans within the allowed changes the
+/// one nearest the end wins, since the newest text on a screen is at the
+/// bottom and an older copy of the text may stand above it; when none is
+/// within them, the closest span is reported. The allowed changes follow
+/// `align`.
+pub fn align_anywhere(inserted: &str, field: &str, max_changed: f64) -> Option<Alignment> {
+    let wanted = fold_space(inserted);
+    let field = fold_space(field);
+    let n = wanted.len();
+    if n == 0 || field.is_empty() {
+        return None;
+    }
+    let allowed_for = |longest: usize| -> usize {
+        let share = (longest as f64 * max_changed).floor() as usize;
+        share.max(3).min(longest / 2)
+    };
+    let (start, end, changes) = nearest_span(&wanted, &field, |len| allowed_for(n.max(len)))?;
+    let span: String = field[start..end].iter().collect();
+    let span = span.trim().to_string();
+    let longest = n.max(span.chars().count());
+    Some(Alignment {
+        span,
+        changes,
+        allowed: allowed_for(longest),
+    })
+}
+
+/// Collapses every run of white space to one space; a run with a line
+/// break in it (a terminal wrapping and indenting a line) collapses to
+/// nothing between two characters that are not written with spaces (CJK).
+fn fold_space(s: &str) -> Vec<char> {
+    let spaced = |c: char| c.is_ascii() || (c.is_alphanumeric() && !is_cjk(c));
+    let mut out: Vec<char> = Vec::new();
+    // Some(true) while a run with a line break is pending.
+    let mut pending: Option<bool> = None;
+    for c in s.chars() {
+        if c.is_whitespace() {
+            pending = Some(pending.unwrap_or(false) || c == '\n' || c == '\r');
+            continue;
+        }
+        if let Some(wrapped) = pending.take() {
+            if let Some(&last) = out.last() {
+                if !wrapped || spaced(last) || spaced(c) {
+                    out.push(' ');
+                }
+            }
+        }
+        out.push(c);
+    }
+    out
+}
+
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32, 0x3000..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF)
+}
+
+/// The substring of `field` that lines up with `wanted`, any start, any
+/// end: one edit-distance pass with a free start, each cell carrying the
+/// start it came from, gives the distance to every end. Each occurrence
+/// of the text is a dip in that distance (the ends just past it cost one
+/// more per character); of the dips within `allowed(span length)` the
+/// last one is taken, else the lowest dip overall.
+fn nearest_span(
+    wanted: &[char],
+    field: &[char],
+    allowed: impl Fn(usize) -> usize,
+) -> Option<(usize, usize, usize)> {
+    let n = wanted.len();
+    let m = field.len();
+    if n == 0 || m == 0 {
+        return None;
+    }
+    let mut prev: Vec<(usize, usize)> = (0..=m).map(|j| (0, j)).collect();
+    let mut cur = vec![(0usize, 0usize); m + 1];
+    for i in 1..=n {
+        cur[0] = (i, 0);
+        for j in 1..=m {
+            let cost = usize::from(wanted[i - 1] != field[j - 1]);
+            let sub = (prev[j - 1].0 + cost, prev[j - 1].1);
+            let skip_field = (cur[j - 1].0 + 1, cur[j - 1].1);
+            let skip_wanted = (prev[j].0 + 1, prev[j].1);
+            cur[j] = if sub.0 <= skip_field.0 && sub.0 <= skip_wanted.0 {
+                sub
+            } else if skip_field.0 <= skip_wanted.0 {
+                skip_field
+            } else {
+                skip_wanted
+            };
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    let dips = (1..=m).filter(|&j| {
+        let d = prev[j].0;
+        d <= prev[j - 1].0 && (j == m || d < prev[j + 1].0)
+    });
+    let mut closest: Option<(usize, usize, usize)> = None;
+    let mut last_fit: Option<(usize, usize, usize)> = None;
+    for j in dips {
+        let (distance, start) = prev[j];
+        if closest.is_none_or(|(_, _, d)| distance < d) {
+            closest = Some((start, j, distance));
+        }
+        if distance <= allowed(j - start) {
+            last_fit = Some((start, j, distance));
+        }
+    }
+    last_fit.or(closest)
 }
 
 /// The substring of `field[lo..hi]` closest to `wanted`: for each start
@@ -1013,6 +1132,37 @@ mod from_rows {
     }
 
     #[test]
+    fn the_final_pair_stays_while_a_rerun_is_chosen() {
+        use crate::history::{Outcome, Redo};
+        let s = HistoryStore::open_in_memory().unwrap();
+        let b = s.insert(row("問一下", "問一下")).unwrap();
+        s.set_final(b, "問一下 Zephyr").unwrap();
+        let rerun = Outcome::Done {
+            redo: Redo {
+                profile_id: ProfileId("default".into()),
+                raw_text: "問一下".into(),
+                final_text: "問一下。".into(),
+                degraded: false,
+                asr_ms: 1,
+                llm_ms: None,
+                dict_fixes: 0,
+                snippets: 0,
+                llm_changed: false,
+                stages: Vec::new(),
+            },
+            asr_label: "asr".into(),
+            llm_label: None,
+        };
+        s.record_attempt(b, &rerun, true).unwrap();
+        let pairs = pairs_of(&s.list_recent(10).unwrap());
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(
+            (pairs[0].from.as_str(), pairs[0].to.as_str()),
+            ("問一下", "問一下 Zephyr")
+        );
+    }
+
+    #[test]
     fn a_chinese_term_heard_once_brings_no_alias() {
         let alias = |text: &str, user: u32| {
             let counts = Counts {
@@ -1222,6 +1372,49 @@ mod read_back_tests {
             read_back("我明天會晚一點到", field, 9, 0.3),
             ReadBack::Corrected("我後天會晚一點到".into())
         );
+    }
+
+    #[test]
+    fn a_screen_is_searched_whole_and_its_line_wraps_folded() {
+        // A terminal screen: a prompt, output, then the dictated text on
+        // the input line, wrapped and indented by the program, with one
+        // word changed.
+        let screen = "$ run\nSearched for 1 pattern\n\n> 我後天會晚一點到，請先\n    開始。\n\n  ? for shortcuts";
+        let a = align_anywhere("我明天會晚一點到，請先開始。", screen, 0.3).unwrap();
+        assert_eq!(a.span, "我後天會晚一點到，請先開始。");
+        assert_eq!(a.changes, 1);
+        // Latin words keep one space between them across a wrap.
+        let screen = "> see you at the Zephyr\n    Kit meeting!";
+        let a = align_anywhere("see you at the zefir kit meeting!", screen, 0.3).unwrap();
+        assert_eq!(a.span, "see you at the Zephyr Kit meeting!");
+        assert!(!a.too_different());
+    }
+
+    #[test]
+    fn a_space_the_text_had_between_chinese_words_stays() {
+        let a = align_anywhere("漢字 整理後", "> 漢字 整理好\n", 0.3).unwrap();
+        assert_eq!(a.span, "漢字 整理好");
+        assert_eq!(a.changes, 1);
+    }
+
+    #[test]
+    fn of_two_copies_on_a_screen_the_lower_one_is_taken() {
+        let screen = "我明天會晚一點到。\n一些輸出\n我後天會晚一點到。";
+        let a = align_anywhere("我明天會晚一點到。", screen, 0.3).unwrap();
+        assert_eq!(a.span, "我後天會晚一點到。");
+        let screen = "我後天會晚一點到。\n一些輸出\n我明天會晚一點到。";
+        let a = align_anywhere("我明天會晚一點到。", screen, 0.3).unwrap();
+        assert_eq!(a.span, "我明天會晚一點到。");
+        assert_eq!(a.changes, 0);
+    }
+
+    #[test]
+    fn a_screen_without_the_text_is_too_different() {
+        let screen = "$ ls\nsrc  docs  target\n$ cargo test\nrunning 12 tests";
+        let a = align_anywhere("我明天會晚一點到。", screen, 0.3).unwrap();
+        assert!(a.too_different());
+        assert_eq!(align_anywhere("  ", screen, 0.3), None);
+        assert_eq!(align_anywhere("我明天", "", 0.3), None);
     }
 }
 

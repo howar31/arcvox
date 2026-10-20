@@ -89,6 +89,8 @@ export interface Attempt {
   degraded: boolean; asr_ms: number; llm_ms: number | null; error: string | null; error_code: string | null;
   /** The result the row had before it was first processed again. */
   origin: boolean; chosen: boolean;
+  /** The user's correction of this result's text, when there is one. */
+  corrected_text: string | null;
 }
 /** The nine stages of a dictation, in their fixed order (positions 1 to 9; the script conversion takes 4 and 6). */
 export type StageKind = "capture" | "trim" | "asr" | "opencc" | "llm" | "rules" | "insert" | "record";

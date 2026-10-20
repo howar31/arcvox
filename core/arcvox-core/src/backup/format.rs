@@ -120,6 +120,9 @@ pub struct AttemptLine {
     pub origin: bool,
     #[serde(default)]
     pub chosen: bool,
+    /// The user's correction of this result's text, when there is one.
+    #[serde(default)]
+    pub corrected_text: Option<String>,
     /// What each stage of this result's run did, in order.
     #[serde(default)]
     pub stages: Vec<StageLine>,

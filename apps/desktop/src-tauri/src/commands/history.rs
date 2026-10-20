@@ -67,6 +67,8 @@ pub struct AttemptDto {
     pub error_code: Option<String>,
     pub origin: bool,
     pub chosen: bool,
+    /// The user's correction of this result's text, when there is one.
+    pub corrected_text: Option<String>,
 }
 
 impl From<Attempt> for AttemptDto {
@@ -86,6 +88,7 @@ impl From<Attempt> for AttemptDto {
             error_code: a.error_code,
             origin: a.origin,
             chosen: a.chosen,
+            corrected_text: a.corrected_text,
         }
     }
 }

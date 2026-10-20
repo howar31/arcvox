@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use std::sync::{Arc, Mutex};
 
 use arcvox_core::history::Delivery;
-use arcvox_core::learn;
+use arcvox_core::learn::{self, Alignment};
 use arcvox_core::types::{ErrorCode, HistoryId, SessionId};
 use arcvox_core::{Engine, Event, Session, SessionRequest};
 use tokio_stream::StreamExt;
@@ -164,11 +164,21 @@ async fn read_back_once(
                     units <= job.caret
                 })
                 .count();
-            let aligned = learn::align(&job.text, &value, at, 0.3);
+            // Around the caret first; when that finds nothing fitting (a
+            // terminal's caret does not map to the screen it gives), the
+            // whole value is searched.
+            let mut found = "caret";
+            let mut aligned = learn::align(&job.text, &value, at, 0.3);
+            if aligned.as_ref().is_none_or(Alignment::too_different) {
+                if let Some(a) = learn::align_anywhere(&job.text, &value, 0.3) {
+                    found = "whole";
+                    aligned = Some(a);
+                }
+            }
             if job.log_detail {
                 match &aligned {
                     Some(a) => tracing::info!(
-                        app = %job.app, when, span = %a.span, changes = a.changes, allowed = a.allowed,
+                        app = %job.app, when, found, span = %a.span, changes = a.changes, allowed = a.allowed,
                         "read-back detail"
                     ),
                     None => {
@@ -1534,6 +1544,34 @@ mod tests {
             "the pipeline's own text stays"
         );
         assert!(r.platform.calls().contains(&"ax_text".to_string()));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_screen_whose_caret_says_nothing_is_searched_whole() {
+        let mut s = fast_settings();
+        s.learning.read_back = true;
+        let r = rig(s).await;
+        // A terminal: the caret is at the start of a screen whose input
+        // line, wrapped and indented, holds the text with a word changed.
+        *r.platform.ax_caret.lock().unwrap() = Some(0);
+        *r.platform.ax_text.lock().unwrap() =
+            Some("$ run\n一些輸出在前面\n\n> 漢字 整理\n    好\n\n  ? for shortcuts".into());
+        mock_ok(&r, "汉字 原文", "汉字 整理後").await;
+        hold_and_speak(&r, 1.0).await;
+        wait_state(&r, UiState::Idle, "idle").await;
+        wait_for(
+            || {
+                r.engine
+                    .history()
+                    .list_recent(1)
+                    .unwrap()
+                    .first()
+                    .map(|u| u.final_text == "漢字 整理好")
+                    .unwrap_or(false)
+            },
+            "the corrected final text",
+        )
+        .await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

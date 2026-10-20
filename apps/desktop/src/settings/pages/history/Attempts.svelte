@@ -68,6 +68,7 @@
             {#if a.chosen}<Tag tone="accent">{t("history.attempt_chosen")}</Tag>{/if}
             {#if fresh === a.id}<Tag tone="accent">{t("history.attempt_fresh")}</Tag>{/if}
             {#if a.origin}<Tag>{t("history.attempt_origin")}</Tag>{/if}
+            {#if a.corrected_text !== null}<Tag tone="accent">{t("history.corrected")}</Tag>{/if}
             {#if a.error !== null}<Tag tone="live">{t("history.attempt_failed")}</Tag>{/if}
             {#if a.degraded}<Tag tone="warn">{t("history.not_rewritten")}</Tag>{/if}
           </span>

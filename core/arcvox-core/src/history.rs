@@ -180,6 +180,9 @@ pub struct Utterance {
     pub error_code: Option<String>,
     /// How many times the recording was processed again.
     pub redone: u32,
+    /// While the row shows a rerun's result: the text the dictation itself
+    /// put in and the user's correction of it, which the rerun hides.
+    pub origin_correction: Option<(String, String)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -208,6 +211,11 @@ pub struct Attempt {
     /// The result the row had before it was first processed again.
     pub origin: bool,
     pub chosen: bool,
+    /// The user's correction of this result's text, read back from the
+    /// application or given by hand; None while it reads as produced. It
+    /// belongs to the result it corrected, so the row shows it only while
+    /// this result is the chosen one.
+    pub corrected_text: Option<String>,
 }
 
 /// A result to record for a row: `Ok` with the engines that made it, or
@@ -418,7 +426,8 @@ CREATE TABLE IF NOT EXISTS attempts (
     error TEXT,
     error_code TEXT,
     origin INTEGER NOT NULL DEFAULT 0,
-    chosen INTEGER NOT NULL DEFAULT 0
+    chosen INTEGER NOT NULL DEFAULT 0,
+    corrected_text TEXT
 );
 CREATE INDEX IF NOT EXISTS attempts_utterance ON attempts(utterance_id);
 ";
@@ -546,6 +555,9 @@ pub(crate) fn upgrade(
         if !has_column(conn, "utterances", name)? {
             conn.execute_batch(ddl)?;
         }
+    }
+    if !has_column(conn, "attempts", "corrected_text")? {
+        conn.execute_batch("ALTER TABLE attempts ADD COLUMN corrected_text TEXT")?;
     }
     // Rows written before rows carried a device belong to this one.
     conn.execute(
@@ -1030,7 +1042,7 @@ impl HistoryStore {
     pub fn apply_redo(&self, id: HistoryId, r: &Redo) -> Result<bool, HistoryError> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
-        let applied = apply_in(&tx, &self.device_id, id, r)?;
+        let applied = apply_in(&tx, &self.device_id, id, r, None)?;
         tx.commit()?;
         Ok(applied)
     }
@@ -1069,7 +1081,7 @@ impl HistoryStore {
                     asr_label: None,
                     llm_label: None,
                     raw_text: row.raw_text.clone(),
-                    final_text: row.final_text.clone(),
+                    final_text: row.refined_text.clone(),
                     degraded: row.degraded,
                     asr_ms: row.asr_ms,
                     llm_ms: row.llm_ms,
@@ -1080,6 +1092,8 @@ impl HistoryStore {
                     error_code: row.error_code.clone(),
                     origin: true,
                     chosen: !was_failed,
+                    corrected_text: (row.final_text != row.refined_text)
+                        .then(|| row.final_text.clone()),
                     stages: Vec::new(),
                 },
             )?;
@@ -1107,6 +1121,7 @@ impl HistoryStore {
                 error_code: None,
                 origin: false,
                 chosen: false,
+                corrected_text: None,
                 stages: Vec::new(),
             },
             Outcome::Failed {
@@ -1130,6 +1145,7 @@ impl HistoryStore {
                 error_code: Some(code.name().to_string()),
                 origin: false,
                 chosen: false,
+                corrected_text: None,
                 stages: Vec::new(),
             },
         };
@@ -1138,7 +1154,7 @@ impl HistoryStore {
             insert_stages(&tx, id.0, Some(attempt_id), &redo.stages)?;
         }
         if let (Outcome::Done { redo, .. }, true) = (outcome, choose || was_failed) {
-            apply_in(&tx, &self.device_id, id, redo)?;
+            apply_in(&tx, &self.device_id, id, redo, None)?;
             choose_in(&tx, id, attempt_id)?;
         } else {
             touch_in(&tx, id)?;
@@ -1183,7 +1199,7 @@ impl HistoryStore {
             // The attempt's stages are already stored under its id.
             stages: Vec::new(),
         };
-        if !apply_in(&tx, &self.device_id, id, &redo)? {
+        if !apply_in(&tx, &self.device_id, id, &redo, a.corrected_text.as_deref())? {
             return Ok(false);
         }
         choose_in(&tx, id, attempt.0)?;
@@ -1226,11 +1242,23 @@ impl HistoryStore {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
+    /// The text the row ends with. A correction belongs to the result it
+    /// corrected: when the row has recorded results, the chosen one keeps
+    /// it (and loses it when the text is its own again), so another result
+    /// chosen later does not show it and choosing this one back brings it.
     pub fn set_final(&self, id: HistoryId, text: &str) -> Result<(), HistoryError> {
-        self.conn.lock().unwrap().execute(
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
             "UPDATE utterances SET final_text = ?1, updated = ?3 WHERE id = ?2",
             params![text, id.0, now_ms()],
         )?;
+        tx.execute(
+            "UPDATE attempts SET corrected_text = CASE WHEN final_text = ?1 THEN NULL ELSE ?1 END
+             WHERE utterance_id = ?2 AND chosen = 1",
+            params![text, id.0],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -2236,6 +2264,7 @@ fn apply_in(
     device_id: &str,
     id: HistoryId,
     r: &Redo,
+    corrected: Option<&str>,
 ) -> Result<bool, HistoryError> {
     let row: Option<(i64, Option<String>, Option<i64>, bool)> = tx
         .query_row(
@@ -2248,7 +2277,7 @@ fn apply_in(
         return Ok(false);
     };
     tx.execute(
-        "UPDATE utterances SET profile_id = ?1, raw_text = ?2, refined_text = ?3, final_text = ?3, degraded = ?4,
+        "UPDATE utterances SET profile_id = ?1, raw_text = ?2, refined_text = ?3, final_text = COALESCE(?11, ?3), degraded = ?4,
             asr_ms = ?5, llm_ms = ?6, dict_fixes = ?7, snippets = ?8, error = NULL, error_code = NULL, updated = ?10 WHERE id = ?9",
         params![
             r.profile_id.0,
@@ -2261,6 +2290,7 @@ fn apply_in(
             r.snippets as i64,
             id.0,
             now_ms(),
+            corrected,
         ],
     )?;
     if was_failed {
@@ -2307,10 +2337,13 @@ fn touch_in(tx: &Connection, id: HistoryId) -> rusqlite::Result<()> {
 }
 
 const SELECT: &str = "SELECT id, ts, profile_id, app_name, raw_text, refined_text, final_text, degraded, audio_path, asr_ms, llm_ms, audio_ms, error, error_code,
-    (SELECT COUNT(*) FROM attempts a WHERE a.utterance_id = utterances.id AND a.origin = 0), heard_text FROM utterances";
+    (SELECT COUNT(*) FROM attempts a WHERE a.utterance_id = utterances.id AND a.origin = 0), heard_text,
+    (SELECT final_text FROM attempts a WHERE a.utterance_id = utterances.id AND a.origin = 1 AND a.chosen = 0 AND a.corrected_text IS NOT NULL),
+    (SELECT corrected_text FROM attempts a WHERE a.utterance_id = utterances.id AND a.origin = 1 AND a.chosen = 0 AND a.corrected_text IS NOT NULL)
+    FROM utterances";
 
 const SELECT_ATTEMPT: &str = "SELECT id, utterance_id, ts, profile_id, asr_label, llm_label, raw_text, final_text, degraded, asr_ms, llm_ms,
-    dict_fixes, snippets, llm_changed, error, error_code, origin, chosen FROM attempts";
+    dict_fixes, snippets, llm_changed, error, error_code, origin, chosen, corrected_text FROM attempts";
 
 fn map_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<Attempt> {
     Ok(Attempt {
@@ -2332,6 +2365,7 @@ fn map_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<Attempt> {
         error_code: r.get(15)?,
         origin: r.get::<_, i64>(16)? != 0,
         chosen: r.get::<_, i64>(17)? != 0,
+        corrected_text: r.get(18)?,
     })
 }
 
@@ -2339,8 +2373,8 @@ fn map_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<Attempt> {
 fn insert_attempt(tx: &Connection, utterance: i64, a: &AttemptLine) -> rusqlite::Result<i64> {
     tx.execute(
         "INSERT INTO attempts (utterance_id, ts, profile_id, asr_label, llm_label, raw_text, final_text, degraded, asr_ms, llm_ms,
-            dict_fixes, snippets, llm_changed, error, error_code, origin, chosen)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            dict_fixes, snippets, llm_changed, error, error_code, origin, chosen, corrected_text)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
         params![
             utterance,
             a.ts,
@@ -2359,6 +2393,7 @@ fn insert_attempt(tx: &Connection, utterance: i64, a: &AttemptLine) -> rusqlite:
             a.error_code,
             a.origin as i64,
             a.chosen as i64,
+            a.corrected_text,
         ],
     )?;
     Ok(tx.last_insert_rowid())
@@ -2393,6 +2428,7 @@ fn attempt_lines(conn: &Connection, utterance: i64) -> rusqlite::Result<Vec<Atte
                 error_code: a.error_code,
                 origin: a.origin,
                 chosen: a.chosen,
+                corrected_text: a.corrected_text,
                 stages: stage_lines(conn, utterance, Some(a.id.0))?,
             })
         })
@@ -2446,6 +2482,13 @@ fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Utterance> {
         error_code: r.get(13)?,
         redone: r.get::<_, i64>(14)? as u32,
         heard_text: r.get(15)?,
+        origin_correction: match (
+            r.get::<_, Option<String>>(16)?,
+            r.get::<_, Option<String>>(17)?,
+        ) {
+            (Some(from), Some(to)) => Some((from, to)),
+            _ => None,
+        },
     })
 }
 
@@ -2533,6 +2576,68 @@ mod tests {
             asr_label: "asr".into(),
             llm_label: None,
         }
+    }
+
+    #[test]
+    fn a_correction_follows_the_result_it_corrected() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let id = s.insert(new(100, None)).unwrap();
+        let put_in = s.get(id).unwrap().unwrap().refined_text;
+        s.set_final(id, "edited").unwrap();
+        // A rerun chosen: the row shows its text, the correction waits
+        // with the original result.
+        let rerun = s
+            .record_attempt(id, &redo_with(vec![]), true)
+            .unwrap()
+            .unwrap();
+        let row = s.get(id).unwrap().unwrap();
+        assert_eq!(
+            (row.refined_text.as_str(), row.final_text.as_str()),
+            ("final2", "final2")
+        );
+        assert_eq!(
+            row.origin_correction,
+            Some((put_in.clone(), "edited".into()))
+        );
+        let origin = s
+            .attempts(id)
+            .unwrap()
+            .into_iter()
+            .find(|a| a.origin)
+            .unwrap();
+        assert_eq!(origin.final_text, put_in);
+        assert_eq!(origin.corrected_text.as_deref(), Some("edited"));
+        // The original chosen back brings the correction with it.
+        assert!(s.choose_attempt(id, origin.id).unwrap());
+        let row = s.get(id).unwrap().unwrap();
+        assert_eq!(
+            (row.refined_text.as_str(), row.final_text.as_str()),
+            (put_in.as_str(), "edited")
+        );
+        assert_eq!(row.origin_correction, None);
+        // A correction made while the rerun is chosen belongs to the rerun.
+        assert!(s.choose_attempt(id, rerun.id).unwrap());
+        s.set_final(id, "edited2").unwrap();
+        let rerun = s
+            .attempts(id)
+            .unwrap()
+            .into_iter()
+            .find(|a| !a.origin)
+            .unwrap();
+        assert_eq!(rerun.corrected_text.as_deref(), Some("edited2"));
+        assert!(s.choose_attempt(id, origin.id).unwrap());
+        assert_eq!(s.get(id).unwrap().unwrap().final_text, "edited");
+        assert!(s.choose_attempt(id, rerun.id).unwrap());
+        assert_eq!(s.get(id).unwrap().unwrap().final_text, "edited2");
+        // Setting the text back to the result's own takes the correction away.
+        s.set_final(id, "final2").unwrap();
+        let rerun = s
+            .attempts(id)
+            .unwrap()
+            .into_iter()
+            .find(|a| !a.origin)
+            .unwrap();
+        assert_eq!(rerun.corrected_text, None);
     }
 
     #[test]
