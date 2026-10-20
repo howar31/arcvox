@@ -21,7 +21,7 @@ use crate::context::{self, Captured};
 use crate::hotkey::{Gesture, Input, Recognizer, KEY_ESCAPE};
 use crate::i18n::Msg;
 use crate::insert::{self, Outcome, Plan, ShowReason, Situation};
-use crate::platform::{AxText, ModifierEvent, Platform};
+use crate::platform::{AxField, AxText, ModifierEvent};
 use crate::settings::ClientSettings;
 use crate::vad;
 
@@ -124,10 +124,12 @@ pub struct Controller {
 }
 
 /// An insertion to read back: the row it went to and where it was put.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct ReadBackJob {
     id: HistoryId,
-    pid: i32,
+    /// The element the text went into, held so a later read is of that
+    /// element and not of whatever has the focus by then.
+    field: Arc<dyn AxField>,
     /// The caret before the insertion, in UTF-16 units.
     caret: usize,
     text: String,
@@ -138,16 +140,10 @@ struct ReadBackJob {
 }
 
 /// Reads the field once and keeps the user's version of the text.
-async fn read_back_once(
-    platform: Arc<dyn Platform>,
-    engine: Engine,
-    job: ReadBackJob,
-    when: &'static str,
-) {
+async fn read_back_once(engine: Engine, job: ReadBackJob, when: &'static str) {
     let read = {
-        let platform = platform.clone();
-        let pid = job.pid;
-        tokio::task::spawn_blocking(move || platform.ax_text(pid)).await
+        let field = job.field.clone();
+        tokio::task::spawn_blocking(move || field.text()).await
     };
     let outcome = match read {
         Err(_) => "gone".to_string(),
@@ -562,10 +558,9 @@ impl Controller {
         // The last insertion's field, read back one last time before the
         // next text arrives.
         if let Some(job) = self.read_back.lock().unwrap().take() {
-            let platform = self.deps.platform.clone();
             let engine = engine.clone();
             self.deps.runtime.spawn(async move {
-                read_back_once(platform, engine, job, "next_recording").await;
+                read_back_once(engine, job, "next_recording").await;
             });
         }
         let captured = context::capture(self.deps.platform.as_ref(), &self.settings.context);
@@ -863,11 +858,14 @@ impl Controller {
             trusted: self.deps.platform.accessibility_trusted(false),
             method,
         });
-        // Where the text goes in, for reading the field back afterwards.
-        let caret = (self.settings.learning.read_back
+        // The element the text goes into and where, for reading it back
+        // afterwards.
+        let field = (self.settings.learning.read_back
             && matches!(plan, Plan::Paste | Plan::Type | Plan::Ax { .. }))
-        .then(|| self.deps.platform.ax_caret(captured.target.pid))
-        .flatten();
+        .then(|| self.deps.platform.ax_field(captured.target.pid))
+        .flatten()
+        .map(Arc::<dyn AxField>::from);
+        let caret = field.as_ref().and_then(|f| f.caret());
         let outcome = insert::run(
             &plan,
             &text,
@@ -911,17 +909,16 @@ impl Controller {
                     app_name: captured.app.app_name.clone(),
                 };
                 let read_back = matches!(outcome, Outcome::Inserted)
-                    .then_some(caret)
+                    .then_some(field.zip(caret))
                     .flatten()
-                    .map(|caret| ReadBackJob {
+                    .map(|(field, caret)| ReadBackJob {
                         id: HistoryId(0),
-                        pid: captured.target.pid,
+                        field,
                         caret,
                         text: text.clone(),
                         app: captured.app.app_name.clone().unwrap_or_default(),
                         log_detail: self.settings.dev.log_read_back,
                     });
-                let platform = self.deps.platform.clone();
                 let pending = self.read_back.clone();
                 let delay = self.deps.read_back_delay;
                 self.deps.runtime.spawn(async move {
@@ -936,7 +933,7 @@ impl Controller {
                     let job = ReadBackJob { id: row, ..job };
                     *pending.lock().unwrap() = Some(job.clone());
                     tokio::time::sleep(delay).await;
-                    read_back_once(platform, engine, job, "after_insert").await;
+                    read_back_once(engine, job, "after_insert").await;
                 });
             }
         }
@@ -969,7 +966,7 @@ mod tests {
     use crate::dictation::ui::MessageKind;
     use crate::dictation::{spawn, ControllerHandle};
     use crate::platform::fake::FakePlatform;
-    use crate::platform::FrontmostApp;
+    use crate::platform::{FrontmostApp, Platform};
     use crate::settings::{HotkeySettings, InsertMethod};
     use crate::vad::Vad;
     use arcvox_core::{DataDir, MemorySecretStore};
@@ -1521,7 +1518,8 @@ mod tests {
         // The caret stood after the first five characters; the user then
         // changed the last word of the inserted text.
         *r.platform.ax_caret.lock().unwrap() = Some(5);
-        *r.platform.ax_text.lock().unwrap() = Some("前面的字。漢字 整理好。後面的字".into());
+        r.platform
+            .set_field_text(Some("前面的字。漢字 整理好。後面的字".into()));
         mock_ok(&r, "汉字 原文", "汉字 整理後").await;
         hold_and_speak(&r, 1.0).await;
         wait_state(&r, UiState::Idle, "idle").await;
@@ -1554,8 +1552,9 @@ mod tests {
         // A terminal: the caret is at the start of a screen whose input
         // line, wrapped and indented, holds the text with a word changed.
         *r.platform.ax_caret.lock().unwrap() = Some(0);
-        *r.platform.ax_text.lock().unwrap() =
-            Some("$ run\n一些輸出在前面\n\n> 漢字 整理\n    好\n\n  ? for shortcuts".into());
+        r.platform.set_field_text(Some(
+            "$ run\n一些輸出在前面\n\n> 漢字 整理\n    好\n\n  ? for shortcuts".into(),
+        ));
         mock_ok(&r, "汉字 原文", "汉字 整理後").await;
         hold_and_speak(&r, 1.0).await;
         wait_state(&r, UiState::Idle, "idle").await;
@@ -1572,6 +1571,51 @@ mod tests {
             "the corrected final text",
         )
         .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_field_the_text_went_into_is_read_even_after_the_focus_moved() {
+        let r = rig(fast_settings()).await;
+        let id = r
+            .engine
+            .history()
+            .insert(arcvox_core::history::NewUtterance {
+                ts: 100,
+                profile_id: arcvox_core::types::ProfileId("default".into()),
+                app_name: None,
+                raw_text: "汉字 原文".into(),
+                refined_text: "漢字 整理後".into(),
+                final_text: "漢字 整理後".into(),
+                degraded: false,
+                audio_path: None,
+                asr_ms: 1,
+                llm_ms: None,
+                audio_ms: None,
+                dict_fixes: 0,
+                snippets: 0,
+                llm_changed: false,
+                stages: Vec::new(),
+            })
+            .unwrap();
+        // The element held at the insertion; the user then changes a word
+        // in it and moves on to an empty field.
+        r.platform
+            .set_field_text(Some("前面的字。漢字 整理後。後面的字".into()));
+        let field: Arc<dyn AxField> = Arc::from(Platform::ax_field(&*r.platform, 1).unwrap());
+        r.platform
+            .set_field_text(Some("前面的字。漢字 整理好。後面的字".into()));
+        r.platform.focus_new_field(Some(String::new()));
+        let job = ReadBackJob {
+            id,
+            field,
+            caret: 5,
+            text: "漢字 整理後".into(),
+            app: String::new(),
+            log_detail: false,
+        };
+        read_back_once(r.engine.clone(), job, "next_recording").await;
+        let row = r.engine.history().get(id).unwrap().unwrap();
+        assert_eq!(row.final_text, "漢字 整理好");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1597,7 +1641,7 @@ mod tests {
     async fn with_the_setting_off_the_field_is_never_read() {
         let r = rig(fast_settings()).await;
         *r.platform.ax_caret.lock().unwrap() = Some(0);
-        *r.platform.ax_text.lock().unwrap() = Some("漢字 整理後了".into());
+        r.platform.set_field_text(Some("漢字 整理後了".into()));
         mock_ok(&r, "汉字 原文", "汉字 整理後").await;
         hold_and_speak(&r, 1.0).await;
         wait_state(&r, UiState::Idle, "idle").await;

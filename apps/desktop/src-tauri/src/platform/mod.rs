@@ -91,11 +91,21 @@ pub type CaptureSink = Arc<dyn Fn(CaptureEvent) + Send + Sync>;
 /// Accessibility.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AxText {
-    /// The application has no focused element now.
+    /// The element is gone: its application or its field closed.
     Gone,
-    /// The focused element gives no text value (a terminal, a canvas).
+    /// The element gives no text value (a canvas, a control).
     Unsupported,
     Text(String),
+}
+
+/// A text element held from the moment the text went in, so it can be
+/// read later whatever has the focus by then.
+pub trait AxField: Send + Sync {
+    /// Where the caret stands, in UTF-16 units from the start of the
+    /// value; None when the element gives no selection range.
+    fn caret(&self) -> Option<usize>;
+    /// The element's value now.
+    fn text(&self) -> AxText;
 }
 
 pub trait Platform: Send + Sync {
@@ -142,15 +152,10 @@ pub trait Platform: Send + Sync {
     fn post_paste(&self);
     fn type_unicode(&self, text: &str);
     fn ax_insert(&self, pid: i32, text: &str) -> Result<(), PlatformError>;
-    /// Where the caret stands in the focused text element of `pid`, in
-    /// UTF-16 units from the start of its value; None when the element
-    /// gives no selection range.
-    fn ax_caret(&self, _pid: i32) -> Option<usize> {
+    /// The focused text element of `pid`, to read back later; None when
+    /// the application has no focused element.
+    fn ax_field(&self, _pid: i32) -> Option<Box<dyn AxField>> {
         None
-    }
-    /// The value of the focused text element of `pid`.
-    fn ax_text(&self, _pid: i32) -> AxText {
-        AxText::Unsupported
     }
     fn accessibility_trusted(&self, prompt: bool) -> bool;
     /// Whether the system lets the process watch the keyboard without
@@ -171,7 +176,7 @@ pub trait Platform: Send + Sync {
 #[cfg(test)]
 pub mod fake {
     use super::*;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     /// Records what the client asked the OS to do.
     #[derive(Default)]
@@ -187,13 +192,36 @@ pub mod fake {
         /// `true` makes every clipboard write fail.
         pub clipboard_failure: Mutex<bool>,
         pub monitor_tx: Mutex<Option<Sender<ModifierEvent>>>,
-        pub calls: Mutex<Vec<String>>,
+        pub calls: Arc<Mutex<Vec<String>>>,
         /// Every value `set_escape_cancels` was given, in order.
         pub escape_cancels: Mutex<Vec<bool>>,
-        /// What `ax_caret` answers.
-        pub ax_caret: Mutex<Option<usize>>,
-        /// What `ax_text` answers; None is `AxText::Unsupported`.
-        pub ax_text: Mutex<Option<String>>,
+        /// What the field's `caret` answers.
+        pub ax_caret: Arc<Mutex<Option<usize>>>,
+        /// What the focused field's `text` answers; None is
+        /// `AxText::Unsupported`. `focus_new_field` makes a new one, so a
+        /// field held from earlier keeps its own value.
+        pub ax_text: Mutex<Arc<Mutex<Option<String>>>>,
+    }
+
+    /// The fake's one text element: reads the platform's values at the
+    /// time of the read, as a held element reads the live field.
+    pub struct FakeField {
+        caret: Arc<Mutex<Option<usize>>>,
+        text: Arc<Mutex<Option<String>>>,
+        calls: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl AxField for FakeField {
+        fn caret(&self) -> Option<usize> {
+            *self.caret.lock().unwrap()
+        }
+        fn text(&self) -> AxText {
+            self.calls.lock().unwrap().push("ax_text".into());
+            match self.text.lock().unwrap().clone() {
+                Some(t) => AxText::Text(t),
+                None => AxText::Unsupported,
+            }
+        }
     }
 
     impl FakePlatform {
@@ -204,6 +232,15 @@ pub mod fake {
         }
         pub fn calls(&self) -> Vec<String> {
             self.calls.lock().unwrap().clone()
+        }
+        /// Sets the focused field's text.
+        pub fn set_field_text(&self, text: Option<String>) {
+            *self.ax_text.lock().unwrap().lock().unwrap() = text;
+        }
+        /// Moves the focus to another field with this text; a field held
+        /// from before keeps the old one.
+        pub fn focus_new_field(&self, text: Option<String>) {
+            *self.ax_text.lock().unwrap() = Arc::new(Mutex::new(text));
         }
         fn record(&self, s: String) {
             self.calls.lock().unwrap().push(s);
@@ -294,15 +331,12 @@ pub mod fake {
                 None => Ok(()),
             }
         }
-        fn ax_caret(&self, _pid: i32) -> Option<usize> {
-            *self.ax_caret.lock().unwrap()
-        }
-        fn ax_text(&self, _pid: i32) -> AxText {
-            self.record("ax_text".into());
-            match self.ax_text.lock().unwrap().clone() {
-                Some(t) => AxText::Text(t),
-                None => AxText::Unsupported,
-            }
+        fn ax_field(&self, _pid: i32) -> Option<Box<dyn AxField>> {
+            Some(Box::new(FakeField {
+                caret: self.ax_caret.clone(),
+                text: self.ax_text.lock().unwrap().clone(),
+                calls: self.calls.clone(),
+            }))
         }
         fn accessibility_trusted(&self, _prompt: bool) -> bool {
             *self.trusted.lock().unwrap()
