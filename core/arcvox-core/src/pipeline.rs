@@ -522,6 +522,7 @@ mod tests {
             term: "Arcvox".into(),
             aliases: vec!["雅客".into()],
             asr_hint: false,
+            ..Default::default()
         }]);
         let p = pipeline(FakeAsr::ok("原文"), FakeLlm::ok("雅客 整理後"));
         let out = p.run(audio(), &ctx, &tx).await.unwrap();

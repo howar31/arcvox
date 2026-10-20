@@ -500,6 +500,7 @@ mod tests {
                     term: "Arcvox".into(),
                     aliases: vec!["雅客".into()],
                     asr_hint: true,
+                    ..Default::default()
                 });
                 let mut mail = c.profiles[0].clone();
                 mail.id = ProfileId("mail".into());

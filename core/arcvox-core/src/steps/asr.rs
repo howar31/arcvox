@@ -153,6 +153,7 @@ mod tests {
             term: "Arcvox".into(),
             aliases: vec![],
             asr_hint: true,
+            ..Default::default()
         }]);
         let out = AsrStep::new(fake.clone())
             .run(
@@ -207,6 +208,7 @@ mod tests {
             term: "Arcvox".into(),
             aliases: vec![],
             asr_hint: true,
+            ..Default::default()
         }]);
         ctx.asr_sample = Some("好，第 2 點可以嗎？".into());
         AsrStep::new(fake.clone())
@@ -250,6 +252,7 @@ mod tests {
             term: "Arcvox".into(),
             aliases: vec![],
             asr_hint: true,
+            ..Default::default()
         }]);
         let mut profile = (*ctx.profile).clone();
         profile.asr_dictionary_hint = false;

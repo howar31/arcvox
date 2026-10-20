@@ -405,6 +405,7 @@ mod tests {
             term: "Arcvox".into(),
             aliases: vec![],
             asr_hint: true,
+            ..Default::default()
         }]);
         with_profile(&mut ctx, |p| p.llm_dictionary_terms = false);
         let out = LlmStep::new(fake.clone())

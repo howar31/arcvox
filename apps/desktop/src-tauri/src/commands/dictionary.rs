@@ -1,4 +1,4 @@
-use arcvox_core::config::{Config, DictionaryEntry};
+use arcvox_core::config::{Config, DictionaryEntry, Dismissed};
 use arcvox_core::learn;
 use arcvox_core::Engine;
 use serde::Serialize;
@@ -11,7 +11,7 @@ use crate::app::AppState;
 pub fn set(
     engine: &Engine,
     entries: Vec<DictionaryEntry>,
-    dismissed: Vec<String>,
+    dismissed: Vec<Dismissed>,
 ) -> CmdResult<Config> {
     let next = engine.config().update(|c| {
         c.dictionary = entries.clone();
@@ -24,7 +24,7 @@ pub fn set(
 pub fn dictionary_set(
     state: State<'_, AppState>,
     entries: Vec<DictionaryEntry>,
-    dismissed: Vec<String>,
+    dismissed: Vec<Dismissed>,
 ) -> CmdResult<Config> {
     set(&engine(&state)?, entries, dismissed)
 }
@@ -85,7 +85,6 @@ pub fn suggestions(engine: &Engine) -> CmdResult<Vec<SuggestionDto>> {
     Ok(learn::suggest(&pairs, &opts)
         .into_iter()
         .filter(|s| s.counts.user() > 0)
-        .filter(|s| !config.dictionary_dismissed.iter().any(|d| d == &s.term))
         // A term already in the dictionary is only worth showing for the
         // aliases it would bring; without any there is nothing to add.
         .filter(|s| !s.known_term || !learn::aliases_to_add(s).is_empty())
@@ -116,4 +115,91 @@ pub fn suggestions(engine: &Engine) -> CmdResult<Vec<SuggestionDto>> {
 #[tauri::command]
 pub fn dictionary_suggestions(state: State<'_, AppState>) -> CmdResult<Vec<SuggestionDto>> {
     suggestions(&engine(&state)?)
+}
+
+/// The keys the Dictionary page sorts and groups a term by: the stroke
+/// count, the Bopomofo initial and the pinyin initial of its first Han
+/// character, in the default profile's regional reading. All None for a
+/// term that does not start with a Han character.
+#[derive(Debug, Clone, Serialize)]
+pub struct IndexDto {
+    pub strokes: Option<u16>,
+    pub zhuyin: Option<String>,
+    pub pinyin: Option<String>,
+}
+
+fn region_of(config: &Config) -> learn::zh::Region {
+    learn::zh::Region::of_language(
+        config
+            .profiles
+            .iter()
+            .find(|p| p.is_default)
+            .and_then(|p| p.language_hint.as_deref()),
+    )
+}
+
+#[tauri::command]
+pub fn dictionary_index(
+    state: State<'_, AppState>,
+    terms: Vec<String>,
+) -> CmdResult<Vec<IndexDto>> {
+    let config = engine(&state)?.config().current();
+    let region = region_of(&config);
+    Ok(terms
+        .iter()
+        .map(|t| match t.trim().chars().next() {
+            Some(c) if learn::zh::is_chinese(&c.to_string()) => IndexDto {
+                strokes: learn::zh::strokes(c, region),
+                zhuyin: learn::zh::zhuyin_initial(c, region).map(str::to_string),
+                pinyin: learn::zh::pinyin_initial(c, region).map(|l| l.to_string()),
+            },
+            _ => IndexDto {
+                strokes: None,
+                zhuyin: None,
+                pinyin: None,
+            },
+        })
+        .collect())
+}
+
+/// Up to `limit` dictations whose final text holds the term, as excerpts
+/// with the term between 【 and 】, newest first.
+#[tauri::command]
+pub fn dictionary_examples(
+    state: State<'_, AppState>,
+    term: String,
+    limit: usize,
+) -> CmdResult<Vec<String>> {
+    let term = term.trim().to_string();
+    if term.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = engine(&state)?
+        .history()
+        .list(limit.min(10), Some(&term), false)?;
+    Ok(rows
+        .iter()
+        .filter_map(|r| {
+            let text = r.final_text.replace(['\n', '\r'], " ");
+            let at = text.find(&term)?;
+            let chars: Vec<char> = text.chars().collect();
+            let start_c = text[..at].chars().count();
+            let end_c = start_c + term.chars().count();
+            let lo = start_c.saturating_sub(18);
+            let hi = (end_c + 18).min(chars.len());
+            let mut out = String::new();
+            if lo > 0 {
+                out.push('…');
+            }
+            out.extend(&chars[lo..start_c]);
+            out.push('【');
+            out.extend(&chars[start_c..end_c]);
+            out.push('】');
+            out.extend(&chars[end_c..hi]);
+            if hi < chars.len() {
+                out.push('…');
+            }
+            Some(out)
+        })
+        .collect())
 }

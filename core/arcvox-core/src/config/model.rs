@@ -28,7 +28,7 @@ pub struct Config {
     pub default_engines: DefaultEngines,
     /// Suggested terms the user turned down, never suggested again.
     #[serde(default)]
-    pub dictionary_dismissed: Vec<String>,
+    pub dictionary_dismissed: Vec<Dismissed>,
 }
 
 /// The one pair of engines every profile falls back on: the one used when
@@ -401,6 +401,84 @@ pub struct DictionaryEntry {
     pub aliases: Vec<String>,
     #[serde(default = "default_true")]
     pub asr_hint: bool,
+    /// Where the entry came from; None for entries from before this was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<EntryOrigin>,
+    /// What the term was heard as when it was suggested.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub heard: Vec<String>,
+    /// Unix seconds when the entry was added and last changed; None for
+    /// entries from before this was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub added: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated: Option<i64>,
+}
+
+impl Default for DictionaryEntry {
+    fn default() -> Self {
+        Self {
+            term: String::new(),
+            aliases: Vec::new(),
+            asr_hint: true,
+            origin: None,
+            heard: Vec::new(),
+            added: None,
+            updated: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntryOrigin {
+    /// Typed in by the user.
+    Manual,
+    /// Taken from the Dictionary page's suggestions.
+    Suggestion,
+}
+
+/// A suggestion the user turned down: it is not shown again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Dismissed {
+    pub term: String,
+    /// What the term was heard as when it was turned down.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub heard: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<i64>,
+}
+
+// Earlier files hold the dismissed terms as plain strings.
+impl<'de> Deserialize<'de> for Dismissed {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Full {
+            term: String,
+            #[serde(default)]
+            heard: Vec<String>,
+            #[serde(default)]
+            at: Option<i64>,
+        }
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Either {
+            Term(String),
+            Full(Full),
+        }
+        Ok(match Either::deserialize(d)? {
+            Either::Term(term) => Dismissed {
+                term,
+                heard: Vec::new(),
+                at: None,
+            },
+            Either::Full(f) => Dismissed {
+                term: f.term,
+                heard: f.heard,
+                at: f.at,
+            },
+        })
+    }
 }
 
 fn default_true() -> bool {

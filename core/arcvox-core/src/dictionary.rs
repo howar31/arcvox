@@ -176,6 +176,7 @@ mod tests {
             term: term.into(),
             aliases: aliases.iter().map(|s| s.to_string()).collect(),
             asr_hint: hint,
+            ..Default::default()
         }
     }
 

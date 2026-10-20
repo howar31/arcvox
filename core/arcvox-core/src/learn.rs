@@ -31,6 +31,8 @@ pub struct Pair {
     pub from: String,
     pub to: String,
     pub source: Source,
+    /// When the row was dictated, unix seconds; 0 when unknown.
+    pub at: i64,
 }
 
 /// How many rows of each source hold a replacement.
@@ -146,6 +148,8 @@ pub struct Suggestion {
     /// Every alias is the term in another casing or spacing: a form to
     /// fix, not a word heard wrong.
     pub form_only: bool,
+    /// When the newest dictation behind it was made, unix seconds.
+    pub latest: i64,
 }
 
 /// What counts as a candidate.
@@ -392,10 +396,12 @@ fn excerpt(to_tokens: &[String], at: (usize, usize), span: usize) -> String {
 struct Tally {
     rows: Rows,
     excerpts: Vec<String>,
+    /// The newest row behind the alias.
+    latest: i64,
 }
 
-/// Dictionary candidates from the pairs, strongest first: by the rows the
-/// user corrected, then by the rows the pipeline changed, then by name.
+/// Dictionary candidates from the pairs, newest first: by the latest
+/// dictation behind each, then by name.
 pub fn suggest(pairs: &[Pair], opts: &Options) -> Vec<Suggestion> {
     // term -> alias -> rows per source
     let mut table: BTreeMap<String, BTreeMap<String, Tally>> = BTreeMap::new();
@@ -416,6 +422,7 @@ pub fn suggest(pairs: &[Pair], opts: &Options) -> Vec<Suggestion> {
             }
             let tally = table.entry(term).or_default().entry(alias).or_default();
             tally.rows.add(pair.source, &pair.id);
+            tally.latest = tally.latest.max(pair.at);
             if tally.excerpts.len() < opts.excerpts {
                 tally.excerpts.push(excerpt(&to_tokens, r.at, 6));
             }
@@ -426,6 +433,7 @@ pub fn suggest(pairs: &[Pair], opts: &Options) -> Vec<Suggestion> {
         .into_iter()
         .filter_map(|(term, aliases)| {
             let mut all = Rows::default();
+            let mut latest = 0i64;
             let mut aliases: Vec<(Alias, Vec<String>)> = aliases
                 .into_iter()
                 .filter_map(|(text, tally)| {
@@ -436,6 +444,7 @@ pub fn suggest(pairs: &[Pair], opts: &Options) -> Vec<Suggestion> {
                         return None;
                     }
                     all.merge(&tally.rows);
+                    latest = latest.max(tally.latest);
                     Some((Alias { text, counts, kind }, tally.excerpts))
                 })
                 .collect();
@@ -480,6 +489,7 @@ pub fn suggest(pairs: &[Pair], opts: &Options) -> Vec<Suggestion> {
                 known_term,
                 near_term,
                 form_only,
+                latest,
             })
         })
         .filter(|s| {
@@ -488,14 +498,7 @@ pub fn suggest(pairs: &[Pair], opts: &Options) -> Vec<Suggestion> {
                 || s.counts.pipeline >= opts.min_pipeline
         })
         .collect();
-    out.sort_by(|x, y| {
-        (x.form_only, y.counts.user(), y.counts.pipeline, &x.term).cmp(&(
-            y.form_only,
-            x.counts.user(),
-            x.counts.pipeline,
-            &y.term,
-        ))
-    });
+    out.sort_by(|x, y| (y.latest, &x.term).cmp(&(x.latest, &y.term)));
     out
 }
 
@@ -553,6 +556,7 @@ fn merge_forms(table: Table) -> Table {
             let mut as_alias = Tally::default();
             for t in other_aliases.values() {
                 as_alias.rows.merge(&t.rows);
+                as_alias.latest = as_alias.latest.max(t.latest);
                 for e in &t.excerpts {
                     if !as_alias.excerpts.contains(e) {
                         as_alias.excerpts.push(e.clone());
@@ -563,6 +567,7 @@ fn merge_forms(table: Table) -> Table {
             for (alias, t) in other_aliases {
                 let into = aliases.entry(alias).or_default();
                 into.rows.merge(&t.rows);
+                into.latest = into.latest.max(t.latest);
                 for e in t.excerpts {
                     if !into.excerpts.contains(&e) {
                         into.excerpts.push(e);
@@ -589,6 +594,7 @@ pub fn pairs_of(rows: &[Utterance]) -> Vec<Pair> {
         if let Some(heard) = &u.heard_text {
             if heard != &u.raw_text {
                 out.push(Pair {
+                    at: u.ts,
                     id: id.clone(),
                     from: u.raw_text.clone(),
                     to: heard.clone(),
@@ -598,6 +604,7 @@ pub fn pairs_of(rows: &[Utterance]) -> Vec<Pair> {
         }
         if u.final_text != u.refined_text {
             out.push(Pair {
+                at: u.ts,
                 id,
                 from: u.refined_text.clone(),
                 to: u.final_text.clone(),
@@ -805,6 +812,7 @@ mod tests {
 
     fn pair(id: &str, from: &str, to: &str, source: Source) -> Pair {
         Pair {
+            at: 0,
             id: id.into(),
             from: from.into(),
             to: to.into(),
@@ -926,6 +934,7 @@ mod thresholds {
 
     fn pair(id: &str, from: &str, to: &str, source: Source) -> Pair {
         Pair {
+            at: 0,
             id: id.into(),
             from: from.into(),
             to: to.into(),
@@ -934,17 +943,24 @@ mod thresholds {
     }
 
     #[test]
-    fn a_changed_wording_is_left_out_and_casing_pairs_sort_last() {
+    fn a_changed_wording_is_left_out_and_the_newest_term_sorts_first() {
+        let at = |mut p: Pair, at: i64| {
+            p.at = at;
+            p
+        };
         let pairs = vec![
-            pair("1", "用別的方式", "用其他方式", Source::Final),
-            pair("2", "清 cdn 快取", "清 CDN 快取", Source::Final),
-            pair("3", "清 cdn 吧", "清 CDN 吧", Source::Final),
-            pair("4", "問謝佛", "問 Zephyr", Source::Final),
-            pair("5", "問謝佛", "問 Zephyr", Source::Final),
+            at(pair("1", "用別的方式", "用其他方式", Source::Final), 50),
+            at(pair("2", "清 cdn 快取", "清 CDN 快取", Source::Final), 10),
+            at(pair("3", "清 cdn 吧", "清 CDN 吧", Source::Final), 30),
+            at(pair("4", "問謝佛", "問 Zephyr", Source::Final), 20),
+            at(pair("5", "問謝佛", "問 Zephyr", Source::Final), 5),
         ];
         let out = suggest(&pairs, &Options::default());
-        let terms: Vec<(&str, bool)> = out.iter().map(|s| (s.term.as_str(), s.form_only)).collect();
-        assert_eq!(terms, [("Zephyr", false), ("CDN", true)]);
+        let terms: Vec<(&str, bool, i64)> = out
+            .iter()
+            .map(|s| (s.term.as_str(), s.form_only, s.latest))
+            .collect();
+        assert_eq!(terms, [("CDN", true, 30), ("Zephyr", false, 20)]);
     }
 }
 
@@ -1018,6 +1034,7 @@ mod from_rows {
             known_term: false,
             near_term: None,
             form_only: false,
+            latest: 0,
         };
         assert_eq!(aliases_to_add(&chinese), ["全線"]);
         let latin = Suggestion {
@@ -1061,18 +1078,21 @@ mod distinct_rows {
     fn a_row_corrected_both_ways_counts_once() {
         let pairs = vec![
             Pair {
+                at: 0,
                 id: "1".into(),
                 from: "問謝佛".into(),
                 to: "問 Zephyr".into(),
                 source: Source::Heard,
             },
             Pair {
+                at: 0,
                 id: "1".into(),
                 from: "問謝佛".into(),
                 to: "問 Zephyr".into(),
                 source: Source::Final,
             },
             Pair {
+                at: 0,
                 id: "2".into(),
                 from: "問謝佛".into(),
                 to: "問 Zephyr".into(),
@@ -1093,6 +1113,7 @@ mod forms {
 
     fn pair(id: &str, from: &str, to: &str) -> Pair {
         Pair {
+            at: 0,
             id: id.into(),
             from: from.into(),
             to: to.into(),
@@ -1210,6 +1231,7 @@ mod chinese_kinds {
 
     fn pair(id: &str, from: &str, to: &str, source: Source) -> Pair {
         Pair {
+            at: 0,
             id: id.into(),
             from: from.into(),
             to: to.into(),
@@ -1251,6 +1273,7 @@ mod near_terms {
     #[test]
     fn a_spelling_a_letter_away_from_a_dictionary_term_names_it() {
         let pairs = vec![Pair {
+            at: 0,
             id: "1".into(),
             from: "用 zefirkit 寫".into(),
             to: "用 zephyrkit 寫".into(),
@@ -1267,6 +1290,7 @@ mod near_terms {
         assert_eq!(out[0].near_term, None);
 
         let pairs = vec![Pair {
+            at: 0,
             id: "1".into(),
             from: "用 zefirkit 寫".into(),
             to: "用 zephir kit 寫".into(),

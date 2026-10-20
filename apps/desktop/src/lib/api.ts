@@ -31,7 +31,20 @@ export interface Profile {
   /** What the rewrite model is told besides the utterance, and whether a much shorter rewrite is refused. */
   llm_dictionary_terms: boolean; llm_window_title: boolean; llm_short_fallback: boolean;
 }
-export interface DictionaryEntry { term: string; aliases: string[]; asr_hint: boolean }
+export interface DictionaryEntry {
+  term: string; aliases: string[]; asr_hint: boolean;
+  /** Where the entry came from and what it was heard as; absent on entries from before this was kept. */
+  origin?: "manual" | "suggestion"; heard?: string[];
+  /** Unix seconds when the entry was added and last changed; absent on entries from before this was kept. */
+  added?: number; updated?: number;
+}
+/** A suggestion the user turned down. */
+export interface Dismissed { term: string; heard?: string[]; at?: number }
+/** The sort keys of terms: stroke count and Bopomofo / pinyin initials of the first Han character, null for other terms. */
+export interface TermIndex { strokes: number | null; zhuyin: string | null; pinyin: string | null }
+export const dictionaryIndex = (terms: string[]) => invoke<TermIndex[]>("dictionary_index", { terms });
+/** Up to `limit` dictations holding the term, as excerpts with the term between 【 and 】. */
+export const dictionaryExamples = (term: string, limit = 2) => invoke<string[]>("dictionary_examples", { term, limit });
 export interface General {
   keep_history: boolean; history_retention_days: number; keep_stages: boolean; stage_retention_days: number; keep_recordings: boolean; recording_retention_days: number; keep_stats: boolean; context_limit_bytes: number;
   asr_timeout_secs: number; llm_timeout_secs: number; llm_temperature: number; llm_max_tokens: number | null;
@@ -46,7 +59,7 @@ export interface Config {
   schema_version: number; general: General; providers: ProviderConfig[]; profiles: Profile[]; dictionary: DictionaryEntry[];
   default_engines: DefaultEngines;
   /** Suggested terms the user turned down. */
-  dictionary_dismissed: string[];
+  dictionary_dismissed: Dismissed[];
 }
 /** A dictionary candidate from the dictations the user corrected. */
 export interface Suggestion {
@@ -138,7 +151,7 @@ export const deleteProfile = (id: string) => invoke<Config>("profiles_delete", {
 export const setDefaultProfile = (id: string) => invoke<Config>("profiles_set_default", { id });
 /** Resets to the profile's own preset, or to `preset` when given (the standard one, when its own is gone). */
 export const resetProfile = (id: string, preset?: string) => invoke<Config>("profiles_reset", { id, preset: preset ?? null });
-export const setDictionary = (entries: DictionaryEntry[], dismissed: string[]) => invoke<Config>("dictionary_set", { entries, dismissed });
+export const setDictionary = (entries: DictionaryEntry[], dismissed: Dismissed[]) => invoke<Config>("dictionary_set", { entries, dismissed });
 export const dictionarySuggestions = () => invoke<Suggestion[]>("dictionary_suggestions");
 export const getPrompt = () => invoke<string>("prompt_get");
 export const setPrompt = (text: string) => invoke<void>("prompt_set", { text });

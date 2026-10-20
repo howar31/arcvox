@@ -1210,6 +1210,7 @@ fn suggest(args: &Args) -> Result<(), String> {
         let id = u.id.0.to_string();
         raw_by_id.insert(id.clone(), u.raw_text.clone());
         pairs.push(Pair {
+            at: 0,
             id,
             from: u.raw_text.clone(),
             to: u.final_text.clone(),
@@ -1223,6 +1224,7 @@ fn suggest(args: &Args) -> Result<(), String> {
             set_rows += 1;
             if let Some(raw) = raw_by_id.get(&row.id) {
                 pairs.push(Pair {
+                    at: 0,
                     id: format!("set:{}", row.id),
                     from: raw.clone(),
                     to: row.spoken.clone(),
@@ -1230,6 +1232,7 @@ fn suggest(args: &Args) -> Result<(), String> {
                 });
             }
             pairs.push(Pair {
+                at: 0,
                 id: format!("set:{}", row.id),
                 from: row.spoken,
                 to: row.final_text,

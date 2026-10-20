@@ -59,6 +59,7 @@ mod tests {
             term: "Arcvox".into(),
             aliases: vec!["雅客".into()],
             asr_hint: true,
+            ..Default::default()
         }]);
         let out = RulesStep {
             dictionary: true,
@@ -83,6 +84,7 @@ mod tests {
             term: "Arcvox".into(),
             aliases: vec!["雅客".into()],
             asr_hint: true,
+            ..Default::default()
         }]);
         let out = RulesStep {
             dictionary: true,
@@ -117,6 +119,7 @@ mod tests {
             term: "Arcvox".into(),
             aliases: vec!["雅客".into()],
             asr_hint: true,
+            ..Default::default()
         }]);
         let out = RulesStep {
             dictionary: false,

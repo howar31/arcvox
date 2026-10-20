@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Builds the two Chinese tables the core ships, from their sources.
 
-usage: zh-tables.py <Unihan_Readings.txt> <out dir> <dict.txt>...
+usage: zh-tables.py <Unihan_Readings.txt> <Unihan_IRGSources.txt> <out dir> <dict.txt>...
 
 Writes `zh-readings.tsv` (one line per CJK character of the basic block:
 the character, its customary Taiwan reading, its customary mainland
-reading, and its dictionary readings, all as toneless pinyin) and
+reading, its dictionary readings, all as toneless pinyin, then its stroke
+count in Taiwan and on the mainland) and
 `zh-words.txt` (one word per line: the words of two to four characters
 any of the dictionaries lists with a frequency of at least MIN_FREQ).
 
 Sources: the Unihan database (Unicode licence; fields kMandarin,
-kHanyuPinyin, kTGHZ2013); the jieba-tw dictionary (MIT) and the jieba
+kHanyuPinyin, kTGHZ2013, kTotalStrokes); the jieba-tw dictionary (MIT) and the jieba
 dictionary (MIT) converted to Traditional characters with OpenCC s2tw
 beforehand (the core's own conversion crate does it).
 """
@@ -68,6 +69,25 @@ def readings(path: Path) -> dict[int, tuple[str, str, list[str]]]:
     return table
 
 
+def strokes(path: Path) -> dict[int, tuple[str, str]]:
+    """kTotalStrokes: one value, or two with the second for zh-Hant."""
+    out = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("U+"):
+            continue
+        code, field, value = line.split("\t", 2)
+        if field != "kTotalStrokes":
+            continue
+        cp = int(code[2:], 16)
+        if cp not in BASIC:
+            continue
+        values = value.split()
+        cn = values[0]
+        tw = values[1] if len(values) > 1 else values[0]
+        out[cp] = (tw, cn)
+    return out
+
+
 def words(paths: list[Path]) -> list[str]:
     out = set()
     for path in paths:
@@ -84,10 +104,14 @@ def words(paths: list[Path]) -> list[str]:
 
 
 def main() -> None:
-    unihan, out = Path(sys.argv[1]), Path(sys.argv[2])
-    dictionaries = [Path(a) for a in sys.argv[3:]]
+    unihan, irg, out = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
+    dictionaries = [Path(a) for a in sys.argv[4:]]
     table = readings(unihan)
-    lines = [f"{chr(cp)}\t{tw}\t{cn}\t{','.join(every)}" for cp, (tw, cn, every) in sorted(table.items())]
+    counts = strokes(irg)
+    lines = [
+        f"{chr(cp)}\t{tw}\t{cn}\t{','.join(every)}\t{counts.get(cp, ('', ''))[0]}\t{counts.get(cp, ('', ''))[1]}"
+        for cp, (tw, cn, every) in sorted(table.items())
+    ]
     (out / "zh-readings.tsv").write_text("\n".join(lines) + "\n", encoding="utf-8")
     listed = words(dictionaries)
     (out / "zh-words.txt").write_text("\n".join(listed) + "\n", encoding="utf-8")

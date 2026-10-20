@@ -337,6 +337,7 @@ mod tests {
             term: "a\nb".into(),
             aliases: vec!["".into()],
             asr_hint: true,
+            ..Default::default()
         });
         assert_eq!(
             validate(&c),
@@ -348,6 +349,7 @@ mod tests {
             term: "\nA\nB".into(),
             aliases: Vec::new(),
             asr_hint: true,
+            ..Default::default()
         };
         assert_eq!(
             validate(&c),

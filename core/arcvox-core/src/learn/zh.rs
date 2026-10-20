@@ -42,6 +42,8 @@ struct Readings {
     taiwan: &'static str,
     mainland: &'static str,
     others: Vec<&'static str>,
+    /// Total strokes, as counted in Taiwan and on the mainland.
+    strokes: (u16, u16),
 }
 
 fn table() -> &'static HashMap<char, Readings> {
@@ -58,12 +60,15 @@ fn table() -> &'static HashMap<char, Readings> {
                     .next()
                     .map(|s| s.split(',').filter(|s| !s.is_empty()).collect())
                     .unwrap_or_default();
+                let mut count = || f.next().and_then(|v| v.parse().ok()).unwrap_or(0u16);
+                let strokes = (count(), count());
                 Some((
                     c,
                     Readings {
                         taiwan,
                         mainland,
                         others,
+                        strokes,
                     },
                 ))
             })
@@ -74,6 +79,85 @@ fn table() -> &'static HashMap<char, Readings> {
 fn words() -> &'static HashSet<&'static str> {
     static WORDS_SET: OnceLock<HashSet<&'static str>> = OnceLock::new();
     WORDS_SET.get_or_init(|| WORDS.lines().filter(|w| !w.is_empty()).collect())
+}
+
+/// The customary reading of a character in the region, toneless pinyin;
+/// None for a character outside the table.
+pub fn reading(c: char, region: Region) -> Option<&'static str> {
+    let r = table().get(&c)?;
+    Some(match region {
+        Region::Taiwan => r.taiwan,
+        Region::Mainland => r.mainland,
+    })
+}
+
+/// How many strokes a character takes in the region; None when unknown.
+pub fn strokes(c: char, region: Region) -> Option<u16> {
+    let r = table().get(&c)?;
+    let n = match region {
+        Region::Taiwan => r.strokes.0,
+        Region::Mainland => r.strokes.1,
+    };
+    (n > 0).then_some(n)
+}
+
+/// The first letter of a character's reading, for an A to Z index.
+pub fn pinyin_initial(c: char, region: Region) -> Option<char> {
+    reading(c, region)?
+        .chars()
+        .next()
+        .map(|l| l.to_ascii_uppercase())
+}
+
+/// The first Bopomofo symbol of a character's reading: its initial, or
+/// the medial or final of a syllable without one, for a ㄅ to ㄦ index.
+pub fn zhuyin_initial(c: char, region: Region) -> Option<&'static str> {
+    let r = reading(c, region)?;
+    const INITIALS: [(&str, &str); 21] = [
+        ("zh", "ㄓ"),
+        ("ch", "ㄔ"),
+        ("sh", "ㄕ"),
+        ("b", "ㄅ"),
+        ("p", "ㄆ"),
+        ("m", "ㄇ"),
+        ("f", "ㄈ"),
+        ("d", "ㄉ"),
+        ("t", "ㄊ"),
+        ("n", "ㄋ"),
+        ("l", "ㄌ"),
+        ("g", "ㄍ"),
+        ("k", "ㄎ"),
+        ("h", "ㄏ"),
+        ("j", "ㄐ"),
+        ("q", "ㄑ"),
+        ("x", "ㄒ"),
+        ("r", "ㄖ"),
+        ("z", "ㄗ"),
+        ("c", "ㄘ"),
+        ("s", "ㄙ"),
+    ];
+    if let Some((_, z)) = INITIALS.iter().find(|(p, _)| r.starts_with(p)) {
+        return Some(z);
+    }
+    // Syllables without an initial: a medial (yi, wu, yu) or a final.
+    const BARE: [(&str, &str); 15] = [
+        ("yu", "ㄩ"),
+        ("y", "ㄧ"),
+        ("w", "ㄨ"),
+        ("ai", "ㄞ"),
+        ("ei", "ㄟ"),
+        ("ao", "ㄠ"),
+        ("ou", "ㄡ"),
+        ("ang", "ㄤ"),
+        ("eng", "ㄥ"),
+        ("an", "ㄢ"),
+        ("en", "ㄣ"),
+        ("er", "ㄦ"),
+        ("a", "ㄚ"),
+        ("o", "ㄛ"),
+        ("e", "ㄜ"),
+    ];
+    BARE.iter().find(|(p, _)| r.starts_with(p)).map(|(_, z)| *z)
 }
 
 /// Whether every character is a CJK ideograph of the basic block.
@@ -250,5 +334,23 @@ mod tests {
         // 行 is xing customarily and hang in 銀行.
         assert!(sound_alike("銀行", "銀航", Region::Taiwan));
         assert!(sound_alike("銀行", "銀行", Region::Mainland));
+    }
+}
+
+#[cfg(test)]
+mod index_tests {
+    use super::*;
+
+    #[test]
+    fn strokes_and_initials_come_from_the_table() {
+        assert_eq!(strokes('封', Region::Taiwan), Some(9));
+        assert_eq!(strokes('權', Region::Taiwan), Some(21));
+        assert_eq!(strokes('a', Region::Taiwan), None);
+        assert_eq!(pinyin_initial('權', Region::Taiwan), Some('Q'));
+        assert_eq!(zhuyin_initial('權', Region::Taiwan), Some("ㄑ"));
+        assert_eq!(zhuyin_initial('知', Region::Taiwan), Some("ㄓ"));
+        assert_eq!(zhuyin_initial('一', Region::Taiwan), Some("ㄧ"));
+        assert_eq!(zhuyin_initial('安', Region::Taiwan), Some("ㄢ"));
+        assert_eq!(zhuyin_initial('二', Region::Taiwan), Some("ㄦ"));
     }
 }
