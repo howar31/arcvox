@@ -144,6 +144,35 @@ mod tests {
     }
 
     #[test]
+    fn optional_fields_serialise_as_null() {
+        snap(
+            Event::Transcript {
+                text: "hi".into(),
+                is_final: false,
+                language: None,
+            },
+            json!({"type":"transcript","text":"hi","is_final":false,"language":null}),
+        );
+        snap(
+            Event::Error {
+                step: None,
+                code: ErrorCode::NoSpeech,
+                message: "no speech in the recording".into(),
+                recoverable: true,
+                hint: None,
+            },
+            json!({"type":"error","step":null,"code":"no_speech","message":"no speech in the recording","recoverable":true,"hint":null}),
+        );
+        snap(
+            Event::Done {
+                session_id: SessionId("s1".into()),
+                history_id: None,
+            },
+            json!({"type":"done","session_id":"s1","history_id":null}),
+        );
+    }
+
+    #[test]
     fn done() {
         snap(
             Event::Done {
