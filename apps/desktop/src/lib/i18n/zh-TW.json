@@ -1378,6 +1378,8 @@
   "flow.cell.questions_inside": "句中改問號 {n} 處",
   "common.list_sep": "、",
   "flow.enable_module": "啟用模組",
+  "flow.enable": "啟用",
+  "flow.enable_help": "這個情境還沒啟用的模組。啟用後會排在階段裡固定的位置。",
   "flow.module.llm_help": "用語言模型把辨識結果整理成可以直接貼上的文字",
   "flow.module.rules_help": "字典替換，以及標點和空格的規則",
   "flow.module.translate_help": "把整理好的文字翻成另一種語言或文體",

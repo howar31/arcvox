@@ -1,8 +1,12 @@
 <script lang="ts">
   /** The stages as a column of cells: name, current setting, what it did last time. A chevron under the number column leads to the next cell.
-   * Between the modules and the insertion, one row adds the modules the profile has not got; it is gone when every module is added. */
+   * Under the stages, one row stands for the modules the profile has not enabled; picking it shows them in the right column.
+   * It is gone when every module is enabled. */
   import { tip } from "../../../lib/tip";
   import type { CellId } from "../../../lib/flowLast";
+
+  /** What the rail can select: a stage, or the row of modules not enabled. */
+  export type Pick = CellId | "enable";
   import Bang from "../../../lib/ui/Bang.svelte";
   import Icon from "../../../lib/ui/Icon.svelte";
 
@@ -21,42 +25,15 @@
     /** Set when the stage runs on another engine than the one the profile names: the problem mark, with this text. */
     problem?: string;
   }
-  /** A module the profile has not added: its name and what it does. */
-  export interface Addable { id: CellId; name: string; help: string }
-
-  let { cells, selected, onpick, label, addable = [], addLabel = "", onadd }: {
-    cells: Cell[]; selected: CellId; onpick: (id: CellId) => void; label: string;
-    /** The modules the profile has not added, and the row's wording. */
-    addable?: Addable[]; addLabel?: string; onadd?: (id: CellId) => void;
+  let { cells, selected, onpick, label, entry = "" }: {
+    cells: Cell[]; selected: Pick; onpick: (id: Pick) => void; label: string;
+    /** The wording of the row for the modules not enabled; "" when every module is enabled and the row is not shown. */
+    entry?: string;
   } = $props();
-
-  let open = $state(false);
-  let entry: HTMLDivElement | undefined = $state();
-  function toggle() { open = !open; }
-  function add(id: CellId) { open = false; onadd?.(id); }
-  function away(e: MouseEvent) { if (open && entry && !entry.contains(e.target as Node)) open = false; }
-  function onkey(e: KeyboardEvent) { if (open && e.key === "Escape") { open = false; e.stopPropagation(); } }
 </script>
-
-<svelte:window onmousedown={away} onkeydown={onkey} />
 
 <div class="rail" role="tablist" aria-orientation="vertical" aria-label={label}>
   {#each cells as c, i (c.id)}
-    {#if c.id === "insert" && addable.length > 0}
-      <div class="entry" bind:this={entry}>
-        <button type="button" class="add" aria-expanded={open} aria-haspopup="listbox" onclick={toggle}>
-          <span class="plus"><Icon name="plus" size={14} /></span>
-          <span class="what">{addLabel}</span>
-        </button>
-        {#if open}
-          <div class="menu" role="listbox" aria-label={addLabel}>
-            {#each addable as m (m.id)}
-              <button type="button" class="opt" role="option" aria-selected="false" onclick={() => add(m.id)}><b>{m.name}</b><small>{m.help}</small></button>
-            {/each}
-          </div>
-        {/if}
-      </div>
-    {/if}
     <button type="button" class="blk" class:on={selected === c.id} role="tab" aria-selected={selected === c.id} onclick={() => onpick(c.id)}>
       <span class="num">{i + 1}</span>
       <span class="t">
@@ -67,6 +44,12 @@
       </span>
     </button>
   {/each}
+  {#if entry}
+    <button type="button" class="add" class:on={selected === "enable"} role="tab" aria-selected={selected === "enable"} onclick={() => onpick("enable")}>
+      <span class="plus"><Icon name="plus" size={14} /></span>
+      <span class="what">{entry}</span>
+    </button>
+  {/if}
 </div>
 
 <style>
@@ -75,18 +58,18 @@
   @media (prefers-color-scheme: dark) { :global(:root:not([data-theme="light"])) .rail { --sel: color-mix(in srgb, var(--accent) 16%, var(--surface)); } }
   .blk, .add { position: relative; display: grid; grid-template-columns: 26px 1fr; gap: 10px; align-items: start; width: 100%; padding: 9px 12px 9px 14px; border: 0; border-top: 1px solid var(--line); background: none; text-align: left; cursor: default; min-width: 0; }
   .blk:first-child { border-top: 0; border-radius: var(--radius-group) var(--radius-group) 0 0; }
-  .blk:last-child { border-radius: 0 0 var(--radius-group) var(--radius-group); }
+  .blk:last-child, .add { border-radius: 0 0 var(--radius-group) var(--radius-group); }
   .blk:hover, .add:hover { background: color-mix(in srgb, var(--sunken) 60%, transparent); }
-  .blk.on { background: var(--sel); }
+  .blk.on, .add.on { background: var(--sel); }
   .blk:focus-visible, .add:focus-visible { outline-offset: -2px; }
   /* The chevron under the number column, riding on the dividing line to the next cell: a line-coloured
      triangle (the V) with a smaller one in the cell's own colour inside it. Two clipped triangles rather
      than a rotated square: the square's edges inside the cell showed as a diamond in the app. */
-  .blk:not(:last-child)::before, .blk:not(:last-child)::after, .add::before, .add::after { content: ""; position: absolute; left: 27px; transform: translateX(-50%); clip-path: polygon(0 0, 100% 0, 50% 100%); z-index: 1; pointer-events: none; }
-  .blk:not(:last-child)::before, .add::before { bottom: -8px; width: 14px; height: 8px; background: var(--line); }
-  .blk:not(:last-child)::after, .add::after { bottom: -6px; width: 11px; height: 6.5px; background: var(--surface); }
+  .blk:not(:last-child)::before, .blk:not(:last-child)::after { content: ""; position: absolute; left: 27px; transform: translateX(-50%); clip-path: polygon(0 0, 100% 0, 50% 100%); z-index: 1; pointer-events: none; }
+  .blk:not(:last-child)::before { bottom: -8px; width: 14px; height: 8px; background: var(--line); }
+  .blk:not(:last-child)::after { bottom: -6px; width: 11px; height: 6.5px; background: var(--surface); }
   /* The inside is the cell's own colour in every state, so the cell and its chevron read as one shape. */
-  .blk:hover:not(:last-child)::after, .add:hover::after { background: color-mix(in srgb, var(--sunken) 60%, var(--surface)); }
+  .blk:hover:not(:last-child)::after { background: color-mix(in srgb, var(--sunken) 60%, var(--surface)); }
   .blk.on:not(:last-child)::after { background: var(--sel); }
   .num { width: 26px; height: 26px; margin-top: 1px; border-radius: 13px; background: var(--sunken); color: var(--ink-2); font: 600 13px/26px var(--font); text-align: center; }
   .blk.on .num { background: var(--accent); color: var(--accent-ink); }
@@ -98,15 +81,10 @@
   .t .setting.warn { color: var(--warn); }
   .t .setting.unknown { color: var(--live); }
   .t i { font-style: normal; color: var(--ink-3); font-size: var(--text-xs); min-height: 1.4em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  /* The row that adds a module: a dashed ring where the number would be, the text in the stage's colour. */
-  .entry { position: relative; }
+  /* The row for the modules not enabled, under the last stage: a dashed ring where the number would be, the text in the stage's colour. */
   .add { align-items: center; padding-top: 7px; padding-bottom: 7px; color: var(--ink-2); font: inherit; font-size: var(--text-sm); }
   .add .plus { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 13px; border: 1px dashed var(--line-strong); color: var(--ink-3); }
-  .add:hover .plus { color: var(--ink-2); border-color: var(--ink-3); }
+  .add:hover .plus, .add.on .plus { color: var(--ink-2); border-color: var(--ink-3); }
+  .add.on { color: var(--ink); }
   .add .what { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .menu { position: absolute; left: 50px; right: 8px; top: calc(100% - 4px); z-index: 5; display: flex; flex-direction: column; padding: 6px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--lift); }
-  .opt { display: flex; flex-direction: column; gap: 1px; padding: 7px 10px; border: 0; border-radius: 9px; background: none; text-align: left; font: inherit; color: var(--ink); cursor: default; }
-  .opt:hover, .opt:focus-visible { background: var(--sunken); outline: none; }
-  .opt b { font-weight: 600; font-size: var(--text-control); }
-  .opt small { color: var(--ink-2); font-size: var(--text-xs); line-height: 1.4; }
 </style>

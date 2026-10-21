@@ -1378,6 +1378,8 @@
   "flow.cell.questions_inside": "Question marks inside {n}",
   "common.list_sep": ", ",
   "flow.enable_module": "Enable a module",
+  "flow.enable": "Enable",
+  "flow.enable_help": "These modules are off in this profile. An enabled module sits at its fixed place among the stages.",
   "flow.module.llm_help": "A language model turns the recognised text into text ready to paste",
   "flow.module.rules_help": "Dictionary replacements, and the punctuation and spacing rules",
   "flow.module.translate_help": "Turns the tidied text into another language or style",

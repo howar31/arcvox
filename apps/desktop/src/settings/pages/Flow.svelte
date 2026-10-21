@@ -35,7 +35,7 @@
   import LastPanel from "./flow/LastPanel.svelte";
   import ManageProfiles from "./flow/ManageProfiles.svelte";
   import ProfilePicker from "./flow/ProfilePicker.svelte";
-  import StageRail, { type Addable, type Cell } from "./flow/StageRail.svelte";
+  import StageRail, { type Cell, type Pick } from "./flow/StageRail.svelte";
 
   /** `arg` is the id of the profile to show; without it the default profile is shown. */
   let { arg }: { arg: string | null } = $props();
@@ -46,8 +46,9 @@
   const TARGET_KEYS = ["en", "ja", "zh_tw", "zh_cn", "ko", "fr", "de", "es"];
   const targetNames = $derived(TARGET_KEYS.map((k) => t(`flow.target.${k}`)));
   // The stage shown first is the one shown when the page was left last.
-  let stage = $state<CellId>(storedStage());
-  $effect(() => { rememberStage(stage); });
+  // A stage, or "enable": the right column lists the modules not enabled.
+  let stage = $state<Pick>(storedStage());
+  $effect(() => { if (stage !== "enable") rememberStage(stage); });
   let managing = $state(false);
   // The profile's newest dictation with its stages: undefined while it is being read, null when there is none.
   let last = $state<LastRun | null | undefined>(undefined);
@@ -259,8 +260,8 @@
     };
     return cellsOf(draft).map((id) => settings[id]());
   });
-  // The modules the draft has not added, offered on the row between the modules and the insertion.
-  const addable = $derived.by((): Addable[] => {
+  // The modules the draft has not enabled, listed in the right column from the row between the modules and the insertion.
+  const addable = $derived.by((): { id: CellId; name: string; help: string }[] => {
     if (!draft) return [];
     return MODULE_IDS.filter((id) => !moduleAdded(draft!, id)).map((id) => ({ id, name: stageName(id), help: t(`flow.module.${id}_help`) }));
   });
@@ -300,9 +301,10 @@
     else return;
     stage = "asr";
   }
-  // A module turned off in the stored profile elsewhere leaves the page on the recognition stage.
-  $effect(() => { if (draft && !cellsOf(draft).includes(stage)) stage = "asr"; });
-  const current = $derived(cells.find((c) => c.id === stage));
+  // A module turned off in the stored profile elsewhere leaves the page on the recognition stage; so does the
+  // module list once every module is enabled.
+  $effect(() => { if (draft && (stage === "enable" ? addable.length === 0 : !cellsOf(draft).includes(stage))) stage = "asr"; });
+  const current = $derived(stage === "enable" ? undefined : cells.find((c) => c.id === stage));
   /** The problem mark of an engine stage that runs on the default because the engine named for it cannot run, or of the rewrite stage whose template style has moved on. */
   function problemOf(id: CellId): string | undefined {
     const c = id === "asr" ? resolved?.asr : id === "llm" ? resolved?.llm : id === "translate" ? resolved?.translate : null;
@@ -526,16 +528,25 @@
   </div>
   <div class="split">
     <!-- The rail stays in view while the right column scrolls; at the window's minimum height it fits whole. -->
-    <div class="railwrap"><StageRail {cells} selected={stage} onpick={(id) => (stage = id)} label={t("flow.stages")} {addable} addLabel={t("flow.enable_module")} onadd={addModule} /></div>
+    <div class="railwrap"><StageRail {cells} selected={stage} onpick={(id) => (stage = id)} label={t("flow.stages")} entry={addable.length ? t("flow.enable_module") : ""} /></div>
     <div class="right">
       {#if current}
         <div class="ttl"><b>{current.name}</b><span class:warn={current.warn} class:unknown={current.unknown}>{titleMeta}</span></div>
       {/if}
-      {#if last !== undefined}
+      {#if stage !== "enable" && last !== undefined}
         <LastPanel id={stage} stages={last?.stages ?? null} row={last?.row ?? null} />
       {/if}
 
-      {#if stage === "capture"}
+      {#if stage === "enable"}
+        <div class="ttl"><b>{t("flow.enable_module")}</b></div>
+        <Group help={t("flow.enable_help")}>
+          {#each addable as m (m.id)}
+            <Row label={m.name} help={m.help}>
+              <button type="button" class="btn" onclick={() => addModule(m.id)}>{t("flow.enable")}</button>
+            </Row>
+          {/each}
+        </Group>
+      {:else if stage === "capture"}
         {@const mic = client.value?.microphone ?? "builtin"}
         <Group title={t("home.stage.capture")}>
           <Row label={t("general.input_device")} help={t("flow.mic_shared")}>
