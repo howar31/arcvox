@@ -302,8 +302,8 @@
     stage = "asr";
   }
   // A module turned off in the stored profile elsewhere leaves the page on the recognition stage; so does the
-  // module list once every module is enabled.
-  $effect(() => { if (draft && (stage === "enable" ? addable.length === 0 : !cellsOf(draft).includes(stage))) stage = "asr"; });
+  // module list once every module is enabled. Before the DOM updates: the stage's panel reads the module's step.
+  $effect.pre(() => { if (draft && (stage === "enable" ? addable.length === 0 : !cellsOf(draft).includes(stage))) stage = "asr"; });
   const current = $derived(stage === "enable" ? undefined : cells.find((c) => c.id === stage));
   /** The problem mark of an engine stage that runs on the default because the engine named for it cannot run, or of the rewrite stage whose template style has moved on. */
   function problemOf(id: CellId): string | undefined {
@@ -688,7 +688,7 @@
         <Group>
           {@render removeRow(t("flow.disable_rules_help"))}
         </Group>
-      {:else if stage === "translate"}
+      {:else if stage === "translate" && translateAt(draft)}
         {@const step = translateAt(draft)!}
         <Group title={t("flow.translate_group")} info={t("flow.translate_info")}>
           <Row label={t("flow.translate_target")} help={t("flow.translate_target_help")}>
