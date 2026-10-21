@@ -1397,7 +1397,7 @@
   "flow.panel.translated": "{secs} s · into {target} · {in} characters sent, {out} received",
   "flow.stage.translate": "Translation",
   "flow.translate_group": "Translation",
-  "flow.translate_info": "The target can be a language or a style; whether the engine can do it is up to the engine. A profile with this module is not read back after insertion.",
+  "flow.translate_info": "The target can be a language or a style; whether the engine can do it is up to the engine. With this module enabled, the text put in is not read back.",
   "flow.translate_target": "Target",
   "flow.translate_target_help": "The tidied text is turned into this language or style before it is put in.",
   "flow.translate_custom": "Custom target",

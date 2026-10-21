@@ -1397,7 +1397,7 @@
   "flow.panel.translated": "{secs} 秒 · 譯成{target} · 送出 {in} 字，收到 {out} 字",
   "flow.stage.translate": "翻譯",
   "flow.translate_group": "翻譯",
-  "flow.translate_info": "目標可以是語言或文體；能不能翻由引擎決定。加入後這個情境填入的文字不讀回。",
+  "flow.translate_info": "目標可以是語言或文體；能不能翻由引擎決定。啟用後這個情境填入的文字不讀回。",
   "flow.translate_target": "目標",
   "flow.translate_target_help": "整理好的文字翻成這個語言或文體後再填入。",
   "flow.translate_custom": "自訂目標",
