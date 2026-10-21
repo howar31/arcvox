@@ -404,6 +404,51 @@ export const benchClipFromHistory = (id: number) => invoke<ClipStatus>("bench_cl
 export const benchHistoryCandidates = () => invoke<ClipCandidate[]>("bench_history_candidates");
 export const benchStart = (asr: string[], llm: string[], fallbackText: string) => invoke<void>("bench_start", { asr, llm, fallbackText });
 export const benchCancel = () => invoke<void>("bench_cancel");
+
+// Quality test: scores history rows or a seed set through engines or a whole profile.
+export type EvalStage = "asr" | "llm" | "full";
+/** Errors over length; the rate is errors / length. */
+export interface Cer { errors: number; length: number }
+export interface MarkCount { extra: number; missing: number }
+/** Punctuation and spacing written too many / left out, by kind. */
+export interface Marks { stop: MarkCount; question: MarkCount; inner: MarkCount; quote: MarkCount; other: MarkCount; space: MarkCount }
+export type MarkKind = keyof Marks;
+export const MARK_KINDS: MarkKind[] = ["stop", "question", "inner", "quote", "other", "space"];
+export interface EvalChecks { ends_with_punctuation: boolean; trailing_whitespace: boolean; correction_marker_left: boolean }
+/** One row scored: the text expected, what came out, and the two scores. */
+export interface EvalItem { id: string; stage: EvalStage; provider: string; tags: string[]; expected: string; output: string; error: string | null; ms: number; text: Cer; punctuation: Cer; checks: EvalChecks | null }
+export interface EvalTotals { items: number; text: Cer; punctuation: Cer; marks: Marks }
+/** Totals for one stage and engine, overall and per category. */
+export interface EvalSummary { stage: EvalStage; provider: string; items: number; failed: number; ms_total: number; total: EvalTotals; by_category: [string, EvalTotals][] }
+export type EvalOrigin = "command" | "app";
+export interface EvalReport { name: string; created: string; notes: string[]; items: EvalItem[]; origin: EvalOrigin; stopped: boolean }
+/** A saved report in brief. */
+export interface ReportHead { file: string; name: string; created: string; origin: EvalOrigin; stopped: boolean; stage: EvalStage; providers: string[]; items: number; failed: number; text: Cer; punctuation: Cer }
+export interface Tally { improved: number; worse: number; same: number }
+export interface EvalChange { id: string; stage: EvalStage; provider: string; categories: string[]; before: Cer; after: Cer; before_punctuation: Cer; after_punctuation: Cer; before_output: string; after_output: string }
+export interface EvalComparison { changed: EvalChange[]; unmatched: number; words: Tally; punctuation: Tally; by_category: [string, Tally, Tally][]; before: EvalSummary[]; after: EvalSummary[] }
+/** Where the rows come from: history rows with a recording in a window (at most `limit`, 0 = all), or a seed set file. */
+export type QualitySource = { kind: "history"; since: number | null; until: number | null; limit: number } | { kind: "file"; path: string };
+export interface SourceInfo { rows: number; available: number; heard: number; categories: [string, number][] }
+/** The run in progress or the last one, with every row so far. */
+export interface QualityRun { running: boolean; stage: EvalStage; profile: string; rows: number; done: number; total: number; provider: string | null; started: number; elapsed_ms: number; stopped: boolean; error: string | null; items: EvalItem[]; summaries: EvalSummary[]; saved: string | null }
+export const qualitySourceInfo = (source: QualitySource) => invoke<SourceInfo>("quality_source_info", { source });
+export const qualityStart = (args: { source: QualitySource; stage: EvalStage; profile: string; asr: string[]; llm: string[] }) => invoke<void>("quality_start", { args });
+export const qualityCancel = () => invoke<void>("quality_cancel");
+export const qualityCurrent = () => invoke<QualityRun | null>("quality_current");
+export const qualityClear = () => invoke<void>("quality_clear");
+export const qualitySave = (name: string) => invoke<ReportHead>("quality_save", { name });
+export const qualityList = () => invoke<ReportHead[]>("quality_list");
+export const qualityOpen = (file: string) => invoke<{ report: EvalReport; summaries: EvalSummary[] }>("quality_open", { file });
+export const qualityDelete = (file: string) => invoke<void>("quality_delete", { file });
+export const qualityCompare = (before: string, after: string) => invoke<EvalComparison>("quality_compare", { before, after });
+export interface QualityProgress { done: number; total: number; provider: string; item: EvalItem; summaries: EvalSummary[] }
+export function onQualityProgress(cb: (p: QualityProgress) => void): Promise<UnlistenFn> {
+  return listen<QualityProgress>("quality-progress", (e) => cb(e.payload));
+}
+export function onQualityDone(cb: (d: { stopped: boolean; error: string | null }) => void): Promise<UnlistenFn> {
+  return listen<{ stopped: boolean; error: string | null }>("quality-done", (e) => cb(e.payload));
+}
 export function onBenchLevel(cb: (rms: number) => void): Promise<UnlistenFn> {
   return listen<{ rms: number }>("bench-level", (e) => cb(e.payload.rms));
 }

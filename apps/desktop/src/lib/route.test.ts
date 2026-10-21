@@ -68,10 +68,13 @@ test("the base prompt has no sidebar entry and counts as the profiles page there
   expect(navPage("prompt")).toBe("flow");
 });
 
-test("the speed test has no sidebar entry and counts as the engines page there", () => {
+test("the speed and quality tests have no sidebar entry and count as the engines page there", () => {
   expect(NAV.flatMap((g) => g.pages)).not.toContain("speed");
+  expect(NAV.flatMap((g) => g.pages)).not.toContain("quality");
   expect(parseRoute("#speed")).toEqual({ page: "speed", arg: null });
+  expect(parseRoute("#quality")).toEqual({ page: "quality", arg: null });
   expect(navPage("speed")).toBe("engines");
+  expect(navPage("quality")).toBe("engines");
   expect(navPage("flow")).toBe("flow");
 });
 

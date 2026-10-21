@@ -21,6 +21,7 @@
   import Dictionary from "./pages/Dictionary.svelte";
   import History from "./pages/History.svelte";
   import Speed from "./pages/Speed.svelte";
+  import Quality from "./pages/Quality.svelte";
   import About from "./pages/About.svelte";
   import Licenses from "./pages/Licenses.svelte";
   import Backup from "./pages/Backup.svelte";
@@ -163,6 +164,7 @@
         {:else if route.page === "dictionary"}<Dictionary />
         {:else if route.page === "history"}<History />
         {:else if route.page === "speed"}<Speed />
+        {:else if route.page === "quality"}<Quality />
         {/if}
       </div>
     </main>

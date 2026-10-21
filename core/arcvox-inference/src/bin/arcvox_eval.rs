@@ -8,28 +8,23 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
 
 use arcvox_core::config::base_prompt::{DEFAULT_BASE_PROMPT, DEFAULT_TRANSLATE_PROMPT};
 use arcvox_core::config::ProviderConfig;
 use arcvox_core::config::{Config, ConfigStore, Profile};
 use arcvox_core::device::Device;
-use arcvox_core::dictionary::asr_hint;
+use arcvox_core::eval::run::report_file_name;
 use arcvox_core::eval::{
-    categories, compare, diff, guess_tags, parse_seed_tsv, pick_examples, pick_slice, pick_spread,
-    seed_tsv, summarize, Cer, Change, DiffOp, ExamplePick, ItemResult, Marks, Report, SeedRow,
-    Stage, Summary, Tally, Totals,
+    self, categories, compare, diff, guess_tags, parse_seed_tsv, pick_slice, pick_spread, seed_tsv,
+    summarize, Cer, Change, DiffOp, ExamplePick, Examples, ItemResult, Marks, Origin, Report,
+    RunRequest, SeedRow, Stage, Summary, Tally, Totals,
 };
 use arcvox_core::history::{DeviceRef, HistoryStore};
 use arcvox_core::learn::{self, Pair, Source};
 use arcvox_core::models::{Manifest, ModelRole, ModelStore};
-use arcvox_core::pipeline::Pipeline;
 use arcvox_core::providers::registry::ProviderRegistry;
-use arcvox_core::providers::AsrHint;
-use arcvox_core::steps::asr::{asr_prompt, ASR_HINT_BUDGET_BYTES};
-use arcvox_core::steps::PipelineContext;
 use arcvox_core::types::HistoryId;
-use arcvox_core::types::{Context, ProviderId};
+use arcvox_core::types::ProviderId;
 use arcvox_core::{DataDir, MemorySecretStore};
 use arcvox_inference::factory::EmbeddedFactory;
 
@@ -43,7 +38,7 @@ arcvox-eval <command> [options]
            Proposes history rows with a recording as a seed set: the raw
            transcript as `spoken`, the row's final text as `final`, tags
            guessed (short, long, mixed, correction). Edit both texts.
-  run      --data <name|dir> --set <set.tsv> --out <run.json> --stage asr|llm|full
+  run      --data <name|dir> --set <set.tsv> --stage asr|llm|full [--out <run.json>]
            [--asr id,id] [--llm id,id] [--profile id] [--base-prompt file]
            [--style file] [--asr-sample file] [--name text]
            [--examples pool.tsv] [--examples-k 3] [--examples-pick similar|random]
@@ -53,6 +48,8 @@ arcvox-eval <command> [options]
            llm: `spoken` through the profile's steps after ASR with each LLM
                 provider, scored against `final`.
            full: every recording through the whole profile, scored against `final`.
+           Without --out the run is saved in the installation's quality folder
+           under --name, where the application's quality page lists it too.
   fetch    --data <name|dir> --model <catalogue id>
            Downloads a catalogue model into the installation's models folder,
            the one place the app reads them from (the only thing written).
@@ -332,32 +329,30 @@ fn load_set(args: &Args) -> Result<Vec<SeedRow>, String> {
     Ok(rows)
 }
 
-fn load_clip(path: &Path) -> Result<Arc<arcvox_core::types::AudioClip>, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    arcvox_core::audio::decode_wav_pcm16(&bytes)
-        .map(Arc::new)
-        .map_err(|e| format!("{}: {e}", path.display()))
-}
-
-fn now_iso() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    format!("{secs}")
-}
-
 async fn run(args: &Args) -> Result<(), String> {
     let dirs = data_dir(args)?;
     let (config, _) = read_config(&dirs)?;
     let rows = load_set(args)?;
-    let out = PathBuf::from(args.required("out")?);
     let stage = match args.required("stage")? {
         "asr" => Stage::Asr,
         "llm" => Stage::Llm,
         "full" => Stage::Full,
         other => return Err(format!("--stage must be asr, llm or full, not `{other}`")),
     };
+    let name = args.flag("name").map(str::to_string);
+    let out = match args.flag("out") {
+        Some(p) => PathBuf::from(p),
+        None => {
+            let dir = dirs.quality_dir();
+            std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            report_file_name(&dir, name.as_deref().unwrap_or("run"))
+        }
+    };
+    let name = name.unwrap_or_else(|| {
+        out.file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    });
     let base_prompt = match args.flag("base-prompt") {
         Some(p) => std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?,
         None => read_base_prompt(&dirs)?,
@@ -395,8 +390,20 @@ async fn run(args: &Args) -> Result<(), String> {
         Arc::new(MemorySecretStore::default()),
         vec![Arc::new(EmbeddedFactory::new(models, true))],
     );
+    let manifest = Manifest::parse(BUNDLED_MANIFEST).map_err(|e| e.to_string())?;
+    // A catalogue model without an engine gets one for this run only.
+    let engine_for = |id: &str| -> Option<ProviderConfig> {
+        manifest
+            .get(id)
+            .filter(|e| e.role == ModelRole::Asr)
+            .map(|e| {
+                let mut made = ProviderConfig::embedded(id, &e.label, e.runtime, id);
+                made.capabilities = e.capabilities();
+                made
+            })
+    };
 
-    let mut notes = vec![
+    let notes = vec![
         format!("data: {}", dirs.data_dir.display()),
         format!("profile: {}", profile.id.0),
         format!(
@@ -420,202 +427,36 @@ async fn run(args: &Args) -> Result<(), String> {
         ),
         format!("set: {} ({} rows)", args.required("set")?, rows.len()),
     ];
-    let mut items: Vec<ItemResult> = Vec::new();
-    let started = Instant::now();
-
-    match stage {
-        Stage::Asr => {
-            let ids = {
-                let l = args.list("asr");
-                if l.is_empty() {
-                    vec![config
-                        .resolve_engines(&profile, |cfg| registry.ready(cfg))
-                        .asr
-                        .id
-                        .0
-                        .clone()]
-                } else {
-                    l
-                }
-            };
-            notes.push(format!("asr providers: {}", ids.join(", ")));
-            let hint = AsrHint {
-                language: profile.language_hint.clone(),
-                prompt: asr_prompt(
-                    asr_sample.as_deref(),
-                    asr_hint(&config.dictionary, ASR_HINT_BUDGET_BYTES),
-                ),
-            };
-            let manifest = Manifest::parse(BUNDLED_MANIFEST).map_err(|e| e.to_string())?;
-            for id in &ids {
-                // A catalogue model without an engine gets one for this run only.
-                let made = config.provider(&ProviderId(id.clone())).is_none().then(|| {
-                    manifest
-                        .get(id)
-                        .filter(|e| e.role == ModelRole::Asr)
-                        .map(|e| {
-                            let mut made = ProviderConfig::embedded(id, &e.label, e.runtime, id);
-                            made.capabilities = e.capabilities();
-                            made
-                        })
-                });
-                let cfg = match made {
-                    Some(Some(ref cfg)) => cfg,
-                    Some(None) => return Err(format!("no provider or catalogue model `{id}`")),
-                    None => config.provider(&ProviderId(id.clone())).unwrap(),
-                };
-                let provider = registry
-                    .asr(cfg, &config.general)
-                    .map_err(|e| format!("{id}: {}", e.message))?;
-                for (n, row) in rows.iter().enumerate() {
-                    progress(n, rows.len(), id, &row.id);
-                    let result = match load_clip(&row.audio) {
-                        Ok(clip) => {
-                            let t0 = Instant::now();
-                            let r = provider
-                                .transcribe(&clip, &hint)
-                                .await
-                                .map(|t| t.text)
-                                .map_err(|e| e.message);
-                            (r, t0.elapsed().as_millis() as u64)
-                        }
-                        Err(e) => (Err(e), 0),
-                    };
-                    items.push(ItemResult::scored(
-                        &row.id,
-                        stage,
-                        id,
-                        &row.tags,
-                        &row.spoken,
-                        result.0,
-                        result.1,
-                    ));
-                }
-            }
-        }
-        Stage::Llm => {
-            let ids = {
-                let l = args.list("llm");
-                if l.is_empty() {
-                    vec![config
-                        .resolve_engines(&profile, |cfg| registry.ready(cfg))
-                        .llm
-                        .map(|c| c.id.0)
-                        .ok_or("the profile has no rewrite step; pass --llm")?]
-                } else {
-                    l
-                }
-            };
-            notes.push(format!("llm providers: {}", ids.join(", ")));
-            for id in &ids {
-                let mut prof = profile.clone();
-                prof.llm_provider = Some(ProviderId(id.clone()));
-                let (pipeline, ctx) = build(
-                    &config,
-                    prof,
-                    &registry,
-                    &base_prompt,
-                    &translate_prompt,
-                    asr_sample.as_deref(),
-                )?;
-                for (n, row) in rows.iter().enumerate() {
-                    progress(n, rows.len(), id, &row.id);
-                    let ctx = match &examples {
-                        Some(e) => e.for_row(&ctx, row),
-                        None => ctx.clone(),
-                    };
-                    let tx = closed_events();
-                    let t0 = Instant::now();
-                    let r = pipeline
-                        .run_from_text(&row.spoken, &ctx, &tx)
-                        .await
-                        .map(|o| o.final_text)
-                        .map_err(|e| e.message);
-                    let ms = t0.elapsed().as_millis() as u64;
-                    items.push(ItemResult::scored(
-                        &row.id,
-                        stage,
-                        id,
-                        &row.tags,
-                        &row.final_text,
-                        r,
-                        ms,
-                    ));
-                }
-            }
-        }
-        Stage::Full => {
-            let mut prof = profile.clone();
-            let asr = args.list("asr");
-            let llm = args.list("llm");
-            if asr.len() > 1 || llm.len() > 1 {
-                return Err("--stage full takes at most one --asr and one --llm".into());
-            }
-            if let Some(a) = asr.first() {
-                prof.asr_provider = Some(ProviderId(a.clone()));
-            }
-            if let Some(l) = llm.first() {
-                prof.llm_provider = Some(ProviderId(l.clone()));
-            }
-            let engines = config.resolve_engines(&prof, |cfg| registry.ready(cfg));
-            let label = format!(
-                "{}+{}",
-                engines.asr.id.0,
-                engines
-                    .llm
-                    .as_ref()
-                    .map(|c| c.id.0.as_str())
-                    .unwrap_or("none")
-            );
-            notes.push(format!("pipeline: {label}"));
-            let (pipeline, ctx) = build(
-                &config,
-                prof,
-                &registry,
-                &base_prompt,
-                &translate_prompt,
-                asr_sample.as_deref(),
-            )?;
-            for (n, row) in rows.iter().enumerate() {
-                progress(n, rows.len(), &label, &row.id);
-                let result = match load_clip(&row.audio) {
-                    Ok(clip) => {
-                        let tx = closed_events();
-                        let t0 = Instant::now();
-                        let r = pipeline
-                            .run(clip, &ctx, &tx)
-                            .await
-                            .map(|o| o.final_text)
-                            .map_err(|e| e.message);
-                        (r, t0.elapsed().as_millis() as u64)
-                    }
-                    Err(e) => (Err(e), 0),
-                };
-                items.push(ItemResult::scored(
-                    &row.id,
-                    stage,
-                    &label,
-                    &row.tags,
-                    &row.final_text,
-                    result.0,
-                    result.1,
-                ));
-            }
-        }
-    }
-    eprintln!();
-    notes.push(format!("wall time: {} s", started.elapsed().as_secs()));
-
-    let report = Report {
-        name: args.flag("name").map(str::to_string).unwrap_or_else(|| {
-            out.file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_default()
-        }),
-        created: now_iso(),
+    let request = RunRequest {
+        name,
+        stage,
+        rows,
+        profile,
+        asr: args.list("asr").into_iter().map(ProviderId).collect(),
+        llm: args.list("llm").into_iter().map(ProviderId).collect(),
+        base_prompt,
+        translate_prompt,
+        asr_sample,
+        examples,
         notes,
-        items,
+        origin: Origin::Command,
     };
+    let report = eval::run::run(
+        request,
+        &config,
+        &registry,
+        &engine_for,
+        &|| false,
+        &mut |p| {
+            eprint!(
+                "\r{}: {}/{} (row {})      ",
+                p.provider, p.done, p.total, p.item.id
+            )
+        },
+    )
+    .await?;
+    eprintln!();
+
     if let Some(parent) = out.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -627,38 +468,6 @@ async fn run(args: &Args) -> Result<(), String> {
     print_summary(&report);
     println!("\nsaved to {}", out.display());
     Ok(())
-}
-
-/// The pool the rewrite model's examples are picked from, per row.
-struct Examples {
-    pool: Vec<SeedRow>,
-    k: usize,
-    pick: ExamplePick,
-}
-
-impl Examples {
-    fn describe(&self, path: &str) -> String {
-        format!(
-            "{path} ({} rows), {} per row, {}",
-            self.pool.len(),
-            self.k,
-            match self.pick {
-                ExamplePick::Similar => "the most similar spoken text",
-                ExamplePick::Random => "a fixed arbitrary choice",
-            }
-        )
-    }
-
-    /// The context with the row's own examples in the profile; the steps
-    /// stay the pipeline's, only the prompt reads the profile's examples.
-    fn for_row(&self, ctx: &PipelineContext, row: &SeedRow) -> PipelineContext {
-        let mut profile = (*ctx.profile).clone();
-        profile.few_shot = pick_examples(&self.pool, &row.id, &row.spoken, self.k, self.pick);
-        PipelineContext {
-            profile: Arc::new(profile),
-            ..ctx.clone()
-        }
-    }
 }
 
 fn load_examples(args: &Args) -> Result<Option<Examples>, String> {
@@ -695,42 +504,6 @@ fn with_style(mut profile: Profile, style: Option<&str>) -> Profile {
         profile.prompt_addition = text.trim().to_string();
     }
     profile
-}
-
-fn build(
-    config: &arcvox_core::config::Config,
-    profile: Profile,
-    registry: &ProviderRegistry,
-    base_prompt: &str,
-    translate_prompt: &str,
-    asr_sample: Option<&str>,
-) -> Result<(Pipeline, PipelineContext), String> {
-    let engines = config.resolve_engines(&profile, |cfg| registry.ready(cfg));
-    let pipeline = Pipeline::build(config, &profile, &engines, registry).map_err(|e| e.message)?;
-    let ctx = PipelineContext {
-        profile: Arc::new(profile),
-        context: Context::default(),
-        dictionary: Arc::new(config.dictionary.clone()),
-        base_prompt: base_prompt.to_string(),
-        translate_prompt: translate_prompt.to_string(),
-        general: config.general.clone(),
-        recognised: Default::default(),
-        asr_sample: asr_sample.map(str::to_string),
-    };
-    Ok((pipeline, ctx))
-}
-
-/// An event sender nobody listens to: the pipeline's progress events are
-/// not needed here, and a sender with a live but unread receiver would block
-/// once the channel is full.
-fn closed_events() -> tokio::sync::mpsc::Sender<arcvox_core::Event> {
-    let (tx, rx) = tokio::sync::mpsc::channel(1);
-    drop(rx);
-    tx
-}
-
-fn progress(n: usize, total: usize, provider: &str, id: &str) {
-    eprint!("\r{provider}: {}/{total} (row {id})      ", n + 1);
 }
 
 fn load_report(path: &str) -> Result<Report, String> {

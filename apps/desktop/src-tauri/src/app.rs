@@ -12,6 +12,7 @@ use crate::audio::capture::CpalSource;
 use crate::audio::AudioSource;
 use crate::backup_auto::{BackupAuto, BackupStatus, Failure, LastWrite};
 use crate::commands::bench::BenchState;
+use crate::commands::quality::QualityState;
 use crate::commands::CmdError;
 use crate::dictation::ui::{Ui, UiState};
 use crate::dictation::{self, ControllerHandle, Deps};
@@ -40,6 +41,7 @@ pub struct AppState {
     /// Why the engine could not open, coded for the interface.
     pub engine_error: Mutex<Option<crate::commands::CmdError>>,
     pub bench: BenchState,
+    pub quality: QualityState,
     pub window_state: WindowState,
     /// Keeps the backup folder up to date.
     pub backup: BackupAuto,
@@ -279,6 +281,16 @@ pub fn run() {
             crate::commands::bench::bench_history_candidates,
             crate::commands::bench::bench_start,
             crate::commands::bench::bench_cancel,
+            crate::commands::quality::quality_source_info,
+            crate::commands::quality::quality_start,
+            crate::commands::quality::quality_cancel,
+            crate::commands::quality::quality_current,
+            crate::commands::quality::quality_clear,
+            crate::commands::quality::quality_save,
+            crate::commands::quality::quality_list,
+            crate::commands::quality::quality_open,
+            crate::commands::quality::quality_delete,
+            crate::commands::quality::quality_compare,
             crate::commands::backup::settings_export,
             crate::commands::backup::settings_inspect,
             crate::commands::backup::settings_import,
@@ -646,6 +658,7 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         language: Mutex::new(language),
         engine_error: Mutex::new(engine_error.clone()),
         bench: BenchState::default(),
+        quality: QualityState::default(),
         window_state,
         backup: backup.clone(),
         version,

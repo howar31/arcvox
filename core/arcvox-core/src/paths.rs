@@ -77,6 +77,7 @@ impl DataDir {
         std::fs::create_dir_all(self.recordings_dir())?;
         std::fs::create_dir_all(self.models_dir())?;
         std::fs::create_dir_all(self.cache_dir.join("bench"))?;
+        std::fs::create_dir_all(self.quality_dir())?;
         Ok(())
     }
 
@@ -120,6 +121,11 @@ impl DataDir {
     pub fn bench_clip_path(&self) -> PathBuf {
         self.cache_dir.join("bench").join("clip.wav")
     }
+    /// Where quality test reports are kept, the application's and the
+    /// command line's alike.
+    pub fn quality_dir(&self) -> PathBuf {
+        self.data_dir.join("quality")
+    }
     /// Last successfully fetched remote model manifest.
     pub fn manifest_cache_path(&self) -> PathBuf {
         self.config_dir.join("models-manifest.json")
@@ -156,6 +162,7 @@ mod tests {
         assert!(d.recordings_dir().is_dir());
         assert!(d.models_dir().is_dir());
         assert!(d.bench_clip_path().parent().unwrap().is_dir());
+        assert!(d.quality_dir().is_dir());
     }
 
     #[test]

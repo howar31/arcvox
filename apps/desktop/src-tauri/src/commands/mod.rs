@@ -12,6 +12,7 @@ pub mod native;
 pub mod profiles;
 pub mod prompt;
 pub mod providers;
+pub mod quality;
 pub mod secrets;
 pub mod stats;
 pub mod system;

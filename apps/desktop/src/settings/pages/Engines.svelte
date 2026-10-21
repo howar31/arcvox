@@ -506,6 +506,10 @@
     {t("engines.speed")}
     <button type="button" class="link" onclick={() => guard.request(() => go("speed"))}>{t("speed.title")}</button>
   </p>
+  <p class="help">
+    {t("engines.quality")}
+    <button type="button" class="link" onclick={() => guard.request(() => go("quality"))}>{t("quality.title")}</button>
+  </p>
 </div>
 
 <Modal bind:open={() => deleting !== null, (v) => { if (!v) deleting = null; }} title={t("engines.delete_model_title")}>

@@ -8,6 +8,9 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+pub mod run;
+pub use run::{list_reports, rows_from_history, Examples, Progress, ReportHead, RunRequest};
+
 /// Errors over length; `rate()` is the character error rate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Cer {
@@ -510,13 +513,28 @@ impl ItemResult {
     }
 }
 
+/// Who made a report: the command line or the application's quality page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Origin {
+    #[default]
+    Command,
+    App,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Report {
     pub name: String,
+    /// Unix seconds, as text.
     pub created: String,
     /// What the run was made with, for the record: profile, prompt source, data folder.
     pub notes: Vec<String>,
     pub items: Vec<ItemResult>,
+    #[serde(default)]
+    pub origin: Origin,
+    /// The run was stopped before every row was done.
+    #[serde(default)]
+    pub stopped: bool,
 }
 
 /// Scores added up over a set of items.
@@ -1168,6 +1186,8 @@ mod tests {
             created: "2026-10-08T00:00:00+08:00".into(),
             notes: vec![],
             items,
+            origin: Origin::Command,
+            stopped: false,
         }
     }
 
