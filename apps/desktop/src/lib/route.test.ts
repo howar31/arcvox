@@ -43,6 +43,12 @@ test("the licences page sits under About and can name a package", () => {
   expect(navPage("licenses")).toBe("about");
 });
 
+test("the first-launch guide is a page without a sidebar entry", () => {
+  expect(parseRoute("#welcome")).toEqual({ page: "welcome", arg: null });
+  expect(navPage("welcome")).toBe("home");
+  expect(NAV.flatMap((g) => g.pages)).not.toContain("welcome");
+});
+
 test("unknown pages resolve to the overview", () => {
   expect(parseRoute("#nope")).toEqual({ page: "home", arg: null });
   expect(parseRoute("#nope/x")).toEqual({ page: "home", arg: null });

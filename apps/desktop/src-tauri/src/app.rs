@@ -29,8 +29,9 @@ use crate::vad::EarshotVad;
 
 pub struct AppState {
     pub models: Arc<ModelStore>,
-    /// The platform's services found at launch; their engines follow them.
-    pub native: FirstRunDefaults,
+    /// The platform's services found at launch, or at the last look since;
+    /// their engines follow them.
+    pub native: Mutex<FirstRunDefaults>,
     pub engine: Mutex<Option<Engine>>,
     pub controller: ControllerHandle,
     pub platform: Arc<dyn Platform>,
@@ -62,8 +63,9 @@ impl AppState {
     pub fn sync_engines(&self) {
         let engine = self.engine.lock().unwrap().clone();
         if let Some(e) = engine {
+            let native = *self.native.lock().unwrap();
             if let Err(err) =
-                crate::commands::models::engines_follow_models(&e, &self.models, &self.native)
+                crate::commands::models::engines_follow_models(&e, &self.models, &native)
             {
                 tracing::warn!(error = %err.message, "engines could not follow the models");
             }
@@ -274,6 +276,7 @@ pub fn run() {
             crate::commands::system::system_open_folder,
             crate::commands::native::native_status,
             crate::commands::native::native_install_language,
+            crate::commands::native::native_refresh,
             crate::commands::bench::bench_clip_status,
             crate::commands::bench::bench_record_start,
             crate::commands::bench::bench_record_stop,
@@ -506,6 +509,7 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
     let log_guard = crate::logging::init(&dirs.data_dir);
     app.manage(crate::logging::LogSlot(std::sync::Mutex::new(log_guard)));
     let settings = ClientSettings::load(&dirs.config_dir);
+    let guide_pending = !settings.guide_done;
     let language = Language::from_setting(
         settings.ui_language,
         i18n::system_preferred_language().as_deref(),
@@ -648,7 +652,7 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
     let state_models = models.clone();
     app.manage(AppState {
         models,
-        native,
+        native: Mutex::new(native),
         engine: Mutex::new(engine.clone()),
         controller: controller.clone(),
         platform: platform.clone(),
@@ -719,7 +723,13 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         ui.set_state(UiState::Idle);
     }
 
+    // A new installation opens on the first-launch guide; the only time the
+    // window opens without the user asking for it.
+    let guide = guide_pending.then(|| app.clone());
     follow_trust(app, platform, controller, ui, engine.is_some());
+    if let Some(app) = guide {
+        crate::ui::tray::open_settings(&app, Some("welcome"));
+    }
     Ok(())
 }
 

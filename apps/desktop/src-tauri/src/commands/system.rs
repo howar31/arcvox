@@ -163,6 +163,37 @@ pub struct SystemInfo {
     pub data_dir: String,
     pub cache_dir: String,
     pub recordings_dir: String,
+    /// The machine's memory, for the model entries that state what they need.
+    pub memory_bytes: u64,
+}
+
+/// The machine's physical memory in bytes; 0 when it cannot be read.
+pub fn memory_bytes() -> u64 {
+    #[cfg(target_os = "macos")]
+    {
+        let mut value: u64 = 0;
+        let mut len = std::mem::size_of::<u64>();
+        // SAFETY: `hw.memsize` is a 64-bit value and `len` says how much
+        // room the out pointer has.
+        let rc = unsafe {
+            libc::sysctlbyname(
+                c"hw.memsize".as_ptr(),
+                &mut value as *mut u64 as *mut libc::c_void,
+                &mut len,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if rc == 0 {
+            value
+        } else {
+            0
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        0
+    }
 }
 
 #[tauri::command]
@@ -214,6 +245,13 @@ pub fn system_request_accessibility(state: State<'_, AppState>) -> bool {
 
 #[tauri::command]
 pub fn system_open_privacy_pane(pane: String) -> CmdResult<()> {
+    // Apple Intelligence is switched on in its own pane, not a privacy one.
+    if pane == "intelligence" {
+        std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.Siri-Settings.extension")
+            .spawn()?;
+        return Ok(());
+    }
     let anchor = match pane.as_str() {
         "accessibility" => "Privacy_Accessibility",
         "microphone" => "Privacy_Microphone",
@@ -308,6 +346,7 @@ pub fn system_info(app: AppHandle<Wry>, state: State<'_, AppState>) -> SystemInf
             .unwrap_or_else(|| state.dirs.recordings_dir())
             .display()
             .to_string(),
+        memory_bytes: memory_bytes(),
     }
 }
 

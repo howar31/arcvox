@@ -25,6 +25,7 @@
   import About from "./pages/About.svelte";
   import Licenses from "./pages/Licenses.svelte";
   import Backup from "./pages/Backup.svelte";
+  import Welcome from "./pages/Welcome.svelte";
 
   let route = $state(parseRoute(location.hash));
   // Nothing translated is rendered before the UI language is known.
@@ -37,6 +38,9 @@
   let quitHint = $state(false);
   let quitTimer: ReturnType<typeof setTimeout> | undefined;
   const current = $derived(navPage(route.page));
+  // A new installation sees the first-launch guide and nothing else until it is finished; the guide's own
+  // hash shows it again later.
+  const guiding = $derived(client.value?.guide_done === false || route.page === "welcome");
   const section = $derived((SETTINGS_PAGES as readonly string[]).includes(route.page) ? (route.page as SettingsPage) : null);
 
   // The pages that have a problem to show; the menu-bar menu lists the same problems.
@@ -120,6 +124,9 @@
 
 {#if !ready}
   <div class="loading">{#if langReady}{t("common.loading")}{/if}</div>
+{:else if guiding}
+  <Welcome />
+  <Toasts />
 {:else}
   <div class="shell">
     <aside class="sidebar">

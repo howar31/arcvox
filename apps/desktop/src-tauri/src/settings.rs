@@ -59,6 +59,14 @@ pub struct ClientSettings {
     /// Switches for looking into the app's workings; all off by default.
     #[serde(default)]
     pub dev: DevSettings,
+    /// Whether the first-launch guide was finished or skipped. A file written
+    /// before the guide existed counts as finished; a missing file does not.
+    #[serde(default = "yes")]
+    pub guide_done: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// What the app learns from the user's corrections.
@@ -382,6 +390,7 @@ impl Default for ClientSettings {
             backup: BackupSettings::default(),
             learning: LearningSettings::default(),
             dev: DevSettings::default(),
+            guide_done: true,
         }
     }
 }
@@ -420,7 +429,13 @@ impl ClientSettings {
         let path = Self::path(config_dir);
         let text = match std::fs::read_to_string(&path) {
             Ok(t) => t,
-            Err(_) => return Self::default(),
+            // A new installation: the first-launch guide is still to come.
+            Err(_) => {
+                return Self {
+                    guide_done: false,
+                    ..Self::default()
+                }
+            }
         };
         match serde_json::from_str::<ClientSettings>(&text) {
             Ok(mut s) => {
@@ -623,6 +638,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_guide_waits_for_a_new_installation_and_not_for_an_old_one() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!ClientSettings::load(dir.path()).guide_done);
+        std::fs::write(dir.path().join("client.json"), br#"{"schema_version":1}"#).unwrap();
+        assert!(ClientSettings::load(dir.path()).guide_done);
+        std::fs::write(
+            dir.path().join("client.json"),
+            br#"{"schema_version":1,"guide_done":false}"#,
+        )
+        .unwrap();
+        assert!(!ClientSettings::load(dir.path()).guide_done);
+        let mut s = ClientSettings::load(dir.path());
+        s.guide_done = true;
+        s.save(dir.path()).unwrap();
+        assert!(ClientSettings::load(dir.path()).guide_done);
+    }
+
+    #[test]
     fn a_file_without_the_fade_gets_the_default_and_values_are_bounded() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("client.json"), br#"{"schema_version":1}"#).unwrap();
@@ -692,7 +725,14 @@ mod tests {
     fn missing_file_yields_defaults_and_save_round_trips() {
         let dir = tempfile::tempdir().unwrap();
         let loaded = ClientSettings::load(dir.path());
-        assert_eq!(loaded, ClientSettings::default());
+        // A new installation differs from the defaults in one way: its guide is still to come.
+        assert_eq!(
+            loaded,
+            ClientSettings {
+                guide_done: false,
+                ..ClientSettings::default()
+            }
+        );
         let mut s = loaded;
         s.microphone = "External USB".into();
         s.insertion

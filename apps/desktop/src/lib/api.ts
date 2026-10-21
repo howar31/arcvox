@@ -140,6 +140,8 @@ export interface ClientSettings {
   stats_layout: StatsCard[] | null;
   /** The folder data is backed up to, what goes there, and whether that happens by itself. */
   backup: { folder: string | null; categories: BackupCategories; auto: boolean; recreate: boolean };
+  /** Whether the first-launch guide was finished or skipped. */
+  guide_done: boolean;
 }
 /** A resting widget turns faint after `after_secs`, to `transparency` percent. */
 export interface WidgetFade { enabled: boolean; after_secs: number; transparency: number }
@@ -152,7 +154,7 @@ export interface Permissions {
   microphone: MicAccess;
 }
 export interface RunningApp { bundle_id: string; name: string }
-export interface SystemInfo { name: string; version: string; dev: boolean; config_dir: string; data_dir: string; cache_dir: string; recordings_dir: string }
+export interface SystemInfo { name: string; version: string; dev: boolean; config_dir: string; data_dir: string; cache_dir: string; recordings_dir: string; memory_bytes: number }
 /** A failed command: `code` names the kind of failure for the interface's wording, with `params` for its placeholders; `message` is the reason as the backend gives it. */
 export interface CmdError { message: string; code?: string | null; params?: Record<string, string> }
 
@@ -262,7 +264,7 @@ export const requestMicrophone = () => invoke<MicAccess>("system_request_microph
 export interface PageProblem { page: string; level: "fails" | "attention" }
 export const problemPages = () => invoke<PageProblem[]>("system_problem_pages");
 export const onProblemPages = (cb: (pages: PageProblem[]) => void) => listen<PageProblem[]>("problem-pages", (e) => cb(e.payload));
-export const openPrivacyPane = (pane: "accessibility" | "microphone" | "files") => invoke<void>("system_open_privacy_pane", { pane });
+export const openPrivacyPane = (pane: "accessibility" | "microphone" | "files" | "intelligence") => invoke<void>("system_open_privacy_pane", { pane });
 export const runningApps = () => invoke<RunningApp[]>("system_running_apps");
 export const appNames = (bundleIds: string[]) => invoke<Record<string, string | null>>("system_app_names", { bundleIds });
 export const systemInfo = () => invoke<SystemInfo>("system_info");
@@ -382,6 +384,9 @@ export type NativeStatusKind = "ready" | "needs_download" | "locale_unsupported"
 export interface NativeStatusView { status: NativeStatusKind; reason: string | null }
 export const nativeStatus = (nativeId: string, hint: string | null) => invoke<NativeStatusView>("native_status", { nativeId, languageHint: hint });
 export const nativeInstallLanguage = (hint: string | null) => invoke<void>("native_install_language", { languageHint: hint });
+/** Which platform services are there now; looks again and makes the engines follow. */
+export interface NativeServices { apple_dictation: boolean; apple_foundation_models: boolean }
+export const nativeRefresh = () => invoke<NativeServices>("native_refresh");
 export function onNativeInstallProgress(cb: (fraction: number) => void): Promise<UnlistenFn> {
   return listen<{ fraction: number }>("native-install-progress", (e) => cb(e.payload.fraction));
 }

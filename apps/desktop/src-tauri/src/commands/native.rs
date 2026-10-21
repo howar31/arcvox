@@ -2,9 +2,10 @@
 //! speech and language providers.
 
 use serde::Serialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, State};
 
 use super::{CmdError, CmdResult};
+use crate::app::AppState;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct NativeStatusView {
@@ -93,6 +94,33 @@ mod imp {
             assert_eq!(status_string(NativeStatus::Failed(3)), "failed");
         }
     }
+}
+
+/// Which of the platform's services are there.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct NativeServices {
+    pub apple_dictation: bool,
+    pub apple_foundation_models: bool,
+}
+
+/// Looks again at the platform's services (a user may have switched Apple
+/// Intelligence on since launch), keeps what was found and makes the
+/// engines follow it.
+#[tauri::command]
+pub async fn native_refresh(state: State<'_, AppState>) -> CmdResult<NativeServices> {
+    #[cfg(target_os = "macos")]
+    let found = tokio::task::spawn_blocking(crate::platform::macos::apple::first_run_defaults)
+        .await
+        .map_err(CmdError::from)?;
+    #[cfg(not(target_os = "macos"))]
+    let found = arcvox_core::FirstRunDefaults::default();
+    *state.native.lock().unwrap() = found;
+    state.sync_engines();
+    state.refresh_problems();
+    Ok(NativeServices {
+        apple_dictation: found.apple_dictation,
+        apple_foundation_models: found.apple_foundation_models,
+    })
 }
 
 #[tauri::command]

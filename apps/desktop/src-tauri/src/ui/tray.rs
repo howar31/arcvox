@@ -776,6 +776,7 @@ const SETTINGS_PAGES: &[&str] = &[
     "models",
     "speed",
     "about",
+    "welcome",
 ];
 
 /// A page, a page and its argument as `page/arg` (a profile id, an
@@ -1026,6 +1027,7 @@ mod tests {
             "models",
             "providers",
             "about",
+            "welcome",
         ] {
             assert!(SETTINGS_PAGES.contains(&page), "{page}");
         }
