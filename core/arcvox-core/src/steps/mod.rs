@@ -72,6 +72,8 @@ pub struct PipelineContext {
     pub context: Context,
     pub dictionary: Arc<Vec<DictionaryEntry>>,
     pub base_prompt: String,
+    /// The translation's rules, from `prompts/translate.md`.
+    pub translate_prompt: String,
     pub general: General,
     /// The transcript once the speech recognition step is done, for a run
     /// that is cut short after it.
@@ -96,6 +98,7 @@ pub(crate) fn test_context() -> PipelineContext {
         context: Context::default(),
         dictionary: Arc::new(Vec::new()),
         base_prompt: crate::config::base_prompt::DEFAULT_BASE_PROMPT.to_string(),
+        translate_prompt: crate::config::base_prompt::DEFAULT_TRANSLATE_PROMPT.to_string(),
         general: General::default(),
         recognised: Default::default(),
         asr_sample: None,

@@ -86,6 +86,10 @@ impl DataDir {
     pub fn base_prompt_path(&self) -> PathBuf {
         self.config_dir.join("prompts").join("base.md")
     }
+
+    pub fn translate_prompt_path(&self) -> PathBuf {
+        self.config_dir.join("prompts").join("translate.md")
+    }
     pub fn history_path(&self) -> PathBuf {
         self.data_dir.join("history.sqlite")
     }

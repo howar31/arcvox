@@ -1676,7 +1676,7 @@ mod tests {
                 .steps
                 .push(arcvox_core::config::StepSpec::Translate {
                     target: "英文".into(),
-                    prompt: None,
+                    addition: String::new(),
                     provider: None,
                 });
         })

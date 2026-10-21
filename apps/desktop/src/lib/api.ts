@@ -19,8 +19,8 @@ export type StepSpec =
   | { step: "opencc"; config: string; punctuation?: boolean }
   | { step: "llm" }
   | { step: "rules"; dictionary?: boolean; trailing_stop?: boolean; question_mark?: boolean; question_mark_inside?: boolean; spacing?: boolean; punctuation_width?: boolean }
-  /** The translation module: `target` is a language or a style as the user wrote it; `prompt` is the profile's own text, null for the built-in one; `provider` null follows the rewrite engine. */
-  | { step: "translate"; target: string; prompt?: string | null; provider?: string | null };
+  /** The translation module: `target` is a language or a style as the user wrote it; `addition` is the profile's own writing after the rules; `provider` null follows the rewrite engine. */
+  | { step: "translate"; target: string; addition?: string; provider?: string | null };
 export interface Example { raw: string; refined: string }
 export interface Matcher { app_ids: string[]; url_patterns: string[] }
 export interface Profile {
@@ -172,6 +172,12 @@ export const getPrompt = () => invoke<string>("prompt_get");
 export const setPrompt = (text: string) => invoke<void>("prompt_set", { text });
 export const defaultPrompt = () => invoke<string>("prompt_default");
 export const restorePrompt = () => invoke<string>("prompt_restore");
+/** The openings the app sends before the rules of the rewrite and of the translation; shown, never edited. */
+export const fixedPrompts = () => invoke<{ rewrite: string; translate: string }>("prompt_fixed");
+export const getTranslatePrompt = () => invoke<string>("translate_prompt_get");
+export const setTranslatePrompt = (text: string) => invoke<void>("translate_prompt_set", { text });
+export const defaultTranslatePrompt = () => invoke<string>("translate_prompt_default");
+export const restoreTranslatePrompt = () => invoke<string>("translate_prompt_restore");
 /** Recent rows; `query` keeps rows whose text contains it, `withAudio` rows with a recording. */
 /** One page of history rows, newest first. `since` and `until` are unix seconds (end exclusive); `before` is the last row shown. */
 export interface HistoryPage { limit: number; query?: string; withAudio?: boolean; since?: number | null; until?: number | null; before?: { ts: number; id: number } | null }
@@ -387,7 +393,6 @@ export type BenchRole = "asr" | "llm";
 export interface BenchRun { provider_id: string; role: BenchRole; cold: boolean; load_ms: number; infer_ms: number; output: string; error: string | null }
 export const profilesPresets = () => invoke<PresetView[]>("profiles_presets");
 /** The instruction the translation module ships with; `{目標}` stands for the target. */
-export const translatePromptDefault = () => invoke<string>("translate_prompt_default");
 export const profilesAddPreset = (presetId: string, name: string) => invoke<Config>("profiles_add_preset", { presetId, name });
 /** Settles a profile whose template's writing style moved on: take the template's current style, or keep the profile's own. */
 export const profilesTemplateStyle = (id: string, take: boolean) => invoke<Config>("profiles_template_style", { id, take });

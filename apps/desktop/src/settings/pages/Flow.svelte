@@ -3,7 +3,7 @@
   import { onMount, untrack } from "svelte";
   import {
     errorMessage, historyLast, listMicrophones, modelsDownload, modelsInstalled, modelsManifestNow, onHistoryChanged, onModelDownloadProgress, openFolder, profilesAddPreset,
-    profilesPresets, profilesTemplateStyle, setDefaultProfile, translatePromptDefault, upsertProfile, type InstalledModel, type LastRun, type ManifestView, type PresetView, type Profile,
+    profilesPresets, profilesTemplateStyle, setDefaultProfile, upsertProfile, type InstalledModel, type LastRun, type ManifestView, type PresetView, type Profile,
   } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { appliesDictionary, PUNCTUATION_CONFIGS, RULE_KEYS, rulesAt, SCRIPT_CONFIGS, SCRIPT_GROUPS, scriptAt, scriptLabel, selectedProfile, translateAt, withDictionary, withRule, withRules, withScript, withScriptPunctuationBoth, withTranslate, type RuleKey, type TranslateStep } from "../../lib/flowEdit";
@@ -45,9 +45,6 @@
   // The targets the translation module offers by name; anything else is typed in and kept as typed.
   const TARGET_KEYS = ["en", "ja", "zh_tw", "zh_cn", "ko", "fr", "de", "es"];
   const targetNames = $derived(TARGET_KEYS.map((k) => t(`flow.target.${k}`)));
-  // The built-in translation instruction, for the prompt field's empty state and its reset.
-  let translatePrompt = $state("");
-
   // The stage shown first is the one shown when the page was left last.
   let stage = $state<CellId>(storedStage());
   $effect(() => { rememberStage(stage); });
@@ -87,7 +84,6 @@
     modelsInstalled().then((m) => { models = m; }).catch(() => { models = null; });
     modelsManifestNow().then((m) => { manifest = m; }).catch(() => { manifest = null; });
     profilesPresets().then((p) => { presets = p; }).catch((e) => toast.error(t("profiles.presets_failed", { detail: errorMessage(e) })));
-    translatePromptDefault().then((p) => { translatePrompt = p; }).catch(() => { translatePrompt = ""; });
     return () => { off.then((u) => u()); };
   });
 
@@ -697,9 +693,9 @@
             </Row>
           </Fold>{/if}
         </Group>
-        <div class="bar"><h2>{t("flow.translate_prompt")}</h2>{#if step.prompt != null}<button type="button" class="btn quiet" onclick={() => setTranslate({ prompt: null })}>{t("flow.translate_prompt_reset")}</button>{/if}</div>
-        <textarea rows="4" value={step.prompt ?? translatePrompt} aria-label={t("flow.translate_prompt")} oninput={(e) => setTranslate({ prompt: e.currentTarget.value === translatePrompt ? null : e.currentTarget.value })}></textarea>
-        <p class="help">{t("flow.translate_prompt_help")}</p>
+        <div class="bar"><h2>{t("flow.translate_addition")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("prompt", null, "translate"))}>{t("flow.see_prompt")}</button></div>
+        <textarea rows="4" value={step.addition ?? ""} aria-label={t("flow.translate_addition")} oninput={(e) => setTranslate({ addition: e.currentTarget.value })}></textarea>
+        <p class="help">{t("flow.translate_addition_help")}<InfoTip info={t("profiles.prompt_info")} /></p>
         <div class="bar"><h2>{t("flow.translate_engines")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("engines", "llm"))}>{t("flow.manage")}</button></div>
         {@render fallbackNote("translate")}
         <EnginePicker

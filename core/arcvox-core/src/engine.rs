@@ -759,6 +759,9 @@ impl Engine {
                 base_prompt: self.inner.config.base_prompt().unwrap_or_else(|_| {
                     crate::config::base_prompt::DEFAULT_BASE_PROMPT.to_string()
                 }),
+                translate_prompt: self.inner.config.translate_prompt().unwrap_or_else(|_| {
+                    crate::config::base_prompt::DEFAULT_TRANSLATE_PROMPT.to_string()
+                }),
                 recognised: Default::default(),
                 asr_sample: None,
                 general: config.general.clone(),
@@ -1584,11 +1587,16 @@ async fn run_session(
         .config
         .base_prompt()
         .unwrap_or_else(|_| crate::config::base_prompt::DEFAULT_BASE_PROMPT.to_string());
+    let translate_prompt = inner
+        .config
+        .translate_prompt()
+        .unwrap_or_else(|_| crate::config::base_prompt::DEFAULT_TRANSLATE_PROMPT.to_string());
     let ctx = PipelineContext {
         profile: profile.clone(),
         context: req.context.clone(),
         dictionary: Arc::new(config.dictionary.clone()),
         base_prompt,
+        translate_prompt,
         general: config.general.clone(),
         recognised: Default::default(),
         asr_sample: None,

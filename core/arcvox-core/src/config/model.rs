@@ -336,8 +336,9 @@ pub enum StepSpec {
     /// engine when the profile has no rewrite).
     Translate {
         target: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        prompt: Option<String>,
+        /// The profile's own writing for the translation, after the rules.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        addition: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider: Option<ProviderId>,
     },
@@ -510,14 +511,14 @@ impl Profile {
     }
 
     /// The translation module's settings, when the profile has one: the
-    /// target, the profile's own prompt and the engine it names.
-    pub fn translate_step(&self) -> Option<(&str, Option<&str>, Option<&ProviderId>)> {
+    /// target, the profile's own addition and the engine it names.
+    pub fn translate_step(&self) -> Option<(&str, &str, Option<&ProviderId>)> {
         self.steps.iter().find_map(|s| match s {
             StepSpec::Translate {
                 target,
-                prompt,
+                addition,
                 provider,
-            } => Some((target.as_str(), prompt.as_deref(), provider.as_ref())),
+            } => Some((target.as_str(), addition.as_str(), provider.as_ref())),
             _ => None,
         })
     }

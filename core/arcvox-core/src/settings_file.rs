@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::config::base_prompt::is_earlier_shipped;
+use crate::config::base_prompt::{is_earlier_shipped, is_earlier_shipped_translate};
 use crate::config::store::fill_trailing_stop;
 use crate::config::validate::fits;
 use crate::config::{
@@ -174,8 +174,32 @@ struct Picked {
     /// existed has none, and the pair in place stays.
     default_engines: Option<DefaultEngines>,
     dictionary: Option<Vec<DictionaryEntry>>,
-    base_prompt: Option<String>,
+    base_prompt: Option<Prompts>,
     general: Option<General>,
+}
+
+/// The `base_prompt` section: the rules of the rewrite and of the
+/// translation. A file from before the translation existed holds the
+/// rewrite's text alone, as a string.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct Prompts {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rewrite: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    translate: Option<String>,
+}
+
+impl Prompts {
+    fn read(v: &Value) -> Result<Prompts, SettingsFileError> {
+        match v {
+            Value::String(s) => Ok(Prompts {
+                rewrite: Some(s.clone()),
+                translate: None,
+            }),
+            other => section("base_prompt", other),
+        }
+    }
 }
 
 impl Picked {
@@ -206,7 +230,7 @@ impl Picked {
             picked.dictionary = Some(section("dictionary", v)?);
         }
         if let Some(v) = get("base_prompt") {
-            picked.base_prompt = Some(section("base_prompt", v)?);
+            picked.base_prompt = Some(Prompts::read(v)?);
         }
         if let Some(core) = get("general").and_then(|v| v.get("core")) {
             picked.general = Some(section("general", core)?);
@@ -345,9 +369,13 @@ impl Engine {
             );
         }
         if has("base_prompt") {
+            let prompts = Prompts {
+                rewrite: Some(self.config().base_prompt()?),
+                translate: Some(self.config().translate_prompt()?),
+            };
             out.insert(
                 "base_prompt".to_string(),
-                Value::String(self.config().base_prompt()?),
+                serde_json::to_value(prompts).expect("prompts serialize"),
             );
         }
         if has("general") {
@@ -389,7 +417,7 @@ impl Engine {
         }
         let copies = self.config().backup_copies()?;
         let engines_changed = picked.providers.is_some();
-        let prompt = picked.base_prompt.clone();
+        let prompts = picked.base_prompt.clone();
         let mut repaired = Vec::new();
         let next = self.config().update(|c| {
             if let Some(v) = picked.profiles {
@@ -418,12 +446,21 @@ impl Engine {
             c.refresh_template_styles();
         })?;
         notes.extend(repaired);
-        if let Some(text) = prompt {
-            // A base prompt an older build shipped was never edited.
-            if is_earlier_shipped(&text) {
-                self.config().restore_base_prompt()?;
-            } else {
-                self.config().set_base_prompt(&text)?;
+        if let Some(prompts) = prompts {
+            // A prompt an older build shipped was never edited.
+            if let Some(text) = prompts.rewrite {
+                if is_earlier_shipped(&text) {
+                    self.config().restore_base_prompt()?;
+                } else {
+                    self.config().set_base_prompt(&text)?;
+                }
+            }
+            if let Some(text) = prompts.translate {
+                if is_earlier_shipped_translate(&text) {
+                    self.config().restore_translate_prompt()?;
+                } else {
+                    self.config().set_translate_prompt(&text)?;
+                }
             }
         }
         if engines_changed {
@@ -512,6 +549,7 @@ mod tests {
             })
             .unwrap();
         e.config().set_base_prompt("my prompt").unwrap();
+        e.config().set_translate_prompt("my translation").unwrap();
         e
     }
 
@@ -579,6 +617,24 @@ mod tests {
         assert_eq!(cb.general.typing_chars_per_min, 77);
         assert_eq!(cb.general.recordings_dir, None);
         assert_eq!(b.config().base_prompt().unwrap(), "my prompt");
+        assert_eq!(b.config().translate_prompt().unwrap(), "my translation");
+    }
+
+    /// A file from before the translation existed: its section is the
+    /// rewrite's text alone, and the translation's rules stay as they are.
+    #[tokio::test]
+    async fn a_prompt_section_that_is_one_string_sets_the_rewrite_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let b = changed(&tmp.path().join("b")).await;
+        let mut file = SettingsFile::new("0.1.0", "macos", "Anna");
+        file.sections.insert("base_prompt".into(), json!("older"));
+        let outcome = b
+            .settings_import(&file, &only(&["base_prompt"]))
+            .await
+            .unwrap();
+        assert_eq!(outcome.applied, only(&["base_prompt"]));
+        assert_eq!(b.config().base_prompt().unwrap(), "older");
+        assert_eq!(b.config().translate_prompt().unwrap(), "my translation");
     }
 
     #[tokio::test]
@@ -928,7 +984,7 @@ mod tests {
         let before = b.config().current();
         let prompt = b.config().base_prompt().unwrap();
         let outcome = b.settings_import(&file, &all()).await.unwrap();
-        assert_eq!(outcome.copies.len(), 2);
+        assert_eq!(outcome.copies.len(), 3);
         let kept: Config =
             serde_json::from_slice(&std::fs::read(&outcome.copies[0].1).unwrap()).unwrap();
         assert_eq!(kept, *before);

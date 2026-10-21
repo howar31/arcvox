@@ -7,7 +7,9 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::watch;
 
-use crate::config::base_prompt::{is_earlier_shipped, DEFAULT_BASE_PROMPT};
+use crate::config::base_prompt::{
+    is_earlier_shipped, is_earlier_shipped_translate, DEFAULT_BASE_PROMPT, DEFAULT_TRANSLATE_PROMPT,
+};
 use crate::config::model::{Config, FirstRunDefaults, FACTORY_PRESET, SCHEMA_VERSION};
 use crate::config::validate::{validate, ConfigError};
 use crate::paths::DataDir;
@@ -64,11 +66,13 @@ impl ConfigStore {
             )?;
             config
         };
-        let prompt_path = dirs.base_prompt_path();
-        if !prompt_path.exists() {
-            write_atomic(&prompt_path, DEFAULT_BASE_PROMPT.as_bytes())?;
-        } else if refresh_base_prompt(&prompt_path)? {
-            tracing::info!("base prompt brought up to the shipped text");
+        for file in PromptFile::ALL {
+            let path = file.path(dirs);
+            if !path.exists() {
+                write_atomic(&path, file.default_text().as_bytes())?;
+            } else if refresh_prompt(&path, file)? {
+                tracing::info!(file = file.name(), "prompt brought up to the shipped text");
+            }
         }
         let (tx, _rx) = watch::channel(Arc::new(config));
         Ok(Self {
@@ -148,7 +152,11 @@ impl ConfigStore {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let mut copies = Vec::new();
-        for path in [self.dirs.config_path(), self.dirs.base_prompt_path()] {
+        for path in [
+            self.dirs.config_path(),
+            self.dirs.base_prompt_path(),
+            self.dirs.translate_prompt_path(),
+        ] {
             if !path.exists() {
                 continue;
             }
@@ -185,38 +193,100 @@ impl ConfigStore {
         Ok(())
     }
 
+    /// The rewrite's rules, the shipped text when the file is missing.
     pub fn base_prompt(&self) -> Result<String, StoreError> {
-        let path = self.dirs.base_prompt_path();
+        self.prompt(PromptFile::Rewrite)
+    }
+
+    pub fn set_base_prompt(&self, text: &str) -> Result<(), StoreError> {
+        self.set_prompt(PromptFile::Rewrite, text)
+    }
+
+    pub fn restore_base_prompt(&self) -> Result<String, StoreError> {
+        self.restore_prompt(PromptFile::Rewrite)
+    }
+
+    /// The translation's rules, the shipped text when the file is missing.
+    pub fn translate_prompt(&self) -> Result<String, StoreError> {
+        self.prompt(PromptFile::Translate)
+    }
+
+    pub fn set_translate_prompt(&self, text: &str) -> Result<(), StoreError> {
+        self.set_prompt(PromptFile::Translate, text)
+    }
+
+    pub fn restore_translate_prompt(&self) -> Result<String, StoreError> {
+        self.restore_prompt(PromptFile::Translate)
+    }
+
+    fn prompt(&self, file: PromptFile) -> Result<String, StoreError> {
+        let path = file.path(&self.dirs);
         match std::fs::read_to_string(&path) {
             Ok(s) => Ok(s),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                Ok(DEFAULT_BASE_PROMPT.to_string())
+                Ok(file.default_text().to_string())
             }
             Err(e) => Err(io_err(&path, e)),
         }
     }
 
-    pub fn set_base_prompt(&self, text: &str) -> Result<(), StoreError> {
+    fn set_prompt(&self, file: PromptFile, text: &str) -> Result<(), StoreError> {
         let _guard = self
             .write_lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        write_atomic(&self.dirs.base_prompt_path(), text.as_bytes())
+        write_atomic(&file.path(&self.dirs), text.as_bytes())
     }
 
-    pub fn restore_base_prompt(&self) -> Result<String, StoreError> {
-        // Locks directly rather than calling `set_base_prompt` (which also
+    fn restore_prompt(&self, file: PromptFile) -> Result<String, StoreError> {
+        // Locks directly rather than calling `set_prompt` (which also
         // locks `write_lock`): `Mutex` is not reentrant, so nesting would
         // deadlock on the same thread.
         let _guard = self
             .write_lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        write_atomic(
-            &self.dirs.base_prompt_path(),
-            DEFAULT_BASE_PROMPT.as_bytes(),
-        )?;
-        Ok(DEFAULT_BASE_PROMPT.to_string())
+        write_atomic(&file.path(&self.dirs), file.default_text().as_bytes())?;
+        Ok(file.default_text().to_string())
+    }
+}
+
+/// The two editable prompt files under `prompts/`.
+#[derive(Clone, Copy)]
+enum PromptFile {
+    Rewrite,
+    Translate,
+}
+
+impl PromptFile {
+    const ALL: [PromptFile; 2] = [PromptFile::Rewrite, PromptFile::Translate];
+
+    fn name(self) -> &'static str {
+        match self {
+            PromptFile::Rewrite => "base",
+            PromptFile::Translate => "translate",
+        }
+    }
+
+    fn path(self, dirs: &DataDir) -> PathBuf {
+        match self {
+            PromptFile::Rewrite => dirs.base_prompt_path(),
+            PromptFile::Translate => dirs.translate_prompt_path(),
+        }
+    }
+
+    fn default_text(self) -> &'static str {
+        match self {
+            PromptFile::Rewrite => DEFAULT_BASE_PROMPT,
+            PromptFile::Translate => DEFAULT_TRANSLATE_PROMPT,
+        }
+    }
+
+    fn is_earlier_shipped(self, stored: &str) -> bool {
+        match self {
+            PromptFile::Rewrite => is_earlier_shipped(stored),
+            PromptFile::Translate => is_earlier_shipped_translate(stored),
+        }
     }
 }
 
@@ -291,15 +361,15 @@ pub fn fill_trailing_stop(profiles: &mut serde_json::Value) {
     }
 }
 
-/// Replaces a stored base prompt that is still an earlier shipped text with
-/// the current one, and says whether it did. An edited prompt is left as it
+/// Replaces a stored prompt that is still an earlier shipped text with the
+/// current one, and says whether it did. An edited prompt is left as it
 /// is: the settings UI shows the difference and offers the shipped text.
-fn refresh_base_prompt(path: &Path) -> Result<bool, StoreError> {
+fn refresh_prompt(path: &Path, file: PromptFile) -> Result<bool, StoreError> {
     let stored = std::fs::read_to_string(path).map_err(|e| io_err(path, e))?;
-    if !is_earlier_shipped(&stored) {
+    if !file.is_earlier_shipped(&stored) {
         return Ok(false);
     }
-    write_atomic(path, DEFAULT_BASE_PROMPT.as_bytes())?;
+    write_atomic(path, file.default_text().as_bytes())?;
     Ok(true)
 }
 

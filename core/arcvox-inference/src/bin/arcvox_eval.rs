@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use arcvox_core::config::base_prompt::DEFAULT_BASE_PROMPT;
+use arcvox_core::config::base_prompt::{DEFAULT_BASE_PROMPT, DEFAULT_TRANSLATE_PROMPT};
 use arcvox_core::config::ProviderConfig;
 use arcvox_core::config::{Config, ConfigStore, Profile};
 use arcvox_core::device::Device;
@@ -232,10 +232,19 @@ fn read_config(dirs: &DataDir) -> Result<(Config, PathBuf), String> {
 /// The base prompt as the installation holds it, the shipped text when it
 /// was never written.
 fn read_base_prompt(dirs: &DataDir) -> Result<String, String> {
-    match std::fs::read_to_string(dirs.base_prompt_path()) {
+    read_prompt(&dirs.base_prompt_path(), DEFAULT_BASE_PROMPT)
+}
+
+/// The translation's rules the same way.
+fn read_translate_prompt(dirs: &DataDir) -> Result<String, String> {
+    read_prompt(&dirs.translate_prompt_path(), DEFAULT_TRANSLATE_PROMPT)
+}
+
+fn read_prompt(path: &std::path::Path, shipped: &str) -> Result<String, String> {
+    match std::fs::read_to_string(path) {
         Ok(s) => Ok(s),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(DEFAULT_BASE_PROMPT.to_string()),
-        Err(e) => Err(format!("{}: {e}", dirs.base_prompt_path().display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(shipped.to_string()),
+        Err(e) => Err(format!("{}: {e}", path.display())),
     }
 }
 
@@ -353,6 +362,7 @@ async fn run(args: &Args) -> Result<(), String> {
         Some(p) => std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?,
         None => read_base_prompt(&dirs)?,
     };
+    let translate_prompt = read_translate_prompt(&dirs)?;
     let profile: Profile = match args.flag("profile") {
         Some(id) => config
             .profiles
@@ -505,6 +515,7 @@ async fn run(args: &Args) -> Result<(), String> {
                     prof,
                     &registry,
                     &base_prompt,
+                    &translate_prompt,
                     asr_sample.as_deref(),
                 )?;
                 for (n, row) in rows.iter().enumerate() {
@@ -562,6 +573,7 @@ async fn run(args: &Args) -> Result<(), String> {
                 prof,
                 &registry,
                 &base_prompt,
+                &translate_prompt,
                 asr_sample.as_deref(),
             )?;
             for (n, row) in rows.iter().enumerate() {
@@ -690,6 +702,7 @@ fn build(
     profile: Profile,
     registry: &ProviderRegistry,
     base_prompt: &str,
+    translate_prompt: &str,
     asr_sample: Option<&str>,
 ) -> Result<(Pipeline, PipelineContext), String> {
     let engines = config.resolve_engines(&profile, |cfg| registry.ready(cfg));
@@ -699,6 +712,7 @@ fn build(
         context: Context::default(),
         dictionary: Arc::new(config.dictionary.clone()),
         base_prompt: base_prompt.to_string(),
+        translate_prompt: translate_prompt.to_string(),
         general: config.general.clone(),
         recognised: Default::default(),
         asr_sample: asr_sample.map(str::to_string),

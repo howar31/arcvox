@@ -169,13 +169,6 @@ pub fn profiles_presets() -> CmdResult<Vec<PresetView>> {
     Ok(preset_views())
 }
 
-/// The instruction the translation module ships with, for the page that
-/// lets a profile edit its own and go back to it.
-#[tauri::command]
-pub fn translate_prompt_default() -> String {
-    arcvox_core::steps::translate::DEFAULT_TRANSLATE_PROMPT.to_string()
-}
-
 #[tauri::command]
 pub fn profiles_add_preset(
     state: State<'_, AppState>,

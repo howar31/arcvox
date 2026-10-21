@@ -115,7 +115,9 @@ impl Pipeline {
                         punctuation_width: *punctuation_width,
                     },
                 }),
-                StepSpec::Translate { target, prompt, .. } => {
+                StepSpec::Translate {
+                    target, addition, ..
+                } => {
                     let id = engines.translate.as_ref().map(|c| &c.id).ok_or_else(|| {
                         StepError::fatal(
                             ErrorCode::InvalidConfig,
@@ -131,9 +133,7 @@ impl Pipeline {
                     // Like the rewrite: an engine that cannot be built now
                     // fails at run time, and the text goes on untranslated.
                     let step: Box<dyn Step> = match registry.llm(cfg, &config.general) {
-                        Ok(provider) => {
-                            Box::new(TranslateStep::new(provider, target, prompt.as_deref()))
-                        }
+                        Ok(provider) => Box::new(TranslateStep::new(provider, target, addition)),
                         Err(e) => Box::new(UnavailableStep {
                             name: StepName::Translate,
                             error: StepError::from(e),
@@ -423,7 +423,7 @@ mod tests {
         p.steps.push(Box::new(TranslateStep::new(
             FakeLlm::ok("The original."),
             "英文",
-            None,
+            "",
         )));
         let out = p.run(audio(), &test_context(), &tx).await.unwrap();
         let kinds: Vec<(u32, StageKind)> =
@@ -438,7 +438,7 @@ mod tests {
         p.steps.push(Box::new(TranslateStep::new(
             FakeLlm::failing(ErrorCode::ProviderTimeout),
             "英文",
-            None,
+            "",
         )));
         let out = p.run(audio(), &test_context(), &tx).await.unwrap();
         assert_eq!(out.final_text, "原文。");
