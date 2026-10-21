@@ -233,6 +233,7 @@ pub fn run() {
             crate::commands::history::history_stages,
             crate::commands::history::history_last,
             crate::commands::history::history_choose_attempt,
+            crate::commands::history::history_set_final,
             crate::commands::history::history_delete_attempt,
             crate::commands::stats::stats_get,
             crate::commands::stats::stats_reset,

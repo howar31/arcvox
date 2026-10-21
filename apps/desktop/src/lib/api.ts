@@ -83,6 +83,8 @@ export interface Utterance {
   error_code: string | null;
   /** How many times the recording was processed again. */
   redone: number;
+  /** How the final text was corrected; null while it is the result's own text or when the source was not kept. */
+  correction_source: "read_back" | "hand" | null;
 }
 /** What processing a row again gave: the result recorded with the row, or why the engines failed (recorded too). */
 export interface RedoOutcome { attempt: Attempt | null; failure: { code: string; detail: string } | null }
@@ -222,6 +224,8 @@ export interface Stats {
 export const getStats = (since: number, tzOffsetSecs: number) => invoke<Stats>("stats_get", { since, tzOffsetSecs });
 export const resetStats = () => invoke<void>("stats_reset");
 export const deleteHistory = (id: number) => invoke<void>("history_delete", { id });
+/** The user's correction of a row's final text; the result's own text takes the correction away. */
+export const setFinalText = (id: number, text: string) => invoke<void>("history_set_final", { id, text });
 export const clearHistory = () => invoke<void>("history_clear");
 export const setSecret = (keyRef: string, value: string) => invoke<void>("secrets_set", { keyRef, value });
 export const hasSecret = (keyRef: string) => invoke<boolean>("secrets_has", { keyRef });

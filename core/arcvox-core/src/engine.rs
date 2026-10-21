@@ -873,10 +873,16 @@ impl Engine {
 
     /// The text the user kept, found in the application after the
     /// dictation: it replaces the row's final text.
-    pub async fn correct_final(&self, id: HistoryId, text: &str) -> Result<(), EngineError> {
+    pub async fn correct_final(
+        &self,
+        id: HistoryId,
+        text: &str,
+        source: crate::history::CorrectionSource,
+    ) -> Result<(), EngineError> {
         let history = self.inner.history.clone();
         let text = text.to_string();
-        tokio::task::spawn_blocking(move || history.set_final(id, &text)).await??;
+        tokio::task::spawn_blocking(move || history.set_final_from(id, &text, Some(source)))
+            .await??;
         Ok(())
     }
 

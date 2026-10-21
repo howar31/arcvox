@@ -56,6 +56,10 @@ pub struct HistoryLine {
     /// What was said, as the user corrected it; absent while uncorrected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heard_text: Option<String>,
+    /// How the final text was corrected: read back from the field or by
+    /// hand; absent while uncorrected or when not kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correction_source: Option<String>,
     #[serde(default)]
     pub degraded: bool,
     #[serde(default)]
@@ -120,9 +124,12 @@ pub struct AttemptLine {
     pub origin: bool,
     #[serde(default)]
     pub chosen: bool,
-    /// The user's correction of this result's text, when there is one.
+    /// The user's correction of this result's text, when there is one,
+    /// and how it was made (read back from the field or by hand).
     #[serde(default)]
     pub corrected_text: Option<String>,
+    #[serde(default)]
+    pub correction_source: Option<String>,
     /// What each stage of this result's run did, in order.
     #[serde(default)]
     pub stages: Vec<StageLine>,

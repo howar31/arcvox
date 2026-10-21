@@ -81,7 +81,8 @@ export function textFlow(u: Utterance, stages: Stage[] | null): { steps: FlowSte
   }
   if (corrected(u)) {
     const final = u.final_text.trim();
-    steps.push({ kind: "user", name: t("history.flow_correction"), small: t("history.flow_changes", { n: String(changeCount(refined, final)) }), from: refined, text: final });
+    const source = u.correction_source === "read_back" ? t("history.flow_source_read_back") : u.correction_source === "hand" ? t("history.flow_source_hand") : "";
+    steps.push({ kind: "user", name: t("history.flow_correction"), small: [t("history.flow_changes", { n: String(changeCount(refined, final)) }), source].filter(Boolean).join(" · "), from: refined, text: final });
   }
   return { steps, unchanged };
 }

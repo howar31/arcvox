@@ -182,6 +182,10 @@ pub struct Utterance {
     pub error_code: Option<String>,
     /// How many times the recording was processed again.
     pub redone: u32,
+    /// How the final text was corrected, `CorrectionSource::name`; None
+    /// while it is the result's own text, or for corrections from before
+    /// the source was kept.
+    pub correction_source: Option<String>,
     /// While the row shows a rerun's result: the text the dictation itself
     /// put in and the user's correction of it, which the rerun hides.
     pub origin_correction: Option<(String, String)>,
@@ -218,6 +222,26 @@ pub struct Attempt {
     /// belongs to the result it corrected, so the row shows it only while
     /// this result is the chosen one.
     pub corrected_text: Option<String>,
+    /// How the correction was made, `CorrectionSource::name`.
+    pub correction_source: Option<String>,
+}
+
+/// How a correction of the final text was made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CorrectionSource {
+    /// Read back from the field the text went into.
+    ReadBack,
+    /// Typed by the user on the History page.
+    Hand,
+}
+
+impl CorrectionSource {
+    pub fn name(self) -> &'static str {
+        match self {
+            CorrectionSource::ReadBack => "read_back",
+            CorrectionSource::Hand => "hand",
+        }
+    }
 }
 
 /// A result to record for a row: `Ok` with the engines that made it, or
@@ -417,7 +441,8 @@ CREATE TABLE IF NOT EXISTS utterances (
     audio_path TEXT,
     asr_ms INTEGER NOT NULL DEFAULT 0,
     llm_ms INTEGER,
-    heard_text TEXT
+    heard_text TEXT,
+    correction_source TEXT
 );
 CREATE INDEX IF NOT EXISTS utterances_ts ON utterances(ts);
 CREATE TABLE IF NOT EXISTS attempts (
@@ -439,7 +464,8 @@ CREATE TABLE IF NOT EXISTS attempts (
     error_code TEXT,
     origin INTEGER NOT NULL DEFAULT 0,
     chosen INTEGER NOT NULL DEFAULT 0,
-    corrected_text TEXT
+    corrected_text TEXT,
+    correction_source TEXT
 );
 CREATE INDEX IF NOT EXISTS attempts_utterance ON attempts(utterance_id);
 ";
@@ -573,6 +599,10 @@ pub(crate) fn upgrade(
             "heard_text",
             "ALTER TABLE utterances ADD COLUMN heard_text TEXT",
         ),
+        (
+            "correction_source",
+            "ALTER TABLE utterances ADD COLUMN correction_source TEXT",
+        ),
     ] {
         if !has_column(conn, "utterances", name)? {
             conn.execute_batch(ddl)?;
@@ -580,6 +610,9 @@ pub(crate) fn upgrade(
     }
     if !has_column(conn, "attempts", "corrected_text")? {
         conn.execute_batch("ALTER TABLE attempts ADD COLUMN corrected_text TEXT")?;
+    }
+    if !has_column(conn, "attempts", "correction_source")? {
+        conn.execute_batch("ALTER TABLE attempts ADD COLUMN correction_source TEXT")?;
     }
     // Rows written before rows carried a device belong to this one.
     conn.execute(
@@ -1130,6 +1163,9 @@ impl HistoryStore {
                     chosen: !was_failed,
                     corrected_text: (row.final_text != row.refined_text)
                         .then(|| row.final_text.clone()),
+                    correction_source: (row.final_text != row.refined_text)
+                        .then(|| row.correction_source.clone())
+                        .flatten(),
                     stages: Vec::new(),
                 },
             )?;
@@ -1158,6 +1194,7 @@ impl HistoryStore {
                 origin: false,
                 chosen: false,
                 corrected_text: None,
+                correction_source: None,
                 stages: Vec::new(),
             },
             Outcome::Failed {
@@ -1182,6 +1219,7 @@ impl HistoryStore {
                 origin: false,
                 chosen: false,
                 corrected_text: None,
+                correction_source: None,
                 stages: Vec::new(),
             },
         };
@@ -1239,7 +1277,11 @@ impl HistoryStore {
             // The attempt's stages are already stored under its id.
             stages: Vec::new(),
         };
-        if !apply_in(&tx, &self.device_id, id, &redo, a.corrected_text.as_deref())? {
+        let corrected = a
+            .corrected_text
+            .as_deref()
+            .map(|t| (t, a.correction_source.as_deref()));
+        if !apply_in(&tx, &self.device_id, id, &redo, corrected)? {
             return Ok(false);
         }
         choose_in(&tx, id, attempt.0)?;
@@ -1287,16 +1329,30 @@ impl HistoryStore {
     /// it (and loses it when the text is its own again), so another result
     /// chosen later does not show it and choosing this one back brings it.
     pub fn set_final(&self, id: HistoryId, text: &str) -> Result<(), HistoryError> {
+        self.set_final_from(id, text, None)
+    }
+
+    /// `set_final` with how the correction was made; a text equal to the
+    /// result's own takes the correction and its source away.
+    pub fn set_final_from(
+        &self,
+        id: HistoryId,
+        text: &str,
+        source: Option<CorrectionSource>,
+    ) -> Result<(), HistoryError> {
+        let source = source.map(CorrectionSource::name);
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
         tx.execute(
-            "UPDATE utterances SET final_text = ?1, updated = ?3 WHERE id = ?2",
-            params![text, id.0, now_ms()],
+            "UPDATE utterances SET final_text = ?1, updated = ?3,
+                correction_source = CASE WHEN refined_text = ?1 THEN NULL ELSE ?4 END WHERE id = ?2",
+            params![text, id.0, now_ms(), source],
         )?;
         tx.execute(
-            "UPDATE attempts SET corrected_text = CASE WHEN final_text = ?1 THEN NULL ELSE ?1 END
+            "UPDATE attempts SET corrected_text = CASE WHEN final_text = ?1 THEN NULL ELSE ?1 END,
+                correction_source = CASE WHEN final_text = ?1 THEN NULL ELSE ?3 END
              WHERE utterance_id = ?2 AND chosen = 1",
-            params![text, id.0],
+            params![text, id.0, source],
         )?;
         tx.commit()?;
         Ok(())
@@ -1431,7 +1487,7 @@ impl HistoryStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT origin_id, ts, updated, profile_id, app_name, raw_text, refined_text, final_text, degraded,
-                    asr_ms, llm_ms, audio_ms, dict_fixes, snippets, error, error_code, audio_path, id, heard_text
+                    asr_ms, llm_ms, audio_ms, dict_fixes, snippets, error, error_code, audio_path, id, heard_text, correction_source
              FROM utterances
              WHERE device_id = ?1 AND origin_id IS NOT NULL AND (error_code IS NULL OR error_code != ?2)
              ORDER BY origin_id",
@@ -1455,6 +1511,7 @@ impl HistoryStore {
                 error: r.get(14)?,
                 error_code: r.get(15)?,
                 heard_text: r.get(18)?,
+                correction_source: r.get(19)?,
                 audio: None,
                 attempts: Vec::new(),
                 stages: Vec::new(),
@@ -1546,8 +1603,8 @@ impl HistoryStore {
                 None => {
                     tx.execute(
                         "INSERT INTO utterances (ts, profile_id, app_name, raw_text, refined_text, final_text, degraded, audio_path,
-                            asr_ms, llm_ms, audio_ms, dict_fixes, snippets, error, error_code, device_id, origin_id, updated, heard_text)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                            asr_ms, llm_ms, audio_ms, dict_fixes, snippets, error, error_code, device_id, origin_id, updated, heard_text, correction_source)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
                         params![
                             l.ts,
                             l.profile_id,
@@ -1568,6 +1625,7 @@ impl HistoryStore {
                             l.origin_id,
                             l.updated,
                             l.heard_text,
+                            l.correction_source,
                         ],
                     )?;
                     let new_id = tx.last_insert_rowid();
@@ -1586,7 +1644,7 @@ impl HistoryStore {
                         tx.execute(
                             "UPDATE utterances SET ts = ?1, profile_id = ?2, app_name = ?3, raw_text = ?4, refined_text = ?5,
                                 final_text = ?6, degraded = ?7, asr_ms = ?8, llm_ms = ?9, audio_ms = ?10, dict_fixes = ?11,
-                                snippets = ?12, error = ?13, error_code = ?14, updated = ?15, heard_text = ?17 WHERE id = ?16",
+                                snippets = ?12, error = ?13, error_code = ?14, updated = ?15, heard_text = ?17, correction_source = ?18 WHERE id = ?16",
                             params![
                                 l.ts,
                                 l.profile_id,
@@ -1605,6 +1663,7 @@ impl HistoryStore {
                                 l.updated,
                                 id,
                                 l.heard_text,
+                                l.correction_source,
                             ],
                         )?;
                         // The line is the newer state of the row: its
@@ -2323,7 +2382,7 @@ fn apply_in(
     device_id: &str,
     id: HistoryId,
     r: &Redo,
-    corrected: Option<&str>,
+    corrected: Option<(&str, Option<&str>)>,
 ) -> Result<bool, HistoryError> {
     let row: Option<(i64, Option<String>, Option<i64>, bool)> = tx
         .query_row(
@@ -2337,7 +2396,8 @@ fn apply_in(
     };
     tx.execute(
         "UPDATE utterances SET profile_id = ?1, raw_text = ?2, refined_text = ?3, final_text = COALESCE(?11, ?3), degraded = ?4,
-            asr_ms = ?5, llm_ms = ?6, dict_fixes = ?7, snippets = ?8, error = NULL, error_code = NULL, updated = ?10 WHERE id = ?9",
+            asr_ms = ?5, llm_ms = ?6, dict_fixes = ?7, snippets = ?8, error = NULL, error_code = NULL, updated = ?10,
+            correction_source = ?12 WHERE id = ?9",
         params![
             r.profile_id.0,
             r.raw_text,
@@ -2349,7 +2409,8 @@ fn apply_in(
             r.snippets as i64,
             id.0,
             now_ms(),
-            corrected,
+            corrected.map(|(text, _)| text),
+            corrected.and_then(|(_, source)| source),
         ],
     )?;
     if was_failed {
@@ -2398,11 +2459,12 @@ fn touch_in(tx: &Connection, id: HistoryId) -> rusqlite::Result<()> {
 const SELECT: &str = "SELECT id, ts, profile_id, app_name, raw_text, refined_text, final_text, degraded, audio_path, asr_ms, llm_ms, audio_ms, error, error_code,
     (SELECT COUNT(*) FROM attempts a WHERE a.utterance_id = utterances.id AND a.origin = 0), heard_text,
     (SELECT final_text FROM attempts a WHERE a.utterance_id = utterances.id AND a.origin = 1 AND a.chosen = 0 AND a.corrected_text IS NOT NULL),
-    (SELECT corrected_text FROM attempts a WHERE a.utterance_id = utterances.id AND a.origin = 1 AND a.chosen = 0 AND a.corrected_text IS NOT NULL)
+    (SELECT corrected_text FROM attempts a WHERE a.utterance_id = utterances.id AND a.origin = 1 AND a.chosen = 0 AND a.corrected_text IS NOT NULL),
+    correction_source
     FROM utterances";
 
 const SELECT_ATTEMPT: &str = "SELECT id, utterance_id, ts, profile_id, asr_label, llm_label, raw_text, final_text, degraded, asr_ms, llm_ms,
-    dict_fixes, snippets, llm_changed, error, error_code, origin, chosen, corrected_text FROM attempts";
+    dict_fixes, snippets, llm_changed, error, error_code, origin, chosen, corrected_text, correction_source FROM attempts";
 
 fn map_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<Attempt> {
     Ok(Attempt {
@@ -2425,6 +2487,7 @@ fn map_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<Attempt> {
         origin: r.get::<_, i64>(16)? != 0,
         chosen: r.get::<_, i64>(17)? != 0,
         corrected_text: r.get(18)?,
+        correction_source: r.get(19)?,
     })
 }
 
@@ -2432,8 +2495,8 @@ fn map_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<Attempt> {
 fn insert_attempt(tx: &Connection, utterance: i64, a: &AttemptLine) -> rusqlite::Result<i64> {
     tx.execute(
         "INSERT INTO attempts (utterance_id, ts, profile_id, asr_label, llm_label, raw_text, final_text, degraded, asr_ms, llm_ms,
-            dict_fixes, snippets, llm_changed, error, error_code, origin, chosen, corrected_text)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            dict_fixes, snippets, llm_changed, error, error_code, origin, chosen, corrected_text, correction_source)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
         params![
             utterance,
             a.ts,
@@ -2453,6 +2516,7 @@ fn insert_attempt(tx: &Connection, utterance: i64, a: &AttemptLine) -> rusqlite:
             a.origin as i64,
             a.chosen as i64,
             a.corrected_text,
+            a.correction_source,
         ],
     )?;
     Ok(tx.last_insert_rowid())
@@ -2488,6 +2552,7 @@ fn attempt_lines(conn: &Connection, utterance: i64) -> rusqlite::Result<Vec<Atte
                 origin: a.origin,
                 chosen: a.chosen,
                 corrected_text: a.corrected_text,
+                correction_source: a.correction_source,
                 stages: stage_lines(conn, utterance, Some(a.id.0))?,
             })
         })
@@ -2548,6 +2613,7 @@ fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Utterance> {
             (Some(from), Some(to)) => Some((from, to)),
             _ => None,
         },
+        correction_source: r.get(18)?,
     })
 }
 
@@ -2701,6 +2767,61 @@ mod tests {
         );
         s.reset_stats().unwrap();
         assert!(s.dictionary_hits().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_correction_keeps_how_it_was_made() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let id = s.insert(new(100, None)).unwrap();
+        assert_eq!(s.get(id).unwrap().unwrap().correction_source, None);
+        s.set_final_from(id, "edited", Some(CorrectionSource::Hand))
+            .unwrap();
+        assert_eq!(
+            s.get(id).unwrap().unwrap().correction_source.as_deref(),
+            Some("hand")
+        );
+        // The source goes with the correction to the original result and
+        // comes back with it.
+        let rerun = s
+            .record_attempt(id, &redo_with(vec![]), true)
+            .unwrap()
+            .unwrap();
+        let row = s.get(id).unwrap().unwrap();
+        assert_eq!(row.correction_source, None);
+        let origin = s
+            .attempts(id)
+            .unwrap()
+            .into_iter()
+            .find(|a| a.origin)
+            .unwrap();
+        assert_eq!(origin.correction_source.as_deref(), Some("hand"));
+        assert!(s.choose_attempt(id, origin.id).unwrap());
+        assert_eq!(
+            s.get(id).unwrap().unwrap().correction_source.as_deref(),
+            Some("hand")
+        );
+        // A rerun's correction read back from the field says so; the text
+        // set back to the result's own clears the source.
+        assert!(s.choose_attempt(id, rerun.id).unwrap());
+        s.set_final_from(id, "final2 edited", Some(CorrectionSource::ReadBack))
+            .unwrap();
+        assert_eq!(
+            s.get(id).unwrap().unwrap().correction_source.as_deref(),
+            Some("read_back")
+        );
+        s.set_final_from(id, "final2", Some(CorrectionSource::Hand))
+            .unwrap();
+        assert_eq!(s.get(id).unwrap().unwrap().correction_source, None);
+        let rerun = s
+            .attempts(id)
+            .unwrap()
+            .into_iter()
+            .find(|a| !a.origin)
+            .unwrap();
+        assert_eq!(
+            (rerun.corrected_text, rerun.correction_source),
+            (None, None)
+        );
     }
 
     #[test]

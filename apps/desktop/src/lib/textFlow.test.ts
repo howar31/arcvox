@@ -4,7 +4,7 @@ import { changeCount, textFlow } from "./textFlow";
 
 const row = (raw: string, refined: string, fin = refined, app: string | null = "TextEdit"): Utterance => ({
   id: 1, ts: 0, profile_id: "default", app_name: app, raw_text: raw, refined_text: refined, final_text: fin,
-  degraded: false, has_audio: false, asr_ms: 200, llm_ms: 1200, audio_ms: null, audio_bytes: null, error: null, error_code: null, redone: 0,
+  degraded: false, has_audio: false, asr_ms: 200, llm_ms: 1200, audio_ms: null, audio_bytes: null, error: null, error_code: null, redone: 0, correction_source: null,
 });
 const stage = (position: number, kind: Stage["kind"], text: string | null, detail: Record<string, unknown> = {}): Stage => ({ position, kind, text, ms: null, detail });
 
@@ -31,6 +31,12 @@ describe("textFlow", () => {
     expect(steps[3]).toMatchObject({ kind: "mark", name: "Put into TextEdit" });
     expect(steps[4]).toMatchObject({ kind: "user", from: "測試一下，停歇", text: "測試一下聽寫", small: "Changes: 1" });
     expect(unchanged).toBe("Text rewriting left the text as it was.");
+  });
+  it("names how the correction was made when that was kept", () => {
+    const hand = { ...row("测试一下，停歇。", "測試一下，停歇", "測試一下聽寫"), correction_source: "hand" as const };
+    expect(textFlow(hand, stages).steps[4]).toMatchObject({ kind: "user", small: "Changes: 1 · by hand" });
+    const read = { ...hand, correction_source: "read_back" as const };
+    expect(textFlow(read, stages).steps[4]).toMatchObject({ small: "Changes: 1 · read back from the field" });
   });
   it("stops at the insertion when the user changed nothing", () => {
     const { steps } = textFlow(row("测试一下，停歇。", "測試一下，停歇"), stages);

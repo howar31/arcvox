@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use std::sync::{Arc, Mutex};
 
+use arcvox_core::history::CorrectionSource;
 use arcvox_core::history::Delivery;
 use arcvox_core::learn::{self, Alignment};
 use arcvox_core::types::{ErrorCode, HistoryId, SessionId};
@@ -186,7 +187,10 @@ async fn read_back_once(engine: Engine, job: ReadBackJob, when: &'static str) {
                 None => "too_different".into(),
                 Some(a) if a.too_different() => "too_different".into(),
                 Some(a) if a.span == job.text.trim() => "unchanged".into(),
-                Some(a) => match engine.correct_final(job.id, &a.span).await {
+                Some(a) => match engine
+                    .correct_final(job.id, &a.span, CorrectionSource::ReadBack)
+                    .await
+                {
                     Ok(()) => "corrected".into(),
                     Err(e) => format!("not recorded: {e}"),
                 },

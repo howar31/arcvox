@@ -1,7 +1,8 @@
 use std::path::Path;
 
 use arcvox_core::history::{
-    Attempt, AttemptId, HistoryStore, ListFilter, StageKind, StageRecord, Utterance,
+    Attempt, AttemptId, CorrectionSource, HistoryStore, ListFilter, StageKind, StageRecord,
+    Utterance,
 };
 use arcvox_core::types::{HistoryId, ProfileId};
 use arcvox_core::{Engine, ReprocessError};
@@ -33,6 +34,9 @@ pub struct UtteranceDto {
     pub error_code: Option<String>,
     /// How many times the recording was processed again.
     pub redone: u32,
+    /// How the final text was corrected: "read_back" or "hand"; None while
+    /// it is the result's own text or for corrections from before this was kept.
+    pub correction_source: Option<String>,
 }
 
 /// What `history_reprocess` returns: the result recorded with the row, or
@@ -127,6 +131,17 @@ pub async fn history_reprocess(
     let e = engine(&state)?;
     state.backup.touch();
     reprocess(&e, id, profile_id).await
+}
+
+/// The user's correction of the row's final text, typed on the History
+/// page; the result's own text takes the correction away.
+#[tauri::command]
+pub async fn history_set_final(state: State<'_, AppState>, id: i64, text: String) -> CmdResult<()> {
+    let e = engine(&state)?;
+    state.backup.touch();
+    e.correct_final(HistoryId(id), &text, CorrectionSource::Hand)
+        .await?;
+    Ok(())
 }
 
 /// Every result a row had, newest first.
@@ -251,6 +266,7 @@ impl UtteranceDto {
             error: u.error,
             error_code: u.error_code,
             redone: u.redone,
+            correction_source: u.correction_source,
         }
     }
 }

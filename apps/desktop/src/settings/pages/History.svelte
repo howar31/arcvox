@@ -5,6 +5,7 @@
     chooseAttempt, clearHistoryRange, clearRecordingsRange, deleteAttempt, historyAttempts, historyStages, deleteHistory, deleteRecording, errorMessage, formatBytes, historyStorage, listHistory, onHistoryChanged, openRecordingsDir, reprocessHistory, revealRecording, widgetCopy,
     type Attempt, type HistoryStorage, type Stage, type Utterance,
   } from "../../lib/api";
+  import { setFinalText } from "../../lib/api";
   import { storedOpen, rememberOpen, type DetailBlock } from "../../lib/detailMemory";
   import { failureText } from "../../lib/failure";
   import { formatDateTime, formatDay, formatTime } from "../../lib/format";
@@ -321,6 +322,10 @@
     if (open === id) open = null;
     try { await deleteHistory(id); } catch (e) { toast.error(errorMessage(e)); }
   }
+  /** Keeps the user's version of a row's final text; the list reloads through the history watcher. */
+  async function correct(u: Utterance, text: string): Promise<boolean> {
+    try { await setFinalText(u.id, text); return true; } catch (e) { toast.error(errorMessage(e)); return false; }
+  }
   async function removeRecording(id: number) {
     clearTimeout(sureTimer);
     sure = null;
@@ -445,7 +450,7 @@
                   <div class="tech">{u.error}</div>
                 {/if}
               {:else}
-                <TextFlow {u} stages={stages[u.id] ?? null} />
+                <TextFlow {u} stages={stages[u.id] ?? null} oncorrect={(text) => correct(u, text)} />
               {/if}
               {#if u.has_audio}
                 {@const failedRow = u.error !== null}
