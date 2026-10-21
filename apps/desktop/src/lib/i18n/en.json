@@ -1385,8 +1385,6 @@
   "flow.remove_sure": "Remove?",
   "flow.remove_llm_help": "The recognised text goes on without a rewrite. The base prompt and this profile's addition stay, and come back with the module.",
   "flow.remove_rules_help": "Dictionary aliases are no longer replaced, snippets no longer inserted, and no rule runs. The recognition hint is unaffected.",
-  "flow.script_after": "Script after the rewrite",
-  "flow.script_after_help": "Converted once more with the output script of speech recognition; a rewrite engine sometimes writes Simplified characters.",
   "flow.cell.capture_trimmed": "Recorded {secs} s, {removed} s of silence removed",
   "flow.cell.asr_converted": "{chars} characters, {n} converted",
   "flow.panel.asr_converted": "{secs} s, {chars} characters, {n} converted",

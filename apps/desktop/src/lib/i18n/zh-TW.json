@@ -1385,8 +1385,6 @@
   "flow.remove_sure": "確定移除？",
   "flow.remove_llm_help": "辨識結果不再改寫，直接往下走；基礎提示詞與這個情境的附加規則都保留，加回來就恢復。",
   "flow.remove_rules_help": "字典的別名不再替換、片段不再插入，規則都不做；辨識提示不受影響。",
-  "flow.script_after": "改寫後的字形",
-  "flow.script_after_help": "依語音辨識的輸出字形再轉一次；改寫引擎偶爾會寫出簡體字。",
   "flow.cell.capture_trimmed": "錄了 {secs} 秒，去掉頭尾 {removed} 秒",
   "flow.cell.asr_converted": "{chars} 字，轉了 {n} 個字",
   "flow.panel.asr_converted": "{secs} 秒，{chars} 字，轉了 {n} 個字",

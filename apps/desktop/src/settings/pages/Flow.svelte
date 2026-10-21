@@ -657,7 +657,6 @@
             </Row>
           </Group>
         <Group>
-          <Row label={t("flow.script_after")} help={t("flow.script_after_help")} />
           {@render removeRow(t("flow.remove_llm_help"))}
         </Group>
       {:else if stage === "rules"}
