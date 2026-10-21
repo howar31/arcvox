@@ -223,6 +223,15 @@ impl Shortcut {
     pub fn fn_key() -> Shortcut {
         Shortcut(vec![Key::named("Fn").unwrap()])
     }
+
+    /// The shortcuts a new installation starts with: the fn key and the
+    /// right Control, Option and Shift keys, each on its own.
+    pub fn defaults() -> Vec<Shortcut> {
+        ["Fn", "ControlRight", "AltRight", "ShiftRight"]
+            .iter()
+            .map(|name| Shortcut(vec![Key::named(name).unwrap()]))
+            .collect()
+    }
 }
 
 /// Why a combination cannot be a recording shortcut.

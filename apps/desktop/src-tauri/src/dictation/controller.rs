@@ -1125,6 +1125,8 @@ mod tests {
         modifier: Sender<ModifierEvent>,
     }
 
+    /// Quick timings, the clipboard given back after a paste, and no
+    /// read-back; the tests that want either turn it on themselves.
     fn fast_settings() -> ClientSettings {
         ClientSettings {
             hotkey: HotkeySettings {
@@ -1132,6 +1134,11 @@ mod tests {
                 double_tap_window_ms: 60,
                 ..HotkeySettings::default()
             },
+            insertion: crate::settings::InsertionSettings {
+                keep_on_clipboard: false,
+                ..Default::default()
+            },
+            learning: crate::settings::LearningSettings { read_back: false },
             ..ClientSettings::default()
         }
     }

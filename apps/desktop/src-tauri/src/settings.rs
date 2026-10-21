@@ -62,13 +62,19 @@ pub struct ClientSettings {
 }
 
 /// What the app learns from the user's corrections.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LearningSettings {
     /// After the text is put in, the field is read back through
     /// Accessibility and the user's changes to it are kept as the
-    /// dictation's final text. Off by default: it reads the field.
+    /// dictation's final text.
     pub read_back: bool,
+}
+
+impl Default for LearningSettings {
+    fn default() -> Self {
+        Self { read_back: true }
+    }
 }
 
 /// Switches for looking into the app's workings. Each one writes more to
@@ -211,11 +217,11 @@ pub enum WidgetSize {
 #[serde(rename_all = "snake_case")]
 pub enum WidgetIdle {
     /// Nothing: the widget leaves the screen.
-    #[default]
     Hidden,
     /// The ring alone, in the round end of the widget.
     Ring,
     /// The whole widget, with a label.
+    #[default]
     Label,
 }
 
@@ -296,7 +302,7 @@ pub struct ContextOptIns {
     pub clipboard: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct InsertionSettings {
     /// The method of every app that is not in `per_app`.
@@ -305,6 +311,16 @@ pub struct InsertionSettings {
     pub keep_on_clipboard: bool,
     /// Bundle id -> method.
     pub per_app: BTreeMap<String, InsertMethod>,
+}
+
+impl Default for InsertionSettings {
+    fn default() -> Self {
+        Self {
+            default: InsertMethod::default(),
+            keep_on_clipboard: true,
+            per_app: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -376,7 +392,7 @@ impl Default for HotkeySettings {
             hold_threshold_ms: 250,
             double_tap_window_ms: 350,
             escape_cancels_processing: true,
-            shortcuts: vec![Shortcut::fn_key()],
+            shortcuts: Shortcut::defaults(),
         }
     }
 }
@@ -644,6 +660,24 @@ mod tests {
             InsertMethod::Paste
         );
         assert_eq!(s.ui_language, UiLanguage::System);
+        // Chosen 2026-10-21: four single-key shortcuts, the text left on the
+        // clipboard, the whole widget at rest, the field read back.
+        let keys: Vec<String> = s
+            .hotkey
+            .shortcuts
+            .iter()
+            .map(|sc| {
+                sc.keys()
+                    .iter()
+                    .map(|k| k.name())
+                    .collect::<Vec<_>>()
+                    .join("+")
+            })
+            .collect();
+        assert_eq!(keys, ["Fn", "ControlRight", "AltRight", "ShiftRight"]);
+        assert!(s.insertion.keep_on_clipboard);
+        assert_eq!(s.widget_idle, WidgetIdle::Label);
+        assert!(s.learning.read_back);
     }
 
     #[test]
@@ -709,7 +743,7 @@ mod tests {
             InsertMethod::Ax
         );
         assert_eq!(json["insertion"]["default"], "paste");
-        assert_eq!(json["insertion"]["keep_on_clipboard"], false);
+        assert_eq!(json["insertion"]["keep_on_clipboard"], true);
     }
 
     #[test]
