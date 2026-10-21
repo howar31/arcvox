@@ -809,7 +809,7 @@ impl Ui for TauriUi {
         } else {
             state
         };
-        self.tray.set_state(state, self.language());
+        self.tray.set_state(state);
         let before = std::mem::replace(&mut *self.state.lock().unwrap(), state);
         let placing = self.placing.load(Ordering::SeqCst);
         if placing && matches!(state, UiState::Recording | UiState::Locked) {

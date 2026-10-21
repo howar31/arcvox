@@ -54,7 +54,7 @@ where
 {
     let channels = channels.max(1);
     data.chunks(channels)
-        .map(|frame| frame.iter().map(|s| f32::from_sample(*s)).sum::<f32>() / channels as f32)
+        .map(|frame| frame.iter().map(|s| f32::from_sample(*s)).sum::<f32>() / frame.len() as f32)
         .collect()
 }
 

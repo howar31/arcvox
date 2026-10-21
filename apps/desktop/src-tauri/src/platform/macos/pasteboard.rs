@@ -22,7 +22,10 @@ pub fn snapshot() -> ClipboardSnapshot {
                     entry.push((ty.to_string(), data.to_vec()));
                 }
             }
-            items.push(entry);
+            // An item whose types gave no data has nothing to put back.
+            if !entry.is_empty() {
+                items.push(entry);
+            }
         }
     }
     ClipboardSnapshot { items }
@@ -31,10 +34,9 @@ pub fn snapshot() -> ClipboardSnapshot {
 pub fn text() -> Option<String> {
     let pb = NSPasteboard::generalPasteboard();
     // SAFETY: `NSPasteboardTypeString` is a process-lifetime extern static;
-    // objc2 requires unsafe to read it, and the call has no other
-    // precondition.
-    let s = unsafe { pb.stringForType(NSPasteboardTypeString) }?;
-    Some(s.to_string())
+    // objc2 requires unsafe to read it.
+    let ty = unsafe { NSPasteboardTypeString };
+    Some(pb.stringForType(ty)?.to_string())
 }
 
 /// Puts `text` on the pasteboard. `false` when the system refused the
@@ -42,10 +44,10 @@ pub fn text() -> Option<String> {
 pub fn write_text(text: &str) -> bool {
     let pb = NSPasteboard::generalPasteboard();
     pb.clearContents();
-    // SAFETY: `NSPasteboardTypeString` is a valid extern static; the
-    // `NSString` argument is owned by this call and kept alive for its
-    // duration.
-    let ok = unsafe { pb.setString_forType(&NSString::from_str(text), NSPasteboardTypeString) };
+    // SAFETY: `NSPasteboardTypeString` is a process-lifetime extern static;
+    // objc2 requires unsafe to read it.
+    let ty = unsafe { NSPasteboardTypeString };
+    let ok = pb.setString_forType(&NSString::from_str(text), ty);
     if !ok {
         tracing::warn!("the pasteboard refused the text");
     }

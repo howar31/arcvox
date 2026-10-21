@@ -856,6 +856,7 @@ pub fn set_pause(state: &AppState, on: bool) {
     }
 }
 
+/// Runs on the main thread: the platform installs its event monitors there.
 fn install_monitor(platform: &Arc<dyn Platform>, controller: &ControllerHandle) {
     if let Err(e) = platform.start_modifier_monitor(controller.modifier_sender()) {
         tracing::error!(error = %e, "modifier monitor not installed");

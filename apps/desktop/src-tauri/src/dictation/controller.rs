@@ -486,7 +486,7 @@ impl Controller {
                 }
                 State::Armed { capture } => {
                     capture.stop();
-                    self.go_idle();
+                    self.settle_idle();
                 }
                 other => self.state = other,
             },

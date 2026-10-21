@@ -524,7 +524,8 @@ impl<R: Runtime> Tray<R> {
         *self.status.lock().unwrap() = status;
     }
 
-    pub fn set_state(&self, state: UiState, language: Language) {
+    pub fn set_state(&self, state: UiState) {
+        let language = *self.language.lock().unwrap();
         let before = std::mem::replace(&mut *self.last_state.lock().unwrap(), state);
         self.show_icon(state);
         if (before == UiState::NoAccessibility) != (state == UiState::NoAccessibility) {

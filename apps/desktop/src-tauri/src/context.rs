@@ -27,7 +27,7 @@ pub fn capture(platform: &dyn Platform, opt: &ContextOptIns) -> Captured {
         app_id: front.bundle_id.clone(),
         app_name: front.name.clone(),
         window_title: front.window_title.clone(),
-        url: front.url.clone(),
+        url: opt.url.then(|| front.url.clone()).flatten(),
     };
     let context = Context {
         app_name: opt.app_name.then(|| front.name.clone()).flatten(),
@@ -46,10 +46,6 @@ pub fn capture(platform: &dyn Platform, opt: &ContextOptIns) -> Captured {
             None
         },
     };
-    let mut app = app;
-    if !opt.url {
-        app.url = None;
-    }
     Captured {
         app,
         context,

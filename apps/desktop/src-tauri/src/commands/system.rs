@@ -281,8 +281,9 @@ pub fn system_running_apps() -> Vec<RunningApp> {
                     .then_some(RunningApp { bundle_id, name })
             })
             .collect();
-        out.sort_by_key(|a| a.name.to_lowercase());
+        out.sort_by(|a, b| a.bundle_id.cmp(&b.bundle_id));
         out.dedup_by(|a, b| a.bundle_id == b.bundle_id);
+        out.sort_by_key(|a| a.name.to_lowercase());
         out
     }
     #[cfg(not(target_os = "macos"))]

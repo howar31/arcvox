@@ -16,9 +16,7 @@ impl Language {
             UiLanguage::ZhTw => Language::ZhTw,
             UiLanguage::En => Language::En,
             UiLanguage::System => match system_preferred {
-                Some(tag)
-                    if tag.starts_with("zh-Hant") || tag == "zh-TW" || tag.starts_with("zh-TW") =>
-                {
+                Some(tag) if tag.starts_with("zh-Hant") || tag.starts_with("zh-TW") => {
                     Language::ZhTw
                 }
                 _ => Language::En,
