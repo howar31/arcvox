@@ -94,32 +94,38 @@ export type RulesStep = Extract<StepSpec, { step: "rules" }>;
 export type RuleKey = "dictionary" | "trailing_stop" | "question_mark" | "question_mark_inside" | "spacing" | "punctuation_width";
 export const RULE_KEYS: RuleKey[] = ["dictionary", "trailing_stop", "question_mark", "question_mark_inside", "spacing", "punctuation_width"];
 
-/** The rules step with every switch read: a step from before the text rules has the dictionary on, the trailing stop kept and the other rules on. */
-export function rulesAt(profile: Profile): Required<RulesStep> | null {
+/** The rules step's switches, whether the module is on or off: a step from before the text rules has the dictionary on, the trailing stop kept and the other rules on. */
+export type RuleSwitches = Required<Omit<RulesStep, "off">>;
+export function rulesAt(profile: Profile): RuleSwitches | null {
   const s = profile.steps.find((s): s is RulesStep => s.step === "rules");
   if (!s) return null;
   return { step: "rules", dictionary: s.dictionary ?? true, trailing_stop: s.trailing_stop ?? false, question_mark: s.question_mark ?? true, question_mark_inside: s.question_mark_inside ?? true, spacing: s.spacing ?? true, punctuation_width: s.punctuation_width ?? true };
 }
 
-/** True when the profile applies the dictionary's aliases to the text. */
+/** True when the profile applies the dictionary's aliases to the text: the tidy module is on with its dictionary switch. */
 export function appliesDictionary(profile: Profile): boolean {
-  return rulesAt(profile)?.dictionary ?? false;
+  const s = profile.steps.find((s) => s.step === "rules");
+  return !!s && !("off" in s && s.off) && (rulesAt(profile)?.dictionary ?? false);
 }
 
-/** A copy with one switch of the rules step set; a profile without the step gets one at the end, its other switches at their defaults. */
+/** A copy with one switch of the rules step set (an off module stays off); a profile without the step gets one at the end, its other switches at their defaults. */
 export function withRule(profile: Profile, key: RuleKey, on: boolean): Profile {
   const steps = copy(profile.steps);
   const current = rulesAt(profile);
-  const next: Required<RulesStep> = { ...(current ?? { step: "rules", dictionary: true, trailing_stop: false, question_mark: true, question_mark_inside: true, spacing: true, punctuation_width: true }), [key]: on };
+  const next: RuleSwitches = { ...(current ?? { step: "rules", dictionary: true, trailing_stop: false, question_mark: true, question_mark_inside: true, spacing: true, punctuation_width: true }), [key]: on };
   const i = steps.findIndex((s) => s.step === "rules");
-  if (i >= 0) steps[i] = next; else steps.push(next);
+  if (i >= 0) steps[i] = (steps[i] as RulesStep).off ? { ...next, off: true } : next; else steps.push(next);
   return { ...profile, steps };
 }
 
-/** A copy with the tidy module added (its switches at their defaults) after the rewrite and its conversion, before a translation; or removed. */
+/** A copy with the tidy module enabled or turned off. A step that is there keeps its switches either way; a profile without one gets it (switches at their defaults) after the rewrite and its conversion, before a translation. */
 export function withRules(profile: Profile, on: boolean): Profile {
-  const steps: StepSpec[] = copy(profile.steps).filter((s) => s.step !== "rules");
-  if (on) {
+  const steps: StepSpec[] = copy(profile.steps);
+  const i = steps.findIndex((s) => s.step === "rules");
+  if (i >= 0) {
+    const { off: _off, ...rest } = steps[i] as RulesStep;
+    steps[i] = on ? rest : { ...rest, off: true };
+  } else if (on) {
     const translate = steps.findIndex((s) => s.step === "translate");
     const at = translate >= 0 ? translate : steps.length;
     steps.splice(at, 0, { step: "rules", dictionary: true, trailing_stop: false, question_mark: true, question_mark_inside: true, spacing: true, punctuation_width: true });
@@ -135,11 +141,23 @@ export function translateAt(profile: Profile): TranslateStep | null {
   return s ?? null;
 }
 
-/** A copy with the translation module set (added at the end when missing) or, with null, removed. */
+/** A copy with the translation module set (added at the end when missing) or, with null, turned off with its settings kept. */
 export function withTranslate(profile: Profile, step: TranslateStep | null): Profile {
-  const steps: StepSpec[] = copy(profile.steps).filter((s) => s.step !== "translate");
-  if (step) steps.push({ ...step });
+  const steps: StepSpec[] = copy(profile.steps);
+  const i = steps.findIndex((s) => s.step === "translate");
+  if (step) {
+    const { off: _off, ...rest } = step;
+    if (i >= 0) steps[i] = { ...rest }; else steps.push({ ...rest });
+  } else if (i >= 0) {
+    steps[i] = { ...(steps[i] as TranslateStep), off: true };
+  }
   return { ...profile, steps };
+}
+
+/** A copy with the translation module enabled: the step it has, settings kept, or a new one with `target`. */
+export function enableTranslate(profile: Profile, target: string): Profile {
+  const s = translateAt(profile);
+  return withTranslate(profile, s ? { ...s } : { step: "translate", target });
 }
 
 /** A copy with the dictionary switch of the rules step set. */

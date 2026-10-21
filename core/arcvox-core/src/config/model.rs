@@ -311,11 +311,18 @@ pub enum StepSpec {
         #[serde(default)]
         punctuation: bool,
     },
-    Llm,
+    /// The rewrite module. A module that is off keeps its settings and
+    /// does not run; the pages show it as not enabled.
+    Llm {
+        #[serde(default, skip_serializing_if = "no")]
+        off: bool,
+    },
     /// The fixed rules at the end: the dictionary's aliases and the text
     /// rules. A step written before the rules existed reads as dictionary
     /// on, the trailing stop kept, the other rules on.
     Rules {
+        #[serde(default, skip_serializing_if = "no")]
+        off: bool,
         #[serde(default = "yes")]
         dictionary: bool,
         #[serde(default)]
@@ -335,6 +342,8 @@ pub enum StepSpec {
     /// the engine, None follows the rewrite engine (the default rewrite
     /// engine when the profile has no rewrite).
     Translate {
+        #[serde(default, skip_serializing_if = "no")]
+        off: bool,
         target: String,
         /// The profile's own writing for the translation, after the rules.
         #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -344,14 +353,30 @@ pub enum StepSpec {
     },
 }
 
+fn no(b: &bool) -> bool {
+    !*b
+}
+
 fn yes() -> bool {
     true
 }
 
 impl StepSpec {
+    /// Whether this is a module the profile has turned off: it keeps its
+    /// settings and does not run.
+    pub fn is_off(&self) -> bool {
+        matches!(
+            self,
+            StepSpec::Llm { off: true }
+                | StepSpec::Rules { off: true, .. }
+                | StepSpec::Translate { off: true, .. }
+        )
+    }
+
     /// The rules step as the shipped profile has it: everything on.
     pub fn rules_default() -> StepSpec {
         StepSpec::Rules {
+            off: false,
             dictionary: true,
             trailing_stop: true,
             question_mark: true,
@@ -507,14 +532,17 @@ fn default_true() -> bool {
 impl Profile {
     /// Whether the profile rewrites at all.
     pub fn has_llm_step(&self) -> bool {
-        self.steps.iter().any(|s| matches!(s, StepSpec::Llm))
+        self.steps
+            .iter()
+            .any(|s| matches!(s, StepSpec::Llm { off: false }))
     }
 
-    /// The translation module's settings, when the profile has one: the
-    /// target, the profile's own addition and the engine it names.
+    /// The translation module's settings, when the profile has one that is
+    /// on: the target, the profile's own addition and the engine it names.
     pub fn translate_step(&self) -> Option<(&str, &str, Option<&ProviderId>)> {
         self.steps.iter().find_map(|s| match s {
             StepSpec::Translate {
+                off: false,
                 target,
                 addition,
                 provider,
@@ -600,7 +628,7 @@ impl Config {
                 config: "s2tw".into(),
                 punctuation: false,
             },
-            StepSpec::Llm,
+            StepSpec::Llm { off: false },
             StepSpec::OpenCc {
                 config: "s2tw".into(),
                 punctuation: false,
@@ -875,6 +903,7 @@ mod tests {
         assert_eq!(
             step,
             StepSpec::Rules {
+                off: false,
                 dictionary: true,
                 trailing_stop: false,
                 question_mark: true,
@@ -882,6 +911,18 @@ mod tests {
                 spacing: true,
                 punctuation_width: true,
             }
+        );
+        // A module that is off keeps its settings and is written with the flag only when set.
+        let off: StepSpec =
+            serde_json::from_value(serde_json::json!({"step":"llm","off":true})).unwrap();
+        assert!(off.is_off());
+        assert_eq!(
+            serde_json::to_value(&off).unwrap(),
+            serde_json::json!({"step":"llm","off":true})
+        );
+        assert_eq!(
+            serde_json::to_value(StepSpec::Llm { off: false }).unwrap(),
+            serde_json::json!({"step":"llm"})
         );
     }
 
@@ -961,10 +1002,13 @@ mod tests {
         ));
 
         // No rewrite step: no rewrite engine, whatever is named.
-        p.steps.retain(|s| !matches!(s, StepSpec::Llm));
+        p.steps.retain(|s| !matches!(s, StepSpec::Llm { .. }));
         let r = c.resolve_engines(&p, all);
         assert_eq!(r.llm, None);
         assert_eq!(r.ids().count(), 1);
+        // A rewrite that is off counts as none.
+        p.steps.push(StepSpec::Llm { off: true });
+        assert_eq!(c.resolve_engines(&p, all).llm, None);
     }
 
     #[test]

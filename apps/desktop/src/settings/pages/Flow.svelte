@@ -6,7 +6,7 @@
     profilesPresets, profilesTemplateStyle, setDefaultProfile, upsertProfile, type InstalledModel, type LastRun, type ManifestView, type PresetView, type Profile,
   } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
-  import { appliesDictionary, PUNCTUATION_CONFIGS, RULE_KEYS, rulesAt, SCRIPT_CONFIGS, SCRIPT_GROUPS, scriptAt, scriptLabel, selectedProfile, translateAt, withDictionary, withRule, withRules, withScript, withScriptPunctuationBoth, withTranslate, type RuleKey, type TranslateStep } from "../../lib/flowEdit";
+  import { appliesDictionary, PUNCTUATION_CONFIGS, RULE_KEYS, rulesAt, SCRIPT_CONFIGS, SCRIPT_GROUPS, scriptAt, scriptLabel, selectedProfile, translateAt, enableTranslate, withDictionary, withRule, withRules, withScript, withScriptPunctuationBoth, withTranslate, type RuleKey, type TranslateStep } from "../../lib/flowEdit";
   import { CELL_IDS, cellLine, cellsOf, cellTime, moduleAdded, MODULE_IDS, runHeadline, stageName, type CellId } from "../../lib/flowLast";
   import { rememberProfile, rememberStage, storedProfile, storedStage } from "../../lib/stageMemory";
   import { guard } from "../../lib/guard.svelte";
@@ -264,12 +264,12 @@
     if (!draft) return [];
     return MODULE_IDS.filter((id) => !moduleAdded(draft!, id)).map((id) => ({ id, name: stageName(id), help: t(`flow.module.${id}_help`) }));
   });
-  /** Adds a module at its fixed place and shows it. A translation starts with English as its target. */
+  /** Enables a module at its fixed place and shows it; a module turned off earlier keeps its settings. A new translation starts with English as its target. */
   function addModule(id: CellId) {
     if (!draft) return;
     if (id === "llm") draft = withLlm(snapshot(), "");
     else if (id === "rules") draft = withRules(snapshot(), true);
-    else if (id === "translate") draft = withTranslate(snapshot(), { step: "translate", target: t("flow.target.en") });
+    else if (id === "translate") draft = enableTranslate(snapshot(), t("flow.target.en"));
     stage = id;
   }
   /** The translation step with one field changed. */
@@ -280,7 +280,7 @@
   }
   // The target picker: a named target, or "custom" with the typed text under it.
   const customTarget = $derived.by(() => { const s = draft ? translateAt(draft) : null; return !!s && !targetNames.includes(s.target); });
-  // The remove row asks once more: a second press within a few seconds removes the module.
+  // The disable row asks once more: a second press within a few seconds turns the module off.
   let sureRemove = $state(false);
   let sureTimer: ReturnType<typeof setTimeout> | undefined;
   $effect(() => { stage; source?.id; clearTimeout(sureTimer); sureRemove = false; });
@@ -289,7 +289,7 @@
     sureRemove = true;
     sureTimer = setTimeout(() => { sureRemove = false; }, 4000);
   }
-  /** Removes the shown module from the draft and shows the recognition stage. */
+  /** Turns the shown module off in the draft, its settings kept, and shows the recognition stage. */
   function removeModule() {
     clearTimeout(sureTimer);
     sureRemove = false;
@@ -300,7 +300,7 @@
     else return;
     stage = "asr";
   }
-  // A module removed from the stored profile elsewhere leaves the page on the recognition stage.
+  // A module turned off in the stored profile elsewhere leaves the page on the recognition stage.
   $effect(() => { if (draft && !cellsOf(draft).includes(stage)) stage = "asr"; });
   const current = $derived(cells.find((c) => c.id === stage));
   /** The problem mark of an engine stage that runs on the default because the engine named for it cannot run, or of the rewrite stage whose template style has moved on. */
@@ -469,11 +469,11 @@
 
 <!-- The last row of a module's settings: removes it after a second press within a few seconds. -->
 {#snippet removeRow(help: string)}
-  <Row label={t("flow.remove_module")} {help}>
+  <Row label={t("flow.disable_module")} {help}>
     {#if sureRemove}
-      <button type="button" class="btn danger" onclick={removeModule}>{t("flow.remove_sure")}</button>
+      <button type="button" class="btn danger" onclick={removeModule}>{t("flow.disable_sure")}</button>
     {:else}
-      <button type="button" class="btn quiet danger" onclick={askRemove}>{t("common.remove")}</button>
+      <button type="button" class="btn quiet danger" onclick={askRemove}>{t("flow.disable")}</button>
     {/if}
   </Row>
 {/snippet}
@@ -526,7 +526,7 @@
   </div>
   <div class="split">
     <!-- The rail stays in view while the right column scrolls; at the window's minimum height it fits whole. -->
-    <div class="railwrap"><StageRail {cells} selected={stage} onpick={(id) => (stage = id)} label={t("flow.stages")} {addable} addLabel={t("flow.add_module")} onadd={addModule} /></div>
+    <div class="railwrap"><StageRail {cells} selected={stage} onpick={(id) => (stage = id)} label={t("flow.stages")} {addable} addLabel={t("flow.enable_module")} onadd={addModule} /></div>
     <div class="right">
       {#if current}
         <div class="ttl"><b>{current.name}</b><span class:warn={current.warn} class:unknown={current.unknown}>{titleMeta}</span></div>
@@ -657,7 +657,7 @@
             </Row>
           </Group>
         <Group>
-          {@render removeRow(t("flow.remove_llm_help"))}
+          {@render removeRow(t("flow.disable_llm_help"))}
         </Group>
       {:else if stage === "rules"}
         <Group title={t("flow.dictionary_group")}>
@@ -675,7 +675,7 @@
           {/each}
         </Group>
         <Group>
-          {@render removeRow(t("flow.remove_rules_help"))}
+          {@render removeRow(t("flow.disable_rules_help"))}
         </Group>
       {:else if stage === "translate"}
         {@const step = translateAt(draft)!}
@@ -707,7 +707,7 @@
           <p class="missing"><span>{t("flow.model_missing")}</span><button type="button" class="btn" onclick={() => guard.request(() => go("engines", "llm"))}>{t("flow.to_download")}</button></p>
         {/if}
         <Group>
-          {@render removeRow(t("flow.remove_translate_help"))}
+          {@render removeRow(t("flow.disable_translate_help"))}
         </Group>
       {:else if stage === "insert"}
         <Group title={t("flow.stage.insert")}>

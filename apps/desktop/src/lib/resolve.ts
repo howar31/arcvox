@@ -20,7 +20,7 @@ export interface Choice { id: string; source: Source }
 /** `llm` is null when the profile has no rewrite step, `translate` null when it has no translation. */
 export interface Resolved { asr: Choice; llm: Choice | null; translate: Choice | null }
 
-export const hasLlmStep = (profile: Pick<Profile, "steps">): boolean => profile.steps.some((s) => s.step === "llm");
+export const hasLlmStep = (profile: Pick<Profile, "steps">): boolean => profile.steps.some((s) => s.step === "llm" && !s.off);
 
 /** Whether an engine can run now, from the installed model files; platform and network engines are taken at their word. */
 export function usableWith(installedIds: Set<string> | null, installedPaths?: Set<string>): (p: ProviderConfig) => boolean {
@@ -36,7 +36,7 @@ export function resolveEngines(config: Config | null, profile: Profile, usable: 
     return { id: fallback, source: { kind: "fallback", wanted: named } };
   };
   const llm = hasLlmStep(profile) ? choose(profile.llm_provider, "llm") : null;
-  const translation = profile.steps.find((s) => s.step === "translate");
+  const translation = profile.steps.find((s) => s.step === "translate" && !s.off);
   // The translation follows the rewrite engine unless it names one; without a rewrite it follows the default rewrite engine.
   const translate = !translation || translation.step !== "translate" ? null
     : translation.provider ? choose(translation.provider, "llm")

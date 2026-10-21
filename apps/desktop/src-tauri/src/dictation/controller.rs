@@ -1675,6 +1675,7 @@ mod tests {
             c.profiles[0]
                 .steps
                 .push(arcvox_core::config::StepSpec::Translate {
+                    off: false,
                     target: "英文".into(),
                     addition: String::new(),
                     provider: None,

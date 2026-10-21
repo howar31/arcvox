@@ -9,11 +9,13 @@ const profile = (steps: StepSpec[], llm: string | null = "llm-a"): Profile => ({
 const full: StepSpec[] = [{ step: "asr" }, { step: "opencc", config: "s2twp" }, { step: "llm" }, { step: "opencc", config: "s2twp" }, { step: "rules" }];
 
 describe("withLlm", () => {
-  it("removes every llm step and clears the engine", () => {
-    const p = profile([...full, { step: "llm" }]);
+  it("turns the llm step off and keeps the engine for when it is enabled again", () => {
+    const p = profile(full, "llm-a");
     const next = withLlm(p, null);
-    expect(next.llm_provider).toBeNull();
-    expect(next.steps.map((s) => s.step)).toEqual(["asr", "opencc", "opencc", "rules"]);
+    expect(next.llm_provider).toBe("llm-a");
+    expect(next.steps).toEqual(full.map((s) => (s.step === "llm" ? { step: "llm", off: true } : s)));
+    const back = withLlm(next, "llm-a");
+    expect(back.steps).toEqual(full);
   });
   it("restores the llm step after the first opencc step", () => {
     const p = profile([{ step: "asr" }, { step: "opencc", config: "s2twp" }, { step: "opencc", config: "s2twp" }, { step: "rules" }], null);

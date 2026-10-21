@@ -8,8 +8,11 @@ import type { Profile, ProviderConfig, StepSpec } from "./api";
  */
 export function withLlm(profile: Profile, pick: string | null): Profile {
   const steps: StepSpec[] = profile.steps.map((s) => ({ ...s }));
-  if (pick === null) return { ...profile, llm_provider: null, steps: steps.filter((s) => s.step !== "llm") };
-  if (!steps.some((s) => s.step === "llm")) {
+  // Off: the step and the profile's engine, writing and examples stay for when it is enabled again.
+  if (pick === null) return { ...profile, steps: steps.map((s) => (s.step === "llm" ? { step: "llm", off: true } : s)) };
+  const i = steps.findIndex((s) => s.step === "llm");
+  if (i >= 0) steps[i] = { step: "llm" };
+  else {
     const first = steps.findIndex((s) => s.step === "opencc");
     const at = first >= 0 ? first : steps.findIndex((s) => s.step === "asr");
     steps.splice(at + 1, 0, { step: "llm" });

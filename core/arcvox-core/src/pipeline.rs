@@ -56,6 +56,10 @@ impl Pipeline {
     ) -> Result<Pipeline, StepError> {
         let mut steps: Vec<Box<dyn Step>> = Vec::with_capacity(profile.steps.len());
         for spec in &profile.steps {
+            // A module that is off keeps its settings and does not run.
+            if spec.is_off() {
+                continue;
+            }
             let step: Box<dyn Step> = match spec {
                 StepSpec::Asr => {
                     let cfg = config.provider(&engines.asr.id).ok_or_else(|| {
@@ -74,7 +78,7 @@ impl Pipeline {
                     config,
                     punctuation,
                 } => Box::new(OpenCcStep::new(config, *punctuation)?),
-                StepSpec::Llm => {
+                StepSpec::Llm { .. } => {
                     let id = engines.llm.as_ref().map(|c| &c.id).ok_or_else(|| {
                         StepError::fatal(ErrorCode::InvalidConfig, "llm step without an engine")
                     })?;
@@ -101,6 +105,7 @@ impl Pipeline {
                 StepSpec::Rules {
                     dictionary,
                     trailing_stop,
+                    off: _,
                     question_mark,
                     question_mark_inside,
                     spacing,
@@ -747,6 +752,27 @@ mod tests {
         );
         let engines = config.resolve_engines(config.default_profile(), |_| true);
         assert!(Pipeline::build(&config, config.default_profile(), &engines, &registry).is_ok());
+    }
+
+    #[test]
+    fn a_module_that_is_off_is_not_built() {
+        let config = Config::http_test_config();
+        let registry = ProviderRegistry::new(
+            reqwest::Client::new(),
+            Arc::new(crate::secrets::MemorySecretStore::default()),
+        );
+        let mut profile = config.default_profile().clone();
+        for s in &mut profile.steps {
+            if let StepSpec::Llm { off } | StepSpec::Rules { off, .. } = s {
+                *off = true;
+            }
+        }
+        let engines = config.resolve_engines(&profile, |_| true);
+        let p = Pipeline::build(&config, &profile, &engines, &registry).unwrap();
+        let names: Vec<StepName> = p.steps.iter().map(|s| s.name()).collect();
+        assert!(!names.contains(&StepName::Llm));
+        assert!(!names.contains(&StepName::Rules));
+        assert_eq!(names.len(), profile.steps.len() - 2);
     }
 
     #[tokio::test]

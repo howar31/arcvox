@@ -286,7 +286,7 @@ mod tests {
     #[test]
     fn rejects_asr_not_first_or_repeated() {
         let mut c = base();
-        c.profiles[0].steps = vec![StepSpec::Llm, StepSpec::Asr];
+        c.profiles[0].steps = vec![StepSpec::Llm { off: false }, StepSpec::Asr];
         assert!(matches!(validate(&c), Err(ConfigError::StepOrder { .. })));
         let mut c = base();
         c.profiles[0].steps = vec![StepSpec::Asr, StepSpec::Asr];

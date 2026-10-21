@@ -17,10 +17,11 @@ export interface ProviderConfig {
 export type StepSpec =
   | { step: "asr" }
   | { step: "opencc"; config: string; punctuation?: boolean }
-  | { step: "llm" }
-  | { step: "rules"; dictionary?: boolean; trailing_stop?: boolean; question_mark?: boolean; question_mark_inside?: boolean; spacing?: boolean; punctuation_width?: boolean }
+  /** A module (rewrite, tidy, translation) with `off` keeps its settings and does not run; the pages show it as not enabled. */
+  | { step: "llm"; off?: boolean }
+  | { step: "rules"; off?: boolean; dictionary?: boolean; trailing_stop?: boolean; question_mark?: boolean; question_mark_inside?: boolean; spacing?: boolean; punctuation_width?: boolean }
   /** The translation module: `target` is a language or a style as the user wrote it; `addition` is the profile's own writing after the rules; `provider` null follows the rewrite engine. */
-  | { step: "translate"; target: string; addition?: string; provider?: string | null };
+  | { step: "translate"; off?: boolean; target: string; addition?: string; provider?: string | null };
 export interface Example { raw: string; refined: string }
 export interface Matcher { app_ids: string[]; url_patterns: string[] }
 export interface Profile {

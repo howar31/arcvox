@@ -22,12 +22,12 @@ export type CellId = "capture" | "asr" | "llm" | "rules" | "translate" | "insert
 export const CELL_IDS: CellId[] = ["capture", "asr", "llm", "rules", "translate", "insert", "record"];
 export const MODULE_IDS: CellId[] = ["llm", "rules", "translate"];
 
-/** Whether a profile has a module: its step is in the profile's steps. */
+/** Whether a profile has a module enabled: its step is in the profile's steps and not turned off. */
 export function moduleAdded(profile: Profile, id: CellId): boolean {
-  return profile.steps.some((s) => s.step === id);
+  return profile.steps.some((s) => s.step === id && !("off" in s && s.off));
 }
 
-/** The cells a profile shows: the base ones and the modules it has added. */
+/** The cells a profile shows: the base ones and the modules it has enabled. */
 export function cellsOf(profile: Profile): CellId[] {
   return CELL_IDS.filter((id) => !MODULE_IDS.includes(id) || moduleAdded(profile, id));
 }

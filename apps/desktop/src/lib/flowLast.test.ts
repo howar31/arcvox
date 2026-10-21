@@ -116,6 +116,10 @@ describe("flowLast", () => {
     const bare: Profile = { ...profile, steps: [{ step: "asr" }] };
     expect(cellsOf(bare)).toEqual(["capture", "asr", "insert", "record"]);
     expect(moduleAdded({ ...profile, llm_provider: null }, "llm")).toBe(true);
+    // A module turned off is not among the cells, whatever settings it keeps.
+    const off: Profile = { ...profile, steps: profile.steps.map((s) => (s.step === "rules" ? { ...s, off: true } : s)) };
+    expect(moduleAdded(off, "rules")).toBe(false);
+    expect(cellsOf(off)).toEqual(["capture", "asr", "llm", "insert", "record"]);
     // A run's numbers follow the modules it holds: without a rewrite the tidy stage is third.
     expect(cellNumber(run, "asr")).toBe(2);
     expect(cellNumber(run, "rules")).toBe(4);
