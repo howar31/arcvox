@@ -471,7 +471,7 @@
 
 <!-- The last row of a module's settings: removes it after a second press within a few seconds. -->
 {#snippet removeRow(help: string)}
-  <Row label={t("flow.disable_module")} {help}>
+  <Row label={t("flow.disable_module")} {help} info={t("flow.disable_info")}>
     {#if sureRemove}
       <button type="button" class="btn danger" onclick={removeModule}>{t("flow.disable_sure")}</button>
     {:else}
