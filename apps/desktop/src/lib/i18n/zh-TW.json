@@ -763,7 +763,7 @@
   "history.correct_hint": "文字應該是什麼。跟從欄位讀回的修正一樣，會成為字典建議的依據。",
   "history.flow_processed": "處理",
   "history.flow_stages_gone": "階段紀錄已過期",
-  "history.flow_unchanged": "{names}沒有改動文字。",
+  "history.flow_cancelled_after": "處理中取消，後面的階段沒有跑。",
   "history.recording": "錄音",
   "history.play": "播放",
   "history.pause": "暫停",

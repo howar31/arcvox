@@ -122,6 +122,11 @@
   .step { position: relative; display: grid; grid-template-columns: 20px 1fr; gap: 0 12px; padding: 6px 0 8px; }
   .dot { position: relative; z-index: 1; display: grid; place-items: center; width: 20px; height: 20px; margin-top: 2px; border-radius: 50%; border: 2px solid var(--line-strong); background: var(--surface); color: var(--ink-2); font-size: 11px; font-weight: 700; }
   .user .dot { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
+  /* A stage that changed nothing: a dashed ring and quiet words, one line, no text under it. */
+  .same { padding: 4px 0 5px; }
+  .same .dot { border-style: dashed; color: var(--ink-3); }
+  .same .head { padding-top: 2px; }
+  .same .head b { color: var(--ink-3); font-weight: 500; }
   .mark .dot { width: 12px; height: 12px; margin: 6px 0 0 4px; background: var(--line-strong); border-color: var(--line-strong); }
   .col { min-width: 0; }
   .head { display: flex; align-items: baseline; gap: 8px; color: var(--ink-2); font-size: var(--text-sm); }

@@ -3,7 +3,7 @@
  * records kept for the row; rows whose stage records are gone show one processing step between the
  * transcript and the text that was put in. */
 import type { Stage, Utterance } from "./api";
-import { cellInput, cellLine, cellNumber, cellOutput, changedCells, insertLines, MODULE_IDS, stageAt, stageName } from "./flowLast";
+import { cellInput, cellLine, cellNumber, cellOutput, changedCells, insertLines, MODULE_IDS, stageAt, stageName, timeLabel } from "./flowLast";
 import { corrected, rawState } from "./historyView";
 import { t } from "./i18n";
 import { diff } from "./textDiff";
@@ -15,6 +15,8 @@ export type FlowStep =
   | { kind: "stage"; mark: string; name: string; small: string; from: string; text: string }
   /** A stage that failed; `text` is its reason. */
   | { kind: "failed"; mark: string; name: string; small: string; text: string }
+  /** A stage that ran and left the text as it was: one line, no text. */
+  | { kind: "same"; mark: string; name: string; small: string }
   /** Where the text went: into an application, or the clipboard. */
   | { kind: "mark"; name: string; small: string }
   /** The user's correction: `from` is the text that was put in. */
@@ -30,7 +32,7 @@ export function changeCount(from: string, to: string): number {
   return runs;
 }
 
-/** The steps, and a line naming the modules that left the text alone (empty when none did). */
+/** The steps, and a line under them: why nothing changed when no stage records remain, or that a cancel cut the run short. */
 export function textFlow(u: Utterance, stages: Stage[] | null): { steps: FlowStep[]; unchanged: string } {
   const steps: FlowStep[] = [];
   const raw = u.raw_text.trim();
@@ -49,22 +51,27 @@ export function textFlow(u: Utterance, stages: Stage[] | null): { steps: FlowSte
   }
   let unchanged = "";
   if (kept) {
+    // Every module that ran is a step, in order: with its change, its failure, or one line that it changed nothing.
     const changed = changedCells(stages);
-    for (const id of changed) {
-      const s = stageAt(stages, id)!;
+    for (const id of MODULE_IDS) {
+      const s = stageAt(stages, id);
+      if (!s) continue;
       const name = stageName(id);
       const small = cellLine(id, stages);
       const mark = String(cellNumber(stages, id));
       const out = cellOutput(stages, id);
-      if (s.text === null || out === null) {
+      if (!changed.includes(id)) {
+        const time = s.ms !== null && s.ms >= 1000 ? timeLabel(s.ms) : "";
+        steps.push({ kind: "same", mark, name, small: [time, small].filter(Boolean).join(" · ") });
+      } else if (s.text === null || out === null) {
         const reason = typeof s.detail.message === "string" ? s.detail.message : typeof s.detail.error === "string" ? s.detail.error : "";
         steps.push({ kind: "failed", mark, name, small, text: reason });
       } else {
         steps.push({ kind: "stage", mark, name, small, from: cellInput(stages, id) ?? "", text: out });
       }
     }
-    const left = MODULE_IDS.filter((id) => stageAt(stages, id) && !changed.includes(id)).map(stageName);
-    if (left.length) unchanged = t("history.flow_unchanged", { names: left.join(t("common.list_sep")) });
+    // A cancel during the processing leaves the run at recognition: say so, since nothing after it shows.
+    if (u.error_code === "cancelled" && !MODULE_IDS.some((id) => stageAt(stages, id))) unchanged = t("history.flow_cancelled_after");
     const insert = stageAt(stages, "insert");
     if (insert) {
       const [method, outcome] = insertLines(stages);

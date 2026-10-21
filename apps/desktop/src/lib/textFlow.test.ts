@@ -26,23 +26,25 @@ describe("textFlow", () => {
   ];
   it("lists the transcript, the stages that changed the text, the insertion and the correction in order", () => {
     const { steps, unchanged } = textFlow(row("测试一下，停歇。", "測試一下，停歇", "測試一下聽寫"), stages);
-    // The conversion after recognition shows as the change recognition's step made; the modules are numbered after it.
-    expect(steps.map((s) => s.kind)).toEqual(["stage", "stage", "mark", "user"]);
+    // The conversion after recognition shows as the change recognition's step made; every module that ran is a step,
+    // the one that changed nothing as a single line.
+    expect(steps.map((s) => s.kind)).toEqual(["stage", "same", "stage", "mark", "user"]);
     expect(steps[0]).toMatchObject({ mark: "2", name: "Speech recognition", from: "测试一下，停歇。", text: "測試一下，停歇。" });
-    expect(steps[1]).toMatchObject({ mark: "4", name: "Tidy", from: "測試一下，停歇。", text: "測試一下，停歇" });
-    expect(steps[2]).toMatchObject({ kind: "mark", name: "Put into TextEdit" });
-    expect(steps[3]).toMatchObject({ kind: "user", from: "測試一下，停歇", text: "測試一下聽寫", small: "Changes: 1" });
-    expect(unchanged).toBe("Text rewriting left the text as it was.");
+    expect(steps[1]).toMatchObject({ kind: "same", mark: "3", name: "Text rewriting", small: "No change" });
+    expect(steps[2]).toMatchObject({ mark: "4", name: "Tidy", from: "測試一下，停歇。", text: "測試一下，停歇" });
+    expect(steps[3]).toMatchObject({ kind: "mark", name: "Put into TextEdit" });
+    expect(steps[4]).toMatchObject({ kind: "user", from: "測試一下，停歇", text: "測試一下聽寫", small: "Changes: 1" });
+    expect(unchanged).toBe("");
   });
   it("names how the correction was made when that was kept", () => {
     const hand = { ...row("测试一下，停歇。", "測試一下，停歇", "測試一下聽寫"), correction_source: "hand" as const };
-    expect(textFlow(hand, stages).steps[3]).toMatchObject({ kind: "user", small: "Changes: 1 · by hand" });
+    expect(textFlow(hand, stages).steps[4]).toMatchObject({ kind: "user", small: "Changes: 1 · by hand" });
     const read = { ...hand, correction_source: "read_back" as const };
-    expect(textFlow(read, stages).steps[3]).toMatchObject({ small: "Changes: 1 · read back from the field" });
+    expect(textFlow(read, stages).steps[4]).toMatchObject({ small: "Changes: 1 · read back from the field" });
   });
   it("stops at the insertion when the user changed nothing", () => {
     const { steps } = textFlow(row("测试一下，停歇。", "測試一下，停歇"), stages);
-    expect(steps.map((s) => s.kind)).toEqual(["stage", "stage", "mark"]);
+    expect(steps.map((s) => s.kind)).toEqual(["stage", "same", "stage", "mark"]);
     // Without a conversion the recognised text is shown whole, numbered 2 after the capture.
     const plain = textFlow(row("测试一下，停歇。", "測試一下，停歇"), stages.filter((s) => s.kind !== "opencc"));
     expect(plain.steps[0]).toMatchObject({ kind: "first", mark: "2" });
@@ -70,6 +72,13 @@ describe("textFlow", () => {
     const { steps } = textFlow({ ...row("測試一下", "A quick test", "A quick test", "Slack"), translated: true }, translated);
     expect(steps.map((s) => s.kind)).toEqual(["first", "stage", "stage", "stage", "mark"]);
     expect(steps[3]).toMatchObject({ mark: "5", name: "Translation", small: "Into 英文", from: "測試一下", text: "A quick test" });
+  });
+  it("says that a cancel cut the run short when only recognition ran", () => {
+    const cut = { ...row("等一下先不要寄", "等一下先不要寄", "等一下先不要寄", "Notes"), error: "cancelled", error_code: "cancelled" };
+    const { steps, unchanged } = textFlow(cut, [stage(1, "capture", null, {}), stage(2, "asr", "等一下先不要寄", {})]);
+    // Nothing was put in, so there is no mark either.
+    expect(steps.map((s) => s.kind)).toEqual(["first"]);
+    expect(unchanged).toBe("Cancelled while processing; the later stages did not run.");
   });
   it("carries a failed stage with its reason", () => {
     const failed = [stage(3, "asr", "原文", {}), stage(5, "llm", null, { message: "timed out" }), stage(8, "insert", null, { method: "paste", outcome: "inserted", app_name: "Notes" })];
