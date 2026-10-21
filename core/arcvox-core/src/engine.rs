@@ -2191,7 +2191,7 @@ pub(crate) mod tests {
             })
         ));
         assert!(events.iter().any(
-            |e| matches!(e, Event::Refined { text, degraded: false } if text == "漢字 整理後")
+            |e| matches!(e, Event::Refined { text, degraded: false, .. } if text == "漢字 整理後")
         ));
         let Some(Event::Done {
             history_id: Some(id),
@@ -2946,7 +2946,7 @@ pub(crate) mod tests {
         let events = drain(&s).await;
         assert!(events
             .iter()
-            .any(|e| matches!(e, Event::Refined { text, degraded: true } if text == "原文")));
+            .any(|e| matches!(e, Event::Refined { text, degraded: true, .. } if text == "原文")));
         assert!(matches!(
             events.last(),
             Some(Event::Done {
@@ -2975,7 +2975,7 @@ pub(crate) mod tests {
         let events = drain(&s).await;
         assert!(events
             .iter()
-            .any(|e| matches!(e, Event::Refined { text, degraded: true } if text == "原文")));
+            .any(|e| matches!(e, Event::Refined { text, degraded: true, .. } if text == "原文")));
         let Some(Event::Done {
             history_id: Some(id),
             ..

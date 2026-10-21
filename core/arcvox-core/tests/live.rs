@@ -70,7 +70,9 @@ async fn dictation_round_trip_through_local_services() {
     while let Some(event) = stream.next().await {
         eprintln!("{}", serde_json::to_string(&event).unwrap());
         match event {
-            Event::Refined { text, degraded: d } => {
+            Event::Refined {
+                text, degraded: d, ..
+            } => {
                 refined = Some(text);
                 degraded = d;
             }

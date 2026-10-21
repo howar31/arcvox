@@ -33,6 +33,9 @@ pub enum Event {
     Refined {
         text: String,
         degraded: bool,
+        /// A translation module turned the text into another language or
+        /// style, so it no longer reads as the words that were spoken.
+        translated: bool,
     },
     Error {
         step: Option<StepName>,
@@ -120,8 +123,9 @@ mod tests {
             Event::Refined {
                 text: "整理後".into(),
                 degraded: false,
+                translated: false,
             },
-            json!({"type":"refined","text":"整理後","degraded":false}),
+            json!({"type":"refined","text":"整理後","degraded":false,"translated":false}),
         );
     }
 

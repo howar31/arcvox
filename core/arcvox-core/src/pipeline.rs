@@ -323,6 +323,7 @@ impl Pipeline {
             .send(Event::Refined {
                 text: text.clone(),
                 degraded,
+                translated: StageRecord::translated(&stages),
             })
             .await;
         Ok(Outcome {

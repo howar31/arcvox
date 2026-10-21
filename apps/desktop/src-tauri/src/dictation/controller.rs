@@ -90,6 +90,11 @@ enum State {
         session: Session,
         captured: Captured,
         refined: Option<String>,
+        /// The refined text is a translation: reading it back from the
+        /// field could only yield corrections in the target language,
+        /// which say nothing about the words spoken, so no read-back is
+        /// scheduled for it.
+        translated: bool,
         failure: Option<UiMessage>,
         /// A recoverable-error notice (for example "LLM unavailable")
         /// queued while processing, paired with the error code it came
@@ -689,6 +694,7 @@ impl Controller {
                     session,
                     captured,
                     refined: None,
+                    translated: false,
                     failure: None,
                     notice: None,
                 };
@@ -735,12 +741,22 @@ impl Controller {
             return;
         }
         match event {
-            Event::Refined { text, .. } => {
+            Event::Refined {
+                text,
+                translated: was_translated,
+                ..
+            } => {
                 if self.settings.show_transcript {
                     self.deps.ui.refined(text.clone());
                 }
-                if let State::Processing { refined, .. } = &mut self.state {
+                if let State::Processing {
+                    refined,
+                    translated,
+                    ..
+                } = &mut self.state
+                {
                     *refined = Some(text);
+                    *translated = was_translated;
                 }
             }
             Event::Error {
@@ -828,6 +844,7 @@ impl Controller {
             session,
             captured,
             refined,
+            translated,
             failure,
             notice,
         } = std::mem::replace(&mut self.state, State::Idle)
@@ -835,7 +852,7 @@ impl Controller {
             return;
         };
         match refined {
-            Some(text) => self.insert(session, captured, text, notice),
+            Some(text) => self.insert(session, captured, text, translated, notice),
             None => {
                 let msg = failure.unwrap_or_else(|| UiMessage::error(Msg::WidgetEmptyResult, None));
                 self.deps.ui.message(msg);
@@ -852,6 +869,7 @@ impl Controller {
         session: Session,
         captured: Captured,
         text: String,
+        translated: bool,
         notice: Option<UiMessage>,
     ) {
         self.deps.ui.set_state(UiState::Inserting);
@@ -868,8 +886,10 @@ impl Controller {
             method,
         });
         // The element the text goes into and where, for reading it back
-        // afterwards.
+        // afterwards. A translation is not read back: the user's changes
+        // to it are in the target language and cannot be learned from.
         let field = (self.settings.learning.read_back
+            && !translated
             && matches!(plan, Plan::Paste | Plan::Type | Plan::Ax { .. }))
         .then(|| self.deps.platform.ax_field(captured.target.pid))
         .flatten()
@@ -1645,6 +1665,46 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(80)).await;
         let row = r.engine.history().list_recent(1).unwrap().remove(0);
         assert_eq!(row.final_text, "漢字 整理後");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_translated_dictation_is_not_read_back() {
+        let mut s = fast_settings();
+        s.learning.read_back = true;
+        let r = rig_with(s, Vec::new(), |c| {
+            c.profiles[0]
+                .steps
+                .push(arcvox_core::config::StepSpec::Translate {
+                    target: "英文".into(),
+                    prompt: None,
+                    provider: None,
+                });
+        })
+        .await;
+        *r.platform.ax_caret.lock().unwrap() = Some(0);
+        r.platform.set_field_text(Some("漢字 整理後了".into()));
+        // The one mocked reply serves the rewrite and the translation.
+        mock_ok(&r, "汉字 原文", "汉字 整理後").await;
+        hold_and_speak(&r, 1.0).await;
+        wait_state(&r, UiState::Idle, "idle").await;
+        wait_for(
+            || {
+                r.engine
+                    .history()
+                    .list_recent(1)
+                    .unwrap()
+                    .first()
+                    .is_some_and(|u| u.translated)
+            },
+            "the translated row",
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        assert!(!r.platform.calls().contains(&"ax_text".to_string()));
+        // The translation's own output (the mock answers it as it answered
+        // the rewrite, after the script conversion) stays the final text.
+        let row = r.engine.history().list_recent(1).unwrap().remove(0);
+        assert_eq!(row.final_text, "汉字 整理後");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
