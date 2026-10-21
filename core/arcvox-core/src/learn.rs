@@ -735,6 +735,22 @@ pub fn read_back(inserted: &str, field: &str, at: usize, max_changed: f64) -> Re
 /// does not pass. None when the inserted text is blank or the field
 /// holds nothing near the caret.
 pub fn align(inserted: &str, field: &str, at: usize, max_changed: f64) -> Option<Alignment> {
+    align_capped(inserted, field, at, max_changed, usize::MAX)
+}
+
+/// How many changes a read taken seconds after the insertion may count as
+/// a correction: a user fixes a word in that time, not a passage. A field
+/// the program is still filling or redrawing differs by more.
+pub const AFTER_INSERT_AT_MOST: usize = 5;
+
+/// `align` with the allowed changes capped at `at_most`.
+pub fn align_capped(
+    inserted: &str,
+    field: &str,
+    at: usize,
+    max_changed: f64,
+    at_most: usize,
+) -> Option<Alignment> {
     let inserted = inserted.trim();
     if inserted.is_empty() {
         return None;
@@ -746,7 +762,7 @@ pub fn align(inserted: &str, field: &str, at: usize, max_changed: f64) -> Option
     let hi = (at + n + n / 2 + 20).min(field.len());
     let allowed_for = |longest: usize| -> usize {
         let share = (longest as f64 * max_changed).floor() as usize;
-        share.max(3).min(longest / 2)
+        share.max(3).min(longest / 2).min(at_most)
     };
     if field[lo..hi].iter().collect::<String>().contains(inserted) {
         return Some(Alignment {
@@ -776,6 +792,16 @@ pub fn align(inserted: &str, field: &str, at: usize, max_changed: f64) -> Option
 /// within them, the closest span is reported. The allowed changes follow
 /// `align`.
 pub fn align_anywhere(inserted: &str, field: &str, max_changed: f64) -> Option<Alignment> {
+    align_anywhere_capped(inserted, field, max_changed, usize::MAX)
+}
+
+/// `align_anywhere` with the allowed changes capped at `at_most`.
+pub fn align_anywhere_capped(
+    inserted: &str,
+    field: &str,
+    max_changed: f64,
+    at_most: usize,
+) -> Option<Alignment> {
     let wanted = fold_space(inserted);
     let field = fold_space(field);
     let n = wanted.len();
@@ -784,7 +810,7 @@ pub fn align_anywhere(inserted: &str, field: &str, max_changed: f64) -> Option<A
     }
     let allowed_for = |longest: usize| -> usize {
         let share = (longest as f64 * max_changed).floor() as usize;
-        share.max(3).min(longest / 2)
+        share.max(3).min(longest / 2).min(at_most)
     };
     let (start, end, changes) = nearest_span(&wanted, &field, |len| allowed_for(n.max(len)))?;
     let span: String = field[start..end].iter().collect();
@@ -795,6 +821,73 @@ pub fn align_anywhere(inserted: &str, field: &str, max_changed: f64) -> Option<A
         changes,
         allowed: allowed_for(longest),
     })
+}
+
+/// Whether two texts differ in white space and line breaks only, as a
+/// screen that wraps lines or a field that joins paragraphs would show
+/// the inserted text.
+pub fn same_apart_from_space(a: &str, b: &str) -> bool {
+    fold_space(a) == fold_space(b)
+}
+
+/// How many characters on each side of a line break identify its place:
+/// few, so a correction near the break does not lose it; a place that
+/// then occurs twice is left alone.
+const BREAK_CONTEXT: usize = 3;
+
+/// Puts the line breaks of `inserted` back into `span`, a corrected
+/// version of it read from a screen whose own line breaks are wrapping:
+/// each run of white space with a line break in it goes where the text
+/// around it still stands, unchanged, exactly once in the span. A break
+/// whose surroundings were changed or occur twice is left out.
+pub fn restore_breaks(inserted: &str, span: &str) -> String {
+    let chars: Vec<char> = inserted.chars().collect();
+    let mut out: Vec<char> = span.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if !chars[i].is_whitespace() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < chars.len() && chars[i].is_whitespace() {
+            i += 1;
+        }
+        let run = &chars[start..i];
+        if !run.contains(&'\n') && !run.contains(&'\r') {
+            continue;
+        }
+        let before: Vec<char> = chars[..start]
+            .iter()
+            .rev()
+            .take_while(|c| !c.is_whitespace())
+            .take(BREAK_CONTEXT)
+            .copied()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let after: Vec<char> = chars[i..]
+            .iter()
+            .take_while(|c| !c.is_whitespace())
+            .take(BREAK_CONTEXT)
+            .copied()
+            .collect();
+        if before.is_empty() || after.is_empty() {
+            continue;
+        }
+        let joined: String = before.iter().chain(run).chain(after.iter()).collect();
+        let needle = fold_space(&joined);
+        let cut = fold_space(&before.iter().collect::<String>()).len();
+        let hits: Vec<usize> = (0..out.len().saturating_sub(needle.len() - 1))
+            .filter(|&k| out[k..k + needle.len()] == needle[..])
+            .collect();
+        let [k] = hits[..] else { continue };
+        // The folded form holds the run as one space or nothing.
+        let folded_run = needle.len() - before.len() - after.len();
+        out.splice(k + cut..k + cut + folded_run, run.iter().copied());
+    }
+    out.into_iter().collect()
 }
 
 /// Collapses every run of white space to one space; a run with a line
@@ -1435,6 +1528,79 @@ mod read_back_tests {
         let a = align_anywhere("我明天會晚一點到。", screen, 0.3).unwrap();
         assert_eq!(a.span, "我明天會晚一點到。");
         assert_eq!(a.changes, 0);
+    }
+
+    #[test]
+    fn a_cap_keeps_a_read_taken_right_after_the_insertion_strict() {
+        let text = "我明天會晚一點到，請先開始，不用等我。".repeat(2);
+        let changed = text
+            .replacen("明天", "後天", 1)
+            .replacen("開始", "開會", 1)
+            .replacen("不用等我", "先吃吧", 2);
+        let loose = align(&text, &changed, 0, 0.3).unwrap();
+        assert!(
+            !loose.too_different(),
+            "{} of {}",
+            loose.changes,
+            loose.allowed
+        );
+        let strict = align_capped(&text, &changed, 0, 0.3, AFTER_INSERT_AT_MOST).unwrap();
+        assert_eq!(strict.allowed, AFTER_INSERT_AT_MOST);
+        assert!(strict.too_different());
+        let whole = align_anywhere_capped(&text, &changed, 0.3, AFTER_INSERT_AT_MOST).unwrap();
+        assert!(whole.too_different());
+        // A word fixed stays within the cap.
+        let one = align_capped(
+            &text,
+            &text.replacen("明天", "後天", 1),
+            0,
+            0.3,
+            AFTER_INSERT_AT_MOST,
+        )
+        .unwrap();
+        assert!(!one.too_different());
+    }
+
+    #[test]
+    fn white_space_and_line_breaks_alone_are_no_difference() {
+        assert!(same_apart_from_space(
+            "第一段。\n\n第二段。",
+            "第一段。第二段。"
+        ));
+        assert!(same_apart_from_space("see you\n    there", "see you there"));
+        assert!(same_apart_from_space(" 漢字 整理後 ", "漢字 整理後"));
+        assert!(!same_apart_from_space(
+            "第一段。\n\n第二段。",
+            "第一段。第三段。"
+        ));
+        assert!(!same_apart_from_space("漢字 整理後", "漢字整理後"));
+    }
+
+    #[test]
+    fn the_inserted_text_s_line_breaks_go_back_into_a_corrected_span() {
+        let inserted = "你先做 A 給我看。另外有幾個問題：\n\n第一件事情是什麼？\n\n再來是第二件。";
+        // The screen folded the breaks away; one word was corrected far from them.
+        let span = "你先做 A 給我看。另外有幾個問題：第一件事情是什麼？再來是第三件。";
+        assert_eq!(
+            restore_breaks(inserted, span),
+            "你先做 A 給我看。另外有幾個問題：\n\n第一件事情是什麼？\n\n再來是第三件。"
+        );
+        // Latin text keeps the space the fold made of the break.
+        assert_eq!(
+            restore_breaks("first line\nsecond line", "first line second lines"),
+            "first line\nsecond lines"
+        );
+        // A break whose surroundings were changed stays out; one that occurs twice too.
+        assert_eq!(
+            restore_breaks("第一段。\n\n第二段。", "第一段啦。第二段。"),
+            "第一段啦。第二段。"
+        );
+        assert_eq!(
+            restore_breaks("一二。\n\n三四。", "一二。三四。一二。三四。"),
+            "一二。三四。一二。三四。"
+        );
+        // No break: nothing changes.
+        assert_eq!(restore_breaks("一二 三四", "一二 三五"), "一二 三五");
     }
 
     #[test]

@@ -168,11 +168,18 @@ async fn read_back_once(engine: Engine, job: ReadBackJob, when: &'static str) {
                 .count();
             // Around the caret first; when that finds nothing fitting (a
             // terminal's caret does not map to the screen it gives), the
-            // whole value is searched.
+            // whole value is searched. Seconds after the insertion a user
+            // may have fixed a word, no more: a larger difference then is
+            // the application still taking the text, not a correction.
+            let at_most = if when == "after_insert" {
+                learn::AFTER_INSERT_AT_MOST
+            } else {
+                usize::MAX
+            };
             let mut found = "caret";
-            let mut aligned = learn::align(&job.text, &value, at, 0.3);
+            let mut aligned = learn::align_capped(&job.text, &value, at, 0.3, at_most);
             if aligned.as_ref().is_none_or(Alignment::too_different) {
-                if let Some(a) = learn::align_anywhere(&job.text, &value, 0.3) {
+                if let Some(a) = learn::align_anywhere_capped(&job.text, &value, 0.3, at_most) {
                     found = "whole";
                     aligned = Some(a);
                 }
@@ -191,14 +198,22 @@ async fn read_back_once(engine: Engine, job: ReadBackJob, when: &'static str) {
             match aligned {
                 None => "too_different".into(),
                 Some(a) if a.too_different() => "too_different".into(),
-                Some(a) if a.span == job.text.trim() => "unchanged".into(),
-                Some(a) => match engine
-                    .correct_final(job.id, &a.span, CorrectionSource::ReadBack)
-                    .await
-                {
-                    Ok(()) => "corrected".into(),
-                    Err(e) => format!("not recorded: {e}"),
-                },
+                // A field that wraps or joins lines shows the text with
+                // other white space; that is no correction.
+                Some(a) if learn::same_apart_from_space(&a.span, &job.text) => "unchanged".into(),
+                Some(a) => {
+                    // A field that joins lines, or a screen's span folded
+                    // by the search, lost the text's own line breaks; they
+                    // go back where the text still stands.
+                    let text = learn::restore_breaks(&job.text, &a.span);
+                    match engine
+                        .correct_final(job.id, &text, CorrectionSource::ReadBack)
+                        .await
+                    {
+                        Ok(()) => "corrected".into(),
+                        Err(e) => format!("not recorded: {e}"),
+                    }
+                }
             }
         }
     };
@@ -1665,6 +1680,85 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(80)).await;
         let row = r.engine.history().list_recent(1).unwrap().remove(0);
         assert_eq!(row.final_text, "漢字 整理後");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_field_that_only_wraps_the_text_leaves_the_record_as_it_was() {
+        let mut s = fast_settings();
+        s.learning.read_back = true;
+        let r = rig(s).await;
+        *r.platform.ax_caret.lock().unwrap() = Some(0);
+        // The program shows the two paragraphs joined; nothing was corrected.
+        // (The tidy step strips the final stop before the insertion.)
+        r.platform.set_field_text(Some("> 第一段。第二段".into()));
+        mock_ok(&r, "第一段 第二段", "第一段。\n\n第二段。").await;
+        hold_and_speak(&r, 1.0).await;
+        wait_state(&r, UiState::Idle, "idle").await;
+        wait_for(
+            || r.platform.calls().contains(&"ax_text".to_string()),
+            "the read",
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let row = r.engine.history().list_recent(1).unwrap().remove(0);
+        assert_eq!(row.final_text, "第一段。\n\n第二段");
+        assert_eq!(row.correction_source, None);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_correction_read_from_a_screen_keeps_the_text_s_line_breaks() {
+        let mut s = fast_settings();
+        s.learning.read_back = true;
+        let r = rig(s).await;
+        *r.platform.ax_caret.lock().unwrap() = Some(0);
+        // A screen: the paragraphs joined, one word changed in the second.
+        r.platform
+            .set_field_text(Some("$ run\n> 第一段落結束。第二段落開頭了\n".into()));
+        mock_ok(
+            &r,
+            "第一段落結束 第二段落開始了",
+            "第一段落結束。\n\n第二段落開始了。",
+        )
+        .await;
+        hold_and_speak(&r, 1.0).await;
+        wait_state(&r, UiState::Idle, "idle").await;
+        wait_for(
+            || {
+                r.engine
+                    .history()
+                    .list_recent(1)
+                    .unwrap()
+                    .first()
+                    .is_some_and(|u| u.final_text == "第一段落結束。\n\n第二段落開頭了")
+            },
+            "the corrected final text with its line breaks",
+        )
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn right_after_the_insertion_a_large_difference_is_not_a_correction() {
+        let mut s = fast_settings();
+        s.learning.read_back = true;
+        let r = rig(s).await;
+        *r.platform.ax_caret.lock().unwrap() = Some(0);
+        // The program is still taking the text: a chunk of it shows as one letter.
+        let text =
+            "你先做這件事給我看。另外有幾個問題想順便問：文字改寫裡面最下面有一塊是做什麼用的？";
+        let partial = text.replace("另外有幾個問題想順便問：文字改寫裡面", "a");
+        r.platform.set_field_text(Some(partial));
+        mock_ok(&r, "原文", text).await;
+        hold_and_speak(&r, 1.0).await;
+        wait_state(&r, UiState::Idle, "idle").await;
+        wait_for(
+            || r.platform.calls().contains(&"ax_text".to_string()),
+            "the read",
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let row = r.engine.history().list_recent(1).unwrap().remove(0);
+        assert_eq!(row.final_text, text, "the partial screen is not stored");
+        assert_eq!(row.correction_source, None);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
