@@ -111,6 +111,7 @@ impl ConfigStore {
             serde_json::from_value(migrated).map_err(|e| unreadable(e.to_string()))?;
         validate(&config)?;
         config.refresh_template_styles();
+        config.normalise_translate_targets();
         Ok(config)
     }
 
@@ -441,6 +442,10 @@ fn load_existing(path: &Path) -> Result<Config, StoreError> {
     let moved = config.refresh_template_styles();
     if !moved.is_empty() {
         tracing::info!(profiles = ?moved, "writing style brought up to the template's");
+    }
+    let keyed = config.normalise_translate_targets();
+    if !keyed.is_empty() {
+        tracing::info!(profiles = ?keyed, "translation target stored under its key");
     }
     Ok(config)
 }

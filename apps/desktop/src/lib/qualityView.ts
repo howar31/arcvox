@@ -6,6 +6,11 @@ export function rate(c: Cer): string {
   return (c.length > 0 ? (c.errors / c.length) * 100 : 0).toFixed(1);
 }
 
+/** Whether a score has anything behind it: a row without a reference text has none. */
+export function scored(c: Cer): boolean {
+  return c.length > 0 || c.errors > 0;
+}
+
 /** The error rate as a number between 0 and 1. */
 export function rateOf(c: Cer): number {
   return c.length > 0 ? c.errors / c.length : 0;

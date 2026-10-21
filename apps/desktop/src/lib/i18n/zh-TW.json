@@ -1540,5 +1540,7 @@
   "error.file_unreadable": "無法讀取檔案：{message}",
   "error.set_invalid": "資料集檔案格式不對：{message}",
   "error.profile_gone": "情境已不存在。",
-  "quality.default_name": "{stage} {time}"
+  "quality.default_name": "{stage} {time}",
+  "quality.stage.translate": "翻譯",
+  "quality.no_reference": "無參考"
 }

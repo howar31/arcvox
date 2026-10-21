@@ -311,12 +311,61 @@ impl Config {
         }
         changed
     }
+
+    /// Stores a listed translation target under its key where a profile
+    /// holds one of its names (the interface language's name was stored
+    /// before keys existed). Returns the profiles changed.
+    pub fn normalise_translate_targets(&mut self) -> Vec<ProfileId> {
+        let mut changed = Vec::new();
+        for profile in &mut self.profiles {
+            for step in &mut profile.steps {
+                if let StepSpec::Translate { target, .. } = step {
+                    if let Some(key) = crate::steps::translate::target_key(target) {
+                        if target != key {
+                            *target = key.to_string();
+                            changed.push(profile.id.clone());
+                        }
+                    }
+                }
+            }
+        }
+        changed
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Config;
+
+    #[test]
+    fn listed_translation_targets_are_stored_under_their_keys() {
+        let mut config = Config::first_run();
+        let translate = |target: &str| StepSpec::Translate {
+            off: false,
+            target: target.into(),
+            addition: String::new(),
+            provider: None,
+        };
+        config.profiles[0].steps.push(translate("英文"));
+        let mut other = config.profiles[0].clone();
+        other.id = ProfileId("other".into());
+        other.is_default = false;
+        other.steps.pop();
+        other.steps.push(translate("Japanese"));
+        let mut own = other.clone();
+        own.id = ProfileId("own".into());
+        own.steps.pop();
+        own.steps.push(translate("文言文"));
+        config.profiles.extend([other, own]);
+        let changed = config.normalise_translate_targets();
+        assert_eq!(changed.len(), 2);
+        let target = |p: &Profile| p.translate_step().map(|(t, _, _)| t.to_string());
+        assert_eq!(target(&config.profiles[0]).as_deref(), Some("en"));
+        assert_eq!(target(&config.profiles[1]).as_deref(), Some("ja"));
+        assert_eq!(target(&config.profiles[2]).as_deref(), Some("文言文"));
+        assert!(config.normalise_translate_targets().is_empty());
+    }
 
     fn profiles() -> Vec<Profile> {
         let base = Config::first_run().profiles.remove(0);

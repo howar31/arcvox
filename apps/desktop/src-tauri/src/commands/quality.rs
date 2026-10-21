@@ -257,7 +257,7 @@ pub fn quality_start(args: StartArgs, app: AppHandle, state: State<'_, AppState>
     let row_count = rows.len();
     let total = match args.stage {
         Stage::Asr => rows.len() * args.asr.len().max(1),
-        Stage::Llm => rows.len() * args.llm.len().max(1),
+        Stage::Llm | Stage::Translate => rows.len() * args.llm.len().max(1),
         Stage::Full => rows.len(),
     };
     let request = RunRequest {
@@ -511,6 +511,7 @@ mod tests {
             spoken: spoken.into(),
             final_text: final_text.into(),
             tags: tags.iter().map(|t| t.to_string()).collect(),
+            translated: None,
         }
     }
 

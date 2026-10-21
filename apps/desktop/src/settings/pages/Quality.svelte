@@ -7,7 +7,7 @@
   import { t } from "../../lib/i18n";
   import { profileName, providerLabel } from "../../lib/labels";
   import { quality, viewOf } from "../../lib/quality.svelte";
-  import { fraction, providersOf } from "../../lib/qualityView";
+  import { fraction, providersOf, rate, scored } from "../../lib/qualityView";
   import { together, type Reset } from "../../lib/reset";
   import { config } from "../../lib/store.svelte";
   import Group from "../../lib/ui/Group.svelte";
@@ -248,7 +248,7 @@
       {#each heads as h (h.file)}
         <Row label={h.name} help={t("quality.saved_meta", { time: formatDateTime(Number(h.created)), stage: stageOf(h.stage), engines: engineNames(h), n: String(rowsOf(h)) })}>
           {#snippet tag()}{#if h.origin === "command"}<Tag>{t("quality.origin.command")}</Tag>{/if}{#if h.stopped}<Tag tone="warn">{t("quality.stopped")}</Tag>{/if}{/snippet}
-          <span class="stat num">{t("quality.saved_scores", { words: (h.text.length ? (h.text.errors / h.text.length) * 100 : 0).toFixed(1), punct: (h.punctuation.length ? (h.punctuation.errors / h.punctuation.length) * 100 : 0).toFixed(1) })}</span>
+          <span class="stat num">{scored(h.text) ? t("quality.saved_scores", { words: rate(h.text), punct: rate(h.punctuation) }) : t("quality.no_reference")}</span>
           <button type="button" class="btn quiet" onclick={() => openReport(h.file)}>{t("quality.open")}</button>
           {#if sureDelete === h.file}
             <button type="button" class="btn danger" onclick={() => deleteReport(h.file)}>{t("quality.delete_sure")}</button>

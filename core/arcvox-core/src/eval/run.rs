@@ -19,7 +19,7 @@ use crate::pipeline::Pipeline;
 use crate::providers::registry::ProviderRegistry;
 use crate::providers::AsrHint;
 use crate::steps::asr::{asr_prompt, ASR_HINT_BUDGET_BYTES};
-use crate::steps::PipelineContext;
+use crate::steps::{translate, PipelineContext, Step, StepInput};
 use crate::types::{AudioClip, Context, ProviderId};
 
 /// The pool the rewrite model's examples are picked from, per row.
@@ -108,15 +108,8 @@ fn closed_events() -> tokio::sync::mpsc::Sender<crate::Event> {
     tx
 }
 
-fn build(
-    config: &Config,
-    profile: Profile,
-    registry: &ProviderRegistry,
-    request: &RunRequest,
-) -> Result<(Pipeline, PipelineContext), String> {
-    let engines = config.resolve_engines(&profile, |cfg| registry.ready(cfg));
-    let pipeline = Pipeline::build(config, &profile, &engines, registry).map_err(|e| e.message)?;
-    let ctx = PipelineContext {
+fn context(config: &Config, profile: Profile, request: &RunRequest) -> PipelineContext {
+    PipelineContext {
         profile: Arc::new(profile),
         context: Context::default(),
         dictionary: Arc::new(config.dictionary.clone()),
@@ -125,8 +118,18 @@ fn build(
         general: config.general.clone(),
         recognised: Default::default(),
         asr_sample: request.asr_sample.clone(),
-    };
-    Ok((pipeline, ctx))
+    }
+}
+
+fn build(
+    config: &Config,
+    profile: Profile,
+    registry: &ProviderRegistry,
+    request: &RunRequest,
+) -> Result<(Pipeline, PipelineContext), String> {
+    let engines = config.resolve_engines(&profile, |cfg| registry.ready(cfg));
+    let pipeline = Pipeline::build(config, &profile, &engines, registry).map_err(|e| e.message)?;
+    Ok((pipeline, context(config, profile, request)))
 }
 
 /// Scores every row of `request` and reports each as it is done. `engine_for`
@@ -338,6 +341,70 @@ pub async fn run(
                 );
             }
         }
+        Stage::Translate => {
+            let (target, addition, _) = request
+                .profile
+                .translate_step()
+                .map(|(t, a, p)| (t.to_string(), a.to_string(), p.cloned()))
+                .ok_or("the profile has no translation module")?;
+            let ids: Vec<String> = if request.llm.is_empty() {
+                vec![config
+                    .resolve_engines(&request.profile, |cfg| registry.ready(cfg))
+                    .translate
+                    .map(|c| c.id.0)
+                    .ok_or("the profile has no translation engine; pass --llm")?]
+            } else {
+                request.llm.iter().map(|id| id.0.clone()).collect()
+            };
+            notes.push(format!("translate providers: {}", ids.join(", ")));
+            notes.push(format!("target: {}", translate::target_name(&target)));
+            let references = rows.iter().filter(|r| r.translated.is_some()).count();
+            notes.push(format!(
+                "reference translations: {references} of {} rows",
+                rows.len()
+            ));
+            let total = ids.len() * rows.len();
+            let ctx = context(config, request.profile.clone(), &request);
+            'engines: for id in &ids {
+                let cfg = config
+                    .provider(&ProviderId(id.clone()))
+                    .ok_or_else(|| format!("no provider `{id}`"))?;
+                let provider = registry
+                    .llm(cfg, &config.general)
+                    .map_err(|e| format!("{id}: {}", e.message))?;
+                let step = translate::TranslateStep::new(provider, &target, &addition);
+                for row in rows {
+                    if cancelled() {
+                        stopped = true;
+                        break 'engines;
+                    }
+                    let t0 = Instant::now();
+                    let input = StepInput {
+                        text: row.final_text.clone(),
+                        audio: None,
+                    };
+                    let r = step
+                        .run(input, &ctx)
+                        .await
+                        .map(|o| o.text)
+                        .map_err(|e| e.message);
+                    let ms = t0.elapsed().as_millis() as u64;
+                    let item = match &row.translated {
+                        Some(expected) => ItemResult::scored(
+                            &row.id,
+                            request.stage,
+                            id,
+                            &row.tags,
+                            expected,
+                            r,
+                            ms,
+                        ),
+                        None => ItemResult::unscored(&row.id, request.stage, id, &row.tags, r, ms),
+                    };
+                    record!(total, id, item);
+                }
+            }
+        }
     }
     notes.push(format!("wall time: {} s", started.elapsed().as_secs()));
     if stopped {
@@ -368,6 +435,7 @@ pub fn rows_from_history(rows: &[Utterance]) -> Vec<SeedRow> {
                 tags: guess_tags(&u.raw_text, u.audio_ms),
                 spoken: u.heard_text.clone().unwrap_or_else(|| u.raw_text.clone()),
                 final_text: u.final_text.clone(),
+                translated: None,
             })
         })
         .collect()
@@ -545,6 +613,111 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn the_translate_stage_runs_the_module_alone_and_scores_only_rows_with_a_reference() {
+        use crate::config::StepSpec;
+        use crate::providers::registry::tests::{embedded_cfg, FakeFactory};
+        use crate::secrets::MemorySecretStore;
+        let mut config = Config::http_test_config();
+        let mut emb = embedded_cfg();
+        emb.capabilities.chat = true;
+        config.providers.push(emb.clone());
+        let registry = ProviderRegistry::with_factories(
+            reqwest::Client::new(),
+            Arc::new(MemorySecretStore::default()),
+            vec![Arc::new(FakeFactory)],
+        );
+        let mut profile = config.default_profile().clone();
+        profile.steps.push(StepSpec::Translate {
+            off: false,
+            target: "en".into(),
+            addition: String::new(),
+            provider: Some(emb.id.clone()),
+        });
+        let rows = vec![
+            SeedRow {
+                id: "1".into(),
+                audio: PathBuf::new(),
+                spoken: "嗨".into(),
+                final_text: "嗨。".into(),
+                tags: vec![],
+                translated: Some("hi".into()),
+            },
+            SeedRow {
+                id: "2".into(),
+                audio: PathBuf::new(),
+                spoken: "好".into(),
+                final_text: "好。".into(),
+                tags: vec![],
+                translated: None,
+            },
+        ];
+        let request = RunRequest {
+            name: "t".into(),
+            stage: Stage::Translate,
+            rows,
+            profile,
+            asr: vec![],
+            llm: vec![],
+            base_prompt: String::new(),
+            translate_prompt: String::new(),
+            asr_sample: None,
+            examples: None,
+            notes: vec![],
+            origin: Origin::Command,
+        };
+        let report = run(
+            request,
+            &config,
+            &registry,
+            &|_| None,
+            &|| false,
+            &mut |_| {},
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.items.len(), 2);
+        assert_eq!(report.items[0].output, "hi");
+        assert_eq!(report.items[0].expected, "hi");
+        assert_eq!(report.items[0].text.length, 2);
+        assert_eq!(report.items[0].text.errors, 0);
+        assert_eq!(report.items[1].expected, "");
+        assert_eq!(report.items[1].text, Cer::default());
+        assert!(report.items[1].checks.is_none());
+        assert!(report.notes.iter().any(|n| n == "target: 英文"));
+        assert!(report
+            .notes
+            .iter()
+            .any(|n| n == "reference translations: 1 of 2 rows"));
+
+        // Without a translation module the stage refuses.
+        let request = RunRequest {
+            name: "t".into(),
+            stage: Stage::Translate,
+            rows: vec![],
+            profile: config.default_profile().clone(),
+            asr: vec![],
+            llm: vec![],
+            base_prompt: String::new(),
+            translate_prompt: String::new(),
+            asr_sample: None,
+            examples: None,
+            notes: vec![],
+            origin: Origin::Command,
+        };
+        let err = run(
+            request,
+            &config,
+            &registry,
+            &|_| None,
+            &|| false,
+            &mut |_| {},
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("translation module"), "{err}");
+    }
+
     #[test]
     fn history_rows_take_the_corrected_transcript_or_the_raw_one() {
         let rows = vec![
@@ -657,6 +830,7 @@ mod tests {
                 spoken: "hi".into(),
                 final_text: "hi".into(),
                 tags: vec![],
+                translated: None,
             },
             SeedRow {
                 id: "2".into(),
@@ -664,6 +838,7 @@ mod tests {
                 spoken: "x".into(),
                 final_text: "hi".into(),
                 tags: vec!["long".into()],
+                translated: None,
             },
         ];
         let request = RunRequest {

@@ -38,7 +38,8 @@ arcvox-eval <command> [options]
            Proposes history rows with a recording as a seed set: the raw
            transcript as `spoken`, the row's final text as `final`, tags
            guessed (short, long, mixed, correction). Edit both texts.
-  run      --data <name|dir> --set <set.tsv> --stage asr|llm|full [--out <run.json>]
+  run      --data <name|dir> --set <set.tsv> --stage asr|llm|full|translate
+           [--out <run.json>]
            [--asr id,id] [--llm id,id] [--profile id] [--base-prompt file]
            [--style file] [--asr-sample file] [--name text]
            [--examples pool.tsv] [--examples-k 3] [--examples-pick similar|random]
@@ -48,6 +49,10 @@ arcvox-eval <command> [options]
            llm: `spoken` through the profile's steps after ASR with each LLM
                 provider, scored against `final`.
            full: every recording through the whole profile, scored against `final`.
+           translate: `final` through the profile's translation module alone with
+                each --llm provider (default: the module's engine); scored against
+                the set's sixth column `translated` where a row has one, otherwise
+                the output and the time are kept and the scores stay empty.
            Without --out the run is saved in the installation's quality folder
            under --name, where the application's quality page lists it too.
   fetch    --data <name|dir> --model <catalogue id>
@@ -286,6 +291,7 @@ fn export(args: &Args) -> Result<(), String> {
             spoken: u.raw_text.clone(),
             final_text: u.final_text.clone(),
             tags: tags.clone(),
+            translated: None,
         };
         candidates.push((id, tags, row));
     }
@@ -337,7 +343,12 @@ async fn run(args: &Args) -> Result<(), String> {
         "asr" => Stage::Asr,
         "llm" => Stage::Llm,
         "full" => Stage::Full,
-        other => return Err(format!("--stage must be asr, llm or full, not `{other}`")),
+        "translate" => Stage::Translate,
+        other => {
+            return Err(format!(
+                "--stage must be asr, llm, full or translate, not `{other}`"
+            ))
+        }
     };
     let name = args.flag("name").map(str::to_string);
     let out = match args.flag("out") {
@@ -511,7 +522,11 @@ fn load_report(path: &str) -> Result<Report, String> {
     serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))
 }
 
+/// A score with nothing to score against prints as a blank.
 fn pct(c: Cer) -> String {
+    if c.length == 0 && c.errors == 0 {
+        return format!("{:>6}", "-");
+    }
     format!("{:5.1}%", c.rate() * 100.0)
 }
 
@@ -522,7 +537,7 @@ fn print_summary(report: &Report) {
     }
     println!();
     println!(
-        "{:<6} {:<28} {:>5} {:>6} {:>8} {:>8} {:>9}",
+        "{:<9} {:<28} {:>5} {:>6} {:>8} {:>8} {:>9}",
         "stage", "provider", "items", "failed", "words", "punct", "avg ms"
     );
     for s in summarize(report) {
@@ -537,7 +552,7 @@ fn print_summary_row(s: &Summary) {
         0
     };
     println!(
-        "{:<6} {:<28} {:>5} {:>6} {:>8} {:>8} {:>9}",
+        "{:<9} {:<28} {:>5} {:>6} {:>8} {:>8} {:>9}",
         stage_name(s.stage),
         s.provider,
         s.items,
@@ -597,6 +612,7 @@ fn stage_name(s: Stage) -> &'static str {
         Stage::Asr => "asr",
         Stage::Llm => "llm",
         Stage::Full => "full",
+        Stage::Translate => "translate",
     }
 }
 

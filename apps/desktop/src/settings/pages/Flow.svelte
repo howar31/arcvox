@@ -42,9 +42,10 @@
 
   const LANGS = ["zh-TW", "zh-CN", "en", "ja"];
   const LANG_KEYS: Record<string, string> = { "zh-TW": "profiles.lang.zh_tw", "zh-CN": "profiles.lang.zh_cn", en: "profiles.lang.en", ja: "profiles.lang.ja" };
-  // The targets the translation module offers by name; anything else is typed in and kept as typed.
+  // The targets the translation module offers, stored under these keys and shown in the interface
+  // language; anything else is typed in and kept as typed.
   const TARGET_KEYS = ["en", "ja", "zh_tw", "zh_cn", "ko", "fr", "de", "es"];
-  const targetNames = $derived(TARGET_KEYS.map((k) => t(`flow.target.${k}`)));
+  const targetLabel = (target: string) => (TARGET_KEYS.includes(target) ? t(`flow.target.${target}`) : target);
   // The stage shown first is the one shown when the page was left last.
   // A stage, or "enable": the right column lists the modules not enabled.
   let stage = $state<Pick>(storedStage());
@@ -254,7 +255,7 @@
       asr: () => cell("asr", lines!.asr.name, lines!.asr.missing, !lines!.asr.known),
       llm: () => cell("llm", lines!.llm.name, lines!.llm.missing, !lines!.llm.known),
       rules: () => cell("rules", rules),
-      translate: () => cell("translate", translate ? translate.target : "", lines!.translate.missing, !lines!.translate.known),
+      translate: () => cell("translate", translate ? targetLabel(translate.target) : "", lines!.translate.missing, !lines!.translate.known),
       insert: () => cell("insert", lines!.out.name),
       record: () => cell("record", t("flow.record_meta")),
     };
@@ -270,7 +271,7 @@
     if (!draft) return;
     if (id === "llm") draft = withLlm(snapshot(), "");
     else if (id === "rules") draft = withRules(snapshot(), true);
-    else if (id === "translate") draft = enableTranslate(snapshot(), t("flow.target.en"));
+    else if (id === "translate") draft = enableTranslate(snapshot(), "en");
     stage = id;
   }
   /** The translation step with one field changed. */
@@ -280,7 +281,7 @@
     if (step) draft = withTranslate(snapshot(), { ...step, ...change });
   }
   // The target picker: a named target, or "custom" with the typed text under it.
-  const customTarget = $derived.by(() => { const s = draft ? translateAt(draft) : null; return !!s && !targetNames.includes(s.target); });
+  const customTarget = $derived.by(() => { const s = draft ? translateAt(draft) : null; return !!s && !TARGET_KEYS.includes(s.target); });
   // The disable row asks once more: a second press within a few seconds turns the module off.
   let sureRemove = $state(false);
   let sureTimer: ReturnType<typeof setTimeout> | undefined;
@@ -693,7 +694,7 @@
         <Group title={t("flow.translate_group")} info={t("flow.translate_info")}>
           <Row label={t("flow.translate_target")} help={t("flow.translate_target_help")}>
             <select class="field" value={customTarget ? "custom" : step.target} aria-label={t("flow.translate_target")} onchange={(e) => setTranslate({ target: e.currentTarget.value === "custom" ? "" : e.currentTarget.value })}>
-              {#each targetNames as name (name)}<option value={name}>{name}</option>{/each}
+              {#each TARGET_KEYS as key (key)}<option value={key}>{t(`flow.target.${key}`)}</option>{/each}
               <option value="custom">{t("flow.translate_custom_option")}</option>
             </select>
           </Row>

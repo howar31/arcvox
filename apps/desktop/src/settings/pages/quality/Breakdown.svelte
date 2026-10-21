@@ -2,7 +2,7 @@
   /** One engine's results in detail: punctuation by kind, totals per category, and every row worst first. */
   import { MARK_KINDS, type EvalItem, type EvalSummary } from "../../../lib/api";
   import { t } from "../../../lib/i18n";
-  import { rate, worstFirst } from "../../../lib/qualityView";
+  import { rate, scored, worstFirst } from "../../../lib/qualityView";
   import Group from "../../../lib/ui/Group.svelte";
   import Tag from "../../../lib/ui/Tag.svelte";
   import TextDiff from "../../../lib/ui/TextDiff.svelte";
@@ -51,13 +51,17 @@
         {#if it.error}
           <span class="bad">{t("quality.row_failed", { error: it.error })}</span>
         {:else}
-          <span class="num">{t("quality.row_words", { p: rate(it.text) })}</span>
-          <span class="num">{t("quality.row_punct", { p: rate(it.punctuation) })}</span>
+          {#if scored(it.text)}
+            <span class="num">{t("quality.row_words", { p: rate(it.text) })}</span>
+            <span class="num">{t("quality.row_punct", { p: rate(it.punctuation) })}</span>
+          {:else}
+            <span>{t("quality.no_reference")}</span>
+          {/if}
           <span class="num">{t("quality.row_secs", { s: pct(it.ms) })}</span>
         {/if}
       </div>
-      <div class="line"><span class="lab">{t("quality.expected")}</span><TextDiff from={null} to={it.expected} /></div>
-      {#if !it.error}<div class="line"><span class="lab">{t("quality.output")}</span><TextDiff from={it.expected} to={it.output} /></div>{/if}
+      {#if scored(it.text)}<div class="line"><span class="lab">{t("quality.expected")}</span><TextDiff from={null} to={it.expected} /></div>{/if}
+      {#if !it.error}<div class="line"><span class="lab">{t("quality.output")}</span><TextDiff from={scored(it.text) ? it.expected : null} to={it.output} /></div>{/if}
     </div>
   {/each}
   {#if rows.length > shown}

@@ -188,9 +188,15 @@ pub struct SeedRow {
     pub spoken: String,
     pub final_text: String,
     pub tags: Vec<String>,
+    /// A reference translation of `final_text`, when the set has the
+    /// sixth column; the translate stage is scored against it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub translated: Option<String>,
 }
 
 pub const SEED_HEADER: &str = "id\taudio\ttags\tspoken\tfinal";
+/// The header of a set with reference translations.
+pub const SEED_HEADER_TRANSLATED: &str = "id\taudio\ttags\tspoken\tfinal\ttranslated";
 
 /// Parses the tab-separated seed set. Tags are comma-separated; empty lines
 /// and lines starting with `#` are skipped. Newlines inside a text are
@@ -198,7 +204,7 @@ pub const SEED_HEADER: &str = "id\taudio\ttags\tspoken\tfinal";
 pub fn parse_seed_tsv(text: &str) -> Result<Vec<SeedRow>, String> {
     let mut rows = Vec::new();
     for (n, line) in text.lines().enumerate() {
-        if n == 0 && line.trim_end() == SEED_HEADER {
+        if n == 0 && matches!(line.trim_end(), SEED_HEADER | SEED_HEADER_TRANSLATED) {
             continue;
         }
         if line.trim().is_empty() || line.starts_with('#') {
@@ -223,23 +229,39 @@ pub fn parse_seed_tsv(text: &str) -> Result<Vec<SeedRow>, String> {
                 .collect(),
             spoken: unescape(cols[3]),
             final_text: unescape(cols[4]),
+            translated: cols
+                .get(5)
+                .map(|c| unescape(c))
+                .filter(|t| !t.trim().is_empty()),
         });
     }
     Ok(rows)
 }
 
+/// Writes the set; the sixth column is there when any row has a reference
+/// translation.
 pub fn seed_tsv(rows: &[SeedRow]) -> String {
-    let mut out = String::from(SEED_HEADER);
+    let translated = rows.iter().any(|r| r.translated.is_some());
+    let mut out = String::from(if translated {
+        SEED_HEADER_TRANSLATED
+    } else {
+        SEED_HEADER
+    });
     out.push('\n');
     for r in rows {
         out.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{}",
             r.id,
             r.audio.display(),
             r.tags.join(","),
             escape(&r.spoken),
             escape(&r.final_text)
         ));
+        if translated {
+            out.push('\t');
+            out.push_str(&escape(r.translated.as_deref().unwrap_or("")));
+        }
+        out.push('\n');
     }
     out
 }
@@ -460,6 +482,9 @@ pub enum Stage {
     Llm,
     /// Audio through the whole profile, scored against `final_text`.
     Full,
+    /// `final_text` through the profile's translation module alone, scored
+    /// against `translated` where the set has it.
+    Translate,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -494,7 +519,7 @@ impl ItemResult {
             Err(e) => (String::new(), Some(e)),
         };
         let checks = match stage {
-            Stage::Asr => None,
+            Stage::Asr | Stage::Translate => None,
             Stage::Llm | Stage::Full => Some(check_rewrite(&text_out)),
         };
         ItemResult {
@@ -514,6 +539,37 @@ impl ItemResult {
 }
 
 /// Who made a report: the command line or the application's quality page.
+impl ItemResult {
+    /// An item with nothing to score against: the output and the time are
+    /// kept, both scores stay empty (length 0).
+    pub fn unscored(
+        id: &str,
+        stage: Stage,
+        provider: &str,
+        tags: &[String],
+        output: Result<String, String>,
+        ms: u64,
+    ) -> ItemResult {
+        let (text_out, error) = match output {
+            Ok(t) => (t, None),
+            Err(e) => (String::new(), Some(e)),
+        };
+        ItemResult {
+            id: id.to_string(),
+            stage,
+            provider: provider.to_string(),
+            tags: tags.to_vec(),
+            expected: String::new(),
+            output: text_out,
+            error,
+            ms,
+            text: Cer::default(),
+            punctuation: Cer::default(),
+            checks: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Origin {
@@ -549,6 +605,10 @@ pub struct Totals {
 impl Totals {
     fn add_item(&mut self, it: &ItemResult) {
         self.items += 1;
+        // A row with nothing to score against counts, and adds nothing else.
+        if it.expected.is_empty() && it.text == Cer::default() {
+            return;
+        }
         add(&mut self.text, it.text);
         add(&mut self.punctuation, it.punctuation);
         self.marks.add(marks(&it.expected, &it.output));
@@ -1087,6 +1147,7 @@ mod tests {
                 spoken: "第一行\n第二行".into(),
                 final_text: "第一行，第二行。".into(),
                 tags: vec!["short".into(), "mixed".into()],
+                translated: None,
             },
             SeedRow {
                 id: "51".into(),
@@ -1094,12 +1155,21 @@ mod tests {
                 spoken: "好".into(),
                 final_text: "好。".into(),
                 tags: vec![],
+                translated: None,
             },
         ];
         let text = seed_tsv(&rows);
         assert!(text.starts_with(SEED_HEADER), "{text}");
+        assert!(!text.contains("translated"), "{text}");
         assert!(text.contains("第一行\\n第二行"), "{text}");
         assert_eq!(parse_seed_tsv(&text).unwrap(), rows);
+        // A reference translation adds the sixth column, empty where a row has none.
+        let mut with = rows.clone();
+        with[0].translated = Some("Line one, line two.".into());
+        let text = seed_tsv(&with);
+        assert!(text.starts_with(SEED_HEADER_TRANSLATED), "{text}");
+        assert!(text.contains("\t好。\t\n"), "{text}");
+        assert_eq!(parse_seed_tsv(&text).unwrap(), with);
     }
 
     #[test]
@@ -1239,6 +1309,19 @@ mod tests {
                 length: 6
             }
         );
+    }
+
+    #[test]
+    fn an_unscored_item_counts_without_adding_scores_or_marks() {
+        let r = report(vec![
+            ItemResult::unscored("1", Stage::Translate, "g", &[], Ok("Why?".into()), 5),
+            item("2", Stage::Translate, "g", &[], "好。", "好？"),
+        ]);
+        let s = summarize(&r);
+        assert_eq!(s[0].items, 2);
+        assert_eq!(s[0].total.text.length, 1);
+        assert_eq!(s[0].total.marks.question.extra, 1);
+        assert_eq!(s[0].total.marks.stop.missing, 1);
     }
 
     #[test]
@@ -1431,6 +1514,7 @@ mod tests {
             tags: tags.iter().map(|t| t.to_string()).collect(),
             spoken: String::new(),
             final_text: final_text.into(),
+            translated: None,
         };
         let rows: Vec<SeedRow> = (1..=30)
             .map(|n| row(&n.to_string(), "平常的句子", &[]))
@@ -1499,6 +1583,7 @@ mod tests {
             spoken: spoken.into(),
             final_text: final_text.into(),
             tags: vec![],
+            translated: None,
         };
         vec![
             row("1", "今天下午三點開會", "今天下午三點開會"),

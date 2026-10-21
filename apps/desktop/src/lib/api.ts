@@ -406,7 +406,7 @@ export const benchStart = (asr: string[], llm: string[], fallbackText: string) =
 export const benchCancel = () => invoke<void>("bench_cancel");
 
 // Quality test: scores history rows or a seed set through engines or a whole profile.
-export type EvalStage = "asr" | "llm" | "full";
+export type EvalStage = "asr" | "llm" | "full" | "translate";
 /** Errors over length; the rate is errors / length. */
 export interface Cer { errors: number; length: number }
 export interface MarkCount { extra: number; missing: number }
