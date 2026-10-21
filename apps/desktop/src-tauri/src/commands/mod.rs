@@ -139,7 +139,9 @@ impl From<arcvox_core::config::ConfigError> for CmdError {
         use arcvox_core::config::ConfigError as E;
         let message = e.to_string();
         match e {
-            E::DuplicateId(id) => CmdError::with("config_duplicate_id", message, &[("id", id)]),
+            E::DuplicateId { id, .. } => {
+                CmdError::with("config_duplicate_id", message, &[("id", id)])
+            }
             E::UnknownDefaultEngine { role, provider } => CmdError::with(
                 "config_unknown_default_engine",
                 message,
@@ -395,7 +397,10 @@ mod tests {
         assert!(e.params["error"].contains("boom"));
 
         // Wrapped errors keep the inner code.
-        let inner = arcvox_core::config::ConfigError::DuplicateId("x".into());
+        let inner = arcvox_core::config::ConfigError::DuplicateId {
+            kind: "engine",
+            id: "x".into(),
+        };
         let e: CmdError = arcvox_core::engine::EngineError::Store(inner.into()).into();
         assert_eq!(e.code, Some("config_duplicate_id"));
         assert_eq!(e.params["id"], "x");

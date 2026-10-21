@@ -432,6 +432,22 @@ pub struct HistoryStore {
     recordings_dir: Mutex<PathBuf>,
 }
 
+impl HistoryStore {
+    /// The connection; a lock poisoned by a panic elsewhere is still usable.
+    fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.conn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The recordings folder, the same way.
+    fn recordings_dir_lock(&self) -> std::sync::MutexGuard<'_, PathBuf> {
+        self.recordings_dir
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
 /// The file name a row stores for a recording.
 fn name_of(path: &Path) -> Option<String> {
     path.file_name().map(|n| n.to_string_lossy().to_string())
@@ -838,13 +854,13 @@ impl HistoryStore {
     /// A consistent copy of the database in one file at `path` (the
     /// write-ahead log included), made by the database itself.
     pub fn copy_to(&self, path: &Path) -> Result<(), HistoryError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         conn.execute("VACUUM INTO ?1", params![path.to_string_lossy()])?;
         Ok(())
     }
 
     pub fn watch(&self, f: impl Fn() + Send + Sync + 'static) {
-        self.conn.lock().unwrap().commit_hook(Some(move || {
+        self.conn().commit_hook(Some(move || {
             f();
             false
         }));
@@ -852,11 +868,11 @@ impl HistoryStore {
 
     /// The folder the rows' recordings are reported under from now on.
     pub fn set_recordings_dir(&self, dir: &Path) {
-        *self.recordings_dir.lock().unwrap() = dir.to_path_buf();
+        *self.recordings_dir_lock() = dir.to_path_buf();
     }
 
     fn dir(&self) -> PathBuf {
-        self.recordings_dir.lock().unwrap().clone()
+        self.recordings_dir_lock().clone()
     }
 
     /// Gives a row the absolute path of its recording.
@@ -953,7 +969,7 @@ impl HistoryStore {
         if !policy.stages {
             u.stages.clear();
         }
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let tx = conn.unchecked_transaction()?;
         if let Some(old) = replaces {
             tx.execute("DELETE FROM utterances WHERE id = ?1", params![old.0])?;
@@ -1014,7 +1030,7 @@ impl HistoryStore {
     /// Stores a failed or cancelled dictation so its recording, when there
     /// is one, can be processed again. It is not counted in the statistics.
     pub fn insert_failed(&self, u: FailedUtterance) -> Result<HistoryId, HistoryError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         conn.execute(
             "INSERT INTO utterances (ts, profile_id, app_name, raw_text, refined_text, final_text, audio_path, audio_ms, error, error_code, device_id, updated)
              VALUES (?1, ?2, ?3, ?10, ?11, ?11, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -1044,7 +1060,7 @@ impl HistoryStore {
         final_text: &str,
         audio_ms: Option<u64>,
     ) -> Result<(), HistoryError> {
-        self.conn.lock().unwrap().execute(
+        self.conn().execute(
             "UPDATE utterances SET error = ?1, error_code = ?2, raw_text = ?3, refined_text = ?4, final_text = ?4,
              audio_ms = COALESCE(?5, audio_ms), updated = ?6 WHERE id = ?7 AND error IS NOT NULL",
             params![
@@ -1068,7 +1084,7 @@ impl HistoryStore {
         code: ErrorCode,
         error: &str,
     ) -> Result<(), HistoryError> {
-        self.conn.lock().unwrap().execute(
+        self.conn().execute(
             "UPDATE utterances SET error = ?1, error_code = ?2, updated = ?4 WHERE id = ?3 AND error IS NOT NULL",
             params![error, code.name(), id.0, now_ms()],
         )?;
@@ -1077,7 +1093,7 @@ impl HistoryStore {
 
     /// The length of a failed row's recording, after the file was replaced.
     pub fn set_audio_ms(&self, id: HistoryId, audio_ms: Option<u64>) -> Result<(), HistoryError> {
-        self.conn.lock().unwrap().execute(
+        self.conn().execute(
             "UPDATE utterances SET audio_ms = ?1, updated = ?3 WHERE id = ?2",
             params![audio_ms.map(|v| v as i64), id.0, now_ms()],
         )?;
@@ -1088,7 +1104,7 @@ impl HistoryStore {
     /// still being processed. True when there was one; a row that reached a
     /// result, or failed for a reason of its own, is left alone.
     pub fn discard_interrupted(&self, path: &Path) -> Result<bool, HistoryError> {
-        let removed = self.conn.lock().unwrap().execute(
+        let removed = self.conn().execute(
             "DELETE FROM utterances WHERE audio_path = ?1 AND error_code = ?2",
             params![name_of(path), ErrorCode::Interrupted.name()],
         )?;
@@ -1140,7 +1156,7 @@ impl HistoryStore {
     /// Makes a result the row's text, profile and timings. True when the
     /// row exists. A row that had failed is counted in the statistics now.
     pub fn apply_redo(&self, id: HistoryId, r: &Redo) -> Result<bool, HistoryError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let tx = conn.unchecked_transaction()?;
         let applied = apply_in(
             &tx,
@@ -1164,7 +1180,7 @@ impl HistoryStore {
         outcome: &Outcome,
         choose: bool,
     ) -> Result<Option<Attempt>, HistoryError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let tx = conn.unchecked_transaction()?;
         let Some(row) = tx
             .query_row(&format!("{SELECT} WHERE id = ?1"), params![id.0], map_row)
@@ -1294,7 +1310,7 @@ impl HistoryStore {
     /// Makes a recorded result the row's. False when the row or the
     /// attempt is gone, or the attempt is a failure.
     pub fn choose_attempt(&self, id: HistoryId, attempt: AttemptId) -> Result<bool, HistoryError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let tx = conn.unchecked_transaction()?;
         let Some(a) = tx
             .query_row(
@@ -1341,7 +1357,7 @@ impl HistoryStore {
     /// original one (the dictation as it was made, which a rerun without a
     /// chosen profile follows). False when it is one of those, or gone.
     pub fn delete_attempt(&self, attempt: AttemptId) -> Result<bool, HistoryError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let tx = conn.unchecked_transaction()?;
         let Some((utterance, kept)) = tx
             .query_row(
@@ -1364,7 +1380,7 @@ impl HistoryStore {
 
     /// Every result a row had, newest first.
     pub fn attempts(&self, id: HistoryId) -> Result<Vec<Attempt>, HistoryError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
             "{SELECT_ATTEMPT} WHERE utterance_id = ?1 ORDER BY ts DESC, id DESC"
         ))?;
@@ -1389,7 +1405,7 @@ impl HistoryStore {
         source: Option<CorrectionSource>,
     ) -> Result<(), HistoryError> {
         let source = source.map(CorrectionSource::name);
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let tx = conn.unchecked_transaction()?;
         tx.execute(
             "UPDATE utterances SET final_text = ?1, updated = ?3,
@@ -1408,7 +1424,7 @@ impl HistoryStore {
 
     /// Records the user's correction of what was said; None takes it away.
     pub fn set_heard(&self, id: HistoryId, text: Option<&str>) -> Result<(), HistoryError> {
-        self.conn.lock().unwrap().execute(
+        self.conn().execute(
             "UPDATE utterances SET heard_text = ?1, updated = ?3 WHERE id = ?2",
             params![text, id.0, now_ms()],
         )?;
@@ -1424,7 +1440,7 @@ impl HistoryStore {
         text: &str,
         delivery: &Delivery,
     ) -> Result<(), HistoryError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let tx = conn.unchecked_transaction()?;
         let changed = tx.execute(
             "UPDATE utterances SET final_text = ?1, updated = ?3 WHERE id = ?2",
@@ -1489,7 +1505,7 @@ impl HistoryStore {
     /// rerun's when one is chosen and recorded them, else the dictation's
     /// own (a rerun from before stages were kept has none).
     pub fn stages(&self, id: HistoryId) -> Result<Vec<StageRecord>, HistoryError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT position, kind, text, ms, detail FROM stages
              WHERE utterance_id = ?1
@@ -1517,7 +1533,7 @@ impl HistoryStore {
     /// kept; rows from before that, or brought in by an import, are passed
     /// over.
     pub fn last_for_profile(&self, profile: &ProfileId) -> Result<Option<Utterance>, HistoryError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let row = conn
             .query_row(
                 &format!(
@@ -1545,7 +1561,7 @@ impl HistoryStore {
     /// Removes one row together with its recording, when that file is inside
     /// `recordings_dir`.
     pub fn delete_row(&self, id: HistoryId, recordings_dir: &Path) -> Result<(), HistoryError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         remove_recording(&conn, id.0, recordings_dir)?;
         conn.execute("DELETE FROM utterances WHERE id = ?1", params![id.0])?;
         Ok(())
@@ -1559,7 +1575,7 @@ impl HistoryStore {
         device: &str,
         recordings_dir: &Path,
     ) -> Result<Vec<(HistoryLine, Option<PathBuf>)>, HistoryError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT origin_id, ts, updated, profile_id, app_name, raw_text, refined_text, final_text, degraded,
                     asr_ms, llm_ms, audio_ms, dict_fixes, snippets, error, error_code, audio_path, id, heard_text, correction_source, translated
@@ -1607,7 +1623,7 @@ impl HistoryStore {
 
     /// A device's statistics buckets for a backup.
     pub(crate) fn export_cells(&self, device: &str) -> Result<Vec<StatsLine>, HistoryError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
             "SELECT hour, app_name, profile_id, updated, {} FROM stats_hourly
              WHERE device_id = ?1 ORDER BY hour, app_name, profile_id",
@@ -1635,7 +1651,7 @@ impl HistoryStore {
         &self,
         device: &str,
     ) -> Result<std::collections::HashSet<i64>, HistoryError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT origin_id FROM utterances WHERE device_id = ?1 AND audio_path IS NOT NULL AND origin_id IS NOT NULL",
         )?;
@@ -1646,7 +1662,7 @@ impl HistoryStore {
     /// Makes a device of a backup known here. A device already known keeps
     /// the name it has.
     pub(crate) fn register_device(&self, meta: &DeviceMeta) -> Result<(), HistoryError> {
-        self.conn.lock().unwrap().execute(
+        self.conn().execute(
             "INSERT INTO devices (id, name, platform) VALUES (?1, ?2, ?3) ON CONFLICT (id) DO NOTHING",
             params![meta.id, meta.name, meta.platform],
         )?;
@@ -1663,7 +1679,7 @@ impl HistoryStore {
         lines: &[(HistoryLine, Option<PathBuf>)],
         cutoff: i64,
     ) -> Result<Merged, HistoryError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let tx = conn.unchecked_transaction()?;
         let mut merged = Merged::default();
         for (l, audio) in lines {
@@ -1794,7 +1810,7 @@ impl HistoryStore {
             slots.join(", "),
             sets.join(", ")
         );
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let tx = conn.unchecked_transaction()?;
         let mut changed = 0;
         {
@@ -1817,7 +1833,7 @@ impl HistoryStore {
 
     /// The devices with rows here: this one first, the others by name.
     pub fn devices(&self) -> Result<Vec<DeviceRow>, HistoryError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT d.id, d.name, d.platform, COUNT(u.id), MAX(u.ts)
              FROM devices d LEFT JOIN utterances u ON u.device_id = d.id
@@ -1838,7 +1854,7 @@ impl HistoryStore {
     }
 
     pub fn set_device_name(&self, id: &str, name: &str) -> Result<(), HistoryError> {
-        self.conn.lock().unwrap().execute(
+        self.conn().execute(
             "UPDATE devices SET name = ?1 WHERE id = ?2",
             params![name, id],
         )?;
@@ -1851,7 +1867,7 @@ impl HistoryStore {
         if id == self.device_id {
             return Err(HistoryError::OwnDevice);
         }
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let tx = conn.unchecked_transaction()?;
         let paths: Vec<String> = {
             let mut stmt = tx.prepare(
@@ -1876,11 +1892,11 @@ impl HistoryStore {
 
     #[cfg(test)]
     pub(crate) fn connection(&self) -> std::sync::MutexGuard<'_, Connection> {
-        self.conn.lock().unwrap()
+        self.conn()
     }
 
     pub fn get(&self, id: HistoryId) -> Result<Option<Utterance>, HistoryError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let row = conn
             .query_row(&format!("{SELECT} WHERE id = ?1"), params![id.0], map_row)
             .optional()?;
@@ -1906,7 +1922,7 @@ impl HistoryStore {
         let sql = format!(
             "SELECT date(ts + ?1, 'unixepoch') AS d, COUNT(*) FROM utterances {audio} GROUP BY d ORDER BY d"
         );
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params![i64::from(tz_offset_secs)], |r| {
             Ok(DayCount {
@@ -1935,7 +1951,7 @@ impl HistoryStore {
             "SELECT CAST(strftime('%H', ts + ?1, 'unixepoch') AS INTEGER) AS h, COUNT(*)
              FROM utterances WHERE ts >= ?2 AND ts < ?3 {audio} GROUP BY h"
         );
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let mut stmt = conn.prepare(&sql)?;
         let mut out = vec![0u32; 24];
         let rows = stmt.query_map(params![i64::from(tz_offset_secs), since, until], |r| {
@@ -2008,7 +2024,7 @@ impl HistoryStore {
         };
         let limit_slot = bind(&mut values, (limit as i64).into());
         let sql = format!("{SELECT}{filter} ORDER BY ts DESC, id DESC LIMIT ?{limit_slot}");
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(values), map_row)?;
         let rows = rows.collect::<Result<Vec<_>, _>>()?;
@@ -2028,7 +2044,7 @@ impl HistoryStore {
         tz_offset_secs: i32,
         typing_chars_per_min: u32,
     ) -> Result<Stats, HistoryError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         Ok(stats::query(
             &conn,
             since,
@@ -2052,7 +2068,7 @@ impl HistoryStore {
     /// Drops every rerun result; the result each row uses is on the row
     /// and stays. Returns how many went.
     pub fn clear_attempts(&self) -> Result<usize, HistoryError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let tx = conn.unchecked_transaction()?;
         tx.execute("DELETE FROM stages WHERE attempt_id IS NOT NULL", [])?;
         let n = tx.execute("DELETE FROM attempts", [])?;
@@ -2061,7 +2077,7 @@ impl HistoryStore {
     }
 
     pub fn reset_stats(&self) -> Result<(), HistoryError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         conn.execute("DELETE FROM stats_hourly", [])?;
         conn.execute("DELETE FROM dictionary_hits", [])?;
         Ok(())
@@ -2070,7 +2086,7 @@ impl HistoryStore {
     /// How often each dictionary term's aliases were replaced, over every
     /// device, with the time of the last replacement (unix seconds).
     pub fn dictionary_hits(&self) -> Result<Vec<TermHits>, HistoryError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let mut stmt = conn
             .prepare("SELECT term, SUM(count), MAX(last_ts) FROM dictionary_hits GROUP BY term")?;
         let rows = stmt.query_map([], |r| {
@@ -2098,7 +2114,7 @@ impl HistoryStore {
         recordings_dir: &Path,
     ) -> Result<Storage, HistoryError> {
         let (since, until) = bounds(since, until);
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let (rows, text_bytes): (i64, i64) = conn.query_row(
             "SELECT COUNT(*), COALESCE(SUM(LENGTH(raw_text) + LENGTH(refined_text) + LENGTH(final_text)), 0)
              FROM utterances WHERE ts >= ?1 AND ts < ?2",
@@ -2162,7 +2178,7 @@ impl HistoryStore {
         recordings_dir: &Path,
     ) -> Result<usize, HistoryError> {
         let (since, until) = bounds(since, until);
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT id FROM utterances WHERE audio_path IS NOT NULL AND ts >= ?1 AND ts < ?2",
         )?;
@@ -2189,7 +2205,7 @@ impl HistoryStore {
         recordings_dir: &Path,
     ) -> Result<usize, HistoryError> {
         let (since, until) = bounds(since, until);
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT id FROM utterances WHERE audio_path IS NOT NULL AND ts >= ?1 AND ts < ?2",
         )?;
@@ -2212,7 +2228,7 @@ impl HistoryStore {
         id: HistoryId,
         recordings_dir: &Path,
     ) -> Result<Option<PathBuf>, HistoryError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         recording_of(&conn, id.0, recordings_dir)
     }
 
@@ -2222,13 +2238,13 @@ impl HistoryStore {
         id: HistoryId,
         recordings_dir: &Path,
     ) -> Result<bool, HistoryError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         remove_recording(&conn, id.0, recordings_dir)
     }
 
     /// The same for every row; returns how many files were removed.
     pub fn clear_recordings(&self, recordings_dir: &Path) -> Result<usize, HistoryError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         let mut stmt = conn.prepare("SELECT id FROM utterances WHERE audio_path IS NOT NULL")?;
         let ids: Vec<i64> = stmt
             .query_map([], |r| r.get(0))?
@@ -2274,7 +2290,7 @@ impl HistoryStore {
         let history_cutoff = cutoff(history_days);
         let recording_cutoff = cutoff(recording_days);
         let stage_cutoff = cutoff(stage_days);
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         // The stages of a row that stays are dropped once they are older
         // than `stage_days`; the row keeps its texts.
         let stages_deleted = conn.execute(
@@ -2338,7 +2354,7 @@ impl HistoryStore {
     /// that cannot be read, or an individual file that cannot be removed,
     /// is skipped rather than aborting the call.
     pub fn clear_all(&self, recordings_dir: &Path) -> Result<(), HistoryError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn();
         conn.execute("DELETE FROM utterances", [])?;
         if recordings_dir.is_dir() {
             if let Ok(entries) = std::fs::read_dir(recordings_dir) {
@@ -2346,8 +2362,7 @@ impl HistoryStore {
                     if entry
                         .path()
                         .extension()
-                        .map(|e| e == "wav")
-                        .unwrap_or(false)
+                        .is_some_and(|e| e.eq_ignore_ascii_case("wav"))
                     {
                         let _ = std::fs::remove_file(entry.path());
                     }

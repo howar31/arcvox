@@ -2,7 +2,7 @@
 //! is rebuilt when its config changes.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use crate::config::{General, ProviderConfig, ProviderKind};
@@ -13,32 +13,80 @@ use crate::providers::{AsrProvider, LlmProvider, ProviderError};
 use crate::secrets::SecretStore;
 use crate::types::{ErrorCode, ProviderId};
 
-#[allow(clippy::type_complexity)]
+/// A provider built from a config, with what it was built from: the
+/// config, the timeout and retry count, and the API key it was given.
+/// Any of these changing means a new provider.
+struct Cached<P: ?Sized> {
+    cfg: ProviderConfig,
+    timing: (u64, u32),
+    key: Option<String>,
+    provider: Arc<P>,
+}
+
+/// One role's providers by id; a lock poisoned by a panic elsewhere stays
+/// usable, the map being whole at every point.
+struct Cache<P: ?Sized>(Mutex<HashMap<ProviderId, Cached<P>>>);
+
+impl<P: ?Sized> Cache<P> {
+    fn new() -> Self {
+        Self(Mutex::new(HashMap::new()))
+    }
+
+    fn lock(&self) -> MutexGuard<'_, HashMap<ProviderId, Cached<P>>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The cached provider when it was built from the same config, timing
+    /// and key.
+    fn get(
+        &self,
+        cfg: &ProviderConfig,
+        timing: (u64, u32),
+        key: &Option<String>,
+    ) -> Option<Arc<P>> {
+        let cache = self.lock();
+        let c = cache.get(&cfg.id)?;
+        (c.cfg == *cfg && c.timing == timing && c.key == *key).then(|| c.provider.clone())
+    }
+
+    fn insert(
+        &self,
+        cfg: &ProviderConfig,
+        timing: (u64, u32),
+        key: Option<String>,
+        provider: Arc<P>,
+    ) {
+        self.lock().insert(
+            cfg.id.clone(),
+            Cached {
+                cfg: cfg.clone(),
+                timing,
+                key,
+                provider,
+            },
+        );
+    }
+
+    /// Removes the providers whose config matches `pred` and returns them.
+    fn evict_where(&self, pred: &impl Fn(&ProviderConfig) -> bool) -> Vec<Arc<P>> {
+        let mut out = Vec::new();
+        self.lock().retain(|_, c| {
+            if pred(&c.cfg) {
+                out.push(c.provider.clone());
+                false
+            } else {
+                true
+            }
+        });
+        out
+    }
+}
+
 pub struct ProviderRegistry {
     client: reqwest::Client,
     secrets: Arc<dyn SecretStore>,
-    asr: Mutex<
-        HashMap<
-            ProviderId,
-            (
-                ProviderConfig,
-                (u64, u32),
-                Option<String>,
-                Arc<dyn AsrProvider>,
-            ),
-        >,
-    >,
-    llm: Mutex<
-        HashMap<
-            ProviderId,
-            (
-                ProviderConfig,
-                (u64, u32),
-                Option<String>,
-                Arc<dyn LlmProvider>,
-            ),
-        >,
-    >,
+    asr: Cache<dyn AsrProvider>,
+    llm: Cache<dyn LlmProvider>,
     factories: Vec<Arc<dyn ProviderFactory>>,
 }
 
@@ -58,8 +106,8 @@ impl ProviderRegistry {
         Self {
             client,
             secrets,
-            asr: Mutex::new(HashMap::new()),
-            llm: Mutex::new(HashMap::new()),
+            asr: Cache::new(),
+            llm: Cache::new(),
             factories,
         }
     }
@@ -80,29 +128,15 @@ impl ProviderRegistry {
     pub fn llm_providers(&self) -> Vec<Arc<dyn LlmProvider>> {
         self.llm
             .lock()
-            .unwrap()
             .values()
-            .map(|v| v.3.clone())
+            .map(|c| c.provider.clone())
             .collect()
     }
 
     /// Removes every cached provider whose config matches `pred` and returns
     /// them, so the caller can unload them outside the cache locks.
     pub fn evict_where(&self, pred: impl Fn(&ProviderConfig) -> bool) -> EvictedProviders {
-        let asr = self.evict_asr_where(&pred);
-        let mut llm = Vec::new();
-        {
-            let mut cache = self.llm.lock().unwrap();
-            cache.retain(|_, (cfg, _, _, p)| {
-                if pred(cfg) {
-                    llm.push(p.clone());
-                    false
-                } else {
-                    true
-                }
-            });
-        }
-        (asr, llm)
+        (self.asr.evict_where(&pred), self.llm.evict_where(&pred))
     }
 
     /// `evict_where` for the speech cache only.
@@ -110,16 +144,7 @@ impl ProviderRegistry {
         &self,
         pred: impl Fn(&ProviderConfig) -> bool,
     ) -> Vec<Arc<dyn AsrProvider>> {
-        let mut asr = Vec::new();
-        self.asr.lock().unwrap().retain(|_, (cfg, _, _, p)| {
-            if pred(cfg) {
-                asr.push(p.clone());
-                false
-            } else {
-                true
-            }
-        });
-        asr
+        self.asr.evict_where(&pred)
     }
 
     pub fn resolve_key(&self, cfg: &ProviderConfig) -> Result<Option<String>, ProviderError> {
@@ -146,14 +171,9 @@ impl ProviderRegistry {
         general: &General,
     ) -> Result<Arc<dyn AsrProvider>, ProviderError> {
         let key = self.resolve_key(cfg)?;
-        let mut cache = self.asr.lock().unwrap();
-        if let Some((cached_cfg, cached_timeout, cached_key, p)) = cache.get(&cfg.id) {
-            if cached_cfg == cfg
-                && *cached_timeout == (general.asr_timeout_secs, general.retry_count)
-                && *cached_key == key
-            {
-                return Ok(p.clone());
-            }
+        let timing = (general.asr_timeout_secs, general.retry_count);
+        if let Some(p) = self.asr.get(cfg, timing, &key) {
+            return Ok(p);
         }
         let provider: Arc<dyn AsrProvider> = match cfg.kind {
             ProviderKind::Http => {
@@ -178,15 +198,7 @@ impl ProviderRegistry {
                 }
             }
         };
-        cache.insert(
-            cfg.id.clone(),
-            (
-                cfg.clone(),
-                (general.asr_timeout_secs, general.retry_count),
-                key,
-                provider.clone(),
-            ),
-        );
+        self.asr.insert(cfg, timing, key, provider.clone());
         Ok(provider)
     }
 
@@ -196,14 +208,9 @@ impl ProviderRegistry {
         general: &General,
     ) -> Result<Arc<dyn LlmProvider>, ProviderError> {
         let key = self.resolve_key(cfg)?;
-        let mut cache = self.llm.lock().unwrap();
-        if let Some((cached_cfg, cached_timeout, cached_key, p)) = cache.get(&cfg.id) {
-            if cached_cfg == cfg
-                && *cached_timeout == (general.llm_timeout_secs, general.retry_count)
-                && *cached_key == key
-            {
-                return Ok(p.clone());
-            }
+        let timing = (general.llm_timeout_secs, general.retry_count);
+        if let Some(p) = self.llm.get(cfg, timing, &key) {
+            return Ok(p);
         }
         let provider: Arc<dyn LlmProvider> = match cfg.kind {
             ProviderKind::Http => {
@@ -225,15 +232,7 @@ impl ProviderRegistry {
                 }
             }
         };
-        cache.insert(
-            cfg.id.clone(),
-            (
-                cfg.clone(),
-                (general.llm_timeout_secs, general.retry_count),
-                key,
-                provider.clone(),
-            ),
-        );
+        self.llm.insert(cfg, timing, key, provider.clone());
         Ok(provider)
     }
 }

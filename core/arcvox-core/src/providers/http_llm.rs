@@ -98,12 +98,19 @@ impl LlmProvider for HttpLlmProvider {
                 format!("{}: bad chat response: {e}", self.label),
             )
         })?;
-        let choice = parsed.choices.into_iter().next();
-        let finish_reason = choice.as_ref().and_then(|c| c.finish_reason.clone());
-        let content = choice.and_then(|c| c.message.content).ok_or_else(|| {
+        let choice = parsed.choices.into_iter().next().ok_or_else(|| {
             ProviderError::new(
                 ErrorCode::ProviderError,
                 format!("{}: no choices in response", self.label),
+            )
+        })?;
+        let finish_reason = choice.finish_reason.clone();
+        // A choice without text: a refusal or a tool call the service gives
+        // instead of a message.
+        let content = choice.message.content.ok_or_else(|| {
+            ProviderError::new(
+                ErrorCode::ProviderError,
+                format!("{}: the response's message has no content", self.label),
             )
         })?;
         if finish_reason.as_deref() == Some("length") {
@@ -169,6 +176,34 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out, "整理後");
+    }
+
+    #[tokio::test]
+    async fn a_message_without_content_is_told_apart_from_no_choices() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                json!({"choices":[{"message":{"role":"assistant","content":null}}]}),
+            ))
+            .mount(&server)
+            .await;
+        let base = Url::parse(&format!("{}/v1", server.uri())).unwrap();
+        let p = HttpLlmProvider::new(
+            reqwest::Client::new(),
+            &base,
+            "gemma3",
+            None,
+            BTreeMap::new(),
+            "Ollama",
+            1,
+        );
+        let err = p
+            .complete(vec![ChatMessage::user("U")], &opts())
+            .await
+            .unwrap_err();
+        assert!(err.message.contains("no content"), "{}", err.message);
+        assert!(!err.message.contains("no choices"), "{}", err.message);
     }
 
     #[tokio::test]

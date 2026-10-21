@@ -5,8 +5,8 @@ use crate::types::{ProfileId, ProviderId};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ConfigError {
-    #[error("duplicate id `{0}`")]
-    DuplicateId(String),
+    #[error("duplicate {kind} id `{id}`")]
+    DuplicateId { kind: &'static str, id: String },
     #[error("default {role:?} engine `{provider}` does not exist")]
     UnknownDefaultEngine {
         role: EngineRole,
@@ -53,7 +53,10 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
     let mut seen = std::collections::HashSet::new();
     for p in &config.providers {
         if !seen.insert(format!("provider:{}", p.id)) {
-            return Err(ConfigError::DuplicateId(p.id.0.clone()));
+            return Err(ConfigError::DuplicateId {
+                kind: "engine",
+                id: p.id.0.clone(),
+            });
         }
         if p.kind == ProviderKind::Embedded
             && (p.runtime.is_none() || (p.model_id.is_none() && p.model_path.is_none()))
@@ -63,7 +66,10 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
     }
     for p in &config.profiles {
         if !seen.insert(format!("profile:{}", p.id)) {
-            return Err(ConfigError::DuplicateId(p.id.0.clone()));
+            return Err(ConfigError::DuplicateId {
+                kind: "profile",
+                id: p.id.0.clone(),
+            });
         }
     }
 
@@ -298,7 +304,20 @@ mod tests {
         let mut c = base();
         let dup = c.providers[0].clone();
         c.providers.push(dup);
-        assert!(matches!(validate(&c), Err(ConfigError::DuplicateId(_))));
+        assert!(matches!(
+            validate(&c),
+            Err(ConfigError::DuplicateId { kind: "engine", .. })
+        ));
+        let mut c = base();
+        let dup = c.profiles[0].clone();
+        c.profiles.push(dup);
+        assert!(matches!(
+            validate(&c),
+            Err(ConfigError::DuplicateId {
+                kind: "profile",
+                ..
+            })
+        ));
     }
 
     #[test]
