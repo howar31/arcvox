@@ -232,7 +232,7 @@
   "dictionary.aliases_placeholder": "Add alias",
   "dictionary.asr_hint": "Use as recognition hint",
   "prompt.restore": "Restore default",
-  "prompt.note": "The rewrite and the translation each have a base prompt: the app sends the fixed opening, and the rules under it can be edited.",
+  "prompt.title": "{stage} base prompt",
   "prompt.rewrite_note": "Every rewrite sends the fixed opening and these rules first, then the profile's writing, the dictionary terms, the background and the examples.",
   "prompt.translate_note": "Every translation sends the fixed opening and these rules first, then the profile's target, the profile's translation writing and the dictionary terms.",
   "prompt.fixed": "Fixed opening, not editable",

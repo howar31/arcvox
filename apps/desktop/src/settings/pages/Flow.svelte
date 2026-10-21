@@ -609,7 +609,7 @@
         {#if lines.llm.missing}
           <p class="missing"><span>{t("flow.model_missing")}</span><button type="button" class="btn" onclick={() => guard.request(() => go("engines", "llm"))}>{t("flow.to_download")}</button></p>
         {/if}
-        <div class="bar"><h2>{t("profiles.prompt_addition")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("prompt"))}>{t("flow.see_prompt")}</button></div>
+        <div class="bar"><h2>{t("profiles.prompt_addition")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("prompt", "llm"))}>{t("flow.see_prompt")}</button></div>
           <!-- The reason for the stage's problem mark when the template's style moved on: the profile keeps its own text until the user decides. -->
           {#if movedTemplate}
             <div class="fallback">
@@ -693,7 +693,7 @@
             </Row>
           </Fold>{/if}
         </Group>
-        <div class="bar"><h2>{t("flow.translate_addition")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("prompt", null, "translate"))}>{t("flow.see_prompt")}</button></div>
+        <div class="bar"><h2>{t("flow.translate_addition")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("prompt", "translate"))}>{t("flow.see_prompt")}</button></div>
         <textarea rows="4" value={step.addition ?? ""} aria-label={t("flow.translate_addition")} oninput={(e) => setTranslate({ addition: e.currentTarget.value })}></textarea>
         <p class="help">{t("flow.translate_addition_help")}<InfoTip info={t("profiles.prompt_info")} /></p>
         <div class="bar"><h2>{t("flow.translate_engines")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("engines", "llm"))}>{t("flow.manage")}</button></div>

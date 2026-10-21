@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import { defaultPrompt, defaultTranslatePrompt, errorMessage, fixedPrompts, getPrompt, getTranslatePrompt, restorePrompt, restoreTranslatePrompt, setPrompt, setTranslatePrompt } from "../../lib/api";
   import { guard } from "../../lib/guard.svelte";
   import { stageName } from "../../lib/flowLast";
@@ -11,8 +10,10 @@
   import SaveBar from "../../lib/ui/SaveBar.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
 
+  /** `arg` names the module whose prompt is shown: `llm` (the default) or `translate`. */
+  let { arg }: { arg: string | null } = $props();
   type Kind = "rewrite" | "translate";
-  const KINDS: Kind[] = ["rewrite", "translate"];
+  const kind = $derived<Kind>(arg === "translate" ? "translate" : "rewrite");
   const api = {
     rewrite: { get: getPrompt, set: setPrompt, standard: defaultPrompt, restore: restorePrompt },
     translate: { get: getTranslatePrompt, set: setTranslatePrompt, standard: defaultTranslatePrompt, restore: restoreTranslatePrompt },
@@ -28,39 +29,41 @@
     // The text of a new installation; null while it is not known.
     standard: string | null;
   }
-  const blank = (): Block => ({ saved: null, text: "", loaded: false, standard: null });
-  let blocks = $state<Record<Kind, Block>>({ rewrite: blank(), translate: blank() });
-  // The openings the app sends before the rules; shown, never edited.
-  let fixed = $state<Record<Kind, string> | null>(null);
+  let b = $state<Block>({ saved: null, text: "", loaded: false, standard: null });
+  // The opening the app sends before the rules; shown, never edited.
+  let fixed = $state<string | null>(null);
   let saving = $state(false);
-  let confirmRestore = $state<Kind | null>(null);
+  let confirmRestore = $state(false);
 
-  onMount(async () => {
-    fixedPrompts().then((f) => { fixed = f; }).catch(() => {});
-    for (const kind of KINDS) {
-      const b = blocks[kind];
-      api[kind].standard().then((d) => { b.standard = d; }).catch(() => {});
-      try {
-        const current = await api[kind].get();
-        b.saved = current;
-        b.text = current;
-        b.loaded = true;
-      } catch (e) {
-        // Still show the editor, so the default can be restored.
-        b.saved = "";
-        b.text = "";
-        toast.error(errorMessage(e));
-      }
-    }
+  // Another module's prompt: the editor starts over with its text.
+  $effect(() => {
+    const k = kind;
+    b = { saved: null, text: "", loaded: false, standard: null };
+    fixed = null;
+    load(k);
   });
 
-  const shown = $derived(KINDS.every((k) => blocks[k].saved !== null));
-  const dirtyOf = (b: Block) => b.saved !== null && b.text !== b.saved;
-  const dirty = $derived(KINDS.some((k) => dirtyOf(blocks[k])));
-  // Saving needs every changed editor to hold the stored text.
-  const canSave = $derived(KINDS.every((k) => !dirtyOf(blocks[k]) || blocks[k].loaded));
+  async function load(k: Kind) {
+    fixedPrompts().then((f) => { if (k === kind) fixed = f[k]; }).catch(() => {});
+    api[k].standard().then((d) => { if (k === kind) b.standard = d; }).catch(() => {});
+    try {
+      const current = await api[k].get();
+      if (k !== kind) return;
+      b.saved = current;
+      b.text = current;
+      b.loaded = true;
+    } catch (e) {
+      if (k !== kind) return;
+      // Still show the editor, so the default can be restored.
+      b.saved = "";
+      b.text = "";
+      toast.error(errorMessage(e));
+    }
+  }
+
+  const dirty = $derived(b.saved !== null && b.text !== b.saved);
   // Restoring is offered while the stored text may differ from the default.
-  const restorable = (b: Block) => !b.loaded || b.standard === null || b.saved !== b.standard;
+  const restorable = $derived(!b.loaded || b.standard === null || b.saved !== b.standard);
 
   $effect(() => {
     guard.set(dirty);
@@ -68,16 +71,12 @@
   });
 
   async function save() {
-    if (!canSave) return;
+    if (!b.loaded) return;
     saving = true;
     try {
-      for (const kind of KINDS) {
-        const b = blocks[kind];
-        if (!dirtyOf(b)) continue;
-        const next = b.text;
-        await api[kind].set(next);
-        b.saved = next;
-      }
+      const next = b.text;
+      await api[kind].set(next);
+      b.saved = next;
     } catch (e) {
       toast.error(errorMessage(e));
     } finally {
@@ -85,16 +84,11 @@
     }
   }
 
-  function revert() {
-    for (const kind of KINDS) blocks[kind].text = blocks[kind].saved ?? "";
-  }
-
-  async function restore(kind: Kind) {
-    confirmRestore = null;
+  async function restore() {
+    confirmRestore = false;
     saving = true;
     try {
       const next = await api[kind].restore();
-      const b = blocks[kind];
       b.saved = next;
       b.text = next;
       b.loaded = true;
@@ -106,65 +100,53 @@
     }
   }
 
-  const title = (kind: Kind) => stageName(kind === "rewrite" ? "llm" : "translate");
+  const stage = $derived(stageName(kind === "rewrite" ? "llm" : "translate"));
 </script>
 
-{#if shown}
+{#if b.saved !== null}
   {#snippet noteInfo()}{t("prompt.note_info_before").slice(0, -1)}<span class="nobr">{t("prompt.note_info_before").slice(-1)}<PageLink page="flow" stage="rules" label={t("nav.flow")} />{t("prompt.note_info_after")}</span>{/snippet}
-  <PageHead title={t("nav.prompt")} description={t("prompt.note")} info={noteInfo} crumb={{ label: t("nav.flow"), page: "flow" }} />
+  <PageHead title={t("prompt.title", { stage })} description={t(kind === "rewrite" ? "prompt.rewrite_note" : "prompt.translate_note")} info={noteInfo} crumb={{ label: t("nav.flow"), page: "flow" }}>
+    {#snippet actions()}
+      {#if restorable}<button type="button" class="btn" disabled={saving} onclick={() => (confirmRestore = true)}>{t("prompt.restore")}</button>{/if}
+    {/snippet}
+  </PageHead>
 
-  {#each KINDS as kind (kind)}
-    {@const b = blocks[kind]}
-    <section class="block" data-section={kind}>
-      <div class="bar">
-        <h2>{title(kind)}</h2>
-        {#if restorable(b)}<button type="button" class="btn" disabled={saving} onclick={() => (confirmRestore = kind)}>{t("prompt.restore")}</button>{/if}
+  {#if fixed !== null}
+    <div class="fixed" aria-label={t("prompt.fixed")}>
+      <span class="fixed-label">{t("prompt.fixed")}</span>
+      <pre>{fixed}</pre>
+    </div>
+  {/if}
+  <textarea class="editor" bind:value={b.text} aria-label="{stage} {t('prompt.rules')}" spellcheck="false"></textarea>
+
+  <SaveBar {dirty} {saving} canSave={b.loaded} message={b.loaded ? undefined : t("prompt.not_loaded")} onsave={save} onrevert={() => (b.text = b.saved ?? "")} />
+
+  <Modal bind:open={confirmRestore} title={t("prompt.restore_title")} size="lg">
+    <p>{t("prompt.restore_body")}</p>
+    {#if b.standard === null}
+      <p class="muted">{t("prompt.default_unknown")}</p>
+    {:else}
+      <p class="legend"><span class="sw del"></span>{t("prompt.diff_current")}<span class="sw ins"></span>{t("prompt.diff_default")}</p>
+      <div class="lines">
+        {#each lineDiff(b.text, b.standard) as l, i (i)}
+          <div class="ln {l.kind}">{l.text || " "}</div>
+        {/each}
       </div>
-      <p class="sub">{t(kind === "rewrite" ? "prompt.rewrite_note" : "prompt.translate_note")}</p>
-      {#if fixed}
-        <div class="fixed" aria-label={t("prompt.fixed")}>
-          <span class="fixed-label">{t("prompt.fixed")}</span>
-          <pre>{fixed[kind]}</pre>
-        </div>
-      {/if}
-      <textarea class="editor" bind:value={b.text} aria-label="{title(kind)} {t('prompt.rules')}" spellcheck="false"></textarea>
-    </section>
-  {/each}
-
-  <SaveBar {dirty} {saving} {canSave} message={canSave ? undefined : t("prompt.not_loaded")} onsave={save} onrevert={revert} />
-
-  <Modal open={confirmRestore !== null} onclose={() => (confirmRestore = null)} title={t("prompt.restore_title")} size="lg">
-    {#if confirmRestore}
-      {@const b = blocks[confirmRestore]}
-      <p>{t("prompt.restore_body")}</p>
-      {#if b.standard === null}
-        <p class="muted">{t("prompt.default_unknown")}</p>
-      {:else}
-        <p class="legend"><span class="sw del"></span>{t("prompt.diff_current")}<span class="sw ins"></span>{t("prompt.diff_default")}</p>
-        <div class="lines">
-          {#each lineDiff(b.text, b.standard) as l, i (i)}
-            <div class="ln {l.kind}">{l.text || " "}</div>
-          {/each}
-        </div>
-      {/if}
     {/if}
     {#snippet actions()}
-      <button type="button" class="btn" onclick={() => (confirmRestore = null)}>{t("common.cancel")}</button>
-      <button type="button" class="btn primary" onclick={() => confirmRestore && restore(confirmRestore)}>{t("prompt.restore")}</button>
+      <button type="button" class="btn" onclick={() => (confirmRestore = false)}>{t("common.cancel")}</button>
+      <button type="button" class="btn primary" onclick={restore}>{t("prompt.restore")}</button>
     {/snippet}
   </Modal>
 {/if}
 
 <style>
-  .block { margin-top: var(--gap-group); scroll-margin-top: 20px; }
-  .bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 4px 6px; min-height: 28px; }
-  .bar h2 { margin: 0; font: 600 var(--text)/1.2 var(--font); }
-  .sub { display: block; margin: 0 4px 10px; }
   /* The opening the app sends first: read like the editor, but plainly not a field. */
-  .fixed { margin: 0 0 8px; padding: 10px 13px; border-radius: 10px; background: var(--sunken); color: var(--ink-2); font-size: var(--text-sm); line-height: 1.6; }
+  .fixed { margin: 16px 0 8px; padding: 10px 13px; border-radius: 10px; background: var(--sunken); color: var(--ink-2); font-size: var(--text-sm); line-height: 1.6; }
   .fixed-label { display: block; margin-bottom: 4px; font-size: var(--text-xs); color: var(--ink-3); }
   .fixed pre { margin: 0; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .editor { display: block; min-height: 180px; }
+  /* Fills the window below the opening, and keeps a usable height in a short window. */
+  .editor { display: block; height: max(180px, calc(100vh - 420px)); }
   .muted { color: var(--ink-2); }
   .legend { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: var(--text-xs); color: var(--ink-2); }
   .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; }

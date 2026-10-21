@@ -232,7 +232,7 @@
   "dictionary.aliases_placeholder": "新增別名",
   "dictionary.asr_hint": "作為辨識提示",
   "prompt.restore": "還原預設值",
-  "prompt.note": "改寫與翻譯各有一段基礎提示詞：固定的開頭由 app 送出，下面的規則可以改。",
+  "prompt.title": "{stage}的基礎提示詞",
   "prompt.rewrite_note": "每次改寫都先送出固定的開頭與這段規則，再接上情境的寫法、字典詞彙、背景資訊與範例。",
   "prompt.translate_note": "每次翻譯都先送出固定的開頭與這段規則，再接上情境的目標、情境的翻譯寫法與字典詞彙。",
   "prompt.fixed": "固定的開頭，不能改",

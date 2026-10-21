@@ -159,7 +159,7 @@
         {:else if route.page === "backup"}<Backup />
         {:else if route.page === "engines"}<Engines arg={route.arg} />
         {:else if route.page === "flow"}<Flow arg={route.arg} />
-        {:else if route.page === "prompt"}<Prompt />
+        {:else if route.page === "prompt"}<Prompt arg={route.arg} />
         {:else if route.page === "dictionary"}<Dictionary />
         {:else if route.page === "history"}<History />
         {:else if route.page === "speed"}<Speed />
