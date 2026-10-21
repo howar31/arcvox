@@ -4,7 +4,7 @@ import { changeCount, textFlow } from "./textFlow";
 
 const row = (raw: string, refined: string, fin = refined, app: string | null = "TextEdit"): Utterance => ({
   id: 1, ts: 0, profile_id: "default", app_name: app, raw_text: raw, refined_text: refined, final_text: fin,
-  degraded: false, has_audio: false, asr_ms: 200, llm_ms: 1200, audio_ms: null, audio_bytes: null, error: null, error_code: null, redone: 0, correction_source: null,
+  degraded: false, has_audio: false, asr_ms: 200, llm_ms: 1200, audio_ms: null, audio_bytes: null, error: null, error_code: null, redone: 0, correction_source: null, translated: false,
 });
 const stage = (position: number, kind: Stage["kind"], text: string | null, detail: Record<string, unknown> = {}): Stage => ({ position, kind, text, ms: null, detail });
 
@@ -58,6 +58,18 @@ describe("textFlow", () => {
     const { steps, unchanged } = textFlow(row("好 我等一下看", "好 我等一下看"), null);
     expect(steps.map((s) => s.kind)).toEqual(["first", "mark"]);
     expect(unchanged).toBe("The rewrite did not change the text");
+  });
+  it("shows a translation whole after the tidy step, numbered after it", () => {
+    const translated = [
+      stage(1, "asr", "測試一下", { chars: 4 }),
+      stage(2, "llm", "測試一下。", {}),
+      stage(3, "rules", "測試一下", { stop_removed: true }),
+      stage(4, "translate", "A quick test", { target: "英文", in_chars: 4, out_chars: 12 }),
+      stage(5, "insert", null, { method: "paste", outcome: "inserted", app_name: "Slack" }),
+    ];
+    const { steps } = textFlow({ ...row("測試一下", "A quick test", "A quick test", "Slack"), translated: true }, translated);
+    expect(steps.map((s) => s.kind)).toEqual(["first", "stage", "stage", "stage", "mark"]);
+    expect(steps[3]).toMatchObject({ mark: "5", name: "Translation", small: "Into 英文", from: "測試一下", text: "A quick test" });
   });
   it("carries a failed stage with its reason", () => {
     const failed = [stage(3, "asr", "原文", {}), stage(5, "llm", null, { message: "timed out" }), stage(8, "insert", null, { method: "paste", outcome: "inserted", app_name: "Notes" })];

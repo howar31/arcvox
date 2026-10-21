@@ -91,6 +91,8 @@ export interface Utterance {
   redone: number;
   /** How the final text was corrected; null while it is the result's own text or when the source was not kept. */
   correction_source: "read_back" | "hand" | null;
+  /** The text is a translation into another language or style. */
+  translated: boolean;
 }
 /** What processing a row again gave: the result recorded with the row, or why the engines failed (recorded too). */
 export interface RedoOutcome { attempt: Attempt | null; failure: { code: string; detail: string } | null }
@@ -380,6 +382,8 @@ export interface ClipCandidate { id: number; ts: number; raw_text: string }
 export type BenchRole = "asr" | "llm";
 export interface BenchRun { provider_id: string; role: BenchRole; cold: boolean; load_ms: number; infer_ms: number; output: string; error: string | null }
 export const profilesPresets = () => invoke<PresetView[]>("profiles_presets");
+/** The instruction the translation module ships with; `{目標}` stands for the target. */
+export const translatePromptDefault = () => invoke<string>("translate_prompt_default");
 export const profilesAddPreset = (presetId: string, name: string) => invoke<Config>("profiles_add_preset", { presetId, name });
 /** Settles a profile whose template's writing style moved on: take the template's current style, or keep the profile's own. */
 export const profilesTemplateStyle = (id: string, take: boolean) => invoke<Config>("profiles_template_style", { id, take });

@@ -3,10 +3,10 @@
   import { onMount, untrack } from "svelte";
   import {
     errorMessage, historyLast, listMicrophones, modelsDownload, modelsInstalled, modelsManifestNow, onHistoryChanged, onModelDownloadProgress, openFolder, profilesAddPreset,
-    profilesPresets, profilesTemplateStyle, setDefaultProfile, upsertProfile, type InstalledModel, type LastRun, type ManifestView, type PresetView, type Profile,
+    profilesPresets, profilesTemplateStyle, setDefaultProfile, translatePromptDefault, upsertProfile, type InstalledModel, type LastRun, type ManifestView, type PresetView, type Profile,
   } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
-  import { appliesDictionary, PUNCTUATION_CONFIGS, RULE_KEYS, rulesAt, SCRIPT_CONFIGS, SCRIPT_GROUPS, scriptAt, scriptLabel, selectedProfile, withDictionary, withRule, withRules, withScript, withScriptPunctuationBoth, type RuleKey } from "../../lib/flowEdit";
+  import { appliesDictionary, PUNCTUATION_CONFIGS, RULE_KEYS, rulesAt, SCRIPT_CONFIGS, SCRIPT_GROUPS, scriptAt, scriptLabel, selectedProfile, translateAt, withDictionary, withRule, withRules, withScript, withScriptPunctuationBoth, withTranslate, type RuleKey, type TranslateStep } from "../../lib/flowEdit";
   import { CELL_IDS, cellLine, cellsOf, cellTime, moduleAdded, MODULE_IDS, runHeadline, stageName, type CellId } from "../../lib/flowLast";
   import { rememberProfile, rememberStage, storedProfile, storedStage } from "../../lib/stageMemory";
   import { guard } from "../../lib/guard.svelte";
@@ -42,6 +42,11 @@
 
   const LANGS = ["zh-TW", "zh-CN", "en", "ja"];
   const LANG_KEYS: Record<string, string> = { "zh-TW": "profiles.lang.zh_tw", "zh-CN": "profiles.lang.zh_cn", en: "profiles.lang.en", ja: "profiles.lang.ja" };
+  // The targets the translation module offers by name; anything else is typed in and kept as typed.
+  const TARGET_KEYS = ["en", "ja", "zh_tw", "zh_cn", "ko", "fr", "de", "es"];
+  const targetNames = $derived(TARGET_KEYS.map((k) => t(`flow.target.${k}`)));
+  // The built-in translation instruction, for the prompt field's empty state and its reset.
+  let translatePrompt = $state("");
 
   // The stage shown first is the one shown when the page was left last.
   let stage = $state<CellId>(storedStage());
@@ -82,6 +87,7 @@
     modelsInstalled().then((m) => { models = m; }).catch(() => { models = null; });
     modelsManifestNow().then((m) => { manifest = m; }).catch(() => { manifest = null; });
     profilesPresets().then((p) => { presets = p; }).catch((e) => toast.error(t("profiles.presets_failed", { detail: errorMessage(e) })));
+    translatePromptDefault().then((p) => { translatePrompt = p; }).catch(() => { translatePrompt = ""; });
     return () => { off.then((u) => u()); };
   });
 
@@ -155,8 +161,8 @@
    * lacks its audio encoder, or a service cannot run.
    */
   type Reason = "gone" | "file" | "download" | "encoder" | "service";
-  function onDefault(role: "asr" | "llm"): { wanted: string; using: string; reason: Reason; modelId: string | null; folder: string | null } | null {
-    const c = role === "asr" ? resolved?.asr : resolved?.llm;
+  function onDefault(role: "asr" | "llm" | "translate"): { wanted: string; using: string; reason: Reason; modelId: string | null; folder: string | null } | null {
+    const c = role === "asr" ? resolved?.asr : role === "llm" ? resolved?.llm : resolved?.translate;
     if (!c || !isFallback(c)) return null;
     const wanted = providers.find((p) => p.id === c.source.wanted);
     const using = providers.find((p) => p.id === c.id)?.label ?? c.id;
@@ -216,12 +222,13 @@
   });
   $effect(() => { ensureAppNames(profiles.flatMap((p) => p.matcher.app_ids)); });
 
-  const lines = $derived.by((): Record<"mic" | "asr" | "llm" | "out", StageLine> | null => {
+  const lines = $derived.by((): Record<"mic" | "asr" | "llm" | "translate" | "out", StageLine> | null => {
     if (!draft) return null;
     return {
       mic: micLine(client.value?.microphone ?? "builtin", mics),
       asr: engineLine(providers, resolved?.asr.id ?? null, installed),
       llm: engineLine(providers, resolved?.llm?.id ?? null, installed),
+      translate: engineLine(providers, resolved?.translate?.id ?? null, installed),
       out: outputLine(draft, client.value?.insertion.default),
     };
   });
@@ -250,7 +257,7 @@
       asr: () => cell("asr", lines!.asr.name, lines!.asr.missing, !lines!.asr.known),
       llm: () => cell("llm", lines!.llm.name, lines!.llm.missing, !lines!.llm.known),
       rules: () => cell("rules", rules),
-      translate: () => cell("translate", translate ? translate.target : ""),
+      translate: () => cell("translate", translate ? translate.target : "", lines!.translate.missing, !lines!.translate.known),
       insert: () => cell("insert", lines!.out.name),
       record: () => cell("record", t("flow.record_meta")),
     };
@@ -261,14 +268,22 @@
     if (!draft) return [];
     return MODULE_IDS.filter((id) => !moduleAdded(draft!, id)).map((id) => ({ id, name: stageName(id), help: t(`flow.module.${id}_help`) }));
   });
-  const translateAt = (p: Profile) => { const s = p.steps.find((x) => x.step === "translate"); return s && s.step === "translate" ? s : null; };
-  /** Adds a module at its fixed place and shows it. */
+  /** Adds a module at its fixed place and shows it. A translation starts with English as its target. */
   function addModule(id: CellId) {
     if (!draft) return;
     if (id === "llm") draft = withLlm(snapshot(), "");
     else if (id === "rules") draft = withRules(snapshot(), true);
+    else if (id === "translate") draft = withTranslate(snapshot(), { step: "translate", target: t("flow.target.en") });
     stage = id;
   }
+  /** The translation step with one field changed. */
+  function setTranslate(change: Partial<TranslateStep>) {
+    if (!draft) return;
+    const step = translateAt(draft);
+    if (step) draft = withTranslate(snapshot(), { ...step, ...change });
+  }
+  // The target picker: a named target, or "custom" with the typed text under it.
+  const customTarget = $derived.by(() => { const s = draft ? translateAt(draft) : null; return !!s && !targetNames.includes(s.target); });
   // The remove row asks once more: a second press within a few seconds removes the module.
   let sureRemove = $state(false);
   let sureTimer: ReturnType<typeof setTimeout> | undefined;
@@ -285,6 +300,7 @@
     if (!draft) return;
     if (stage === "llm") draft = withLlm(snapshot(), null);
     else if (stage === "rules") draft = withRules(snapshot(), false);
+    else if (stage === "translate") draft = withTranslate(snapshot(), null);
     else return;
     stage = "asr";
   }
@@ -293,7 +309,7 @@
   const current = $derived(cells.find((c) => c.id === stage));
   /** The problem mark of an engine stage that runs on the default because the engine named for it cannot run, or of the rewrite stage whose template style has moved on. */
   function problemOf(id: CellId): string | undefined {
-    const c = id === "asr" ? resolved?.asr : id === "llm" ? resolved?.llm : null;
+    const c = id === "asr" ? resolved?.asr : id === "llm" ? resolved?.llm : id === "translate" ? resolved?.translate : null;
     if (c && isFallback(c)) return t("flow.profile_fallback");
     return id === "llm" && movedTemplate ? t("flow.style_moved") : undefined;
   }
@@ -313,8 +329,9 @@
   // The right column's title repeats the setting, and for an engine adds whether it is ready.
   const titleMeta = $derived.by(() => {
     if (!current || !lines) return "";
-    const meta = stage === "asr" ? lines.asr.meta : stage === "llm" ? lines.llm.meta : stage === "capture" ? lines.mic.meta : "";
-    return meta && meta !== current.setting ? `${current.setting} · ${meta}` : current.setting;
+    const meta = stage === "asr" ? lines.asr.meta : stage === "llm" ? lines.llm.meta : stage === "translate" ? lines.translate.meta : stage === "capture" ? lines.mic.meta : "";
+    if (!meta || meta === current.setting) return current.setting;
+    return current.setting ? `${current.setting} · ${meta}` : meta;
   });
 
   /** Where a profile applies, in one sentence. */
@@ -431,7 +448,7 @@
 <PageHead title={t("nav.flow")} description={t("flow.description")} />
 
 <!-- What is wrong with the engine the stage names, that dictation goes on meanwhile, and a fix in place. -->
-{#snippet fallbackNote(role: "asr" | "llm")}
+{#snippet fallbackNote(role: "asr" | "llm" | "translate")}
   {@const fb = onDefault(role)}
   {#if fb}
     <div class="fallback">
@@ -448,7 +465,7 @@
         {:else if fb.reason === "service"}
           <button type="button" class="btn" onclick={() => guard.request(() => go("engines", role))}>{t("flow.to_engines")}</button>
         {/if}
-        <button type="button" class="btn quiet" onclick={() => { if (role === "asr") draft!.asr_provider = null; else draft!.llm_provider = null; }}>{t("flow.use_default")}</button>
+        <button type="button" class="btn quiet" onclick={() => { if (role === "asr") draft!.asr_provider = null; else if (role === "llm") draft!.llm_provider = null; else setTranslate({ provider: null }); }}>{t("flow.use_default")}</button>
       </div>
     </div>
   {/if}
@@ -664,6 +681,38 @@
         </Group>
         <Group>
           {@render removeRow(t("flow.remove_rules_help"))}
+        </Group>
+      {:else if stage === "translate"}
+        {@const step = translateAt(draft)!}
+        <Group title={t("flow.translate_group")} info={t("flow.translate_info")}>
+          <Row label={t("flow.translate_target")} help={t("flow.translate_target_help")}>
+            <select class="field" value={customTarget ? "custom" : step.target} aria-label={t("flow.translate_target")} onchange={(e) => setTranslate({ target: e.currentTarget.value === "custom" ? "" : e.currentTarget.value })}>
+              {#each targetNames as name (name)}<option value={name}>{name}</option>{/each}
+              <option value="custom">{t("flow.translate_custom_option")}</option>
+            </select>
+          </Row>
+          {#if customTarget}<Fold>
+            <Row label={t("flow.translate_custom")} help={t("flow.translate_custom_help")}>
+              <input type="text" class="field" value={step.target} aria-label={t("flow.translate_custom")} aria-invalid={step.target.trim() === "" ? "true" : undefined} oninput={(e) => setTranslate({ target: e.currentTarget.value })} />
+            </Row>
+          </Fold>{/if}
+        </Group>
+        <div class="bar"><h2>{t("flow.translate_prompt")}</h2>{#if step.prompt != null}<button type="button" class="btn quiet" onclick={() => setTranslate({ prompt: null })}>{t("flow.translate_prompt_reset")}</button>{/if}</div>
+        <textarea rows="4" value={step.prompt ?? translatePrompt} aria-label={t("flow.translate_prompt")} oninput={(e) => setTranslate({ prompt: e.currentTarget.value === translatePrompt ? null : e.currentTarget.value })}></textarea>
+        <p class="help">{t("flow.translate_prompt_help")}</p>
+        <div class="bar"><h2>{t("flow.translate_engines")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("engines", "llm"))}>{t("flow.manage")}</button></div>
+        {@render fallbackNote("translate")}
+        <EnginePicker
+          engines={llmChoices} selected={step.provider ?? FOLLOW} label={t("flow.translate_engines")} {manifest} {installed} models={models ?? []}
+          follow={{ name: t("flow.follow_rewrite"), help: t("flow.follow_rewrite_help", { name: lines.llm.name === t("home.no_rewrite") ? defaultName("llm") : lines.llm.name }) }} suggested={null}
+          defaultId={config.value?.default_engines.llm} onmanage={() => guard.request(() => go("engines", "llm"))}
+          stale={stale(step.provider ?? null, llmChoices)} onpick={(id) => setTranslate({ provider: id === FOLLOW ? null : id })}
+        />
+        {#if lines.translate.missing}
+          <p class="missing"><span>{t("flow.model_missing")}</span><button type="button" class="btn" onclick={() => guard.request(() => go("engines", "llm"))}>{t("flow.to_download")}</button></p>
+        {/if}
+        <Group>
+          {@render removeRow(t("flow.remove_translate_help"))}
         </Group>
       {:else if stage === "insert"}
         <Group title={t("flow.stage.insert")}>

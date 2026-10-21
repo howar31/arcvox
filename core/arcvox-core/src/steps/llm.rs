@@ -161,18 +161,20 @@ impl Step for LlmStep {
     }
 }
 
-/// Placeholder step used when the configured LLM provider could not be built
-/// at pipeline-build time (for example a missing API key). It always fails
-/// with the recorded error, so the pipeline degrades to the ASR text at run
-/// time instead of aborting the whole session during `Pipeline::build`.
-pub(crate) struct UnavailableLlmStep {
+/// Placeholder step used when a step's language model provider could not
+/// be built at pipeline-build time (for example a missing API key). It
+/// always fails with the recorded error, so the pipeline carries the text
+/// on at run time instead of aborting the whole session during
+/// `Pipeline::build`.
+pub(crate) struct UnavailableStep {
+    pub(crate) name: StepName,
     pub(crate) error: StepError,
 }
 
 #[async_trait]
-impl Step for UnavailableLlmStep {
+impl Step for UnavailableStep {
     fn name(&self) -> StepName {
-        StepName::Llm
+        self.name
     }
 
     async fn run(

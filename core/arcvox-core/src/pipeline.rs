@@ -12,9 +12,10 @@ use crate::history::{StageKind, StageRecord};
 use crate::protocol::Event;
 use crate::providers::registry::ProviderRegistry;
 use crate::steps::asr::AsrStep;
-use crate::steps::llm::{LlmStep, UnavailableLlmStep};
+use crate::steps::llm::{LlmStep, UnavailableStep};
 use crate::steps::opencc::OpenCcStep;
 use crate::steps::rules::RulesStep;
+use crate::steps::translate::TranslateStep;
 use crate::steps::{PipelineContext, Step, StepError, StepInput};
 use crate::tidy::TidyRules;
 use crate::types::{AudioClip, ErrorCode, StepName};
@@ -90,7 +91,8 @@ impl Pipeline {
                     // session never starting.
                     let llm_step: Box<dyn Step> = match registry.llm(cfg, &config.general) {
                         Ok(provider) => Box::new(LlmStep::new(provider)),
-                        Err(e) => Box::new(UnavailableLlmStep {
+                        Err(e) => Box::new(UnavailableStep {
+                            name: StepName::Llm,
                             error: StepError::from(e),
                         }),
                     };
@@ -113,6 +115,32 @@ impl Pipeline {
                         punctuation_width: *punctuation_width,
                     },
                 }),
+                StepSpec::Translate { target, prompt, .. } => {
+                    let id = engines.translate.as_ref().map(|c| &c.id).ok_or_else(|| {
+                        StepError::fatal(
+                            ErrorCode::InvalidConfig,
+                            "translate step without an engine",
+                        )
+                    })?;
+                    let cfg = config.provider(id).ok_or_else(|| {
+                        StepError::fatal(
+                            ErrorCode::InvalidConfig,
+                            format!("translate provider {id} missing"),
+                        )
+                    })?;
+                    // Like the rewrite: an engine that cannot be built now
+                    // fails at run time, and the text goes on untranslated.
+                    let step: Box<dyn Step> = match registry.llm(cfg, &config.general) {
+                        Ok(provider) => {
+                            Box::new(TranslateStep::new(provider, target, prompt.as_deref()))
+                        }
+                        Err(e) => Box::new(UnavailableStep {
+                            name: StepName::Translate,
+                            error: StepError::from(e),
+                        }),
+                    };
+                    step
+                }
             };
             steps.push(step);
         }
@@ -173,6 +201,7 @@ impl Pipeline {
                 StepName::OpenCc => StageKind::OpenCc,
                 StepName::Llm => StageKind::Llm,
                 StepName::Rules => StageKind::Rules,
+                StepName::Translate => StageKind::Translate,
             };
             // One step per place: the pages show one step for each. A second
             // conversion before the rewrite (kept in a profile whose rewrite
@@ -383,6 +412,38 @@ mod tests {
         );
         assert_eq!(out.stages[4].detail["fixes"], 0);
         assert!(out.stages.iter().all(|s| s.ms.is_some()));
+    }
+
+    #[tokio::test]
+    async fn a_translation_runs_last_and_its_failure_keeps_the_tidied_text() {
+        use crate::steps::translate::TranslateStep;
+        let (tx, _rx) = mpsc::channel(64);
+        let mut p = pipeline(FakeAsr::ok("原文"), FakeLlm::ok("原文。"));
+        p.steps.push(Box::new(TranslateStep::new(
+            FakeLlm::ok("The original."),
+            "英文",
+            None,
+        )));
+        let out = p.run(audio(), &test_context(), &tx).await.unwrap();
+        let kinds: Vec<(u32, StageKind)> =
+            out.stages.iter().map(|s| (s.position, s.kind)).collect();
+        assert_eq!(kinds[5], (6, StageKind::Translate));
+        assert_eq!(out.final_text, "The original.");
+        assert_eq!(out.stages[5].detail["target"], "英文");
+        assert!(!out.degraded);
+        assert!(StageRecord::translated(&out.stages));
+
+        let mut p = pipeline(FakeAsr::ok("原文"), FakeLlm::ok("原文。"));
+        p.steps.push(Box::new(TranslateStep::new(
+            FakeLlm::failing(ErrorCode::ProviderTimeout),
+            "英文",
+            None,
+        )));
+        let out = p.run(audio(), &test_context(), &tx).await.unwrap();
+        assert_eq!(out.final_text, "原文。");
+        assert!(out.degraded);
+        assert_eq!(out.stages[5].text, None);
+        assert!(!StageRecord::translated(&out.stages));
     }
 
     #[tokio::test]
@@ -648,12 +709,13 @@ mod tests {
         // build-level guarantee (that a missing LLM key does not fail the
         // build) is covered separately by `build_succeeds_when_llm_key_is_missing`;
         // here the pipeline is constructed directly with fakes to exercise
-        // what `Pipeline::build` would have produced: an `UnavailableLlmStep`
+        // what `Pipeline::build` would have produced: an `UnavailableStep`
         // in the LLM slot.
         let p = Pipeline {
             steps: vec![
                 Box::new(AsrStep::new(FakeAsr::ok("原文"))),
-                Box::new(crate::steps::llm::UnavailableLlmStep {
+                Box::new(crate::steps::llm::UnavailableStep {
+                    name: StepName::Llm,
                     error: StepError::recoverable(ErrorCode::ProviderUnauthorized, "missing key"),
                 }),
             ],

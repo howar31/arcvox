@@ -60,6 +60,9 @@ pub struct HistoryLine {
     /// hand; absent while uncorrected or when not kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub correction_source: Option<String>,
+    /// The row's text is a translation into another language or style.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub translated: bool,
     #[serde(default)]
     pub degraded: bool,
     #[serde(default)]
@@ -115,6 +118,9 @@ pub struct AttemptLine {
     pub snippets: u32,
     #[serde(default)]
     pub llm_changed: bool,
+    /// The result's text is a translation.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub translated: bool,
     #[serde(default)]
     pub error: Option<String>,
     #[serde(default)]

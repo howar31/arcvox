@@ -458,14 +458,14 @@ mod tests {
         let dirs = DataDir::custom(tmp.path());
         dirs.ensure().unwrap();
         let mut v = serde_json::to_value(Config::first_run()).unwrap();
-        v["profiles"][0]["steps"][1] = serde_json::json!({"step":"translate"});
+        v["profiles"][0]["steps"][1] = serde_json::json!({"step":"summarise"});
         let raw = serde_json::to_string(&v).unwrap();
         std::fs::write(dirs.config_path(), &raw).unwrap();
         let err = ConfigStore::open(&dirs).unwrap_err();
         let StoreError::Broken { backup, reason } = err else {
             panic!("expected Broken, got {err}")
         };
-        assert!(reason.contains("translate"), "{reason}");
+        assert!(reason.contains("summarise"), "{reason}");
         assert!(
             !dirs.config_path().exists(),
             "broken file must be moved, not overwritten"

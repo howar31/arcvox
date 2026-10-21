@@ -22,7 +22,7 @@ const run: Stage[] = [
 ];
 const row: Utterance = {
   id: 1, ts: 1_700_000_000, profile_id: "default", app_name: "Slack", raw_text: "", refined_text: "", final_text: "", degraded: false,
-  has_audio: true, asr_ms: 1180, llm_ms: 1400, audio_ms: 5800, audio_bytes: 1, error: null, error_code: null, redone: 0, correction_source: null,
+  has_audio: true, asr_ms: 1180, llm_ms: 1400, audio_ms: 5800, audio_bytes: 1, error: null, error_code: null, redone: 0, correction_source: null, translated: false,
 };
 
 describe("flowLast", () => {

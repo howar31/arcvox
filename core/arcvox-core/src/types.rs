@@ -32,6 +32,7 @@ pub enum StepName {
     OpenCc,
     Llm,
     Rules,
+    Translate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

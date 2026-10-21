@@ -204,6 +204,7 @@ pub fn run() {
             crate::commands::profiles::profiles_set_default,
             crate::commands::profiles::profiles_reset,
             crate::commands::profiles::profiles_presets,
+            crate::commands::profiles::translate_prompt_default,
             crate::commands::profiles::profiles_add_preset,
             crate::commands::profiles::profiles_template_style,
             crate::commands::dictionary::dictionary_set,

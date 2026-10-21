@@ -37,6 +37,8 @@ pub struct UtteranceDto {
     /// How the final text was corrected: "read_back" or "hand"; None while
     /// it is the result's own text or for corrections from before this was kept.
     pub correction_source: Option<String>,
+    /// The text is a translation into another language or style.
+    pub translated: bool,
 }
 
 /// What `history_reprocess` returns: the result recorded with the row, or
@@ -267,6 +269,7 @@ impl UtteranceDto {
             error_code: u.error_code,
             redone: u.redone,
             correction_source: u.correction_source,
+            translated: u.translated,
         }
     }
 }

@@ -12,6 +12,7 @@ pub mod asr;
 pub mod llm;
 pub mod opencc;
 pub mod rules;
+pub mod translate;
 
 #[derive(Debug, Clone)]
 pub struct StepInput {

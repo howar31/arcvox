@@ -138,9 +138,13 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
     for profile in &config.profiles {
         // A profile may name an engine that is gone (the default stands in
         // until it is back); one that is there must fit its role.
+        let translate_engine = profile
+            .translate_step()
+            .and_then(|(_, _, named)| named.cloned());
         for (role, named) in [
             (EngineRole::Asr, &profile.asr_provider),
             (EngineRole::Llm, &profile.llm_provider),
+            (EngineRole::Llm, &translate_engine),
         ] {
             if let Some(engine) = named.as_ref().and_then(|id| config.provider(id)) {
                 if !fits(engine, role) {

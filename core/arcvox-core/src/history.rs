@@ -32,6 +32,7 @@ pub enum StageKind {
     OpenCc,
     Llm,
     Rules,
+    Translate,
     Insert,
     Record,
 }
@@ -42,7 +43,11 @@ impl StageKind {
     pub fn is_text(self) -> bool {
         matches!(
             self,
-            StageKind::Asr | StageKind::OpenCc | StageKind::Llm | StageKind::Rules
+            StageKind::Asr
+                | StageKind::OpenCc
+                | StageKind::Llm
+                | StageKind::Rules
+                | StageKind::Translate
         )
     }
 
@@ -54,6 +59,7 @@ impl StageKind {
             StageKind::OpenCc => "opencc",
             StageKind::Llm => "llm",
             StageKind::Rules => "rules",
+            StageKind::Translate => "translate",
             StageKind::Insert => "insert",
             StageKind::Record => "record",
         }
@@ -67,6 +73,7 @@ impl StageKind {
             "opencc" => StageKind::OpenCc,
             "llm" => StageKind::Llm,
             "rules" => StageKind::Rules,
+            "translate" => StageKind::Translate,
             "insert" => StageKind::Insert,
             "record" => StageKind::Record,
             _ => return None,
@@ -95,6 +102,14 @@ impl StageRecord {
         for (i, s) in stages.iter_mut().enumerate() {
             s.position = i as u32 + 1;
         }
+    }
+
+    /// Whether a run turned its text into another language or style: a
+    /// translation stage ran and handed text on.
+    pub fn translated(stages: &[StageRecord]) -> bool {
+        stages
+            .iter()
+            .any(|s| s.kind == StageKind::Translate && s.text.is_some())
     }
 
     /// The record as a records-file line.
@@ -187,6 +202,10 @@ pub struct Utterance {
     /// While the row shows a rerun's result: the text the dictation itself
     /// put in and the user's correction of it, which the rerun hides.
     pub origin_correction: Option<(String, String)>,
+    /// The result's text is a translation: it is in the target language or
+    /// style, not what was said, so a correction of it teaches the
+    /// dictionary nothing.
+    pub translated: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -210,6 +229,8 @@ pub struct Attempt {
     pub dict_fixes: u32,
     pub snippets: u32,
     pub llm_changed: bool,
+    /// The result's text is a translation.
+    pub translated: bool,
     pub error: Option<String>,
     pub error_code: Option<String>,
     /// The result the row had before it was first processed again.
@@ -440,7 +461,8 @@ CREATE TABLE IF NOT EXISTS utterances (
     asr_ms INTEGER NOT NULL DEFAULT 0,
     llm_ms INTEGER,
     heard_text TEXT,
-    correction_source TEXT
+    correction_source TEXT,
+    translated INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS utterances_ts ON utterances(ts);
 CREATE TABLE IF NOT EXISTS attempts (
@@ -463,7 +485,8 @@ CREATE TABLE IF NOT EXISTS attempts (
     origin INTEGER NOT NULL DEFAULT 0,
     chosen INTEGER NOT NULL DEFAULT 0,
     corrected_text TEXT,
-    correction_source TEXT
+    correction_source TEXT,
+    translated INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS attempts_utterance ON attempts(utterance_id);
 ";
@@ -601,6 +624,10 @@ pub(crate) fn upgrade(
             "correction_source",
             "ALTER TABLE utterances ADD COLUMN correction_source TEXT",
         ),
+        (
+            "translated",
+            "ALTER TABLE utterances ADD COLUMN translated INTEGER NOT NULL DEFAULT 0",
+        ),
     ] {
         if !has_column(conn, "utterances", name)? {
             conn.execute_batch(ddl)?;
@@ -611,6 +638,11 @@ pub(crate) fn upgrade(
     }
     if !has_column(conn, "attempts", "correction_source")? {
         conn.execute_batch("ALTER TABLE attempts ADD COLUMN correction_source TEXT")?;
+    }
+    if !has_column(conn, "attempts", "translated")? {
+        conn.execute_batch(
+            "ALTER TABLE attempts ADD COLUMN translated INTEGER NOT NULL DEFAULT 0",
+        )?;
     }
     // Rows written before rows carried a device belong to this one.
     conn.execute(
@@ -692,8 +724,8 @@ fn own_last_row(conn: &Connection) -> rusqlite::Result<i64> {
 
 fn insert_row(conn: &Connection, u: &NewUtterance, device: &str) -> rusqlite::Result<i64> {
     conn.execute(
-        "INSERT INTO utterances (ts, profile_id, app_name, raw_text, refined_text, final_text, degraded, audio_path, asr_ms, llm_ms, audio_ms, dict_fixes, snippets, device_id, updated)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        "INSERT INTO utterances (ts, profile_id, app_name, raw_text, refined_text, final_text, degraded, audio_path, asr_ms, llm_ms, audio_ms, dict_fixes, snippets, device_id, updated, translated)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             u.ts,
             u.profile_id.0,
@@ -710,6 +742,7 @@ fn insert_row(conn: &Connection, u: &NewUtterance, device: &str) -> rusqlite::Re
             u.snippets as i64,
             device,
             now_ms(),
+            StageRecord::translated(&u.stages) as i64,
         ],
     )?;
     let id = own_last_row(conn)?;
@@ -1109,7 +1142,14 @@ impl HistoryStore {
     pub fn apply_redo(&self, id: HistoryId, r: &Redo) -> Result<bool, HistoryError> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
-        let applied = apply_in(&tx, &self.device_id, id, r, None)?;
+        let applied = apply_in(
+            &tx,
+            &self.device_id,
+            id,
+            r,
+            StageRecord::translated(&r.stages),
+            None,
+        )?;
         tx.commit()?;
         Ok(applied)
     }
@@ -1164,6 +1204,7 @@ impl HistoryStore {
                     correction_source: (row.final_text != row.refined_text)
                         .then(|| row.correction_source.clone())
                         .flatten(),
+                    translated: row.translated,
                     stages: Vec::new(),
                 },
             )?;
@@ -1187,6 +1228,7 @@ impl HistoryStore {
                 dict_fixes: redo.dict_fixes,
                 snippets: redo.snippets,
                 llm_changed: redo.llm_changed,
+                translated: StageRecord::translated(&redo.stages),
                 error: None,
                 error_code: None,
                 origin: false,
@@ -1212,6 +1254,7 @@ impl HistoryStore {
                 dict_fixes: 0,
                 snippets: 0,
                 llm_changed: false,
+                translated: false,
                 error: Some(text.clone()),
                 error_code: Some(code.name().to_string()),
                 origin: false,
@@ -1227,7 +1270,14 @@ impl HistoryStore {
             add_hits(&tx, &self.device_id, ts, &redo.dict_hits)?;
         }
         if let (Outcome::Done { redo, .. }, true) = (outcome, choose || was_failed) {
-            apply_in(&tx, &self.device_id, id, redo, None)?;
+            apply_in(
+                &tx,
+                &self.device_id,
+                id,
+                redo,
+                StageRecord::translated(&redo.stages),
+                None,
+            )?;
             choose_in(&tx, id, attempt_id)?;
         } else {
             touch_in(&tx, id)?;
@@ -1279,7 +1329,7 @@ impl HistoryStore {
             .corrected_text
             .as_deref()
             .map(|t| (t, a.correction_source.as_deref()));
-        if !apply_in(&tx, &self.device_id, id, &redo, corrected)? {
+        if !apply_in(&tx, &self.device_id, id, &redo, a.translated, corrected)? {
             return Ok(false);
         }
         choose_in(&tx, id, attempt.0)?;
@@ -1512,7 +1562,7 @@ impl HistoryStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT origin_id, ts, updated, profile_id, app_name, raw_text, refined_text, final_text, degraded,
-                    asr_ms, llm_ms, audio_ms, dict_fixes, snippets, error, error_code, audio_path, id, heard_text, correction_source
+                    asr_ms, llm_ms, audio_ms, dict_fixes, snippets, error, error_code, audio_path, id, heard_text, correction_source, translated
              FROM utterances
              WHERE device_id = ?1 AND origin_id IS NOT NULL AND (error_code IS NULL OR error_code != ?2)
              ORDER BY origin_id",
@@ -1537,6 +1587,7 @@ impl HistoryStore {
                 error_code: r.get(15)?,
                 heard_text: r.get(18)?,
                 correction_source: r.get(19)?,
+                translated: r.get::<_, i64>(20)? != 0,
                 audio: None,
                 attempts: Vec::new(),
                 stages: Vec::new(),
@@ -1628,8 +1679,8 @@ impl HistoryStore {
                 None => {
                     tx.execute(
                         "INSERT INTO utterances (ts, profile_id, app_name, raw_text, refined_text, final_text, degraded, audio_path,
-                            asr_ms, llm_ms, audio_ms, dict_fixes, snippets, error, error_code, device_id, origin_id, updated, heard_text, correction_source)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+                            asr_ms, llm_ms, audio_ms, dict_fixes, snippets, error, error_code, device_id, origin_id, updated, heard_text, correction_source, translated)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
                         params![
                             l.ts,
                             l.profile_id,
@@ -1651,6 +1702,7 @@ impl HistoryStore {
                             l.updated,
                             l.heard_text,
                             l.correction_source,
+                            l.translated as i64,
                         ],
                     )?;
                     let new_id = tx.last_insert_rowid();
@@ -1669,7 +1721,7 @@ impl HistoryStore {
                         tx.execute(
                             "UPDATE utterances SET ts = ?1, profile_id = ?2, app_name = ?3, raw_text = ?4, refined_text = ?5,
                                 final_text = ?6, degraded = ?7, asr_ms = ?8, llm_ms = ?9, audio_ms = ?10, dict_fixes = ?11,
-                                snippets = ?12, error = ?13, error_code = ?14, updated = ?15, heard_text = ?17, correction_source = ?18 WHERE id = ?16",
+                                snippets = ?12, error = ?13, error_code = ?14, updated = ?15, heard_text = ?17, correction_source = ?18, translated = ?19 WHERE id = ?16",
                             params![
                                 l.ts,
                                 l.profile_id,
@@ -1689,6 +1741,7 @@ impl HistoryStore {
                                 id,
                                 l.heard_text,
                                 l.correction_source,
+                                l.translated as i64,
                             ],
                         )?;
                         // The line is the newer state of the row: its
@@ -2407,6 +2460,7 @@ fn apply_in(
     device_id: &str,
     id: HistoryId,
     r: &Redo,
+    translated: bool,
     corrected: Option<(&str, Option<&str>)>,
 ) -> Result<bool, HistoryError> {
     let row: Option<(i64, Option<String>, Option<i64>, bool)> = tx
@@ -2422,7 +2476,7 @@ fn apply_in(
     tx.execute(
         "UPDATE utterances SET profile_id = ?1, raw_text = ?2, refined_text = ?3, final_text = COALESCE(?11, ?3), degraded = ?4,
             asr_ms = ?5, llm_ms = ?6, dict_fixes = ?7, snippets = ?8, error = NULL, error_code = NULL, updated = ?10,
-            correction_source = ?12 WHERE id = ?9",
+            correction_source = ?12, translated = ?13 WHERE id = ?9",
         params![
             r.profile_id.0,
             r.raw_text,
@@ -2436,6 +2490,7 @@ fn apply_in(
             now_ms(),
             corrected.map(|(text, _)| text),
             corrected.and_then(|(_, source)| source),
+            translated as i64,
         ],
     )?;
     if was_failed {
@@ -2485,11 +2540,11 @@ const SELECT: &str = "SELECT id, ts, profile_id, app_name, raw_text, refined_tex
     (SELECT COUNT(*) FROM attempts a WHERE a.utterance_id = utterances.id AND a.origin = 0), heard_text,
     (SELECT final_text FROM attempts a WHERE a.utterance_id = utterances.id AND a.origin = 1 AND a.chosen = 0 AND a.corrected_text IS NOT NULL),
     (SELECT corrected_text FROM attempts a WHERE a.utterance_id = utterances.id AND a.origin = 1 AND a.chosen = 0 AND a.corrected_text IS NOT NULL),
-    correction_source
+    correction_source, translated
     FROM utterances";
 
 const SELECT_ATTEMPT: &str = "SELECT id, utterance_id, ts, profile_id, asr_label, llm_label, raw_text, final_text, degraded, asr_ms, llm_ms,
-    dict_fixes, snippets, llm_changed, error, error_code, origin, chosen, corrected_text, correction_source FROM attempts";
+    dict_fixes, snippets, llm_changed, error, error_code, origin, chosen, corrected_text, correction_source, translated FROM attempts";
 
 fn map_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<Attempt> {
     Ok(Attempt {
@@ -2513,6 +2568,7 @@ fn map_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<Attempt> {
         chosen: r.get::<_, i64>(17)? != 0,
         corrected_text: r.get(18)?,
         correction_source: r.get(19)?,
+        translated: r.get::<_, i64>(20)? != 0,
     })
 }
 
@@ -2520,8 +2576,8 @@ fn map_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<Attempt> {
 fn insert_attempt(tx: &Connection, utterance: i64, a: &AttemptLine) -> rusqlite::Result<i64> {
     tx.execute(
         "INSERT INTO attempts (utterance_id, ts, profile_id, asr_label, llm_label, raw_text, final_text, degraded, asr_ms, llm_ms,
-            dict_fixes, snippets, llm_changed, error, error_code, origin, chosen, corrected_text, correction_source)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+            dict_fixes, snippets, llm_changed, error, error_code, origin, chosen, corrected_text, correction_source, translated)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
         params![
             utterance,
             a.ts,
@@ -2542,6 +2598,7 @@ fn insert_attempt(tx: &Connection, utterance: i64, a: &AttemptLine) -> rusqlite:
             a.chosen as i64,
             a.corrected_text,
             a.correction_source,
+            a.translated as i64,
         ],
     )?;
     Ok(tx.last_insert_rowid())
@@ -2578,6 +2635,7 @@ fn attempt_lines(conn: &Connection, utterance: i64) -> rusqlite::Result<Vec<Atte
                 chosen: a.chosen,
                 corrected_text: a.corrected_text,
                 correction_source: a.correction_source,
+                translated: a.translated,
                 stages: stage_lines(conn, utterance, Some(a.id.0))?,
             })
         })
@@ -2639,6 +2697,7 @@ fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Utterance> {
             _ => None,
         },
         correction_source: r.get(18)?,
+        translated: r.get::<_, i64>(19)? != 0,
     })
 }
 

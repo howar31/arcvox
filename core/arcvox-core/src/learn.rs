@@ -602,6 +602,11 @@ pub fn pairs_of(rows: &[Utterance]) -> Vec<Pair> {
                 });
             }
         }
+        // A translated result is in another language or style: its
+        // correction says nothing about what was heard.
+        if u.translated {
+            continue;
+        }
         // The correction of the text the dictation put in, which a rerun
         // chosen since keeps aside.
         let (from, to) = match &u.origin_correction {
@@ -1108,6 +1113,28 @@ mod from_rows {
             dict_hits: Vec::new(),
             stages: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_translated_row_gives_no_final_pair() {
+        use crate::history::{StageKind, StageRecord};
+        let s = HistoryStore::open_in_memory().unwrap();
+        let mut translated = row("測試一下", "A test.");
+        translated.stages = vec![StageRecord {
+            position: 1,
+            kind: StageKind::Translate,
+            text: Some("A test.".into()),
+            ms: None,
+            detail: serde_json::json!({ "target": "英文" }),
+        }];
+        let id = s.insert(translated).unwrap();
+        s.set_final(id, "A quick test.").unwrap();
+        s.set_heard(id, Some("測試一下下")).unwrap();
+        let rows = s.list_recent(10).unwrap();
+        assert!(rows[0].translated);
+        let pairs = pairs_of(&rows);
+        assert_eq!(pairs.len(), 1, "{pairs:?}");
+        assert_eq!(pairs[0].source, Source::Heard);
     }
 
     #[test]

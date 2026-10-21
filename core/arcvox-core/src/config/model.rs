@@ -89,26 +89,32 @@ pub struct EngineChoice {
 }
 
 /// The engines a profile runs with now. `llm` is None when the profile
-/// has no rewrite step.
+/// has no rewrite step, `translate` None when it has no translation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedEngines {
     pub asr: EngineChoice,
     pub llm: Option<EngineChoice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub translate: Option<EngineChoice>,
 }
 
 impl ResolvedEngines {
-    /// The ids in use, the rewrite's only when there is one.
+    /// The ids in use, the rewrite's and the translation's only when there is one.
     pub fn ids(&self) -> impl Iterator<Item = &ProviderId> {
-        std::iter::once(&self.asr.id).chain(self.llm.as_ref().map(|c| &c.id))
+        std::iter::once(&self.asr.id)
+            .chain(self.llm.as_ref().map(|c| &c.id))
+            .chain(self.translate.as_ref().map(|c| &c.id))
     }
 
-    /// Whether either role runs on the default instead of a named engine.
+    /// Whether any role runs on the default instead of a named engine.
     pub fn any_fallback(&self) -> bool {
-        matches!(self.asr.source, EngineSource::Fallback { .. })
-            || self
-                .llm
-                .as_ref()
+        let fell = |c: &Option<EngineChoice>| {
+            c.as_ref()
                 .is_some_and(|c| matches!(c.source, EngineSource::Fallback { .. }))
+        };
+        matches!(self.asr.source, EngineSource::Fallback { .. })
+            || fell(&self.llm)
+            || fell(&self.translate)
     }
 }
 
@@ -323,6 +329,18 @@ pub enum StepSpec {
         #[serde(default = "yes")]
         punctuation_width: bool,
     },
+    /// The translation module: the tidied text is turned into `target`, a
+    /// language or a style as the user wrote it. `prompt` is the profile's
+    /// own instruction text, None for the built-in one; `provider` names
+    /// the engine, None follows the rewrite engine (the default rewrite
+    /// engine when the profile has no rewrite).
+    Translate {
+        target: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prompt: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider: Option<ProviderId>,
+    },
 }
 
 fn yes() -> bool {
@@ -490,6 +508,19 @@ impl Profile {
     pub fn has_llm_step(&self) -> bool {
         self.steps.iter().any(|s| matches!(s, StepSpec::Llm))
     }
+
+    /// The translation module's settings, when the profile has one: the
+    /// target, the profile's own prompt and the engine it names.
+    pub fn translate_step(&self) -> Option<(&str, Option<&str>, Option<&ProviderId>)> {
+        self.steps.iter().find_map(|s| match s {
+            StepSpec::Translate {
+                target,
+                prompt,
+                provider,
+            } => Some((target.as_str(), prompt.as_deref(), provider.as_ref())),
+            _ => None,
+        })
+    }
 }
 
 impl Config {
@@ -609,11 +640,25 @@ impl Config {
                 },
             }
         };
+        let llm = profile
+            .has_llm_step()
+            .then(|| choose(&profile.llm_provider, EngineRole::Llm));
+        // The translation follows the rewrite engine unless it names one;
+        // without a rewrite it follows the default rewrite engine.
+        let translate = profile.translate_step().map(|(_, _, named)| match named {
+            Some(id) => choose(&Some(id.clone()), EngineRole::Llm),
+            None => match &llm {
+                Some(c) => EngineChoice {
+                    id: c.id.clone(),
+                    source: EngineSource::Default,
+                },
+                None => choose(&None, EngineRole::Llm),
+            },
+        });
         ResolvedEngines {
             asr: choose(&profile.asr_provider, EngineRole::Asr),
-            llm: profile
-                .has_llm_step()
-                .then(|| choose(&profile.llm_provider, EngineRole::Llm)),
+            llm,
+            translate,
         }
     }
 
@@ -841,8 +886,8 @@ mod tests {
 
     #[test]
     fn unknown_step_name_fails_to_parse() {
-        let err = serde_json::from_str::<StepSpec>(r#"{"step":"translate"}"#).unwrap_err();
-        assert!(err.to_string().contains("translate"), "{err}");
+        let err = serde_json::from_str::<StepSpec>(r#"{"step":"summarise"}"#).unwrap_err();
+        assert!(err.to_string().contains("summarise"), "{err}");
     }
 
     #[test]

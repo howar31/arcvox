@@ -127,6 +127,21 @@ export function withRules(profile: Profile, on: boolean): Profile {
   return { ...profile, steps };
 }
 
+export type TranslateStep = Extract<StepSpec, { step: "translate" }>;
+
+/** The translation module's step, or null when the profile has none. */
+export function translateAt(profile: Profile): TranslateStep | null {
+  const s = profile.steps.find((s): s is TranslateStep => s.step === "translate");
+  return s ?? null;
+}
+
+/** A copy with the translation module set (added at the end when missing) or, with null, removed. */
+export function withTranslate(profile: Profile, step: TranslateStep | null): Profile {
+  const steps: StepSpec[] = copy(profile.steps).filter((s) => s.step !== "translate");
+  if (step) steps.push({ ...step });
+  return { ...profile, steps };
+}
+
 /** A copy with the dictionary switch of the rules step set. */
 export function withDictionary(profile: Profile, on: boolean): Profile {
   return withRule(profile, "dictionary", on);
