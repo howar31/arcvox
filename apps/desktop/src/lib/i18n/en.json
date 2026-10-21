@@ -1539,5 +1539,6 @@
   "error.quality_empty": "The run has no rows.",
   "error.file_unreadable": "The file could not be read: {message}",
   "error.set_invalid": "The set file is not in the expected form: {message}",
-  "error.profile_gone": "The profile no longer exists."
+  "error.profile_gone": "The profile no longer exists.",
+  "quality.default_name": "{stage} {time}"
 }

@@ -1539,5 +1539,6 @@
   "error.quality_empty": "這次沒有任何一筆。",
   "error.file_unreadable": "無法讀取檔案：{message}",
   "error.set_invalid": "資料集檔案格式不對：{message}",
-  "error.profile_gone": "情境已不存在。"
+  "error.profile_gone": "情境已不存在。",
+  "quality.default_name": "{stage} {time}"
 }

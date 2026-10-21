@@ -6,7 +6,7 @@
   import { periodLabel, periodRange } from "../../lib/historyView";
   import { t } from "../../lib/i18n";
   import { profileName, providerLabel } from "../../lib/labels";
-  import { quality } from "../../lib/quality.svelte";
+  import { quality, viewOf } from "../../lib/quality.svelte";
   import { fraction, providersOf } from "../../lib/qualityView";
   import { together, type Reset } from "../../lib/reset";
   import { config } from "../../lib/store.svelte";
@@ -22,6 +22,8 @@
   import Result from "./quality/Result.svelte";
   import Tiles from "./quality/Tiles.svelte";
 
+  let { arg = null }: { arg?: string | null } = $props();
+  const view = $derived(viewOf(arg));
   const fail = (e: unknown) => { toast.error(errorMessage(e)); };
 
   let heads = $state<ReportHead[]>([]);
@@ -157,9 +159,9 @@
   {/if}
 {/snippet}
 
-{#if quality.view === "result"}
+{#if view === "result"}
   <Result onsaved={loadHeads} />
-{:else if quality.view === "compare"}
+{:else if view === "compare"}
   <Compare {heads} />
 {:else}
   <PageHead title={t("quality.title")} description={t("quality.description")} crumb={{ label: t("nav.engines"), page: "engines" }} />

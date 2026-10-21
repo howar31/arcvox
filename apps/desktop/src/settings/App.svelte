@@ -164,7 +164,7 @@
         {:else if route.page === "dictionary"}<Dictionary />
         {:else if route.page === "history"}<History />
         {:else if route.page === "speed"}<Speed />
-        {:else if route.page === "quality"}<Quality />
+        {:else if route.page === "quality"}<Quality arg={route.arg} />
         {/if}
       </div>
     </main>

@@ -1,8 +1,12 @@
 import { onQualityDone, onQualityProgress, qualityCancel, qualityCurrent, qualityStart, type EvalStage, type QualityProgress, type QualityRun, type QualitySource } from "./api";
 import type { PeriodSel } from "./historyView";
+import { go } from "./route";
 
-/** Which part of the quality page is shown. */
+/** The parts of the quality page, each with its own hash: `#quality`, `#quality/result`, `#quality/compare`. */
 export type QualityView = "setup" | "result" | "compare";
+export function viewOf(arg: string | null): QualityView {
+  return arg === "result" || arg === "compare" ? arg : "setup";
+}
 
 /**
  * The quality test: the page's choices and the run. It lives outside the page, so a run in
@@ -10,7 +14,6 @@ export type QualityView = "setup" | "result" | "compare";
  * The rows come from the backend's record of the run, so the page can be opened mid-run.
  */
 class QualityStore {
-  view = $state<QualityView>("setup");
   /** The saved report shown on the result view, or null for the run just made. */
   opened = $state<string | null>(null);
   /** The two reports the compare view sets side by side. */
@@ -53,7 +56,8 @@ class QualityStore {
     if (this.run) this.run = { ...this.run, running: false, stopped: d.stopped, error: d.error };
     // The totals are the backend's; take them with the final state.
     await this.refresh();
-    if (this.run && !this.run.error) { this.opened = null; this.view = "result"; }
+    // The result opens in place of the test page; any other page is left as it is.
+    if (this.run && !this.run.error && location.hash.replace(/^#/, "") === "quality") { this.opened = null; this.show("result"); }
   }
 
   async start(args: { source: QualitySource; stage: EvalStage; profile: string; asr: string[]; llm: string[] }) {
@@ -66,7 +70,7 @@ class QualityStore {
     return qualityCancel();
   }
 
-  show(view: QualityView) { this.view = view; }
+  show(view: QualityView) { go("quality", view === "setup" ? null : view); }
 }
 
 export const quality = new QualityStore();

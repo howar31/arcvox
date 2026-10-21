@@ -19,8 +19,18 @@
 
   // A saved report is read when the view opens on it; the run just made is the store's.
   let opened = $state<{ name: string; created: number; notes: string[]; stopped: boolean; items: EvalItem[]; summaries: EvalSummary[] } | null>(null);
+  // The name a saved run starts with: the stage and when it began.
   let name = $state("");
   let saving = $state(false);
+  $effect(() => {
+    if (opened || !quality.run || quality.run.saved) return;
+    name = t("quality.default_name", { stage: t(`quality.stage.${quality.run.stage}`), time: stamp(quality.run.started) });
+  });
+  function stamp(secs: number): string {
+    const d = new Date(secs * 1000);
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}${p(d.getMinutes())}`;
+  }
   $effect(() => {
     const file = quality.opened;
     opened = null;
