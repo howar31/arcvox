@@ -1,29 +1,28 @@
 /** The steps a dictation's text went through, for the History page: the transcript, every stage that changed
  * the text, where it was put, and the user's correction read back from the field. Stages come from the
  * records kept for the row; rows whose stage records are gone show one processing step between the
- * transcript and the text put in. */
+ * transcript and the text that was put in. */
 import type { Stage, Utterance } from "./api";
-import { changedStages, cellLine, insertLines, inputOf, stageAt, stageName, type StageId } from "./flowLast";
+import { cellInput, cellLine, cellNumber, cellOutput, changedCells, insertLines, MODULE_IDS, stageAt, stageName } from "./flowLast";
 import { corrected, rawState } from "./historyView";
 import { t } from "./i18n";
 import { diff } from "./textDiff";
 
 export type FlowStep =
-  /** The transcript, shown whole. */
+  /** The recognised text, as the engine wrote it. */
   | { kind: "first"; mark: string; name: string; small: string; text: string }
   /** A stage that changed the text; `from` is what it received. */
   | { kind: "stage"; mark: string; name: string; small: string; from: string; text: string }
   /** A stage that failed; `text` is its reason. */
   | { kind: "failed"; mark: string; name: string; small: string; text: string }
-  /** The text left the app: no text of its own. */
+  /** Where the text went: into an application, or the clipboard. */
   | { kind: "mark"; name: string; small: string }
-  /** The user's correction, against the text put in. */
+  /** The user's correction: `from` is the text that was put in. */
   | { kind: "user"; name: string; small: string; from: string; text: string };
 
-/** How many runs of changed text separate the two. */
+/** Runs of changed text between two versions, a removal next to an addition counted once. */
 export function changeCount(from: string, to: string): number {
-  let runs = 0;
-  let inRun = false;
+  let runs = 0, inRun = false;
   for (const c of diff(from, to)) {
     if (c.kind === "keep") inRun = false;
     else if (!inRun) { inRun = true; runs++; }
@@ -31,9 +30,7 @@ export function changeCount(from: string, to: string): number {
   return runs;
 }
 
-const TEXT_STAGES: StageId[] = ["opencc1", "llm", "opencc2", "rules"];
-
-/** The steps, and a line naming the stages that left the text alone (empty when none did). */
+/** The steps, and a line naming the modules that left the text alone (empty when none did). */
 export function textFlow(u: Utterance, stages: Stage[] | null): { steps: FlowStep[]; unchanged: string } {
   const steps: FlowStep[] = [];
   const raw = u.raw_text.trim();
@@ -42,26 +39,31 @@ export function textFlow(u: Utterance, stages: Stage[] | null): { steps: FlowSte
   const kept = stages !== null && stages.length > 0;
   if (raw !== "") {
     const asr = kept ? stageAt(stages, "asr") : undefined;
-    steps.push({ kind: "first", mark: asr ? String(asr.position) : "3", name: stageName("asr"), small: asr ? cellLine("asr", stages) : "", text: raw });
+    const mark = kept ? String(cellNumber(stages, "asr")) : "2";
+    const name = stageName("asr");
+    const small = asr ? cellLine("asr", stages) : "";
+    // The conversion after recognition shows with the recognised text, as the change it made to it.
+    const converted = kept ? cellOutput(stages, "asr") : null;
+    if (converted !== null && converted.trim() !== raw) steps.push({ kind: "stage", mark, name, small, from: raw, text: converted.trim() });
+    else steps.push({ kind: "first", mark, name, small, text: raw });
   }
   let unchanged = "";
   if (kept) {
-    const changed = changedStages(stages);
+    const changed = changedCells(stages);
     for (const id of changed) {
       const s = stageAt(stages, id)!;
       const name = stageName(id);
       const small = cellLine(id, stages);
-      if (s.text === null) {
+      const mark = String(cellNumber(stages, id));
+      const out = cellOutput(stages, id);
+      if (s.text === null || out === null) {
         const reason = typeof s.detail.message === "string" ? s.detail.message : typeof s.detail.error === "string" ? s.detail.error : "";
-        steps.push({ kind: "failed", mark: String(s.position), name, small, text: reason });
+        steps.push({ kind: "failed", mark, name, small, text: reason });
       } else {
-        steps.push({ kind: "stage", mark: String(s.position), name, small, from: inputOf(stages, id) ?? "", text: s.text });
+        steps.push({ kind: "stage", mark, name, small, from: cellInput(stages, id) ?? "", text: out });
       }
     }
-    // A stage that left the text alone is named, unless a stage of the same name (the second script
-    // conversion) did change it.
-    const changedNames = new Set(changed.map(stageName));
-    const left = [...new Set(TEXT_STAGES.filter((id) => stageAt(stages, id) && !changed.includes(id)).map(stageName))].filter((n) => !changedNames.has(n));
+    const left = MODULE_IDS.filter((id) => stageAt(stages, id) && !changed.includes(id)).map(stageName);
     if (left.length) unchanged = t("history.flow_unchanged", { names: left.join(t("common.list_sep")) });
     const insert = stageAt(stages, "insert");
     if (insert) {

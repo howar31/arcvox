@@ -10,9 +10,12 @@ export function withLlm(profile: Profile, pick: string | null): Profile {
   const steps: StepSpec[] = profile.steps.map((s) => ({ ...s }));
   if (pick === null) return { ...profile, llm_provider: null, steps: steps.filter((s) => s.step !== "llm") };
   if (!steps.some((s) => s.step === "llm")) {
-    let at = steps.findIndex((s) => s.step === "opencc");
-    if (at < 0) at = steps.findIndex((s) => s.step === "asr");
+    const first = steps.findIndex((s) => s.step === "opencc");
+    const at = first >= 0 ? first : steps.findIndex((s) => s.step === "asr");
     steps.splice(at + 1, 0, { step: "llm" });
+    // The rewrite's output is converted the way the recognised text is, unless a conversion after it is already there.
+    const script = steps[first];
+    if (first >= 0 && script.step === "opencc" && !steps.slice(at + 2).some((s) => s.step === "opencc")) steps.splice(at + 2, 0, { ...script });
   }
   return { ...profile, llm_provider: pick === "" ? null : pick, steps };
 }

@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import type { Profile, Stage, Utterance } from "./api";
-import { cellLine, cellTime, changedCount, changedStages, inputOf, insertLines, promptLine, recordLines, runHeadline, stageAt, stageName, stageOpen, summaryLine, timeLabel } from "./flowLast";
+import { cellInput, cellLine, cellNumber, cellOutput, cellsOf, cellTime, changedCells, changedCount, inputOf, insertLines, moduleAdded, promptLine, recordLines, runHeadline, stageAt, stageName, summaryLine, timeLabel } from "./flowLast";
 import { setLanguage } from "./i18n";
 
 const profile: Profile = {
@@ -54,12 +54,16 @@ describe("flowLast", () => {
   });
 
   it("writes the third line of every cell from the last run", () => {
-    expect(cellLine("capture", run)).toBe("6.8 s recorded");
-    expect(cellLine("trim", run)).toBe("1.0 s removed");
-    expect(cellLine("asr", run)).toBe("12 characters");
-    expect(cellLine("opencc1", run)).toBe("Converted 2");
+    // The trim shows with the capture, the conversions with recognition and the rewrite.
+    expect(cellLine("capture", run)).toBe("Recorded 6.8 s, 1.0 s of silence removed");
+    expect(cellLine("capture", run.filter((s) => s.kind !== "trim"))).toBe("6.8 s recorded");
+    expect(cellLine("asr", run)).toBe("12 characters, 2 converted");
+    expect(cellLine("asr", run.filter((s) => s.position !== 4))).toBe("12 characters");
     expect(cellLine("llm", run)).toBe("Changed 2");
-    expect(cellLine("opencc2", run)).toBe("No change");
+    const converted = run.map((s) => (s.position === 6 ? { ...s, text: "這個版本測試過了，沒有問題！", detail: { config: "s2tw", changed_chars: 1 } } : s));
+    expect(cellLine("llm", converted)).toBe("2 changes, 1 characters converted");
+    expect(cellOutput(converted, "llm")).toBe("這個版本測試過了，沒有問題！");
+    expect(cellInput(run, "llm")).toBe("這個版本測試過了沒有問題");
     expect(cellLine("rules", run)).toBe("No change");
     const tidy = run.map((s) => (s.position === 7 ? { ...s, detail: { fixes: 1, snippets: 0, widened: 0, spaces: 2, stop_removed: true, question_added: false } } : s));
     expect(cellLine("rules", tidy)).toBe("Replaced 1, Spaces added 2, Final full stop dropped");
@@ -69,7 +73,6 @@ describe("flowLast", () => {
 
   it("tags the text stages with their time and leaves the others without one", () => {
     expect(cellTime("asr", run)).toBe("1.2 s");
-    expect(cellTime("opencc1", run)).toBe("2 ms");
     expect(cellTime("rules", run)).toBe("<1 ms");
     expect(cellTime("capture", run)).toBeNull();
     expect(cellTime("insert", run)).toBeNull();
@@ -79,7 +82,8 @@ describe("flowLast", () => {
     expect(cellTime("llm", failed)).toBe("20.0 s");
     expect(timeLabel(999)).toBe("999 ms");
     expect(timeLabel(1000)).toBe("1.0 s");
-    expect(summaryLine("asr", run)).toBe("1.2 s, 12 characters");
+    expect(summaryLine("asr", run)).toBe("1.2 s, 12 characters, 2 converted");
+    expect(summaryLine("asr", run.filter((s) => s.position !== 4))).toBe("1.2 s, 12 characters");
   });
 
   it("tells the insertion without an application name when none was captured", () => {
@@ -105,19 +109,19 @@ describe("flowLast", () => {
     expect(cellLine("record", noAudio)).toBe("Stored, no recording kept");
   });
 
-  it("dims the stages a profile does not run", () => {
-    expect(stageOpen("llm", profile)).toBe(true);
-    expect(stageOpen("llm", { ...profile, llm_provider: null })).toBe(true);
-    expect(stageOpen("llm", { ...profile, steps: profile.steps.filter((s) => s.step !== "llm") })).toBe(false);
+  it("lists the cells a profile has: the base ones and the modules it added, numbered in that order", () => {
+    expect(cellsOf(profile)).toEqual(["capture", "asr", "llm", "rules", "insert", "record"]);
+    expect(moduleAdded(profile, "llm")).toBe(true);
+    expect(moduleAdded(profile, "translate")).toBe(false);
     const bare: Profile = { ...profile, steps: [{ step: "asr" }] };
-    expect(stageOpen("opencc1", bare)).toBe(false);
-    expect(stageOpen("opencc2", bare)).toBe(false);
-    expect(stageOpen("rules", bare)).toBe(false);
-    expect(stageOpen("capture", bare)).toBe(true);
-    expect(stageOpen("opencc2", { ...profile, steps: [{ step: "asr" }, { step: "opencc", config: "s2tw" }, { step: "llm" }] })).toBe(false);
-    const onlySecond: Profile = { ...profile, steps: [{ step: "asr" }, { step: "llm" }, { step: "opencc", config: "s2tw" }] };
-    expect(stageOpen("opencc1", onlySecond)).toBe(false);
-    expect(stageOpen("opencc2", onlySecond)).toBe(true);
+    expect(cellsOf(bare)).toEqual(["capture", "asr", "insert", "record"]);
+    expect(moduleAdded({ ...profile, llm_provider: null }, "llm")).toBe(true);
+    // A run's numbers follow the modules it holds: without a rewrite the tidy stage is third.
+    expect(cellNumber(run, "asr")).toBe(2);
+    expect(cellNumber(run, "rules")).toBe(4);
+    expect(cellNumber(run, "record")).toBe(6);
+    expect(cellNumber(run.filter((s) => s.kind !== "llm"), "rules")).toBe(3);
+    expect(cellNumber(run.filter((s) => s.kind !== "llm"), "insert")).toBe(4);
   });
 
   it("counts a run of removed or added units as one change", () => {
@@ -127,7 +131,7 @@ describe("flowLast", () => {
 
   it("writes the panel head and the prompt line of the rewrite", () => {
     expect(summaryLine("llm", run)).toBe("1.4 s · 12 characters sent, 14 received");
-    expect(summaryLine("asr", run)).toBe("1.2 s, 12 characters");
+    expect(summaryLine("asr", run)).toBe("1.2 s, 12 characters, 2 converted");
     expect(promptLine(stageAt(run, "llm")!)).toBe('Prompt: base 412 characters · profile addition 0 characters · 12 dictionary terms · 0 examples · front window "Slack"');
   });
 
@@ -139,13 +143,13 @@ describe("flowLast", () => {
     expect(other).toMatch(/^Last dictation: \d+\/\d+ \d\d:\d\d, 2\.6 s in all$/);
   });
 
-  it("lists the stages that changed the text or failed, leaving the rest out", () => {
-    expect(changedStages(run)).toEqual(["opencc1", "llm"]);
-    // The rewrite failed, so the later stages carried stage 4's text on unchanged.
+  it("lists the modules that changed the text or failed, leaving the rest out", () => {
+    expect(changedCells(run)).toEqual(["llm"]);
+    // The rewrite failed, so the later stages carried the recognised text on unchanged.
     const failed = run.map((s) => (s.position === 5 ? { ...s, text: null, detail: { error: "provider_timeout", message: "timed out" } } : s.position > 5 && s.text !== null ? { ...s, text: "這個版本測試過了沒有問題" } : s));
-    expect(changedStages(failed)).toEqual(["opencc1", "llm"]);
-    expect(changedStages([])).toEqual([]);
-    expect(stageName("opencc2")).toBe("Script conversion");
+    expect(changedCells(failed)).toEqual(["llm"]);
+    expect(changedCells([])).toEqual([]);
+    expect(stageName("translate")).toBe("Translation");
   });
 
   it("writes the insertion and record panels from the stage details and the row", () => {

@@ -6,14 +6,14 @@
     profilesPresets, profilesTemplateStyle, setDefaultProfile, upsertProfile, type InstalledModel, type LastRun, type ManifestView, type PresetView, type Profile,
   } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
-  import { appliesDictionary, PUNCTUATION_CONFIGS, RULE_KEYS, rulesAt, SCRIPT_CONFIGS, SCRIPT_GROUPS, scriptAt, scriptLabel, selectedProfile, withDictionary, withRule, withScriptAt, withScriptPunctuation, type RuleKey, type ScriptPass } from "../../lib/flowEdit";
-  import { cellLine, cellTime, runHeadline, STAGE_IDS, stageOpen, type StageId } from "../../lib/flowLast";
+  import { appliesDictionary, PUNCTUATION_CONFIGS, RULE_KEYS, rulesAt, SCRIPT_CONFIGS, SCRIPT_GROUPS, scriptAt, scriptLabel, selectedProfile, withDictionary, withRule, withRules, withScript, withScriptPunctuationBoth, type RuleKey } from "../../lib/flowEdit";
+  import { CELL_IDS, cellLine, cellsOf, cellTime, moduleAdded, MODULE_IDS, runHeadline, stageName, type CellId } from "../../lib/flowLast";
   import { rememberProfile, rememberStage, storedProfile, storedStage } from "../../lib/stageMemory";
   import { guard } from "../../lib/guard.svelte";
   import { t } from "../../lib/i18n";
   import { isImeKey } from "../../lib/ime";
   import { appsSummary, freshName, withLlm } from "../../lib/profileEdit";
-  import { anyFallback, FOLLOW, hasLlmStep, isFallback, resolveEngines, usableWith } from "../../lib/resolve";
+  import { anyFallback, FOLLOW, isFallback, resolveEngines, usableWith } from "../../lib/resolve";
   import { encoderMissing, runnable } from "../../lib/engines";
   import { go } from "../../lib/route";
   import { engineLine, micLine, outputLine, type StageLine } from "../../lib/stages";
@@ -35,7 +35,7 @@
   import LastPanel from "./flow/LastPanel.svelte";
   import ManageProfiles from "./flow/ManageProfiles.svelte";
   import ProfilePicker from "./flow/ProfilePicker.svelte";
-  import StageRail, { type Cell } from "./flow/StageRail.svelte";
+  import StageRail, { type Addable, type Cell } from "./flow/StageRail.svelte";
 
   /** `arg` is the id of the profile to show; without it the default profile is shown. */
   let { arg }: { arg: string | null } = $props();
@@ -44,7 +44,7 @@
   const LANG_KEYS: Record<string, string> = { "zh-TW": "profiles.lang.zh_tw", "zh-CN": "profiles.lang.zh_cn", en: "profiles.lang.en", ja: "profiles.lang.ja" };
 
   // The stage shown first is the one shown when the page was left last.
-  let stage = $state<StageId>(storedStage());
+  let stage = $state<CellId>(storedStage());
   $effect(() => { rememberStage(stage); });
   let managing = $state(false);
   // The profile's newest dictation with its stages: undefined while it is being read, null when there is none.
@@ -227,42 +227,72 @@
   });
 
   // What each stage did in the last dictation, computed when that run changes, not with every edit of the draft.
-  const runLines = $derived.by((): Record<StageId, string> => {
+  const runLines = $derived.by((): Record<CellId, string> => {
     const run = last?.stages ?? null;
-    return Object.fromEntries(STAGE_IDS.map((id) => [id, cellLine(id, run)])) as Record<StageId, string>;
+    return Object.fromEntries(CELL_IDS.map((id) => [id, cellLine(id, run)])) as Record<CellId, string>;
   });
-  const runTimes = $derived.by((): Record<StageId, string | null> => {
+  const runTimes = $derived.by((): Record<CellId, string | null> => {
     const run = last?.stages ?? null;
-    return Object.fromEntries(STAGE_IDS.map((id) => [id, cellTime(id, run)])) as Record<StageId, string | null>;
+    return Object.fromEntries(CELL_IDS.map((id) => [id, cellTime(id, run)])) as Record<CellId, string | null>;
   });
 
-  // One cell per stage: the stage's name, its current setting, and what it did in the last dictation.
+  // One cell per stage the profile has: the stage's name, its current setting, and what it did in the last dictation.
   const cells = $derived.by((): Cell[] => {
     if (!draft || !lines) return [];
-    const passLabel = (pass: ScriptPass) => {
-      const script = scriptAt(draft!, pass);
-      return script ? scriptLabel(script.config) : t("flow.script_none");
-    };
     const on = rulesAt(draft);
     const ruleCount = on ? RULE_KEYS.filter((k) => k !== "dictionary" && on[k]).length : 0;
     const rules = !on || (!on.dictionary && ruleCount === 0) ? t("flow.rules_none") : on.dictionary ? t("flow.rules_meta", { n: String(ruleCount) }) : t("flow.rules_meta_nodict", { n: String(ruleCount) });
-    const cell = (id: StageId, name: string, setting: string, warn = false, unknown = false): Cell =>
-      ({ id, name, setting, line: runLines[id], time: runTimes[id], open: stageOpen(id, draft!), warn, unknown, problem: problemOf(id) });
-    return [
-      cell("capture", t("home.stage.capture"), lines.mic.name, lines.mic.missing),
-      cell("trim", t("flow.stage.trim"), t("flow.trim_meta")),
-      cell("asr", t("home.stage.asr"), lines.asr.name, lines.asr.missing, !lines.asr.known),
-      cell("opencc1", t("flow.stage.opencc"), passLabel(1)),
-      cell("llm", t("home.stage.llm"), lines.llm.name, lines.llm.missing, !lines.llm.known),
-      cell("opencc2", t("flow.stage.opencc"), passLabel(2)),
-      cell("rules", t("flow.stage.rules"), rules),
-      cell("insert", t("flow.stage.insert"), lines.out.name),
-      cell("record", t("flow.stage.record"), t("flow.record_meta")),
-    ];
+    const translate = translateAt(draft);
+    const cell = (id: CellId, setting: string, warn = false, unknown = false): Cell =>
+      ({ id, name: stageName(id), setting, line: runLines[id], time: runTimes[id], warn, unknown, problem: problemOf(id) });
+    const settings: Record<CellId, () => Cell> = {
+      capture: () => cell("capture", lines!.mic.name, lines!.mic.missing),
+      asr: () => cell("asr", lines!.asr.name, lines!.asr.missing, !lines!.asr.known),
+      llm: () => cell("llm", lines!.llm.name, lines!.llm.missing, !lines!.llm.known),
+      rules: () => cell("rules", rules),
+      translate: () => cell("translate", translate ? translate.target : ""),
+      insert: () => cell("insert", lines!.out.name),
+      record: () => cell("record", t("flow.record_meta")),
+    };
+    return cellsOf(draft).map((id) => settings[id]());
   });
+  // The modules the draft has not added, offered on the row between the modules and the insertion.
+  const addable = $derived.by((): Addable[] => {
+    if (!draft) return [];
+    return MODULE_IDS.filter((id) => !moduleAdded(draft!, id)).map((id) => ({ id, name: stageName(id), help: t(`flow.module.${id}_help`) }));
+  });
+  const translateAt = (p: Profile) => { const s = p.steps.find((x) => x.step === "translate"); return s && s.step === "translate" ? s : null; };
+  /** Adds a module at its fixed place and shows it. */
+  function addModule(id: CellId) {
+    if (!draft) return;
+    if (id === "llm") draft = withLlm(snapshot(), "");
+    else if (id === "rules") draft = withRules(snapshot(), true);
+    stage = id;
+  }
+  // The remove row asks once more: a second press within a few seconds removes the module.
+  let sureRemove = $state(false);
+  let sureTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => { stage; source?.id; clearTimeout(sureTimer); sureRemove = false; });
+  function askRemove() {
+    clearTimeout(sureTimer);
+    sureRemove = true;
+    sureTimer = setTimeout(() => { sureRemove = false; }, 4000);
+  }
+  /** Removes the shown module from the draft and shows the recognition stage. */
+  function removeModule() {
+    clearTimeout(sureTimer);
+    sureRemove = false;
+    if (!draft) return;
+    if (stage === "llm") draft = withLlm(snapshot(), null);
+    else if (stage === "rules") draft = withRules(snapshot(), false);
+    else return;
+    stage = "asr";
+  }
+  // A module removed from the stored profile elsewhere leaves the page on the recognition stage.
+  $effect(() => { if (draft && !cellsOf(draft).includes(stage)) stage = "asr"; });
   const current = $derived(cells.find((c) => c.id === stage));
   /** The problem mark of an engine stage that runs on the default because the engine named for it cannot run, or of the rewrite stage whose template style has moved on. */
-  function problemOf(id: StageId): string | undefined {
+  function problemOf(id: CellId): string | undefined {
     const c = id === "asr" ? resolved?.asr : id === "llm" ? resolved?.llm : null;
     if (c && isFallback(c)) return t("flow.profile_fallback");
     return id === "llm" && movedTemplate ? t("flow.style_moved") : undefined;
@@ -424,6 +454,17 @@
   {/if}
 {/snippet}
 
+<!-- The last row of a module's settings: removes it after a second press within a few seconds. -->
+{#snippet removeRow(help: string)}
+  <Row label={t("flow.remove_module")} {help}>
+    {#if sureRemove}
+      <button type="button" class="btn danger" onclick={removeModule}>{t("flow.remove_sure")}</button>
+    {:else}
+      <button type="button" class="btn quiet danger" onclick={askRemove}>{t("common.remove")}</button>
+    {/if}
+  </Row>
+{/snippet}
+
 {#if config.value && draft && source && lines}
   <div class="pick">
     <ProfilePicker
@@ -472,10 +513,10 @@
   </div>
   <div class="split">
     <!-- The rail stays in view while the right column scrolls; at the window's minimum height it fits whole. -->
-    <div class="railwrap"><StageRail {cells} selected={stage} onpick={(id) => (stage = id)} label={t("flow.stages")} /></div>
+    <div class="railwrap"><StageRail {cells} selected={stage} onpick={(id) => (stage = id)} label={t("flow.stages")} {addable} addLabel={t("flow.add_module")} onadd={addModule} /></div>
     <div class="right">
       {#if current}
-        <div class="ttl"><b>{current.name}</b><span class:warn={current.warn && current.open} class:unknown={current.unknown}>{titleMeta}</span></div>
+        <div class="ttl"><b>{current.name}</b><span class:warn={current.warn} class:unknown={current.unknown}>{titleMeta}</span></div>
       {/if}
       {#if last !== undefined}
         <LastPanel id={stage} stages={last?.stages ?? null} row={last?.row ?? null} />
@@ -492,9 +533,6 @@
               {#if lines.mic.missing}<option value={mic} disabled>{mic}</option>{/if}
             </select>
           </Row>
-        </Group>
-      {:else if stage === "trim"}
-        <Group title={t("flow.stage.trim")}>
           <Row label={t("flow.trim_meta")} help={t("flow.trim_help")} />
         </Group>
       {:else if stage === "asr"}
@@ -517,9 +555,32 @@
               <option value="">{t("profiles.lang.auto")}</option>
             </select>
           </Row>
+          {@const script = scriptAt(draft, 1)}
+          <Row label={t("flow.script")} help={t("flow.script_help")} info={t("flow.script_info")}>
+            <!-- Sixteen fixed conversions: a list, grouped by the script they produce. A configuration set
+                 outside this page is listed by its name and kept until another choice is made. The choice
+                 covers the conversion after the rewrite too. -->
+            <select class="field wide" value={script?.config ?? ""} aria-label={t("flow.script")} onchange={(e) => (draft = withScript(snapshot(), e.currentTarget.value || null))}>
+              <option value="">{t("flow.script_none")}</option>
+              {#each SCRIPT_GROUPS as g (g.id)}
+                <optgroup label={t(`flow.script_group.${g.id}`)}>
+                  {#each g.configs as c (c)}<option value={c}>{scriptLabel(c)}</option>{/each}
+                </optgroup>
+              {/each}
+              {#if script && !SCRIPT_CONFIGS.includes(script.config)}<option value={script.config}>{script.config}</option>{/if}
+            </select>
+          </Row>
+          {#if script && PUNCTUATION_CONFIGS.includes(script.config)}<Fold>
+            <Row label={t("flow.script_punct")} help={t("flow.script_punct_help")}>
+              <Switch bind:checked={() => script.punctuation, (v) => (draft = withScriptPunctuationBoth(snapshot(), v))} label={t("flow.script_punct")} />
+            </Row>
+          </Fold>{/if}
           <Row label={t("flow.asr_hint")}>
             {#snippet help()}{t("flow.asr_hint_help_before").slice(0, -1)}<span class="nobr">{t("flow.asr_hint_help_before").slice(-1)}<button type="button" class="stage-link" onclick={() => (stage = "rules")}>{t("flow.stage.rules")}</button>{t("flow.asr_hint_help_after")}</span>{/snippet}
             <Switch bind:checked={draft.asr_dictionary_hint} label={t("flow.asr_hint")} />
+          </Row>
+          <Row label={t("flow.opencc_engine")}>
+            {#snippet help()}{t("flow.opencc_engine_before")}<PageLink page="about" label={t("nav.about")} />{t("flow.opencc_engine_after")}{/snippet}
           </Row>
         </Group>
       {:else if stage === "llm"}
@@ -527,16 +588,15 @@
         <!-- The reason for the stage's problem mark, above the engines to choose from. -->
         {@render fallbackNote("llm")}
         <EnginePicker
-          engines={llmChoices} selected={hasLlmStep(draft) ? (draft.llm_provider ?? FOLLOW) : null} label={t("flow.llm_engines")} {manifest} {installed} models={models ?? []}
-          follow={followChoice("llm")} suggested={suggested.llm} none={{ name: t("home.no_rewrite"), help: t("home.no_rewrite_meta") }}
+          engines={llmChoices} selected={draft.llm_provider ?? FOLLOW} label={t("flow.llm_engines")} {manifest} {installed} models={models ?? []}
+          follow={followChoice("llm")} suggested={suggested.llm}
           defaultId={config.value?.default_engines.llm} onmanage={() => guard.request(() => go("engines", "llm"))}
           stale={stale(draft.llm_provider, llmChoices)} onpick={(id) => (draft = withLlm(snapshot(), id))}
         />
         {#if lines.llm.missing}
           <p class="missing"><span>{t("flow.model_missing")}</span><button type="button" class="btn" onclick={() => guard.request(() => go("engines", "llm"))}>{t("flow.to_download")}</button></p>
         {/if}
-        {#if hasLlmStep(draft)}<Fold>
-          <div class="bar"><h2>{t("profiles.prompt_addition")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("prompt"))}>{t("flow.see_prompt")}</button></div>
+        <div class="bar"><h2>{t("profiles.prompt_addition")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("prompt"))}>{t("flow.see_prompt")}</button></div>
           <!-- The reason for the stage's problem mark when the template's style moved on: the profile keeps its own text until the user decides. -->
           {#if movedTemplate}
             <div class="fallback">
@@ -583,34 +643,9 @@
               <Switch bind:checked={draft.llm_short_fallback} label={t("flow.llm_short")} />
             </Row>
           </Group>
-        </Fold>{/if}
-      {:else if stage === "opencc1" || stage === "opencc2"}
-        {@const pass: ScriptPass = stage === "opencc1" ? 1 : 2}
-        {@const script = scriptAt(draft, pass)}
-        {@const noRewrite = pass === 2 && !stageOpen("llm", draft)}
-        <Group title={t("flow.stage.opencc")}>
-          <Row label={t("flow.script")} help={t(pass === 1 ? "flow.script_help" : noRewrite ? "flow.script_help2_off" : "flow.script_help2")} info={pass === 1 ? t("flow.script_info") : undefined}>
-            <!-- Sixteen fixed conversions: a list, grouped by the script they produce. A configuration set
-                 outside this page is listed by its name and kept until another choice is made. The second
-                 pass follows the rewrite; without one it cannot be set. -->
-            <select class="field wide" value={script?.config ?? ""} aria-label={t("flow.script")} disabled={noRewrite} onchange={(e) => (draft = withScriptAt(snapshot(), pass, e.currentTarget.value || null))}>
-              <option value="">{t("flow.script_none")}</option>
-              {#each SCRIPT_GROUPS as g (g.id)}
-                <optgroup label={t(`flow.script_group.${g.id}`)}>
-                  {#each g.configs as c (c)}<option value={c}>{scriptLabel(c)}</option>{/each}
-                </optgroup>
-              {/each}
-              {#if script && !SCRIPT_CONFIGS.includes(script.config)}<option value={script.config}>{script.config}</option>{/if}
-            </select>
-          </Row>
-          {#if script && PUNCTUATION_CONFIGS.includes(script.config)}<Fold>
-            <Row label={t("flow.script_punct")} help={t("flow.script_punct_help")}>
-              <Switch bind:checked={() => script.punctuation, (v) => (draft = withScriptPunctuation(snapshot(), pass, v))} label={t("flow.script_punct")} />
-            </Row>
-          </Fold>{/if}
-          <Row label={t("flow.opencc_engine")}>
-            {#snippet help()}{t("flow.opencc_engine_before")}<PageLink page="about" label={t("nav.about")} />{t("flow.opencc_engine_after")}{/snippet}
-          </Row>
+        <Group>
+          <Row label={t("flow.script_after")} help={t("flow.script_after_help")} />
+          {@render removeRow(t("flow.remove_llm_help"))}
         </Group>
       {:else if stage === "rules"}
         <Group title={t("flow.dictionary_group")}>
@@ -626,6 +661,9 @@
               <Switch bind:checked={() => on, (v) => (draft = withRule(snapshot(), key, v))} label={t(`flow.rule.${key}`)} />
             </Row>
           {/each}
+        </Group>
+        <Group>
+          {@render removeRow(t("flow.remove_rules_help"))}
         </Group>
       {:else if stage === "insert"}
         <Group title={t("flow.stage.insert")}>

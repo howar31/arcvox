@@ -3,9 +3,9 @@
   import { guard } from "../guard.svelte";
   import { go, type Page } from "../route";
   import { rememberStage } from "../stageMemory";
-  import type { StageId } from "../flowLast";
+  import type { CellId } from "../flowLast";
   // `stage`: the stage the profiles page opens on, when the link leads there.
-  let { page, arg = null, stage = null, label }: { page: Page; arg?: string | null; stage?: StageId | null; label: string } = $props();
+  let { page, arg = null, stage = null, label }: { page: Page; arg?: string | null; stage?: CellId | null; label: string } = $props();
 
   function open() {
     if (stage) rememberStage(stage);

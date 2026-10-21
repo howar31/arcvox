@@ -65,6 +65,16 @@ export function withScriptAt(profile: Profile, pass: ScriptPass, config: string 
   return { ...profile, steps };
 }
 
+/** A copy with the output script set for both places: after recognition, and after the rewrite when there is one; null removes both. */
+export function withScript(profile: Profile, config: string | null): Profile {
+  return withScriptAt(withScriptAt(profile, 1, config), 2, config);
+}
+
+/** A copy with the punctuation choice set for both places. */
+export function withScriptPunctuationBoth(profile: Profile, on: boolean): Profile {
+  return withScriptPunctuation(withScriptPunctuation(profile, 1, on), 2, on);
+}
+
 /** A copy with the punctuation choice of one pass set; unchanged when that pass is off. */
 export function withScriptPunctuation(profile: Profile, pass: ScriptPass, on: boolean): Profile {
   const steps = copy(profile.steps);
@@ -103,6 +113,17 @@ export function withRule(profile: Profile, key: RuleKey, on: boolean): Profile {
   const next: Required<RulesStep> = { ...(current ?? { step: "rules", dictionary: true, trailing_stop: false, question_mark: true, question_mark_inside: true, spacing: true, punctuation_width: true }), [key]: on };
   const i = steps.findIndex((s) => s.step === "rules");
   if (i >= 0) steps[i] = next; else steps.push(next);
+  return { ...profile, steps };
+}
+
+/** A copy with the tidy module added (its switches at their defaults) after the rewrite and its conversion, before a translation; or removed. */
+export function withRules(profile: Profile, on: boolean): Profile {
+  const steps: StepSpec[] = copy(profile.steps).filter((s) => s.step !== "rules");
+  if (on) {
+    const translate = steps.findIndex((s) => s.step === "translate");
+    const at = translate >= 0 ? translate : steps.length;
+    steps.splice(at, 0, { step: "rules", dictionary: true, trailing_stop: false, question_mark: true, question_mark_inside: true, spacing: true, punctuation_width: true });
+  }
   return { ...profile, steps };
 }
 

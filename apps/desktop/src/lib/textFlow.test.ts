@@ -26,21 +26,26 @@ describe("textFlow", () => {
   ];
   it("lists the transcript, the stages that changed the text, the insertion and the correction in order", () => {
     const { steps, unchanged } = textFlow(row("测试一下，停歇。", "測試一下，停歇", "測試一下聽寫"), stages);
-    expect(steps.map((s) => s.kind)).toEqual(["first", "stage", "stage", "mark", "user"]);
-    expect(steps[1]).toMatchObject({ mark: "4", from: "测试一下，停歇。", text: "測試一下，停歇。" });
-    expect(steps[3]).toMatchObject({ kind: "mark", name: "Put into TextEdit" });
-    expect(steps[4]).toMatchObject({ kind: "user", from: "測試一下，停歇", text: "測試一下聽寫", small: "Changes: 1" });
+    // The conversion after recognition shows as the change recognition's step made; the modules are numbered after it.
+    expect(steps.map((s) => s.kind)).toEqual(["stage", "stage", "mark", "user"]);
+    expect(steps[0]).toMatchObject({ mark: "2", name: "Speech recognition", from: "测试一下，停歇。", text: "測試一下，停歇。" });
+    expect(steps[1]).toMatchObject({ mark: "4", name: "Tidy", from: "測試一下，停歇。", text: "測試一下，停歇" });
+    expect(steps[2]).toMatchObject({ kind: "mark", name: "Put into TextEdit" });
+    expect(steps[3]).toMatchObject({ kind: "user", from: "測試一下，停歇", text: "測試一下聽寫", small: "Changes: 1" });
     expect(unchanged).toBe("Text rewriting left the text as it was.");
   });
   it("names how the correction was made when that was kept", () => {
     const hand = { ...row("测试一下，停歇。", "測試一下，停歇", "測試一下聽寫"), correction_source: "hand" as const };
-    expect(textFlow(hand, stages).steps[4]).toMatchObject({ kind: "user", small: "Changes: 1 · by hand" });
+    expect(textFlow(hand, stages).steps[3]).toMatchObject({ kind: "user", small: "Changes: 1 · by hand" });
     const read = { ...hand, correction_source: "read_back" as const };
-    expect(textFlow(read, stages).steps[4]).toMatchObject({ small: "Changes: 1 · read back from the field" });
+    expect(textFlow(read, stages).steps[3]).toMatchObject({ small: "Changes: 1 · read back from the field" });
   });
   it("stops at the insertion when the user changed nothing", () => {
     const { steps } = textFlow(row("测试一下，停歇。", "測試一下，停歇"), stages);
-    expect(steps.map((s) => s.kind)).toEqual(["first", "stage", "stage", "mark"]);
+    expect(steps.map((s) => s.kind)).toEqual(["stage", "stage", "mark"]);
+    // Without a conversion the recognised text is shown whole, numbered 2 after the capture.
+    const plain = textFlow(row("测试一下，停歇。", "測試一下，停歇"), stages.filter((s) => s.kind !== "opencc"));
+    expect(plain.steps[0]).toMatchObject({ kind: "first", mark: "2" });
   });
   it("shows one processing step between the transcript and the text put in when the stage records are gone", () => {
     const { steps, unchanged } = textFlow(row("跟他說我明天會晚到", "我明天會晚一點到。", "我明天會晚一點到", "Mail"), []);

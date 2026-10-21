@@ -1,18 +1,42 @@
 // What the Profiles page says about the last dictation's stages: the third line of each
-// cell, the head line of the "last run" panel, and which stages a profile runs at all.
+// cell, the head line of the "last run" panel, and which cells a profile has at all.
 
 import type { Profile, Stage, Utterance } from "./api";
 import { formatShortDate, formatTime } from "./format";
 import { t } from "./i18n";
-import { scriptAt } from "./flowEdit";
 import { diff } from "./textDiff";
 
-/** The nine stages in order; the two script conversions are told apart by their place around the rewrite. */
-export type StageId = "capture" | "trim" | "asr" | "opencc1" | "llm" | "opencc2" | "rules" | "insert" | "record";
-export const STAGE_IDS: StageId[] = ["capture", "trim", "asr", "opencc1", "llm", "opencc2", "rules", "insert", "record"];
+/** The records a run may hold, in the order they run; the two script conversions are told apart by their place around the rewrite. */
+export type StageId = "capture" | "trim" | "asr" | "opencc1" | "llm" | "opencc2" | "rules" | "translate" | "insert" | "record";
+export const STAGE_IDS: StageId[] = ["capture", "trim", "asr", "opencc1", "llm", "opencc2", "rules", "translate", "insert", "record"];
 
-/** The stages that carry text, in the order they run. */
-const TEXT_IDS: StageId[] = ["asr", "opencc1", "llm", "opencc2", "rules"];
+/** The records that carry text, in the order they run. */
+const TEXT_KINDS = ["asr", "opencc", "llm", "rules", "translate"];
+
+/**
+ * The cells of the Profiles page, in their fixed order: capture holds the trim, speech recognition the
+ * conversion after it, the rewrite the conversion after itself. The modules are the cells a profile adds
+ * or removes; the others every profile has.
+ */
+export type CellId = "capture" | "asr" | "llm" | "rules" | "translate" | "insert" | "record";
+export const CELL_IDS: CellId[] = ["capture", "asr", "llm", "rules", "translate", "insert", "record"];
+export const MODULE_IDS: CellId[] = ["llm", "rules", "translate"];
+
+/** Whether a profile has a module: its step is in the profile's steps. */
+export function moduleAdded(profile: Profile, id: CellId): boolean {
+  return profile.steps.some((s) => s.step === id);
+}
+
+/** The cells a profile shows: the base ones and the modules it has added. */
+export function cellsOf(profile: Profile): CellId[] {
+  return CELL_IDS.filter((id) => !MODULE_IDS.includes(id) || moduleAdded(profile, id));
+}
+
+/** The number a cell shows in a run: its place among the base cells and the modules that run holds. */
+export function cellNumber(stages: Stage[], id: CellId): number {
+  const present = CELL_IDS.filter((c) => !MODULE_IDS.includes(c) || stageIndex(stages, c) >= 0);
+  return present.indexOf(id) + 1;
+}
 
 /** Where a stage's record sits in a run (the records come in running order); -1 when it did not run.
  * A stage is found by its kind: a script conversion before the rewrite is the first, one after it the second. */
@@ -32,27 +56,31 @@ export function stageAt(stages: Stage[], id: StageId): Stage | undefined {
 
 /** The text a text stage received: the nearest earlier stage that handed text on; null for the audio stages and after the text. */
 export function inputOf(stages: Stage[], id: StageId): string | null {
-  if (!TEXT_IDS.includes(id)) return null;
   const at = stageIndex(stages, id);
-  if (at < 0) return null;
+  if (at < 0 || !TEXT_KINDS.includes(stages[at].kind)) return null;
   for (let i = at - 1; i >= 0; i--) {
     const s = stages[i];
-    if (!s.kind || !["asr", "opencc", "llm", "rules"].includes(s.kind)) continue;
+    if (!TEXT_KINDS.includes(s.kind)) continue;
     if (s.text != null) return s.text;
   }
   return null;
 }
 
-/** Whether a profile runs a stage; a closed stage is shown dimmed. */
-export function stageOpen(id: StageId, profile: Profile): boolean {
-  const kinds = profile.steps.map((s) => s.step);
-  switch (id) {
-    case "llm": return kinds.includes("llm");
-    case "opencc1": return scriptAt(profile, 1) !== null;
-    case "opencc2": return scriptAt(profile, 2) !== null;
-    case "rules": return kinds.includes("rules");
-    default: return true;
+/** The text a cell received: what its first record got. */
+export function cellInput(stages: Stage[], id: CellId): string | null {
+  return id === "llm" || id === "rules" || id === "translate" ? inputOf(stages, id) : null;
+}
+
+/** The text a cell handed on: after the conversion it holds, when that ran; null when the cell's stage failed or carries no text. */
+export function cellOutput(stages: Stage[], id: CellId): string | null {
+  if (id === "asr") return stageAt(stages, "opencc1")?.text ?? stageAt(stages, "asr")?.text ?? null;
+  if (id === "llm") {
+    const llm = stageAt(stages, "llm");
+    if (!llm || llm.text === null) return null;
+    return stageAt(stages, "opencc2")?.text ?? llm.text;
   }
+  if (id === "rules" || id === "translate") return stageAt(stages, id)?.text ?? null;
+  return null;
 }
 
 /** Changes between two texts, counting each run of removed or added units as one. */
@@ -69,29 +97,35 @@ const secs = (ms: number) => (ms / 1000).toFixed(1);
 const num = (v: unknown, fallback = 0): number => (typeof v === "number" ? v : fallback);
 const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
 
+/** How many characters the conversion a cell holds changed; 0 when it did not run. */
+function converted(stages: Stage[], id: "asr" | "llm"): number {
+  const s = stageAt(stages, id === "asr" ? "opencc1" : "opencc2");
+  return s && s.text !== null ? num(s.detail.changed_chars) : 0;
+}
+
 /** The third line of a cell: what the stage did in the last run; "" when nothing ran. */
-export function cellLine(id: StageId, stages: Stage[] | null): string {
+export function cellLine(id: CellId, stages: Stage[] | null): string {
   if (!stages) return "";
   const s = stageAt(stages, id);
   if (!s) return id === "insert" ? t("flow.cell.insert_none") : t("flow.cell.not_run");
   const d = s.detail;
   switch (id) {
-    case "capture": return t("flow.cell.recorded", { secs: secs(num(d.duration_ms)) });
-    case "trim": {
-      const removed = num(d.removed_ms);
-      return removed > 0 ? t("flow.cell.removed", { secs: secs(removed) }) : t("flow.cell.removed_none");
+    case "capture": {
+      const removed = num(stageAt(stages, "trim")?.detail.removed_ms);
+      const vars = { secs: secs(num(d.duration_ms)), removed: secs(removed) };
+      return removed > 0 ? t("flow.cell.capture_trimmed", vars) : t("flow.cell.recorded", vars);
     }
-    case "asr": return t("flow.cell.asr", { chars: String(num(d.chars, s.text?.length ?? 0)) });
-    case "opencc1":
-    case "opencc2": {
-      if (s.text === null) return t("flow.cell.failed");
-      const n = num(d.changed_chars);
-      return n > 0 ? t("flow.cell.converted", { n: String(n) }) : t("flow.cell.unchanged");
+    case "asr": {
+      const n = converted(stages, "asr");
+      const vars = { chars: String(num(d.chars, s.text?.length ?? 0)), n: String(n) };
+      return n > 0 ? t("flow.cell.asr_converted", vars) : t("flow.cell.asr", vars);
     }
     case "llm": {
       if (s.text === null) return t("flow.cell.failed");
       const from = inputOf(stages, "llm");
       const n = from === null ? 0 : changedCount(from, s.text);
+      const m = converted(stages, "llm");
+      if (m > 0) return t("flow.cell.llm_converted", { n: String(n), m: String(m) });
       return n > 0 ? t("flow.cell.llm", { n: String(n) }) : t("flow.cell.unchanged");
     }
     case "rules": {
@@ -109,6 +143,10 @@ export function cellLine(id: StageId, stages: Stage[] | null): string {
       if (inside > 0) parts.push(t("flow.cell.questions_inside", { n: String(inside) }));
       return parts.length > 0 ? parts.join(t("flow.cell.join")) : t("flow.cell.unchanged");
     }
+    case "translate": {
+      if (s.text === null) return t("flow.cell.failed");
+      return t("flow.cell.translated", { target: str(d.target) ?? "" });
+    }
     case "insert": {
       const outcome = str(d.outcome), method = str(d.method) ?? "paste", app = str(d.app_name);
       if (outcome === "inserted") {
@@ -122,8 +160,8 @@ export function cellLine(id: StageId, stages: Stage[] | null): string {
   }
 }
 
-/** A stage's time in the last run, as the rail's tag shows it; null for a stage that did not run or has no stored time. */
-export function cellTime(id: StageId, stages: Stage[] | null): string | null {
+/** A cell's time in the last run, as the rail's tag shows it; null for a cell that did not run or has no stored time. */
+export function cellTime(id: CellId, stages: Stage[] | null): string | null {
   const s = stages ? stageAt(stages, id) : undefined;
   return s?.ms == null ? null : timeLabel(s.ms);
 }
@@ -134,14 +172,19 @@ export function timeLabel(ms: number): string {
   return ms < 1 ? t("flow.time_under_ms") : t("flow.time_ms", { ms: String(Math.round(ms)) });
 }
 
-/** The head line of the "last run" panel for a stage; recognition and the rewrite tell their time too. */
-export function summaryLine(id: StageId, stages: Stage[]): string {
+/** The head line of the "last run" panel for a cell; recognition and the rewrite tell their time too. */
+export function summaryLine(id: CellId, stages: Stage[]): string {
   const s = stageAt(stages, id);
   if (id === "asr" && s?.text != null) {
-    return t("flow.panel.asr", { secs: secs(num(s.ms)), chars: String(num(s.detail.chars, s.text.length)) });
+    const n = converted(stages, "asr");
+    const vars = { secs: secs(num(s.ms)), chars: String(num(s.detail.chars, s.text.length)), n: String(n) };
+    return n > 0 ? t("flow.panel.asr_converted", vars) : t("flow.panel.asr", vars);
   }
   if (id === "llm" && s?.text != null) {
     return t("flow.panel.sent_received", { secs: secs(num(s.ms)), in: String(num(s.detail.in_chars)), out: String(num(s.detail.out_chars)) });
+  }
+  if (id === "translate" && s?.text != null) {
+    return t("flow.panel.translated", { secs: secs(num(s.ms)), target: str(s.detail.target) ?? "", in: String(num(s.detail.in_chars)), out: String(num(s.detail.out_chars)) });
   }
   return cellLine(id, stages);
 }
@@ -165,32 +208,30 @@ export function whenLabel(ts: number, now: Date): string {
 
 /** The line above the stages: when the last dictation was, where, and how long its text stages took in all. */
 export function runHeadline(row: Utterance, stages: Stage[], now: Date): string {
-  const total = stages.filter((s) => ["asr", "opencc", "llm", "rules"].includes(s.kind)).reduce((n, s) => n + (s.ms ?? 0), 0);
+  const total = stages.filter((s) => TEXT_KINDS.includes(s.kind)).reduce((n, s) => n + (s.ms ?? 0), 0);
   const vars = { time: whenLabel(row.ts, now), secs: secs(total), app: row.app_name ?? "" };
   return row.app_name ? t("flow.last_head", vars) : t("flow.last_head_noapp", vars);
 }
 
-/** The stage's name as the pages show it. */
-export function stageName(id: StageId): string {
+/** The cell's name as the pages show it. */
+export function stageName(id: CellId): string {
   switch (id) {
     case "capture": return t("home.stage.capture");
-    case "trim": return t("flow.stage.trim");
     case "asr": return t("home.stage.asr");
-    case "opencc1":
-    case "opencc2": return t("flow.stage.opencc");
     case "llm": return t("home.stage.llm");
     case "rules": return t("flow.stage.rules");
+    case "translate": return t("flow.stage.translate");
     case "insert": return t("flow.stage.insert");
     case "record": return t("flow.stage.record");
   }
 }
 
-/** The text stages after recognition that changed the text or failed, in order; the ones that passed it on unchanged are left out. */
-export function changedStages(stages: Stage[]): StageId[] {
-  return (["opencc1", "llm", "opencc2", "rules"] as StageId[]).filter((id) => {
+/** The modules after recognition that changed the text or failed, in order; the ones that passed it on unchanged are left out. */
+export function changedCells(stages: Stage[]): CellId[] {
+  return MODULE_IDS.filter((id) => {
     const s = stageAt(stages, id);
     if (!s) return false;
-    return s.text === null || s.text !== inputOf(stages, id);
+    return s.text === null || cellOutput(stages, id) !== cellInput(stages, id);
   });
 }
 
@@ -219,4 +260,3 @@ export function recordLines(stages: Stage[], row: Utterance | null, size: (bytes
     : t("flow.panel.record_audio_gone");
   return [t("flow.panel.record_history"), audio];
 }
-

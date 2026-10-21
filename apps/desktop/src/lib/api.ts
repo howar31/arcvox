@@ -14,7 +14,13 @@ export interface ProviderConfig {
   extra_headers: Record<string, string>; model_path: string | null; native_id: string | null;
   model_id: string | null; runtime: Runtime | null;
 }
-export type StepSpec = { step: "asr" } | { step: "opencc"; config: string; punctuation?: boolean } | { step: "llm" } | { step: "rules"; dictionary?: boolean; trailing_stop?: boolean; question_mark?: boolean; question_mark_inside?: boolean; spacing?: boolean; punctuation_width?: boolean };
+export type StepSpec =
+  | { step: "asr" }
+  | { step: "opencc"; config: string; punctuation?: boolean }
+  | { step: "llm" }
+  | { step: "rules"; dictionary?: boolean; trailing_stop?: boolean; question_mark?: boolean; question_mark_inside?: boolean; spacing?: boolean; punctuation_width?: boolean }
+  /** The translation module: `target` is a language or a style as the user wrote it; `prompt` is the profile's own text, null for the built-in one; `provider` null follows the rewrite engine. */
+  | { step: "translate"; target: string; prompt?: string | null; provider?: string | null };
 export interface Example { raw: string; refined: string }
 export interface Matcher { app_ids: string[]; url_patterns: string[] }
 export interface Profile {
@@ -98,7 +104,7 @@ export interface Attempt {
   corrected_text: string | null;
 }
 /** The nine stages of a dictation, in their fixed order (positions 1 to 9; the script conversion takes 4 and 6). */
-export type StageKind = "capture" | "trim" | "asr" | "opencc" | "llm" | "rules" | "insert" | "record";
+export type StageKind = "capture" | "trim" | "asr" | "opencc" | "llm" | "rules" | "translate" | "insert" | "record";
 /** What one stage did in one run: the text it handed on (null for the audio stages and a failed step), its time, and its own facts. */
 export interface Stage { position: number; kind: StageKind; text: string | null; ms: number | null; detail: Record<string, unknown> }
 /** The newest dictation made with a profile and what its stages did. */
