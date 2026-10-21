@@ -37,25 +37,13 @@ pub enum StageKind {
 }
 
 impl StageKind {
-    /// The stage's place in the fixed order. A script conversion is stage
-    /// 4 before the rewrite and stage 6 after it.
-    pub fn position(self, after_rewrite: bool) -> u32 {
-        match self {
-            StageKind::Capture => 1,
-            StageKind::Trim => 2,
-            StageKind::Asr => 3,
-            StageKind::OpenCc => {
-                if after_rewrite {
-                    6
-                } else {
-                    4
-                }
-            }
-            StageKind::Llm => 5,
-            StageKind::Rules => 7,
-            StageKind::Insert => 8,
-            StageKind::Record => 9,
-        }
+    /// Whether the stage hands text on: the audio stages before recognition
+    /// and the two bookends after the text carry none.
+    pub fn is_text(self) -> bool {
+        matches!(
+            self,
+            StageKind::Asr | StageKind::OpenCc | StageKind::Llm | StageKind::Rules
+        )
     }
 
     pub fn name(self) -> &'static str {
@@ -99,6 +87,16 @@ pub struct StageRecord {
 }
 
 impl StageRecord {
+    /// Numbers the stages of one run in the order they ran, from 1. A
+    /// stage's number is its place in that run, not a fixed slot: a run
+    /// without a rewrite has no gap, and a later build may add a kind
+    /// without moving the others.
+    pub fn renumber(stages: &mut [StageRecord]) {
+        for (i, s) in stages.iter_mut().enumerate() {
+            s.position = i as u32 + 1;
+        }
+    }
+
     /// The record as a records-file line.
     pub(crate) fn to_line(&self) -> StageLine {
         StageLine {
@@ -1385,11 +1383,38 @@ impl HistoryStore {
         if changed == 0 {
             return Ok(());
         }
-        let position = StageKind::Insert.position(false);
-        tx.execute(
-            "DELETE FROM stages WHERE utterance_id = ?1 AND attempt_id IS NULL AND position = ?2",
-            params![id.0, position as i64],
-        )?;
+        // The insertion sits just before the record stage: it takes the
+        // record's number and the record moves one up, unless an earlier
+        // insertion already made that room.
+        let had_insert = tx.execute(
+            "DELETE FROM stages WHERE utterance_id = ?1 AND attempt_id IS NULL AND kind = 'insert'",
+            params![id.0],
+        )? > 0;
+        let record: Option<i64> = tx
+            .query_row(
+                "SELECT position FROM stages WHERE utterance_id = ?1 AND attempt_id IS NULL AND kind = 'record'",
+                params![id.0],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let position = match record {
+            Some(p) if had_insert => (p - 1).max(1) as u32,
+            Some(p) => {
+                tx.execute(
+                    "UPDATE stages SET position = position + 1 WHERE utterance_id = ?1 AND attempt_id IS NULL AND kind = 'record'",
+                    params![id.0],
+                )?;
+                p as u32
+            }
+            None => {
+                let last: Option<i64> = tx.query_row(
+                    "SELECT MAX(position) FROM stages WHERE utterance_id = ?1 AND attempt_id IS NULL",
+                    params![id.0],
+                    |r| r.get(0),
+                )?;
+                last.unwrap_or(0) as u32 + 1
+            }
+        };
         insert_stages(
             &tx,
             id.0,
@@ -2972,7 +2997,10 @@ mod tests {
     fn record_final_appends_the_insertion_stage() {
         let s = HistoryStore::open_in_memory().unwrap();
         let mut u = new(100, None);
-        u.stages = vec![stage(9, StageKind::Record, "")];
+        u.stages = vec![
+            stage(1, StageKind::Asr, "a"),
+            stage(2, StageKind::Record, ""),
+        ];
         let id = s.insert(u).unwrap();
         let d = Delivery {
             method: "paste".into(),
@@ -2982,10 +3010,14 @@ mod tests {
         s.set_final_delivered(id, "typed", &d).unwrap();
         s.set_final_delivered(id, "typed", &d).unwrap();
         let got = s.stages(id).unwrap();
-        assert_eq!(got.len(), 2);
-        assert_eq!(got[0].kind, StageKind::Insert);
-        assert_eq!(got[0].detail["method"], "paste");
-        assert_eq!(got[0].detail["app_name"], "Slack");
+        // The insertion sits before the record, numbered in between, once.
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[1].kind, StageKind::Insert);
+        assert_eq!(got[1].position, 2);
+        assert_eq!(got[2].kind, StageKind::Record);
+        assert_eq!(got[2].position, 3);
+        assert_eq!(got[1].detail["method"], "paste");
+        assert_eq!(got[1].detail["app_name"], "Slack");
         assert_eq!(s.get(id).unwrap().unwrap().final_text, "typed");
     }
 

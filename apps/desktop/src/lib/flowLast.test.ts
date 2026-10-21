@@ -28,6 +28,18 @@ const row: Utterance = {
 describe("flowLast", () => {
   beforeAll(() => setLanguage("en"));
 
+  it("finds a stage by its kind and place, whatever its number", () => {
+    // A run without a rewrite: its one conversion is the one before the rewrite, numbered without a gap.
+    const noRewrite = [run[0], run[1], { ...run[2] }, { ...run[3], position: 4 }, { ...run[6], position: 5 }, { ...run[7], position: 6 }, { ...run[8], position: 7 }];
+    expect(stageAt(noRewrite, "opencc1")?.position).toBe(4);
+    expect(stageAt(noRewrite, "opencc2")).toBeUndefined();
+    expect(stageAt(noRewrite, "rules")?.position).toBe(5);
+    expect(inputOf(noRewrite, "rules")).toBe("這個版本測試過了沒有問題");
+    // A conversion after the rewrite alone is the second one.
+    const afterOnly = [run[2], { ...run[4], position: 2 }, { ...run[5], position: 3 }];
+    expect(stageAt(afterOnly, "opencc1")).toBeUndefined();
+    expect(stageAt(afterOnly, "opencc2")?.position).toBe(3);
+  });
   it("finds a stage by its fixed position and the text a stage received", () => {
     expect(stageAt(run, "opencc2")?.position).toBe(6);
     expect(inputOf(run, "llm")).toBe("這個版本測試過了沒有問題");

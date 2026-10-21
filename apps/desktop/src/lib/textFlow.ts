@@ -42,7 +42,7 @@ export function textFlow(u: Utterance, stages: Stage[] | null): { steps: FlowSte
   const kept = stages !== null && stages.length > 0;
   if (raw !== "") {
     const asr = kept ? stageAt(stages, "asr") : undefined;
-    steps.push({ kind: "first", mark: "3", name: stageName("asr"), small: asr ? cellLine("asr", stages) : "", text: raw });
+    steps.push({ kind: "first", mark: asr ? String(asr.position) : "3", name: stageName("asr"), small: asr ? cellLine("asr", stages) : "", text: raw });
   }
   let unchanged = "";
   if (kept) {

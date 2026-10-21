@@ -7,24 +7,38 @@ import { t } from "./i18n";
 import { scriptAt } from "./flowEdit";
 import { diff } from "./textDiff";
 
-/** The nine stages in order; the two script conversions are told apart by their place. */
+/** The nine stages in order; the two script conversions are told apart by their place around the rewrite. */
 export type StageId = "capture" | "trim" | "asr" | "opencc1" | "llm" | "opencc2" | "rules" | "insert" | "record";
 export const STAGE_IDS: StageId[] = ["capture", "trim", "asr", "opencc1", "llm", "opencc2", "rules", "insert", "record"];
 
-const POSITION: Record<StageId, number> = { capture: 1, trim: 2, asr: 3, opencc1: 4, llm: 5, opencc2: 6, rules: 7, insert: 8, record: 9 };
+/** The stages that carry text, in the order they run. */
+const TEXT_IDS: StageId[] = ["asr", "opencc1", "llm", "opencc2", "rules"];
 
-/** The record of a stage in a run, by its fixed position. */
+/** Where a stage's record sits in a run (the records come in running order); -1 when it did not run.
+ * A stage is found by its kind: a script conversion before the rewrite is the first, one after it the second. */
+export function stageIndex(stages: Stage[], id: StageId): number {
+  if (id === "opencc1" || id === "opencc2") {
+    const llm = stages.findIndex((s) => s.kind === "llm");
+    return stages.findIndex((s, i) => s.kind === "opencc" && (id === "opencc1" ? llm < 0 || i < llm : llm >= 0 && i > llm));
+  }
+  return stages.findIndex((s) => s.kind === id);
+}
+
+/** The record of a stage in a run, by its kind and place. */
 export function stageAt(stages: Stage[], id: StageId): Stage | undefined {
-  return stages.find((s) => s.position === POSITION[id]);
+  const i = stageIndex(stages, id);
+  return i < 0 ? undefined : stages[i];
 }
 
 /** The text a text stage received: the nearest earlier stage that handed text on; null for the audio stages and after the text. */
 export function inputOf(stages: Stage[], id: StageId): string | null {
-  const pos = POSITION[id];
-  if (pos < 4 || pos > 7) return null;
-  for (let p = pos - 1; p >= 3; p--) {
-    const s = stages.find((x) => x.position === p);
-    if (s?.text != null) return s.text;
+  if (!TEXT_IDS.includes(id)) return null;
+  const at = stageIndex(stages, id);
+  if (at < 0) return null;
+  for (let i = at - 1; i >= 0; i--) {
+    const s = stages[i];
+    if (!s.kind || !["asr", "opencc", "llm", "rules"].includes(s.kind)) continue;
+    if (s.text != null) return s.text;
   }
   return null;
 }
@@ -151,7 +165,7 @@ export function whenLabel(ts: number, now: Date): string {
 
 /** The line above the stages: when the last dictation was, where, and how long its text stages took in all. */
 export function runHeadline(row: Utterance, stages: Stage[], now: Date): string {
-  const total = stages.filter((s) => s.position >= 3 && s.position <= 7).reduce((n, s) => n + (s.ms ?? 0), 0);
+  const total = stages.filter((s) => ["asr", "opencc", "llm", "rules"].includes(s.kind)).reduce((n, s) => n + (s.ms ?? 0), 0);
   const vars = { time: whenLabel(row.ts, now), secs: secs(total), app: row.app_name ?? "" };
   return row.app_name ? t("flow.last_head", vars) : t("flow.last_head_noapp", vars);
 }

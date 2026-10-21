@@ -158,8 +158,9 @@ impl Pipeline {
         let mut dict_hits: Vec<String> = Vec::new();
         let mut snippets = 0u32;
         let mut llm_changed = false;
-        let mut stages = Vec::with_capacity(self.steps.len());
-        // A conversion before the rewrite is stage 4, one after it stage 6.
+        let mut stages: Vec<StageRecord> = Vec::with_capacity(self.steps.len());
+        // Whether the rewrite has run: a script conversion before it and one
+        // after it are two different places.
         let mut after_rewrite = false;
 
         for step in &self.steps {
@@ -173,17 +174,23 @@ impl Pipeline {
                 StepName::Llm => StageKind::Llm,
                 StepName::Rules => StageKind::Rules,
             };
-            let position = kind.position(after_rewrite);
-            // One step per place: the run is told by place, and the pages
-            // show one step for each. A second conversion before the rewrite
-            // (kept in a profile whose rewrite is turned off, so that it
-            // comes back with it) or a repeated step does not run.
-            if stages.iter().any(|s: &StageRecord| s.position == position) {
+            // One step per place: the pages show one step for each. A second
+            // conversion before the rewrite (kept in a profile whose rewrite
+            // is turned off, so that it comes back with it) or a repeated
+            // step does not run.
+            let taken = stages.iter().any(|s| {
+                s.kind == kind
+                    && (kind != StageKind::OpenCc || s.detail["after_rewrite"] == after_rewrite)
+            });
+            if taken {
                 continue;
             }
             if kind == StageKind::Llm {
                 after_rewrite = true;
             }
+            // Numbered in the order they ran; the engine renumbers once the
+            // audio stages and the record stage are around them.
+            let position = stages.len() as u32 + 1;
             let _ = events.send(Event::StepStarted { step: name }).await;
             let started = Instant::now();
             let input = StepInput {
@@ -193,12 +200,16 @@ impl Pipeline {
             match step.run(input, ctx).await {
                 Ok(out) => {
                     let elapsed = started.elapsed().as_millis() as u64;
+                    let mut detail = out.detail.clone();
+                    if kind == StageKind::OpenCc {
+                        detail["after_rewrite"] = serde_json::Value::Bool(after_rewrite);
+                    }
                     stages.push(StageRecord {
                         position,
                         kind,
                         text: Some(out.text.clone()),
                         ms: Some(elapsed),
-                        detail: out.detail.clone(),
+                        detail,
                     });
                     match name {
                         StepName::Asr => {
@@ -261,15 +272,19 @@ impl Pipeline {
                     if !err.recoverable || name == StepName::Asr {
                         return Err(err);
                     }
+                    let mut detail = serde_json::json!({
+                        "error": err.code.name(),
+                        "message": err.message,
+                    });
+                    if kind == StageKind::OpenCc {
+                        detail["after_rewrite"] = serde_json::Value::Bool(after_rewrite);
+                    }
                     stages.push(StageRecord {
                         position,
                         kind,
                         text: None,
                         ms: Some(started.elapsed().as_millis() as u64),
-                        detail: serde_json::json!({
-                            "error": err.code.name(),
-                            "message": err.message,
-                        }),
+                        detail,
                     });
                     degraded = true;
                 }
@@ -336,7 +351,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn positions_follow_the_kind_order() {
+    async fn stages_are_numbered_in_the_order_they_ran() {
         let (tx, _rx) = mpsc::channel(64);
         let p = pipeline(FakeAsr::ok("软件 原文"), FakeLlm::ok("软件 整理後"));
         let out = p.run(audio(), &test_context(), &tx).await.unwrap();
@@ -345,13 +360,15 @@ mod tests {
         assert_eq!(
             positions,
             [
-                (3, StageKind::Asr),
+                (1, StageKind::Asr),
+                (2, StageKind::OpenCc),
+                (3, StageKind::Llm),
                 (4, StageKind::OpenCc),
-                (5, StageKind::Llm),
-                (6, StageKind::OpenCc),
-                (7, StageKind::Rules)
+                (5, StageKind::Rules)
             ]
         );
+        assert_eq!(out.stages[1].detail["after_rewrite"], false);
+        assert_eq!(out.stages[3].detail["after_rewrite"], true);
         assert_eq!(out.stages[0].text.as_deref(), Some("软件 原文"));
         assert_eq!(out.stages[1].text.as_deref(), Some("軟體 原文"));
         assert_eq!(out.stages[1].detail["config"], "s2twp");
@@ -385,7 +402,7 @@ mod tests {
         };
         let out = p.run(audio(), &test_context(), &tx).await.unwrap();
         let positions: Vec<u32> = out.stages.iter().map(|s| s.position).collect();
-        assert_eq!(positions, [3, 4, 7]);
+        assert_eq!(positions, [1, 2, 3]);
         assert_eq!(out.final_text, "軟件");
         let started = collect(&mut rx)
             .await
@@ -403,7 +420,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_conversion_after_the_rewrite_alone_is_stage_six() {
+    async fn a_conversion_after_the_rewrite_alone_is_told_so() {
         let (tx, _rx) = mpsc::channel(64);
         let p = Pipeline {
             steps: vec![
@@ -414,7 +431,9 @@ mod tests {
         };
         let out = p.run(audio(), &test_context(), &tx).await.unwrap();
         let positions: Vec<u32> = out.stages.iter().map(|s| s.position).collect();
-        assert_eq!(positions, [3, 5, 6]);
+        assert_eq!(positions, [1, 2, 3]);
+        assert_eq!(out.stages[2].kind, StageKind::OpenCc);
+        assert_eq!(out.stages[2].detail["after_rewrite"], true);
     }
 
     #[tokio::test]
@@ -431,7 +450,7 @@ mod tests {
             .iter()
             .find(|s| s.kind == StageKind::Llm)
             .unwrap();
-        assert_eq!(llm.position, 5);
+        assert_eq!(llm.position, 3);
         assert_eq!(llm.text, None);
         assert_eq!(llm.detail["error"], "provider_timeout");
         assert!(llm.detail["message"].is_string());
@@ -444,7 +463,7 @@ mod tests {
         let p = pipeline(FakeAsr::ok("x"), FakeLlm::ok("整理後"));
         let out = p.run_from_text("原文", &test_context(), &tx).await.unwrap();
         assert_eq!(out.stages[0].kind, StageKind::OpenCc);
-        assert_eq!(out.stages[0].position, 4);
+        assert_eq!(out.stages[0].position, 1);
     }
 
     #[tokio::test]

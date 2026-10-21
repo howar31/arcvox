@@ -789,22 +789,26 @@ impl Engine {
                     dict_hits: out.dict_hits.clone(),
                     // A rerun starts from the kept recording: nothing to
                     // trim, nothing inserted.
-                    stages: std::iter::once(StageRecord {
-                        position: StageKind::Capture.position(false),
-                        kind: StageKind::Capture,
-                        text: None,
-                        ms: None,
-                        detail: serde_json::json!({ "duration_ms": clip_duration_ms }),
-                    })
-                    .chain(out.stages.iter().cloned())
-                    .chain(std::iter::once(StageRecord {
-                        position: StageKind::Record.position(false),
-                        kind: StageKind::Record,
-                        text: None,
-                        ms: None,
-                        detail: serde_json::json!({ "history": true, "recording": true }),
-                    }))
-                    .collect(),
+                    stages: {
+                        let mut stages: Vec<StageRecord> = std::iter::once(StageRecord {
+                            position: 0,
+                            kind: StageKind::Capture,
+                            text: None,
+                            ms: None,
+                            detail: serde_json::json!({ "duration_ms": clip_duration_ms }),
+                        })
+                        .chain(out.stages.iter().cloned())
+                        .chain(std::iter::once(StageRecord {
+                            position: 0,
+                            kind: StageKind::Record,
+                            text: None,
+                            ms: None,
+                            detail: serde_json::json!({ "history": true, "recording": true }),
+                        }))
+                        .collect();
+                        StageRecord::renumber(&mut stages);
+                        stages
+                    },
                 },
                 asr_label,
                 llm_label,
@@ -1723,14 +1727,14 @@ async fn run_session(
     let kept_ms = clip_ms(&clip).unwrap_or(0);
     let mut stages = vec![
         StageRecord {
-            position: StageKind::Capture.position(false),
+            position: 0,
             kind: StageKind::Capture,
             text: None,
             ms: None,
             detail: serde_json::json!({ "duration_ms": recorded_ms }),
         },
         StageRecord {
-            position: StageKind::Trim.position(false),
+            position: 0,
             kind: StageKind::Trim,
             text: None,
             ms: None,
@@ -1739,12 +1743,13 @@ async fn run_session(
     ];
     stages.extend(outcome.stages);
     stages.push(StageRecord {
-        position: StageKind::Record.position(false),
+        position: 0,
         kind: StageKind::Record,
         text: None,
         ms: None,
         detail: serde_json::json!({ "history": true, "recording": audio_path.is_some() }),
     });
+    StageRecord::renumber(&mut stages);
     // For a kept cancel that lands while the row is being written.
     let texts = (outcome.raw_text.clone(), outcome.final_text.clone());
     let new = NewUtterance {
@@ -2204,7 +2209,7 @@ pub(crate) mod tests {
         // Every stage but the insertion, which the client reports later.
         let stages = r.engine.history().stages(*id).unwrap();
         let positions: Vec<u32> = stages.iter().map(|s| s.position).collect();
-        assert_eq!(positions, [1, 2, 3, 4, 5, 6, 7, 9]);
+        assert_eq!(positions, [1, 2, 3, 4, 5, 6, 7, 8]);
         assert!(stages[0].detail["duration_ms"].as_u64().unwrap() > 0);
         assert_eq!(stages[7].detail["recording"], false);
 
@@ -2232,7 +2237,11 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(last.id, *id);
         assert_eq!(stages.len(), 9);
+        // The insertion took the record's number and the record moved up.
+        let positions: Vec<u32> = stages.iter().map(|s| s.position).collect();
+        assert_eq!(positions, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
         assert_eq!(stages[7].kind, StageKind::Insert);
+        assert_eq!(stages[8].kind, StageKind::Record);
         assert_eq!(stages[7].detail["method"], "paste");
         assert!(r
             .engine
