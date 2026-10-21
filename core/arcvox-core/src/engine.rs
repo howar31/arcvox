@@ -748,24 +748,20 @@ impl Engine {
         };
         let pipeline = Pipeline::build(&config, &profile, &engines, &self.inner.registry)
             .map_err(|e| fail(&e))?;
-        let ctx =
-            PipelineContext {
-                profile: profile.clone(),
-                context: Context {
-                    app_name: row.app_name.clone(),
-                    ..Context::default()
-                },
-                dictionary: Arc::new(config.dictionary.clone()),
-                base_prompt: self.inner.config.base_prompt().unwrap_or_else(|_| {
-                    crate::config::base_prompt::DEFAULT_BASE_PROMPT.to_string()
-                }),
-                translate_prompt: self.inner.config.translate_prompt().unwrap_or_else(|_| {
-                    crate::config::base_prompt::DEFAULT_TRANSLATE_PROMPT.to_string()
-                }),
-                recognised: Default::default(),
-                asr_sample: None,
-                general: config.general.clone(),
-            };
+        let (base_prompt, translate_prompt) = read_prompts(&self.inner).await;
+        let ctx = PipelineContext {
+            profile: profile.clone(),
+            context: Context {
+                app_name: row.app_name.clone(),
+                ..Context::default()
+            },
+            dictionary: Arc::new(config.dictionary.clone()),
+            base_prompt,
+            translate_prompt,
+            recognised: Default::default(),
+            asr_sample: None,
+            general: config.general.clone(),
+        };
         // Nobody listens to the step events of a rerun.
         let (tx, mut rx) = mpsc::channel(EVENT_BUFFER);
         let drain = self
@@ -1095,6 +1091,30 @@ async fn storage_failed(tx: &mpsc::Sender<Event>, message: String) {
             hint: None,
         })
         .await;
+}
+
+/// The base prompts as the files hold them, read off the async worker;
+/// the shipped text stands in for a file that cannot be read.
+async fn read_prompts(inner: &Arc<Inner>) -> (String, String) {
+    let inner = inner.clone();
+    tokio::task::spawn_blocking(move || {
+        (
+            inner
+                .config
+                .base_prompt()
+                .unwrap_or_else(|_| crate::config::base_prompt::DEFAULT_BASE_PROMPT.to_string()),
+            inner.config.translate_prompt().unwrap_or_else(|_| {
+                crate::config::base_prompt::DEFAULT_TRANSLATE_PROMPT.to_string()
+            }),
+        )
+    })
+    .await
+    .unwrap_or_else(|_| {
+        (
+            crate::config::base_prompt::DEFAULT_BASE_PROMPT.to_string(),
+            crate::config::base_prompt::DEFAULT_TRANSLATE_PROMPT.to_string(),
+        )
+    })
 }
 
 async fn send_done_once(
@@ -1583,14 +1603,7 @@ async fn run_session(
         "session started"
     );
     let config = inner.config.current();
-    let base_prompt = inner
-        .config
-        .base_prompt()
-        .unwrap_or_else(|_| crate::config::base_prompt::DEFAULT_BASE_PROMPT.to_string());
-    let translate_prompt = inner
-        .config
-        .translate_prompt()
-        .unwrap_or_else(|_| crate::config::base_prompt::DEFAULT_TRANSLATE_PROMPT.to_string());
+    let (base_prompt, translate_prompt) = read_prompts(&inner).await;
     let ctx = PipelineContext {
         profile: profile.clone(),
         context: req.context.clone(),

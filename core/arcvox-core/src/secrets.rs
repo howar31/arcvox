@@ -10,6 +10,10 @@ pub enum SecretError {
     Unavailable(String),
 }
 
+/// Where API keys live. `get` is called while a pipeline is being built
+/// on an async worker, so it must answer in milliseconds, as a keychain
+/// or a map does; a store that goes over the network belongs behind
+/// `spawn_blocking`.
 pub trait SecretStore: Send + Sync {
     fn get(&self, key_ref: &str) -> Result<Option<String>, SecretError>;
     fn set(&self, key_ref: &str, value: &str) -> Result<(), SecretError>;

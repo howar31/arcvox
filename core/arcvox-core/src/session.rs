@@ -160,10 +160,7 @@ impl Session {
             }
         }
         if !self.flags.done_sent.swap(true, Ordering::SeqCst) {
-            let _ = self.events_tx.try_send(Event::Done {
-                session_id: self.id.clone(),
-                history_id: None,
-            });
+            self.send_done();
             (self.on_cancel_done)(false);
         }
     }
@@ -184,15 +181,37 @@ impl Session {
         self.cmd_tx.lock().unwrap().take();
         self.flags.cancel.notify_one();
         if !self.flags.done_sent.swap(true, Ordering::SeqCst) {
-            let _ = self.events_tx.try_send(Event::Done {
-                session_id: self.id.clone(),
-                history_id: None,
-            });
+            self.send_done();
             (self.on_cancel_done)(true);
         }
     }
 
+    /// Sends the `Done` of a cancel without waiting. The channel is wide
+    /// enough for a session's events, so the event normally goes in at
+    /// once; when it is full the send finishes on a task of its own, so the
+    /// listener still gets its `Done`. Without a runtime it is dropped,
+    /// as before.
+    fn send_done(&self) {
+        let done = Event::Done {
+            session_id: self.id.clone(),
+            history_id: None,
+        };
+        if let Err(mpsc::error::TrySendError::Full(done)) = self.events_tx.try_send(done) {
+            let tx = self.events_tx.clone();
+            match tokio::runtime::Handle::try_current() {
+                Ok(handle) => {
+                    handle.spawn(async move {
+                        let _ = tx.send(done).await;
+                    });
+                }
+                Err(_) => tracing::warn!("the event channel is full; the cancel's Done is dropped"),
+            }
+        }
+    }
+
     /// The event stream. May be called once; panics on a second call.
+    /// `Done` is the last event of a session: nothing follows it, although
+    /// the stream itself stays open for as long as the `Session` lives.
     pub fn events(&self) -> ReceiverStream<Event> {
         let rx = self
             .events_rx

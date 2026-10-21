@@ -55,15 +55,22 @@ pub async fn probe_http(
         return ProbeResult::fail(ProbeFailure::MissingBaseUrl);
     };
     let key = match &cfg.api_key_ref {
-        Some(r) => match secrets.get(r) {
-            Ok(Some(k)) => Some(k),
-            Ok(None) => return ProbeResult::fail(ProbeFailure::MissingKey),
-            Err(e) => {
-                return ProbeResult::fail(ProbeFailure::Other {
-                    message: e.to_string(),
-                })
+        Some(r) => {
+            // The keychain answers on its own time; the worker is not held.
+            let (secrets, r) = (secrets.clone(), r.clone());
+            let found = tokio::task::spawn_blocking(move || secrets.get(&r))
+                .await
+                .unwrap_or_else(|e| Err(crate::secrets::SecretError::Unavailable(e.to_string())));
+            match found {
+                Ok(Some(k)) => Some(k),
+                Ok(None) => return ProbeResult::fail(ProbeFailure::MissingKey),
+                Err(e) => {
+                    return ProbeResult::fail(ProbeFailure::Other {
+                        message: e.to_string(),
+                    })
+                }
             }
-        },
+        }
         None => None,
     };
     let mut req = client
