@@ -188,7 +188,7 @@
       </Group>
     {/if}
   {:else}
-    {#if run && !run.running}
+    {#if run && !run.running && !run.saved}
       <Group>
         <Row label={t("quality.last_run")} help={t("quality.last_run_help", { stage: stageOf(run.stage), n: String(run.rows) })}>
           <button type="button" class="btn quiet" onclick={() => { quality.opened = null; quality.show("result"); }}>{t("quality.open")}</button>
@@ -240,6 +240,7 @@
     </div>
   {/if}
 
+  {#if !running}
   <Group title={t("quality.saved")}>
     {#if heads.length === 0}
       <p class="help">{t("quality.none_saved")}</p>
@@ -261,6 +262,7 @@
       {/if}
     {/if}
   </Group>
+  {/if}
 {/if}
 
 <style>

@@ -49,7 +49,9 @@ class QualityStore {
 
   progress(p: QualityProgress) {
     if (!this.run) return;
-    this.run = { ...this.run, done: p.done, total: p.total, provider: p.provider, items: [...this.run.items, p.item], summaries: p.summaries };
+    // A refresh may already hold this row: the event's count says where it goes.
+    const items = [...this.run.items.slice(0, p.done - 1), p.item];
+    this.run = { ...this.run, done: p.done, total: p.total, provider: p.provider, items, summaries: p.summaries };
   }
 
   async done(d: { stopped: boolean; error: string | null }) {

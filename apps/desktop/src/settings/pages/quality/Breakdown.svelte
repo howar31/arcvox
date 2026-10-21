@@ -42,7 +42,7 @@
 </Group>
 
 <Group title={head("quality.items")}>
-  {#each rows.slice(0, shown) as it (it.id)}
+  {#each rows.slice(0, shown) as it, i (i)}
     <div class="item">
       <div class="h">
         <span class="num">#{it.id}</span>

@@ -90,7 +90,7 @@
       {#if result.changed.length === 0}
         <p class="help">{t("quality.compare.no_change")}</p>
       {/if}
-      {#each result.changed.slice(0, shown) as c (c.id + c.provider)}
+      {#each result.changed.slice(0, shown) as c, i (i)}
         <div class="item">
           <div class="h">
             <span class="num">#{c.id}</span>
