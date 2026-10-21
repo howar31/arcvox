@@ -73,7 +73,7 @@
     try {
       if (apiKey.trim()) { p.api_key_ref = p.id; await setSecret(p.id, apiKey); }
       else if (!keyPresent) { p.api_key_ref = null; }
-      await upsertProvider(p);
+      config.value = await upsertProvider(p);
       // A key stored under an earlier reference is removed.
       const oldRef = initial?.api_key_ref;
       if (oldRef && oldRef !== p.api_key_ref) await deleteSecret(oldRef).catch(() => {});

@@ -1,5 +1,5 @@
 //! Frontmost application via NSWorkspace, plus its focused window's title
-//! and (browsers) document URL via AX.
+//! and web address via AX.
 
 use objc2_app_kit::NSWorkspace;
 
@@ -18,7 +18,7 @@ pub fn frontmost_app(ax_trusted: bool) -> Option<FrontmostApp> {
     let bundle_id = app.bundleIdentifier().map(|s| s.to_string());
     let name = app.localizedName().map(|s| s.to_string());
     let (window_title, url) = if ax_trusted {
-        window_title_and_url(pid, bundle_id.as_deref())
+        window_title_and_url(pid)
     } else {
         (None, None)
     };
@@ -31,35 +31,17 @@ pub fn frontmost_app(ax_trusted: bool) -> Option<FrontmostApp> {
     })
 }
 
-fn is_browser(bundle_id: Option<&str>) -> bool {
-    matches!(
-        bundle_id,
-        Some(
-            "com.apple.Safari"
-                | "com.google.Chrome"
-                | "com.google.Chrome.canary"
-                | "com.microsoft.edgemac"
-                | "com.brave.Browser"
-                | "org.mozilla.firefox"
-                | "company.thebrowser.Browser"
-                | "com.vivaldi.Vivaldi"
-        )
-    )
-}
-
-fn window_title_and_url(pid: i32, bundle_id: Option<&str>) -> (Option<String>, Option<String>) {
+/// Any application whose focused window names a web address as its
+/// document gives it; a file address (an editor's document) is left out.
+fn window_title_and_url(pid: i32) -> (Option<String>, Option<String>) {
     let app = AxElement::application(pid);
     let Some(window) = app.attribute_element(AX_FOCUSED_WINDOW) else {
         return (None, None);
     };
     let title = window.attribute_string(AX_TITLE).filter(|s| !s.is_empty());
-    let url = if is_browser(bundle_id) {
-        window
-            .attribute_url(AX_DOCUMENT)
-            .or_else(|| window.attribute_url(AX_URL))
-            .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
-    } else {
-        None
-    };
+    let url = window
+        .attribute_url(AX_DOCUMENT)
+        .or_else(|| window.attribute_url(AX_URL))
+        .filter(|u| u.starts_with("http://") || u.starts_with("https://"));
     (title, url)
 }
