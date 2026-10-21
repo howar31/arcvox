@@ -372,3 +372,16 @@ mod tests {
         assert_eq!(names.get("invalid.bundle.id.zz"), Some(&None));
     }
 }
+
+/// An error the web view caught (an uncaught exception or a rejected
+/// promise): written to the app's log, since a broken page shows nothing
+/// of its own. `window` names the page (settings, widget, panel).
+#[tauri::command]
+pub fn webview_error(window: String, message: String, source: Option<String>, stack: Option<String>) {
+    tracing::error!(
+        window,
+        source = source.unwrap_or_default(),
+        stack = stack.unwrap_or_default(),
+        "webview error: {message}"
+    );
+}
