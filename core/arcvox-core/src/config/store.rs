@@ -60,6 +60,8 @@ impl ConfigStore {
             load_existing(&path)?
         } else {
             let config = Config::first_run_with(defaults);
+            // Like a file read back: never written unless it validates.
+            validate(&config)?;
             write_atomic(
                 &path,
                 serde_json::to_string_pretty(&config).unwrap().as_bytes(),
@@ -302,10 +304,11 @@ enum MigrateError {
     NoPath(u32),
 }
 
-/// Schema ladder. A higher version is refused so an older build never
-/// rewrites a newer file; `open` moves the file aside and reports the reason.
-/// The migrated value is published in memory; the file keeps its version
-/// until the next update writes it.
+/// Schema ladder. A higher version is refused and left on disk untouched,
+/// so an older build never rewrites a newer file; a version with no
+/// migration path is moved aside by `load_existing`, which reports the
+/// reason. The migrated value is published in memory; the file keeps its
+/// version until the next update writes it.
 fn migrate(value: serde_json::Value) -> Result<serde_json::Value, MigrateError> {
     let version = value
         .get("schema_version")
@@ -406,10 +409,10 @@ fn v1_to_v2(mut value: serde_json::Value) -> serde_json::Value {
 }
 
 /// Reads and parses an existing `config.json`. A newer `schema_version` is
-/// reported and left on disk untouched; any other failure (malformed JSON,
-/// a schema_version with no migration path, a shape that does not
-/// deserialize, or a validation failure) moves the file aside to
-/// `config.json.broken-<ts>` and reports the reason.
+/// reported and left on disk untouched; malformed JSON, a schema_version
+/// with no migration path, or a shape that does not deserialize moves the
+/// file aside to `config.json.broken-<ts>` and reports the reason. A file
+/// that parses but fails validation is reported and left in place.
 fn load_existing(path: &Path) -> Result<Config, StoreError> {
     let raw = std::fs::read_to_string(path).map_err(|e| io_err(path, e))?;
 
@@ -459,12 +462,21 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// Where a broken `config.json` is moved: `config.json.broken-<ts>`, with
+/// a `-<n>` suffix when that name is taken, so a second failure within the
+/// same second keeps the first copy.
 fn broken_backup_path(path: &Path) -> PathBuf {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    path.with_file_name(format!("config.json.broken-{ts}"))
+    let mut backup = path.with_file_name(format!("config.json.broken-{ts}"));
+    let mut n = 1;
+    while backup.exists() {
+        n += 1;
+        backup = path.with_file_name(format!("config.json.broken-{ts}-{n}"));
+    }
+    backup
 }
 
 fn io_err(path: &Path, source: std::io::Error) -> StoreError {
@@ -549,6 +561,37 @@ mod tests {
     }
 
     #[test]
+    fn a_second_broken_file_in_the_same_second_keeps_the_first_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let first = broken_backup_path(&path);
+        std::fs::write(&first, b"first").unwrap();
+        let second = broken_backup_path(&path);
+        assert_ne!(first, second);
+        assert!(second.to_string_lossy().ends_with("-2"));
+        std::fs::write(&second, b"second").unwrap();
+        assert!(broken_backup_path(&path).to_string_lossy().ends_with("-3"));
+    }
+
+    #[test]
+    fn a_first_run_config_is_validated_before_it_is_written() {
+        // Every first-run variant passes the check a loaded file takes, so
+        // a new installation's file is never written invalid.
+        for defaults in [
+            FirstRunDefaults::default(),
+            FirstRunDefaults {
+                apple_dictation: true,
+                apple_foundation_models: true,
+            },
+        ] {
+            validate(&Config::first_run_with(&defaults)).unwrap();
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ConfigStore::open(&DataDir::custom(tmp.path())).unwrap();
+        assert_eq!(*store.current(), Config::first_run());
+    }
+
+    #[test]
     fn a_read_only_load_leaves_a_file_it_cannot_read_in_place() {
         let tmp = tempfile::tempdir().unwrap();
         let dirs = DataDir::custom(tmp.path());
@@ -619,7 +662,7 @@ mod tests {
         // Four profiles as an older build wrote them: a casual one, one from
         // before presets were recorded, a formal one, and a casual one
         // whose user turned the stop rule off after the flag existed.
-        let mut make = |id: &str, preset: Option<&str>, rules: serde_json::Value| {
+        let make = |id: &str, preset: Option<&str>, rules: serde_json::Value| {
             let mut p = v["profiles"][0].clone();
             p["id"] = serde_json::json!(id);
             p["is_default"] = serde_json::json!(id == "a");
