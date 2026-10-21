@@ -757,6 +757,7 @@ mod tests {
             dict_fixes: 0,
             snippets: 0,
             llm_changed: false,
+            dict_hits: Vec::new(),
             stages: Vec::new(),
         };
         let kept = history.insert(row(Some(wav), "kept")).unwrap();

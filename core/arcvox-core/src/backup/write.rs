@@ -248,6 +248,7 @@ pub(crate) mod tests {
             dict_fixes: 1,
             snippets: 0,
             llm_changed: true,
+            dict_hits: Vec::new(),
             stages: Vec::new(),
         }
     }

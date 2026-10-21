@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick, untrack } from "svelte";
-  import { dictionaryExamples, dictionaryIndex, dictionarySuggestions, errorMessage, setDictionary, type DictionaryEntry, type Dismissed, type Suggestion, type TermIndex } from "../../lib/api";
+  import { dictionaryExamples, dictionaryHits, dictionaryIndex, dictionarySuggestions, errorMessage, setDictionary, type DictionaryEntry, type Dismissed, type Suggestion, type TermHits, type TermIndex } from "../../lib/api";
   import { dropBlank, isSnippet, trimEntries } from "../../lib/dictionary";
   import { arrange, matches, rememberSort, rememberView, SORTS, storedSort, storedView, VIEWS, type Labels, type Sort, type View } from "../../lib/dictionaryView";
   import { guard } from "../../lib/guard.svelte";
@@ -78,13 +78,19 @@
     }).catch(() => {});
   });
 
+  // How often each term's aliases were replaced, from the records.
+  let hits = $state<Map<string, TermHits>>(new Map());
+  const hitsOf = (item: Item): TermHits | null => hits.get(item.term.trim()) ?? null;
+  const aliasText = (n: number): string => (n === 0 ? t("dictionary.no_aliases") : n === 1 ? t("dictionary.alias_one") : t("dictionary.alias_count", { n: String(n) }));
+  const hitsText = (item: Item): string => { const h = hitsOf(item); return !h ? "" : h.count === 1 ? t("dictionary.hits_one") : t("dictionary.hits_n", { n: String(h.count) }); };
+
   const labels = $derived<Labels>({
     strokes: (n) => t("dictionary.strokes_n", { n: String(n) }),
     latin: "", kana: t("dictionary.sec_kana"), other: t("dictionary.sec_other"), unknown: t("dictionary.sec_unknown"),
     manual: t("dictionary.origin_manual"), suggestion: t("dictionary.origin_suggestion"), snippet: t("dictionary.snippet"), term: t("dictionary.tab_terms"),
   });
   const shownItems = $derived((items ?? []).filter((i) => matches(i, query)));
-  const sections = $derived(arrange(shownItems, sort, shownItems.map((i) => index.get(i.term.trim()) ?? null), labels));
+  const sections = $derived(arrange(shownItems, sort, shownItems.map((i) => index.get(i.term.trim()) ?? null), labels, hits));
   const sectioned = $derived(sections.length > 1 || (sections.length === 1 && sections[0].label !== ""));
   const selectedItem = $derived(items?.find((i) => i.key === selected) ?? null);
 
@@ -126,7 +132,10 @@
   async function loadSuggestions() {
     try { suggestions = await dictionarySuggestions(); } catch (e) { suggestions = []; toast.error(errorMessage(e)); }
   }
-  onMount(() => { void loadSuggestions(); });
+  onMount(() => {
+    void loadSuggestions();
+    dictionaryHits().then((list) => { hits = new Map(list.map((h) => [h.term, h])); }).catch(() => {});
+  });
 
   /** The excerpt's pieces: the term is between 【 and 】. */
   function pieces(excerpt: string): { text: string; mark: boolean }[] {
@@ -278,6 +287,7 @@
   }
   /** The date a list row shows: when it was changed under that sort, else when it was added. */
   function when(item: Item): string {
+    if (sort === "hits") { const h = hitsOf(item); return h ? t("dictionary.hit_on", { date: formatShortDate(h.last) }) : ""; }
     if (sort === "updated" && item.updated) return t("dictionary.updated_on", { date: formatShortDate(item.updated) });
     return item.added ? t("dictionary.added_on", { date: formatShortDate(item.added) }) : "";
   }
@@ -350,7 +360,7 @@
               {#each s.items as item, i (item.key)}
                 <button type="button" class="card" class:sel={selected === item.key} aria-expanded={selected === item.key} onclick={() => choose(item)}>
                   <span class="ct"><span class="name" class:blank={!item.term.trim()}>{firstLine(item.term) || t("dictionary.term")}</span>
-                    {#if status(item)}<span class="corner"><Tag tone={status(item)!.tone}>{status(item)!.text}</Tag></span>{:else if item.aliases.length}<span class="corner num">{item.aliases.length}</span>{/if}
+                    {#if status(item)}<span class="corner"><Tag tone={status(item)!.tone}>{status(item)!.text}</Tag></span>{:else if hitsOf(item)}<span class="corner num" use:tip={t("dictionary.hits_note")}>{hitsText(item)}</span>{:else if item.aliases.length}<span class="corner num">{aliasText(item.aliases.length)}</span>{/if}
                   </span>
                   {#if item.aliases.length}
                     <span class="als">{#each item.aliases.slice(0, 3) as a, i (i)}<span class="chip">{a}</span>{/each}{#if item.aliases.length > 3}<span class="chip more">+{item.aliases.length - 3}</span>{/if}</span>
@@ -358,7 +368,7 @@
                 </button>
                 <!-- The editor goes under the chosen card's whole row, so the cards beside it stay where they are. -->
                 {#if i === after && selectedItem}
-                  <div class="ged"><Fold><div class="edbox"><DictionaryEditor bind:item={items[items.findIndex((x) => x.key === selectedItem!.key)]} examples={examplesFor(selectedItem)} invalid={!!problem && blocks(selectedItem)} autofocus={fresh === selectedItem.key} onremove={() => remove(selectedItem!)} /></div></Fold></div>
+                  <div class="ged"><Fold><div class="edbox"><DictionaryEditor bind:item={items[items.findIndex((x) => x.key === selectedItem!.key)]} examples={examplesFor(selectedItem)} hits={hitsOf(selectedItem)} invalid={!!problem && blocks(selectedItem)} autofocus={fresh === selectedItem.key} onremove={() => remove(selectedItem!)} /></div></Fold></div>
                 {/if}
               {/each}
             {/each}
@@ -371,10 +381,10 @@
                 <button type="button" class="row" class:sel={selected === item.key} aria-expanded={selected === item.key} onclick={() => choose(item)}>
                   <span class="name" class:blank={!item.term.trim()}>{firstLine(item.term) || t("dictionary.term")}</span>
                   <span class="als">{#each item.aliases as a, i (i)}<span class="chip">{a}</span>{/each}</span>
-                  <span class="right">{#if when(item)}<span class="num">{when(item)}</span>{/if}{#if status(item)}<Tag tone={status(item)!.tone}>{status(item)!.text}</Tag>{:else}<span class="num">{item.aliases.length ? t("dictionary.alias_count", { n: String(item.aliases.length) }) : t("dictionary.no_aliases")}</span>{/if}</span>
+                  <span class="right">{#if when(item)}<span class="num">{when(item)}</span>{/if}{#if hitsOf(item)}<span class="num" use:tip={t("dictionary.hits_note")}>{hitsText(item)}</span>{/if}{#if status(item)}<Tag tone={status(item)!.tone}>{status(item)!.text}</Tag>{:else}<span class="num">{aliasText(item.aliases.length)}</span>{/if}</span>
                 </button>
                 {#if selected === item.key}
-                  <Fold><div class="edrow"><DictionaryEditor bind:item={items[items.findIndex((i) => i.key === item.key)]} examples={examplesFor(item)} invalid={!!problem && blocks(item)} autofocus={fresh === item.key} onremove={() => remove(item)} /></div></Fold>
+                  <Fold><div class="edrow"><DictionaryEditor bind:item={items[items.findIndex((i) => i.key === item.key)]} examples={examplesFor(item)} hits={hitsOf(item)} invalid={!!problem && blocks(item)} autofocus={fresh === item.key} onremove={() => remove(item)} /></div></Fold>
                 {/if}
               {/each}
             {/each}
@@ -387,7 +397,7 @@
                 {#each s.items as item (item.key)}
                   <button type="button" class="prow" class:sel={selected === item.key} aria-pressed={selected === item.key} onclick={() => { selected = item.key; fresh = null; }}>
                     <span class="name" class:blank={!item.term.trim()}>{firstLine(item.term) || t("dictionary.term")}</span>
-                    <span class="meta">{#if status(item)}{status(item)!.text}{:else if item.aliases.length}{item.aliases.length}{/if}</span>
+                    <span class="meta">{#if status(item)}{status(item)!.text}{:else if hitsOf(item)}<span use:tip={t("dictionary.hits_note")}>{hitsText(item)}</span>{:else if item.aliases.length}{aliasText(item.aliases.length)}{/if}</span>
                   </button>
                 {/each}
               {/each}
@@ -395,7 +405,7 @@
             <div class="pane">
               <Group>
                 {#if selectedItem}
-                  <div class="edrow pane-ed"><DictionaryEditor bind:item={items[items.findIndex((i) => i.key === selectedItem!.key)]} examples={examplesFor(selectedItem)} invalid={!!problem && blocks(selectedItem)} autofocus={fresh === selectedItem.key} onremove={() => remove(selectedItem!)} /></div>
+                  <div class="edrow pane-ed"><DictionaryEditor bind:item={items[items.findIndex((i) => i.key === selectedItem!.key)]} examples={examplesFor(selectedItem)} hits={hitsOf(selectedItem)} invalid={!!problem && blocks(selectedItem)} autofocus={fresh === selectedItem.key} onremove={() => remove(selectedItem!)} /></div>
                 {:else}
                   <Empty text={t("dictionary.select_hint")} />
                 {/if}
@@ -414,6 +424,7 @@
     {/if}
     <p class="help">{t("dictionary.snippet_help")}<InfoTip info={t("dictionary.snippet_info")} /></p>
     {#if sort === "strokes" || sort === "zhuyin" || sort === "pinyin"}<p class="help">{t("dictionary.sort_note")}</p>{/if}
+    {#if sort === "hits"}<p class="help">{t("dictionary.hits_note")}</p>{/if}
   {:else if tab === "suggestions"}
     {#if !visible.length}
       <Group><Empty text={t("dictionary.suggestions_empty")} /></Group>

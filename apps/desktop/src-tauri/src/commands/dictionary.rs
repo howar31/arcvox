@@ -138,6 +138,28 @@ fn region_of(config: &Config) -> learn::zh::Region {
     )
 }
 
+/// How often a term's aliases were replaced, and when last (unix seconds).
+#[derive(Debug, Clone, Serialize)]
+pub struct HitsDto {
+    pub term: String,
+    pub count: u64,
+    pub last: i64,
+}
+
+#[tauri::command]
+pub fn dictionary_hits(state: State<'_, AppState>) -> CmdResult<Vec<HitsDto>> {
+    Ok(engine(&state)?
+        .history()
+        .dictionary_hits()?
+        .into_iter()
+        .map(|h| HitsDto {
+            term: h.term,
+            count: h.count,
+            last: h.last_ts,
+        })
+        .collect())
+}
+
 #[tauri::command]
 pub fn dictionary_index(
     state: State<'_, AppState>,

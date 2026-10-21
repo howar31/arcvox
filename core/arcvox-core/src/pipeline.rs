@@ -33,6 +33,8 @@ pub struct Outcome {
     pub llm_ms: Option<u64>,
     /// Dictionary term corrections and snippet insertions made by the run.
     pub dict_fixes: u32,
+    /// The dictionary term of each replacement made, in order.
+    pub dict_hits: Vec<String>,
     pub snippets: u32,
     /// The rewrite step ran, did not fail, and returned different text.
     pub llm_changed: bool,
@@ -153,6 +155,7 @@ impl Pipeline {
         let mut asr_ms = 0;
         let mut llm_ms = None;
         let mut dict_fixes = 0u32;
+        let mut dict_hits: Vec<String> = Vec::new();
         let mut snippets = 0u32;
         let mut llm_changed = false;
         let mut stages = Vec::with_capacity(self.steps.len());
@@ -218,6 +221,7 @@ impl Pipeline {
                         _ => {}
                     }
                     dict_fixes += out.aliases.fixes;
+                    dict_hits.extend(out.aliases.terms.iter().cloned());
                     snippets += out.aliases.snippets;
                     text = out.text;
                     let _ = events
@@ -285,6 +289,7 @@ impl Pipeline {
             asr_ms,
             llm_ms,
             dict_fixes,
+            dict_hits,
             snippets,
             llm_changed,
             stages,

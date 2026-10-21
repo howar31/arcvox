@@ -37,6 +37,8 @@ describe("arrange", () => {
   });
   it("joins Han terms into the letters under pinyin and keeps Bopomofo in its own order", () => {
     expect(arrange(items, "pinyin", index, labels).map((s) => s.label)).toEqual(["A", "B", "F", "Q", "S"]);
+    const hits = new Map([["Slack", { term: "Slack", count: 3, last: 10 }], ["權限", { term: "權限", count: 3, last: 20 }], ["封包", { term: "封包", count: 1, last: 5 }]]);
+    expect(arrange(items, "hits", index, labels, hits)[0].items.map((x) => x.term)).toEqual(["權限", "Slack", "封包", "Arcvox", "Best regards,\nThe team"]);
     expect(arrange(items, "zhuyin", index, labels).map((s) => s.label)).toEqual(["A", "B", "S", "ㄈ", "ㄑ"]);
   });
   it("orders by alias count, origin and kind", () => {

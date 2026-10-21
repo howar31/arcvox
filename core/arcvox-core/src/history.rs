@@ -150,6 +150,8 @@ pub struct NewUtterance {
     pub snippets: u32,
     /// The rewrite step ran, did not fail, and returned different text.
     pub llm_changed: bool,
+    /// The dictionary term of each replacement made, in order.
+    pub dict_hits: Vec<String>,
     /// What each stage did, in order; the insertion stage comes later.
     pub stages: Vec<StageRecord>,
 }
@@ -265,8 +267,18 @@ pub struct Redo {
     pub dict_fixes: u32,
     pub snippets: u32,
     pub llm_changed: bool,
+    /// The dictionary term of each replacement the rerun made, in order.
+    pub dict_hits: Vec<String>,
     /// What each stage of the rerun did, in order.
     pub stages: Vec<StageRecord>,
+}
+
+/// How often a term's aliases were replaced, and when last.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TermHits {
+    pub term: String,
+    pub count: u64,
+    pub last_ts: i64,
 }
 
 /// Row and recording counts of the history.
@@ -466,6 +478,16 @@ CREATE TABLE IF NOT EXISTS stats_hourly (
 CREATE TABLE IF NOT EXISTS stats_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ";
 
+/// How often each dictionary term's aliases were replaced, per device:
+/// a count of use that goes with the statistics.
+const HITS_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS dictionary_hits (
+    device_id TEXT NOT NULL, term TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0, last_ts INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (device_id, term)
+);
+";
+
 const DEVICES_SCHEMA: &str = "
 CREATE UNIQUE INDEX IF NOT EXISTS utterances_origin ON utterances(device_id, origin_id);
 CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, platform TEXT NOT NULL DEFAULT '');
@@ -575,6 +597,7 @@ pub(crate) fn upgrade(
     // kept now, so a folder renamed or moved by hand keeps its recordings.
     keep_names_only(conn)?;
     conn.execute_batch(STATS_SCHEMA)?;
+    conn.execute_batch(HITS_SCHEMA)?;
     conn.execute_batch(STAGES_SCHEMA)?;
     // A failed backfill leaves the history usable; it runs again at the next open.
     if let Err(e) = stats::backfill(conn, recordings_dir, device.id) {
@@ -661,6 +684,18 @@ fn insert_row(conn: &Connection, u: &NewUtterance, device: &str) -> rusqlite::Re
     let id = own_last_row(conn)?;
     insert_stages(conn, id, None, &u.stages)?;
     Ok(id)
+}
+
+/// Counts one replacement per term, with the time it happened.
+fn add_hits(tx: &Connection, device: &str, ts: i64, terms: &[String]) -> rusqlite::Result<()> {
+    let mut stmt = tx.prepare_cached(
+        "INSERT INTO dictionary_hits (device_id, term, count, last_ts) VALUES (?1, ?2, 1, ?3)
+         ON CONFLICT (device_id, term) DO UPDATE SET count = count + 1, last_ts = MAX(last_ts, excluded.last_ts)",
+    )?;
+    for term in terms {
+        stmt.execute(params![device, term, ts])?;
+    }
+    Ok(())
 }
 
 /// Writes the stages of one run, under the attempt when it was a rerun.
@@ -866,6 +901,7 @@ impl HistoryStore {
             .then(|| insert_row(&tx, &u, &self.device_id))
             .transpose()?;
         let added = if policy.stats {
+            add_hits(&tx, &self.device_id, u.ts, &u.dict_hits)?;
             stats::add(
                 &tx,
                 &stats::Sample {
@@ -1152,6 +1188,7 @@ impl HistoryStore {
         let attempt_id = insert_attempt(&tx, id.0, &line)?;
         if let Outcome::Done { redo, .. } = outcome {
             insert_stages(&tx, id.0, Some(attempt_id), &redo.stages)?;
+            add_hits(&tx, &self.device_id, ts, &redo.dict_hits)?;
         }
         if let (Outcome::Done { redo, .. }, true) = (outcome, choose || was_failed) {
             apply_in(&tx, &self.device_id, id, redo, None)?;
@@ -1196,6 +1233,9 @@ impl HistoryStore {
             dict_fixes: a.dict_fixes,
             snippets: a.snippets,
             llm_changed: a.llm_changed,
+            // Choosing counts nothing: the replacements were counted when
+            // the result was made.
+            dict_hits: Vec::new(),
             // The attempt's stages are already stored under its id.
             stages: Vec::new(),
         };
@@ -1685,6 +1725,10 @@ impl HistoryStore {
         };
         let rows = tx.execute("DELETE FROM utterances WHERE device_id = ?1", params![id])?;
         tx.execute("DELETE FROM stats_hourly WHERE device_id = ?1", params![id])?;
+        tx.execute(
+            "DELETE FROM dictionary_hits WHERE device_id = ?1",
+            params![id],
+        )?;
         tx.execute("DELETE FROM devices WHERE id = ?1", params![id])?;
         tx.commit()?;
         for name in &paths {
@@ -1880,11 +1924,26 @@ impl HistoryStore {
     }
 
     pub fn reset_stats(&self) -> Result<(), HistoryError> {
-        self.conn
-            .lock()
-            .unwrap()
-            .execute("DELETE FROM stats_hourly", [])?;
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM stats_hourly", [])?;
+        conn.execute("DELETE FROM dictionary_hits", [])?;
         Ok(())
+    }
+
+    /// How often each dictionary term's aliases were replaced, over every
+    /// device, with the time of the last replacement (unix seconds).
+    pub fn dictionary_hits(&self) -> Result<Vec<TermHits>, HistoryError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT term, SUM(count), MAX(last_ts) FROM dictionary_hits GROUP BY term")?;
+        let rows = stmt.query_map([], |r| {
+            Ok(TermHits {
+                term: r.get(0)?,
+                count: r.get::<_, i64>(1)? as u64,
+                last_ts: r.get(2)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
     /// Row count and the recordings of `recordings_dir` that exist.
@@ -2513,6 +2572,7 @@ pub(crate) mod tests_support {
             dict_fixes: 0,
             snippets: 0,
             llm_changed: false,
+            dict_hits: Vec::new(),
             stages: Vec::new(),
         }
     }
@@ -2545,6 +2605,7 @@ mod tests {
             dict_fixes: 0,
             snippets: 0,
             llm_changed: false,
+            dict_hits: Vec::new(),
             stages: Vec::new(),
         }
     }
@@ -2571,11 +2632,75 @@ mod tests {
                 dict_fixes: 0,
                 snippets: 0,
                 llm_changed: false,
+                dict_hits: Vec::new(),
                 stages,
             },
             asr_label: "asr".into(),
             llm_label: None,
         }
+    }
+
+    #[test]
+    fn replacements_are_counted_per_term_with_the_statistics() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let mut u = new(100, None);
+        u.dict_hits = vec!["Arcvox".into(), "Arcvox".into(), "封包".into()];
+        let id = s
+            .insert_replacing(u, None, || true, Keep::ALL)
+            .unwrap()
+            .unwrap();
+        let mut hits = s.dictionary_hits().unwrap();
+        hits.sort_by(|a, b| a.term.cmp(&b.term));
+        assert_eq!(
+            hits,
+            vec![
+                TermHits {
+                    term: "Arcvox".into(),
+                    count: 2,
+                    last_ts: 100
+                },
+                TermHits {
+                    term: "封包".into(),
+                    count: 1,
+                    last_ts: 100
+                },
+            ]
+        );
+        // A rerun's replacements count too, at the time of the rerun.
+        let mut rerun = redo_with(vec![]);
+        if let Outcome::Done { redo, .. } = &mut rerun {
+            redo.dict_hits = vec!["封包".into()];
+        }
+        s.record_attempt(id, &rerun, false).unwrap();
+        let hits = s.dictionary_hits().unwrap();
+        let packet = hits.iter().find(|h| h.term == "封包").unwrap();
+        assert_eq!(packet.count, 2);
+        assert!(packet.last_ts > 100);
+        // Without the statistics nothing is counted; the reset clears them.
+        let mut u = new(101, None);
+        u.dict_hits = vec!["Arcvox".into()];
+        s.insert_replacing(
+            u,
+            None,
+            || true,
+            Keep {
+                row: true,
+                stages: true,
+                stats: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            s.dictionary_hits()
+                .unwrap()
+                .iter()
+                .find(|h| h.term == "Arcvox")
+                .unwrap()
+                .count,
+            2
+        );
+        s.reset_stats().unwrap();
+        assert!(s.dictionary_hits().unwrap().is_empty());
     }
 
     #[test]
@@ -3261,6 +3386,7 @@ mod tests {
             dict_fixes: 0,
             snippets: 0,
             llm_changed: true,
+            dict_hits: Vec::new(),
             stages: Vec::new(),
         };
         assert!(s.apply_redo(id, &redo).unwrap());
@@ -3305,6 +3431,7 @@ mod tests {
                 dict_fixes: 0,
                 snippets: 0,
                 llm_changed: true,
+                dict_hits: Vec::new(),
                 stages: Vec::new(),
             },
             asr_label: "Breeze".into(),
@@ -3695,6 +3822,7 @@ INSERT INTO stats_meta (key, value) VALUES ('backfilled', '1');
             dict_fixes: 0,
             snippets: 0,
             llm_changed: false,
+            dict_hits: Vec::new(),
             stages: Vec::new(),
         };
         assert!(s.apply_redo(failed, &redo).unwrap());

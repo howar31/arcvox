@@ -53,11 +53,14 @@ pub fn llm_terms(entries: &[DictionaryEntry]) -> Vec<String> {
         .collect()
 }
 
-/// How many replacements a pass made: term corrections and snippet insertions.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// How many replacements a pass made: term corrections and snippet
+/// insertions, and the term of each replacement in order (a term repeats
+/// once per replacement).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AliasCounts {
     pub fixes: u32,
     pub snippets: u32,
+    pub terms: Vec<String>,
 }
 
 /// Replaces every alias with its term, matching against the original text
@@ -101,6 +104,7 @@ pub fn apply_aliases_counted(entries: &[DictionaryEntry], text: &str) -> (String
             } else {
                 counts.fixes += 1;
             }
+            counts.terms.push(term.to_string());
             i += alias.len();
         } else {
             let ch = rest
@@ -270,7 +274,12 @@ mod tests {
             counts,
             AliasCounts {
                 fixes: 2,
-                snippets: 1
+                snippets: 1,
+                terms: vec![
+                    "Arcvox".into(),
+                    "Arcvox".into(),
+                    "Best regards,\nThe team".into()
+                ],
             }
         );
     }

@@ -2,7 +2,7 @@
   /** The one editor of a dictionary entry, shown under the chosen row or card or in the right pane: the term,
    * the aliases, the recognition hint, where the entry came from, the sentences it appeared in, and removal. */
   import { tip } from "../../lib/tip";
-  import type { DictionaryEntry } from "../../lib/api";
+  import type { DictionaryEntry, TermHits } from "../../lib/api";
   import { addAliases, isSnippet } from "../../lib/dictionary";
   import { formatShortDate } from "../../lib/format";
   import { isImeKey } from "../../lib/ime";
@@ -12,10 +12,12 @@
   import Tag from "../../lib/ui/Tag.svelte";
 
   type Item = DictionaryEntry & { key: number; pending: string };
-  let { item = $bindable(), examples, invalid = false, onremove, autofocus = false }: {
+  let { item = $bindable(), examples, hits = null, invalid = false, onremove, autofocus = false }: {
     item: Item;
     /** Sentences from the history that hold the term; null while they load. */
     examples: string[] | null;
+    /** How often the term's aliases were replaced, when ever. */
+    hits?: TermHits | null;
     invalid?: boolean;
     onremove: () => void;
     autofocus?: boolean;
@@ -69,14 +71,16 @@
   }
 
   const origin = $derived.by(() => {
-    if (!item.origin && !item.added) return "";
-    const what = t(item.origin === "suggestion" ? "dictionary.origin_suggestion" : "dictionary.origin_manual");
-    const line = item.added ? t("dictionary.origin_on", { origin: what, date: formatShortDate(item.added) }) : what;
-    const heard = (item.heard ?? []).filter((h) => h.trim());
     const sep = t("common.list_sep") === "、" ? "，" : ", ";
-    const parts = [line];
-    if (heard.length) parts.push(t("dictionary.heard_before", { list: heard.join(t("common.list_sep")) }));
-    if (item.updated && item.updated !== item.added) parts.push(t("dictionary.updated_on", { date: formatShortDate(item.updated) }));
+    const parts: string[] = [];
+    if (item.origin || item.added) {
+      const what = t(item.origin === "suggestion" ? "dictionary.origin_suggestion" : "dictionary.origin_manual");
+      parts.push(item.added ? t("dictionary.origin_on", { origin: what, date: formatShortDate(item.added) }) : what);
+      const heard = (item.heard ?? []).filter((h) => h.trim());
+      if (heard.length) parts.push(t("dictionary.heard_before", { list: heard.join(t("common.list_sep")) }));
+      if (item.updated && item.updated !== item.added) parts.push(t("dictionary.updated_on", { date: formatShortDate(item.updated) }));
+    }
+    if (hits) parts.push(t("dictionary.hits_line", { n: String(hits.count), date: formatShortDate(hits.last) }));
     return parts.join(sep);
   });
 </script>

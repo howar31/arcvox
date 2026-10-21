@@ -43,6 +43,9 @@ export interface Dismissed { term: string; heard?: string[]; at?: number }
 /** The sort keys of terms: stroke count and Bopomofo / pinyin initials of the first Han character, null for other terms. */
 export interface TermIndex { strokes: number | null; zhuyin: string | null; pinyin: string | null }
 export const dictionaryIndex = (terms: string[]) => invoke<TermIndex[]>("dictionary_index", { terms });
+/** How often a term's aliases were replaced, and when last (unix seconds); terms never replaced are absent. */
+export interface TermHits { term: string; count: number; last: number }
+export const dictionaryHits = () => invoke<TermHits[]>("dictionary_hits");
 /** Up to `limit` dictations holding the term, as excerpts with the term between 【 and 】. */
 export const dictionaryExamples = (term: string, limit = 2) => invoke<string[]>("dictionary_examples", { term, limit });
 export interface General {

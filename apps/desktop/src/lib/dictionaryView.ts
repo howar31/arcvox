@@ -1,12 +1,12 @@
 /** How the Dictionary page shows its entries: the view, the sort with its sections, and the search. Both
  * choices are kept on this computer only. */
-import type { DictionaryEntry, TermIndex } from "./api";
+import type { DictionaryEntry, TermHits, TermIndex } from "./api";
 import { isSnippet } from "./dictionary";
 
 export type View = "cards" | "list" | "panes";
-export type Sort = "added" | "updated" | "strokes" | "zhuyin" | "pinyin" | "aliases" | "origin" | "kind";
+export type Sort = "added" | "updated" | "hits" | "strokes" | "zhuyin" | "pinyin" | "aliases" | "origin" | "kind";
 export const VIEWS: View[] = ["cards", "list", "panes"];
-export const SORTS: Sort[] = ["added", "updated", "strokes", "zhuyin", "pinyin", "aliases", "origin", "kind"];
+export const SORTS: Sort[] = ["added", "updated", "hits", "strokes", "zhuyin", "pinyin", "aliases", "origin", "kind"];
 
 const VIEW_KEY = "dictionary.view";
 const SORT_KEY = "dictionary.sort";
@@ -52,8 +52,9 @@ export interface Labels {
   manual: string; suggestion: string; snippet: string; term: string;
 }
 
-/** Sorts the entries and cuts them into sections; `index` gives each term's keys in the same order. */
-export function arrange<T extends DictionaryEntry>(items: T[], sort: Sort, index: (TermIndex | null)[], labels: Labels): Section<T>[] {
+/** Sorts the entries and cuts them into sections; `index` gives each term's keys in the same order, `hits` how often
+ * each term was replaced. */
+export function arrange<T extends DictionaryEntry>(items: T[], sort: Sort, index: (TermIndex | null)[], labels: Labels, hits: Map<string, TermHits> = new Map()): Section<T>[] {
   const keyed = items.map((e, i) => ({ e, i, idx: index[i] ?? null, script: scriptOf(e.term) }));
   const byTerm = (a: typeof keyed[number], b: typeof keyed[number]) => a.e.term.localeCompare(b.e.term, undefined, { sensitivity: "base", numeric: true });
   const one = (key: string, label: string, list: typeof keyed): Section<T>[] => (list.length ? [{ key, label, items: list.map((k) => k.e) }] : []);
@@ -63,6 +64,12 @@ export function arrange<T extends DictionaryEntry>(items: T[], sort: Sort, index
       const at = (k: typeof keyed[number]) => (sort === "added" ? k.e.added : (k.e.updated ?? k.e.added)) ?? 0;
       // Newest first; entries without a time keep their stored order after them.
       const sorted = [...keyed].sort((a, b) => at(b) - at(a) || a.i - b.i);
+      return one("all", "", sorted);
+    }
+    case "hits": {
+      // Most replaced first, the latest replacement breaking ties; terms never replaced come after, by name.
+      const h = (k: typeof keyed[number]) => hits.get(k.e.term.trim());
+      const sorted = [...keyed].sort((a, b) => (h(b)?.count ?? 0) - (h(a)?.count ?? 0) || (h(b)?.last ?? 0) - (h(a)?.last ?? 0) || byTerm(a, b));
       return one("all", "", sorted);
     }
     case "aliases": {

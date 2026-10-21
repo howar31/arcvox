@@ -786,6 +786,7 @@ impl Engine {
                     dict_fixes: out.dict_fixes,
                     snippets: out.snippets,
                     llm_changed: out.llm_changed,
+                    dict_hits: out.dict_hits.clone(),
                     // A rerun starts from the kept recording: nothing to
                     // trim, nothing inserted.
                     stages: std::iter::once(StageRecord {
@@ -816,9 +817,14 @@ impl Engine {
         };
         let history = self.inner.history.clone();
         let mut recorded = recorded;
-        if !self.inner.config.current().general.keep_stages {
-            if let crate::history::Outcome::Done { redo, .. } = &mut recorded {
+        let general = self.inner.config.current().general.clone();
+        if let crate::history::Outcome::Done { redo, .. } = &mut recorded {
+            if !general.keep_stages {
                 redo.stages.clear();
+            }
+            // The counts of use go with the statistics.
+            if !general.keep_stats {
+                redo.dict_hits.clear();
             }
         }
         let stored =
@@ -1751,6 +1757,7 @@ async fn run_session(
         dict_fixes: outcome.dict_fixes,
         snippets: outcome.snippets,
         llm_changed: outcome.llm_changed,
+        dict_hits: outcome.dict_hits,
     };
     let history = inner.history.clone();
     let claim = flags.clone();
@@ -3406,6 +3413,7 @@ pub(crate) mod tests {
             dict_fixes: 0,
             snippets: 0,
             llm_changed: false,
+            dict_hits: Vec::new(),
             stages: Vec::new(),
         }
     }
