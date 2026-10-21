@@ -3,7 +3,7 @@
       every other tooltip (`lib/tip.ts`), with two additions: it can hold links, so it stays while the
       pointer is on the card too, and a click pins it until a click elsewhere or Esc. */
   import type { Snippet } from "svelte";
-  import { tick } from "svelte";
+  import { onDestroy, tick } from "svelte";
   import { t } from "../i18n";
   import { closed, HIDE_MS, opened, placeCard, showDelay } from "../tip";
   import Icon from "./Icon.svelte";
@@ -76,6 +76,13 @@
   function onKey(e: KeyboardEvent) {
     if (open && e.key === "Escape") close();
   }
+
+  // The card was moved under the body, out of the component's own nodes, so the component's removal
+  // (a link on the card leading to another page) does not take it along: it goes here.
+  onDestroy(() => {
+    close();
+    card?.remove();
+  });
 </script>
 
 <svelte:document onpointerdown={onDocumentDown} onkeydown={onKey} onscrollcapture={() => { if (open && !pinned) close(); }} />
