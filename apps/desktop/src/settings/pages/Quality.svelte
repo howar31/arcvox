@@ -3,11 +3,12 @@
   import { onMount } from "svelte";
   import { errorMessage, qualityClear, qualityDelete, qualityList, qualitySourceInfo, type ProviderConfig, type QualitySource, type ReportHead, type SourceInfo } from "../../lib/api";
   import { formatDateTime } from "../../lib/format";
-  import { periodRange } from "../../lib/historyView";
+  import { periodLabel, periodRange } from "../../lib/historyView";
   import { t } from "../../lib/i18n";
   import { profileName, providerLabel } from "../../lib/labels";
   import { quality } from "../../lib/quality.svelte";
   import { fraction, providersOf } from "../../lib/qualityView";
+  import { together, type Reset } from "../../lib/reset";
   import { config } from "../../lib/store.svelte";
   import Group from "../../lib/ui/Group.svelte";
   import NumberField from "../../lib/ui/NumberField.svelte";
@@ -116,6 +117,26 @@
   const rowsOf = (h: ReportHead) => Math.round(h.items / Math.max(1, h.providers.length));
   const stageOf = (s: string) => t(`quality.stage.${s}`);
   const runEngine = $derived(run?.provider ? providersOf(run.provider, run.stage).map((id) => providerLabel(config.value, id)).join(" + ") : "");
+
+  // Each choice offers the way back to what the page starts with.
+  const DEFAULT_PERIOD = { kind: "30d" } as const;
+  const DEFAULT_LIMIT = 120;
+  const defaultProfile = $derived(profiles.find((p) => p.is_default) ?? null);
+  const defaultEngines = $derived.by(() => {
+    const pair = config.value?.default_engines;
+    const ids = new Set((config.value?.providers ?? []).map((p) => p.id));
+    return { asr: pair && ids.has(pair.asr) ? [pair.asr] : [], llm: pair && ids.has(pair.llm) ? [pair.llm] : [] };
+  });
+  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  const back = (changed: boolean, value: string, run: () => void): Reset | undefined => (changed ? { hint: t("common.reset_to", { value }), run } : undefined);
+  const resets = $derived({
+    source: back(quality.source !== "history", t("quality.source.history"), () => { quality.source = "history"; }),
+    period: back(!same(quality.period, DEFAULT_PERIOD), periodLabel(DEFAULT_PERIOD), () => { quality.period = { ...DEFAULT_PERIOD }; }),
+    limit: back(quality.limit !== DEFAULT_LIMIT, `${DEFAULT_LIMIT} ${t("quality.rows_unit")}`, () => { quality.limit = DEFAULT_LIMIT; }),
+    stage: back(quality.stage !== "llm", t("quality.stage.llm"), () => { quality.stage = "llm"; }),
+    profile: back(!!defaultProfile && !!profile && profile.id !== defaultProfile.id, defaultProfile?.name ?? "", () => { quality.profile = defaultProfile?.id ?? null; }),
+    engines: back(!same([...selectedAsr].sort(), defaultEngines.asr) || !same([...selectedLlm].sort(), defaultEngines.llm), [...defaultEngines.asr, ...defaultEngines.llm].map((id) => providerLabel(config.value, id)).join(", "), () => { quality.asr = [...defaultEngines.asr]; quality.llm = [...defaultEngines.llm]; }),
+  });
 </script>
 
 {#snippet engineList(id: string, title: string, list: ProviderConfig[], selected: string[], set: (next: string[]) => void, one: boolean)}
@@ -173,15 +194,15 @@
       </Group>
     {/if}
 
-    <Group title={t("quality.data")} info={t("quality.data_info")}>
-      <Row label={t("quality.source")}>
+    <Group title={t("quality.data")} info={t("quality.data_info")} onreset={together([resets.source, resets.period, resets.limit])}>
+      <Row label={t("quality.source")} reset={resets.source}>
         <Segmented options={[{ value: "history", label: t("quality.source.history") }, { value: "file", label: t("quality.source.file") }]} bind:value={quality.source} label={t("quality.source")} />
       </Row>
       {#if quality.source === "history"}
-        <Row label={t("quality.period")}>
+        <Row label={t("quality.period")} reset={resets.period}>
           <PeriodPicker value={quality.period} withAudio onchange={(v) => (quality.period = v)} />
         </Row>
-        <Row label={t("quality.limit")} help={t("quality.limit_help")}>
+        <Row label={t("quality.limit")} help={t("quality.limit_help")} reset={resets.limit}>
           <NumberField bind:value={quality.limit} min={0} max={100000} unit={t("quality.rows_unit")} label={t("quality.limit")} />
         </Row>
         <Row label={info ? t("quality.available", { n: String(info.rows) }) : t("quality.counting")} help={info ? t("quality.available_help", { n: String(info.available), heard: String(info.heard) }) : undefined} />
@@ -195,18 +216,18 @@
       {/if}
     </Group>
 
-    <Group title={t("quality.part")}>
-      <Row label={t("quality.stage")} help={t("quality.stage_help")}>
+    <Group title={t("quality.part")} onreset={together([resets.stage, resets.profile])}>
+      <Row label={t("quality.stage")} help={t("quality.stage_help")} reset={resets.stage}>
         <Segmented options={[{ value: "asr", label: t("quality.stage.asr") }, { value: "llm", label: t("quality.stage.llm") }, { value: "full", label: t("quality.stage.full") }]} bind:value={quality.stage} label={t("quality.stage")} />
       </Row>
-      <Row label={t("quality.profile")} help={t("quality.profile_help")}>
+      <Row label={t("quality.profile")} help={t("quality.profile_help")} reset={resets.profile}>
         <select class="field" bind:value={() => profile?.id ?? "", (v) => (quality.profile = v)} aria-label={t("quality.profile")} disabled={running}>
           {#each profiles as p (p.id)}<option value={p.id}>{p.name}</option>{/each}
         </select>
       </Row>
     </Group>
 
-    <Group title={t("quality.engines")} help={quality.stage === "full" ? t("quality.engines_full_help") : undefined}>
+    <Group title={t("quality.engines")} help={quality.stage === "full" ? t("quality.engines_full_help") : undefined} onreset={together([resets.engines])}>
       {#if needsAsr}{@render engineList("quality-asr", t("speed.role.asr"), asrProviders, selectedAsr, (next) => { quality.asr = next; }, quality.stage === "full")}{/if}
       {#if needsLlm}{@render engineList("quality-llm", t("speed.role.llm"), llmProviders, selectedLlm, (next) => { quality.llm = next; }, quality.stage === "full")}{/if}
     </Group>
