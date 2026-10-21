@@ -430,11 +430,17 @@ impl ClientSettings {
         let text = match std::fs::read_to_string(&path) {
             Ok(t) => t,
             // A new installation: the first-launch guide is still to come.
-            Err(_) => {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 return Self {
                     guide_done: false,
                     ..Self::default()
                 }
+            }
+            // A file that exists but cannot be read belongs to an installation
+            // that has run before; the defaults serve until it can be read.
+            Err(e) => {
+                tracing::warn!(?path, error = %e, "client settings unreadable, using defaults");
+                return Self::default();
             }
         };
         match serde_json::from_str::<ClientSettings>(&text) {
@@ -767,6 +773,34 @@ mod tests {
             "{names:?}"
         );
         assert!(!names.iter().any(|n| n == "client.json"));
+    }
+
+    #[test]
+    fn a_file_with_an_unknown_key_is_moved_aside() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            ClientSettings::path(dir.path()),
+            br#"{"schema_version": 1, "no_such_key": true}"#,
+        )
+        .unwrap();
+        let s = ClientSettings::load(dir.path());
+        assert_eq!(s, ClientSettings::default());
+        assert!(!ClientSettings::path(dir.path()).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_file_yields_defaults_without_the_guide() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = ClientSettings::path(dir.path());
+        std::fs::write(&path, b"{}").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let s = ClientSettings::load(dir.path());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(s, ClientSettings::default());
+        assert!(s.guide_done);
+        assert!(path.exists());
     }
 
     #[test]
