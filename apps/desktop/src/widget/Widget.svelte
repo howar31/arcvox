@@ -131,7 +131,7 @@
   });
   const label = $derived.by(() => {
     void feed.language;
-    const key = resting ? (feed.idle === "label" ? READY : null) : labelKey(feed.state, feed.message, feed.done);
+    const key = resting ? (feed.idle === "label" ? READY : null) : labelKey(feed.state, feed.message, feed.done, feed.step);
     return key ? t(key) : "";
   });
 

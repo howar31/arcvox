@@ -3,6 +3,7 @@
 
 use crate::i18n::Msg;
 use arcvox_core::types::ErrorCode;
+use arcvox_core::types::StepName;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiState {
@@ -105,11 +106,25 @@ impl UiMessage {
     }
 }
 
+/// A step's name as the widget events carry it.
+pub fn step_name(step: StepName) -> &'static str {
+    match step {
+        StepName::Asr => "asr",
+        StepName::OpenCc => "opencc",
+        StepName::Llm => "llm",
+        StepName::Rules => "rules",
+        StepName::Translate => "translate",
+    }
+}
+
 pub trait Ui: Send + Sync {
     fn set_state(&self, state: UiState);
     /// RMS of the latest audio block, 0.0 to 1.0, while recording.
     fn level(&self, rms: f32);
     fn message(&self, message: UiMessage);
+    /// A step of the processing began; the widget names it (recognising,
+    /// rewriting, translating).
+    fn step(&self, step: StepName);
     /// The final ASR text, sent while the rewrite step is still running.
     fn transcript(&self, text: String);
     /// The text the processing ended with, sent before it is inserted.
@@ -184,6 +199,12 @@ pub mod fake {
         fn transcript(&self, text: String) {
             self.log.lock().unwrap().push(format!("transcript:{text}"));
             self.transcripts.lock().unwrap().push(text);
+        }
+        fn step(&self, step: StepName) {
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("step:{}", step_name(step)));
         }
     }
 }

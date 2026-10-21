@@ -1,4 +1,4 @@
-import type { MessagePayload, WidgetState } from "./api";
+import type { MessagePayload, ProcessingStep, WidgetState } from "./api";
 import { failureText } from "./failure";
 import { t } from "./i18n";
 
@@ -13,6 +13,12 @@ const STATE_LABELS: Partial<Record<WidgetState, string>> = {
   placing: "widget.placing",
   moving: "widget.placing",
 };
+/** The steps the widget names while they run; the quick ones in between keep the label of the step before. */
+export type LabelledStep = "asr" | "llm" | "translate";
+const STEP_LABELS: Record<LabelledStep, string> = { asr: "widget.recognising", llm: "widget.rewriting", translate: "widget.translating" };
+export function labelledStep(step: ProcessingStep): LabelledStep | null {
+  return step === "asr" || step === "llm" || step === "translate" ? step : null;
+}
 /** Messages the widget shows by itself, with their label. */
 const NOTICES: Record<string, string> = {
   "widget.cancelled": "widget.cancelled",
@@ -29,7 +35,7 @@ const REWRITE_FAILED = "widget.rewrite_failed";
 const RECORD_FAILED = "widget.record_failed_short";
 
 /** Every label the widget can show; its long side holds the longest of them. */
-export const LABEL_KEYS: string[] = [...Object.values(STATE_LABELS), ...Object.values(NOTICES), READY, ...Object.values(DONE_LABELS), FAILED, NOT_INSERTED, REWRITE_FAILED, RECORD_FAILED];
+export const LABEL_KEYS: string[] = [...Object.values(STATE_LABELS), ...Object.values(STEP_LABELS), ...Object.values(NOTICES), READY, ...Object.values(DONE_LABELS), FAILED, NOT_INSERTED, REWRITE_FAILED, RECORD_FAILED];
 
 /** The text exists but is not in the application, or is not what the processing should have made of it. */
 function needsAttention(message: MessagePayload): boolean {
@@ -39,8 +45,10 @@ function needsAttention(message: MessagePayload): boolean {
 /**
  * The key of the widget's label, or null when it shows the ring alone.
  * `done`: the text was put into the application or on the clipboard and nothing happened since.
+ * `step`: the step the processing is at, which names the label while it runs.
  */
-export function labelKey(state: WidgetState, message: MessagePayload | null, done: Done = null): string | null {
+export function labelKey(state: WidgetState, message: MessagePayload | null, done: Done = null, step: LabelledStep | null = null): string | null {
+  if (!message && state === "processing" && step) return STEP_LABELS[step];
   if (!message) return STATE_LABELS[state] ?? (done && state === "idle" ? DONE_LABELS[done] : null);
   if (message.key in NOTICES) return NOTICES[message.key];
   if (message.key === "widget.degraded") return REWRITE_FAILED;

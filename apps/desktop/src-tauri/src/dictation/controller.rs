@@ -813,6 +813,11 @@ impl Controller {
                     self.deps.ui.transcript(text);
                 }
             }
+            // The widget names the step that runs; the quick ones in between
+            // (script conversion, tidying) keep the name of the step before.
+            Event::StepStarted { step } if matches!(self.state, State::Processing { .. }) => {
+                self.deps.ui.step(step);
+            }
             Event::Done { .. } => self.on_done(),
             _ => {}
         }

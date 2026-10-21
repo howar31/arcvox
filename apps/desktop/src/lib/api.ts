@@ -311,6 +311,10 @@ export interface LevelPayload { rms: number }
 /** `code` is the kind of failure of a failed dictation; `retry` says it was kept for a retry from the history. */
 export interface MessagePayload { kind: "info" | "error"; key: string; detail: string | null; copyable: string | null; code: string | null; retry: boolean; language: "zh-TW" | "en" }
 export function onWidgetState(cb: (p: StatePayload) => void): Promise<UnlistenFn> { return listen<StatePayload>("widget-state", (e) => cb(e.payload)); }
+/** A step of the processing began; the quick ones in between carry no label of their own. */
+export type ProcessingStep = "asr" | "opencc" | "llm" | "rules" | "translate";
+export interface StepPayload { step: ProcessingStep; language: "zh-TW" | "en" }
+export function onWidgetStep(cb: (p: StepPayload) => void): Promise<UnlistenFn> { return listen<StepPayload>("widget-step", (e) => cb(e.payload)); }
 /** The widget is kept on screen to be positioned, or no longer: switched in the settings window or in a menu. */
 export function onWidgetPlacing(cb: (on: boolean) => void): Promise<UnlistenFn> { return listen<boolean>("widget-placing", (e) => cb(e.payload)); }
 /** The pointer came over a resting widget (true) or left it. */

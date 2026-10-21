@@ -81,6 +81,12 @@ struct TranscriptPayload {
 }
 
 #[derive(Serialize, Clone)]
+struct StepPayload {
+    step: &'static str,
+    language: &'static str,
+}
+
+#[derive(Serialize, Clone)]
 struct MessagePayload {
     kind: &'static str,
     key: &'static str,
@@ -881,6 +887,17 @@ impl Ui for TauriUi {
             "widget-transcript",
             TranscriptPayload {
                 text,
+                language: language.tag(),
+            },
+        );
+    }
+
+    fn step(&self, step: arcvox_core::types::StepName) {
+        let language = self.language();
+        self.emit(
+            "widget-step",
+            StepPayload {
+                step: crate::dictation::ui::step_name(step),
                 language: language.tag(),
             },
         );

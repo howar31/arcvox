@@ -1,4 +1,5 @@
-import { onWidgetCopied, onWidgetEnter, onWidgetHover, onWidgetInserted, onWidgetLeave, onWidgetLevel, onWidgetMessage, onWidgetRefined, onWidgetReset, onWidgetState, onWidgetTranscript, uiLanguage, widgetFade, widgetIdle, widgetScale, type MessagePayload, type WidgetFade, type WidgetIdle, type WidgetState } from "./api";
+import { onWidgetCopied, onWidgetEnter, onWidgetHover, onWidgetInserted, onWidgetLeave, onWidgetLevel, onWidgetMessage, onWidgetRefined, onWidgetReset, onWidgetState, onWidgetStep, onWidgetTranscript, uiLanguage, widgetFade, widgetIdle, widgetScale, type MessagePayload, type WidgetFade, type WidgetIdle, type WidgetState } from "./api";
+import { type LabelledStep, labelledStep } from "./widgetView";
 import { currentLanguage, setLanguage, type Lang } from "./i18n";
 import { messageDelay } from "./rewriteTiming";
 import type { Done } from "./widgetView";
@@ -16,6 +17,8 @@ export class WidgetFeed {
   transcript = $state("");
   /** The final text, once the processing is over. */
   refined = $state<string | null>(null);
+  /** The step the processing is at, while it runs and has one the widget names. */
+  step = $state<LabelledStep | null>(null);
   /** True from the moment the text was put into the application until something else happens. */
   done = $state<Done>(null);
   /** When the final text arrived. */
@@ -88,6 +91,7 @@ export class WidgetFeed {
           hintTimer = setTimeout(() => { this.hint = false; }, HINT_MS);
         } else if (p.state !== "locked") this.hint = false;
         this.state = p.state;
+        if (p.state !== "processing") this.step = null;
         if (p.state !== "idle") this.done = null;
         // A new dictation drops a message that was still waiting.
         if (p.state === "recording" || p.state === "locked" || p.state === "processing") clearTimeout(waiting);
@@ -113,6 +117,7 @@ export class WidgetFeed {
       onWidgetHover((over) => { this.over = over; }),
       onWidgetLeave(() => { this.open = false; }),
       onWidgetTranscript((p) => { this.transcript = p.text; this.refined = null; }),
+      onWidgetStep((p) => { const s = labelledStep(p.step); if (s) this.step = s; }),
       onWidgetRefined((p) => {
         if (!this.transcript) return;
         this.refined = p.text;

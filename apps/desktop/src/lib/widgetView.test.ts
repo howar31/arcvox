@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { MessagePayload } from "./api";
 import { keysOf, setLanguage, t } from "./i18n";
-import { LABEL_KEYS, dictationLabelKey, faintOpacity, labelKey, panelView, ringView } from "./widgetView";
+import { LABEL_KEYS, dictationLabelKey, faintOpacity, labelKey, labelledStep, panelView, ringView } from "./widgetView";
 
 const message = (over: Partial<MessagePayload>): MessagePayload => ({ kind: "error", key: "widget.asr_failed", detail: null, copyable: null, code: null, retry: false, language: "zh-TW", ...over });
 
@@ -12,6 +12,17 @@ describe("widget label", () => {
     expect(labelKey("recording", null)).toBe("widget.listening");
     expect(labelKey("locked", null)).toBe("widget.locked_short");
     expect(labelKey("idle", null)).toBeNull();
+  });
+  it("names the step the processing is at, and only while it runs", () => {
+    expect(labelKey("processing", null, null, "asr")).toBe("widget.recognising");
+    expect(labelKey("processing", null, null, "llm")).toBe("widget.rewriting");
+    expect(labelKey("processing", null, null, "translate")).toBe("widget.translating");
+    expect(labelKey("processing", null)).toBe("widget.processing");
+    expect(labelKey("inserting", null, null, "translate")).toBe("widget.inserting");
+    expect(labelKey("processing", message({ key: "widget.degraded" }), null, "llm")).toBe("widget.rewrite_failed");
+    expect(labelledStep("opencc")).toBeNull();
+    expect(labelledStep("rules")).toBeNull();
+    expect(labelledStep("llm")).toBe("llm");
   });
   it("names the kind of message", () => {
     expect(labelKey("idle", message({ kind: "info", key: "widget.cancelled" }))).toBe("widget.cancelled");
