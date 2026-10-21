@@ -2299,6 +2299,13 @@ mod tests {
             "{msgs:?}"
         );
         assert!(!r.platform.calls().contains(&"paste".to_string()));
+        // Nothing usable was produced, so no final text is recorded.
+        let rows = r.engine.history().list_recent(10).unwrap();
+        assert!(
+            rows.iter().all(|u| u.final_text.is_empty()),
+            "{:?}",
+            rows.iter().map(|u| &u.final_text).collect::<Vec<_>>()
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

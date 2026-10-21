@@ -14,6 +14,8 @@ test("no value is empty and interpolation works", () => {
   }
   setLanguage("en");
   expect(t("missing.key")).toBe("missing.key");
+  expect(t("home.apps_more", { names: "A, B", count: "3" })).toBe("A, B and 3 more");
+  expect(t("home.apps_more", { names: "A" })).toBe("A and {count} more");
 });
 
 test("has tells whether a key is translated", () => {

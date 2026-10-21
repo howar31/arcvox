@@ -38,8 +38,17 @@ fn accessibility_trust_query_does_not_prompt() {
 #[ignore]
 fn pasteboard_round_trip_keeps_text() {
     let p = MacPlatform::new();
-    // Keep the owner's real clipboard intact across this test.
-    let original = p.clipboard_snapshot();
+    // The real clipboard goes back when the test ends, also on a failed
+    // assertion.
+    struct PutBack(Option<ClipboardSnapshot>);
+    impl Drop for PutBack {
+        fn drop(&mut self) {
+            if let Some(snapshot) = self.0.take() {
+                MacPlatform::new().clipboard_restore(snapshot);
+            }
+        }
+    }
+    let _put_back = PutBack(Some(p.clipboard_snapshot()));
     p.clipboard_write_text("arcvox-test-before");
     let snap = p.clipboard_snapshot();
     assert!(!snap.items.is_empty());
@@ -49,7 +58,6 @@ fn pasteboard_round_trip_keeps_text() {
     assert_eq!(p.clipboard_text().as_deref(), Some("arcvox-test-before"));
     p.clipboard_restore(ClipboardSnapshot::default());
     assert_eq!(p.clipboard_text(), None);
-    p.clipboard_restore(original);
 }
 
 #[test]

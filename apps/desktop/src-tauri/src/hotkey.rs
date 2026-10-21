@@ -341,6 +341,45 @@ mod tests {
     }
 
     #[test]
+    fn a_key_after_the_threshold_without_a_tick_keeps_the_hold() {
+        // No tick ran between the press and the key: the hold starts from
+        // the key event itself and the key counts as part of a combination.
+        let (mut r, t0) = rec();
+        r.on_input(Input::TriggerDown, t0);
+        assert_eq!(
+            r.on_input(Input::KeyDown { key_code: 123 }, ms(t0, 300)),
+            vec![Gesture::HoldStart]
+        );
+        assert_eq!(
+            r.on_input(Input::TriggerUp, ms(t0, 400)),
+            vec![Gesture::HoldEnd { keyed: true }]
+        );
+    }
+
+    #[test]
+    fn a_press_at_the_end_of_the_window_is_a_new_press() {
+        // The window runs 350 ms from the release at 80 ms: a press at
+        // exactly 430 ms ends the first press as a tap and starts over; one
+        // ms earlier is a double tap.
+        let (mut r, t0) = rec();
+        r.on_input(Input::TriggerDown, t0);
+        r.on_input(Input::TriggerUp, ms(t0, 80));
+        assert_eq!(
+            r.on_input(Input::TriggerDown, ms(t0, 430)),
+            vec![Gesture::Tap]
+        );
+        assert_eq!(r.next_deadline(), Some(ms(t0, 680)));
+
+        let (mut r, t0) = rec();
+        r.on_input(Input::TriggerDown, t0);
+        r.on_input(Input::TriggerUp, ms(t0, 80));
+        assert_eq!(
+            r.on_input(Input::TriggerDown, ms(t0, 429)),
+            vec![Gesture::DoubleTap]
+        );
+    }
+
+    #[test]
     fn repeated_down_or_up_events_are_ignored() {
         let (mut r, t0) = rec();
         r.on_input(Input::TriggerDown, t0);
