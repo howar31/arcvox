@@ -377,7 +377,12 @@ mod tests {
 /// promise): written to the app's log, since a broken page shows nothing
 /// of its own. `window` names the page (settings, widget, panel).
 #[tauri::command]
-pub fn webview_error(window: String, message: String, source: Option<String>, stack: Option<String>) {
+pub fn webview_error(
+    window: String,
+    message: String,
+    source: Option<String>,
+    stack: Option<String>,
+) {
     tracing::error!(
         window,
         source = source.unwrap_or_default(),
