@@ -506,6 +506,64 @@ mod tests {
         assert_eq!(out.text, "今天下午四點要開會，記得帶筆電。");
     }
 
+    async fn guard_verdict(input: &str, output: &str) -> Result<StepOutput, StepError> {
+        LlmStep::new(FakeLlm::ok(output))
+            .run(
+                StepInput {
+                    text: input.into(),
+                    audio: None,
+                },
+                &test_context(),
+            )
+            .await
+    }
+
+    #[tokio::test]
+    async fn output_at_exactly_one_third_is_accepted() {
+        // 15 input chars, 5 output chars: the ratio is met, not undercut.
+        let out = guard_verdict("一二三四五六七八九十甲乙丙丁戊", "一二三四五")
+            .await
+            .unwrap();
+        assert_eq!(out.text, "一二三四五");
+        let err = guard_verdict("一二三四五六七八九十甲乙丙丁戊", "一二三四")
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProviderError);
+    }
+
+    #[tokio::test]
+    async fn filler_heavy_inputs_are_rejected_by_the_ratio_guard() {
+        // The guard cannot tell a collapsed filler run from a chat reply;
+        // these degrade to the raw transcript by design. Pinned so the
+        // threshold can be tuned against them.
+        for (input, output) in [
+            ("那個那個那個那個那個幫我關燈", "幫我關燈"),
+            ("uh uh uh uh uh uh uh uh yes", "Yes."),
+        ] {
+            let err = guard_verdict(input, output).await.unwrap_err();
+            assert_eq!(err.code, ErrorCode::ProviderError, "{input}");
+            assert!(err.recoverable, "{input}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_english_rewrite_within_the_ratio_is_accepted() {
+        for (input, output) in [
+            (
+                "um so I think we should uh meet tomorrow at ten no at eleven",
+                "I think we should meet tomorrow at eleven.",
+            ),
+            // A filler run with a long enough tail stays above the ratio.
+            (
+                "okay so so so so so so so so turn off the light",
+                "Turn off the light.",
+            ),
+        ] {
+            let out = guard_verdict(input, output).await.unwrap();
+            assert_eq!(out.text, output);
+        }
+    }
+
     fn titled(title: &str) -> PipelineContext {
         let mut ctx = test_context();
         ctx.context.window_title = Some(title.into());
