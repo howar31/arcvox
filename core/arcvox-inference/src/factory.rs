@@ -56,6 +56,7 @@ fn fail(failure: ProbeFailure) -> ProbeResult {
     ProbeResult {
         ok: false,
         failure: Some(failure),
+        models: Vec::new(),
     }
 }
 
@@ -145,10 +146,7 @@ impl ProviderFactory for EmbeddedFactory {
             return fail(ProbeFailure::ModelMissing);
         }
         match arcvox_core::models::magic::detect(&path) {
-            Ok(Some(rt)) if Some(rt) == cfg.runtime => ProbeResult {
-                ok: true,
-                failure: None,
-            },
+            Ok(Some(rt)) if Some(rt) == cfg.runtime => ProbeResult::ok(),
             Ok(_) => fail(ProbeFailure::ModelCorrupt),
             Err(e) => fail(ProbeFailure::Other {
                 message: e.to_string(),

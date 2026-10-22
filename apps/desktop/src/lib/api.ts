@@ -78,7 +78,7 @@ export interface Suggestion {
   /** Every heard text is a Chinese word that sounds like the term. */
   sound_alike: boolean;
 }
-export interface ProbeResult { ok: boolean; failure: { kind: string; message?: string; reason?: string; status?: number } | null }
+export interface ProbeResult { ok: boolean; failure: { kind: string; message?: string; reason?: string; status?: number } | null; models: string[] }
 export interface Utterance {
   id: number; ts: number; profile_id: string; app_name: string | null; raw_text: string; refined_text: string; final_text: string;
   degraded: boolean; has_audio: boolean; asr_ms: number; llm_ms: number | null;

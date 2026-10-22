@@ -404,6 +404,7 @@ mod tests {
             arcvox_core::providers::probe::ProbeResult {
                 ok: true,
                 failure: None,
+                models: Vec::new(),
             }
         }
     }

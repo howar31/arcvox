@@ -53,12 +53,14 @@ fn probe_result(status: NativeStatus) -> ProbeResult {
         NativeStatus::Ready => ProbeResult {
             ok: true,
             failure: None,
+            models: Vec::new(),
         },
         other => ProbeResult {
             ok: false,
             failure: Some(ProbeFailure::NativeUnavailable {
                 reason: reason(other),
             }),
+            models: Vec::new(),
         },
     }
 }
@@ -113,6 +115,7 @@ impl ProviderFactory for AppleFactory {
                     failure: Some(ProbeFailure::Other {
                         message: format!("unknown native provider {}", other.unwrap_or("(none)")),
                     }),
+                    models: Vec::new(),
                 }
             }
         };
@@ -123,6 +126,7 @@ impl ProviderFactory for AppleFactory {
                 failure: Some(ProbeFailure::Other {
                     message: e.to_string(),
                 }),
+                models: Vec::new(),
             },
         }
     }

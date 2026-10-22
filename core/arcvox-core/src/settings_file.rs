@@ -882,6 +882,7 @@ mod tests {
             crate::providers::probe::ProbeResult {
                 ok: false,
                 failure: None,
+                models: Vec::new(),
             }
         }
     }

@@ -625,6 +625,7 @@ impl Engine {
                     failure: Some(ProbeFailure::Other {
                         message: "provider kind not available in this build".into(),
                     }),
+                    models: Vec::new(),
                 },
             },
         }
@@ -1983,6 +1984,7 @@ pub(crate) mod tests {
                 ProbeResult {
                     ok: true,
                     failure: None,
+                    models: Vec::new(),
                 }
             }
         }

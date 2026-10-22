@@ -14,10 +14,10 @@ describe("providerForm", () => {
   });
   it("describeProbe names model and native failures", () => {
     const t = (k: string) => k;
-    expect(describeProbe({ ok: false, failure: { kind: "model_missing" } }, t)).toBe("engines.probe_failed: engines.failure.model_missing");
-    expect(describeProbe({ ok: false, failure: { kind: "native_unavailable", reason: "off" } }, t)).toContain("off");
-    expect(describeProbe({ ok: false, failure: { kind: "native_unavailable", reason: "off" } }, t)).toBe("engines.probe_failed: engines.failure.native_unavailable (off)");
-    expect(describeProbe({ ok: false, failure: { kind: "server_error", status: 503 } }, t)).toBe("engines.probe_failed: engines.failure.server_error (503)");
-    expect(describeProbe({ ok: true, failure: null }, t)).toBe("engines.probe_ok");
+    expect(describeProbe({ ok: false, failure: { kind: "model_missing" }, models: [] }, t)).toBe("engines.probe_failed: engines.failure.model_missing");
+    expect(describeProbe({ ok: false, failure: { kind: "native_unavailable", reason: "off" }, models: [] }, t)).toContain("off");
+    expect(describeProbe({ ok: false, failure: { kind: "native_unavailable", reason: "off" }, models: [] }, t)).toBe("engines.probe_failed: engines.failure.native_unavailable (off)");
+    expect(describeProbe({ ok: false, failure: { kind: "server_error", status: 503 }, models: [] }, t)).toBe("engines.probe_failed: engines.failure.server_error (503)");
+    expect(describeProbe({ ok: true, failure: null, models: [] }, t)).toBe("engines.probe_ok");
   });
 });

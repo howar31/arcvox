@@ -286,6 +286,7 @@ pub(crate) mod tests {
             crate::providers::probe::ProbeResult {
                 ok: true,
                 failure: None,
+                models: Vec::new(),
             }
         }
     }

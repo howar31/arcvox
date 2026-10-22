@@ -524,6 +524,7 @@ mod tests {
             ProbeResult {
                 ok: true,
                 failure: None,
+                models: Vec::new(),
             }
         }
     }

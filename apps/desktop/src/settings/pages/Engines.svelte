@@ -480,7 +480,8 @@
 <!-- The only engines made by hand. -->
 <Group title={t("engines.external")}>
   {#snippet actions()}
-    <button type="button" class="btn" onclick={() => openForm(null)}><Icon name="plus" size={14} />{t("engines.add")}</button>
+    <!-- With no service yet, the empty state carries the only add button. -->
+    {#if shownExternals.length > 0 || q}<button type="button" class="btn" onclick={() => openForm(null)}><Icon name="plus" size={14} />{t("engines.add")}</button>{/if}
   {/snippet}
   {#each shownExternals as p (p.id)}
     <Row>
@@ -505,7 +506,7 @@
   {:else}
     {#if q}<Row><span class="sub">{t("engines.no_match")}</span></Row>{:else}
     <Empty text={t("engines.none_external." + role)}>
-      {#snippet action()}<button type="button" class="btn" onclick={() => openForm(null)}>{t("engines.add")}</button>{/snippet}
+      {#snippet action()}<button type="button" class="btn" onclick={() => openForm(null)}><Icon name="plus" size={14} />{t("engines.add")}</button>{/snippet}
     </Empty>{/if}
   {/each}
 </Group>

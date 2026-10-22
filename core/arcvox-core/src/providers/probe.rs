@@ -35,13 +35,25 @@ pub enum ProbeFailure {
 pub struct ProbeResult {
     pub ok: bool,
     pub failure: Option<ProbeFailure>,
+    /// The model ids the service listed; empty when it lists none.
+    #[serde(default)]
+    pub models: Vec<String>,
 }
 
 impl ProbeResult {
+    pub fn ok() -> Self {
+        Self {
+            ok: true,
+            failure: None,
+            models: Vec::new(),
+        }
+    }
+
     fn fail(f: ProbeFailure) -> Self {
         Self {
             ok: false,
             failure: Some(f),
+            models: Vec::new(),
         }
     }
 }
@@ -92,8 +104,15 @@ pub async fn probe_http(
             status @ 500..=599 => ProbeResult::fail(ProbeFailure::ServerError { status }),
             200 => match resp.json::<serde_json::Value>().await {
                 Ok(v) if v.get("data").map(|d| d.is_array()).unwrap_or(false) => ProbeResult {
-                    ok: true,
-                    failure: None,
+                    models: v["data"]
+                        .as_array()
+                        .map(|list| {
+                            list.iter()
+                                .filter_map(|m| m["id"].as_str().map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    ..ProbeResult::ok()
                 },
                 _ => ProbeResult::fail(ProbeFailure::NotCompatible),
             },
@@ -146,7 +165,8 @@ mod tests {
             r,
             ProbeResult {
                 ok: true,
-                failure: None
+                failure: None,
+                models: vec!["gemma3".into()],
             }
         );
     }
