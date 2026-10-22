@@ -45,8 +45,20 @@
   let moving = $state(false);
   let progress = $state<Record<string, DownloadProgress>>({});
   let refreshing = $state(false);
-  // Per-row test result, keyed by engine id.
-  let rowProbes = $state<Record<string, { state: "wait" | "ok" | "bad"; text: string }>>({});
+  // Per-row test result, keyed by engine id, with the configuration it was
+  // made for: an engine that is deleted or changed loses its result, also
+  // when a new engine takes the same id.
+  let rowProbes = $state<Record<string, { state: "wait" | "ok" | "bad"; text: string; of: string }>>({});
+  $effect(() => {
+    const providers = config.value?.providers ?? [];
+    const stale = Object.entries(rowProbes)
+      .filter(([id, probe]) => JSON.stringify(providers.find((p) => p.id === id) ?? null) !== probe.of)
+      .map(([id]) => id);
+    if (stale.length === 0) return;
+    const next = { ...rowProbes };
+    for (const id of stale) delete next[id];
+    rowProbes = next;
+  });
   // The platform services' status, keyed by engine id.
   let nativeStates = $state<Record<string, NativeStatusView>>({});
   let installing = $state(false);
@@ -254,7 +266,8 @@
   const recommended = (id: string): boolean => !!manifest?.models.find((m) => m.id === id)?.recommended;
 
   async function test(p: ProviderConfig) {
-    rowProbes = { ...rowProbes, [p.id]: { state: "wait", text: t("engines.testing") } };
+    const of = JSON.stringify($state.snapshot(p));
+    rowProbes = { ...rowProbes, [p.id]: { state: "wait", text: t("engines.testing"), of } };
     let next: { state: "ok" | "bad"; text: string };
     try {
       const r = await probeProvider($state.snapshot(p) as ProviderConfig);
@@ -262,7 +275,7 @@
     } catch (e) {
       next = { state: "bad", text: `${t("engines.probe_failed")}: ${errorMessage(e)}` };
     }
-    rowProbes = { ...rowProbes, [p.id]: next };
+    rowProbes = { ...rowProbes, [p.id]: { ...next, of } };
   }
   function openForm(p: ProviderConfig | null) {
     formInitial = p;
