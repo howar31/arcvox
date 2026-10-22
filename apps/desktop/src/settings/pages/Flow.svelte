@@ -76,7 +76,6 @@
   let models = $state<InstalledModel[] | null>(null);
   let manifest = $state<ManifestView | null>(null);
   // Typed but not added yet: counts as a change, and Save adds it first.
-  let newApp = $state("");
   let newUrl = $state("");
   let newRaw = $state("");
   let newRefined = $state("");
@@ -200,13 +199,13 @@
       if (draft === null || id !== syncedId || comparable(draft) === synced) {
         draft = structuredClone($state.snapshot(source)) as Profile;
         synced = next;
-        if (id !== syncedId) { newApp = ""; newUrl = ""; newRaw = ""; newRefined = ""; }
+        if (id !== syncedId) { newUrl = ""; newRaw = ""; newRefined = ""; }
         syncedId = id;
       }
     });
   });
 
-  const pending = $derived(!!(newApp.trim() || newUrl.trim() || newRaw.trim() || newRefined.trim()));
+  const pending = $derived(!!(newUrl.trim() || newRaw.trim() || newRefined.trim()));
   const halfExample = $derived(!newRaw.trim() !== !newRefined.trim());
   const dirty = $derived(draft !== null && source !== null && (pending || comparable(draft) !== comparable(source)));
 
@@ -381,7 +380,6 @@
     if (!draft || !source) return;
     if (!draft.name.trim()) { problem = t("profiles.name_required"); return; }
     if (halfExample) { problem = t("profiles.example_incomplete"); stage = "llm"; return; }
-    if (newApp.trim()) { addApp(newApp.trim()); newApp = ""; }
     addUrl();
     addExample();
     const next = snapshot();
@@ -401,7 +399,7 @@
     if (!source) return;
     draft = structuredClone($state.snapshot(source)) as Profile;
     synced = comparable(source);
-    newApp = ""; newUrl = ""; newRaw = ""; newRefined = "";
+    newUrl = ""; newRaw = ""; newRefined = "";
   }
 
   // The add dialog: the template, the new profile's name and whether it becomes the default.
@@ -507,7 +505,7 @@
           {/each}
         </div>
       </Row>
-      <AddPerApp onadd={addApp} bind:value={newApp} exclude={draft.matcher.app_ids} />
+      <AddPerApp onadd={addApp} exclude={draft.matcher.app_ids} />
     </Group>
     <Group>
       <Row label={t("profiles.urls")} help={t("profiles.urls_help")}>

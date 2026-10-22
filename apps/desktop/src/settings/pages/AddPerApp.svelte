@@ -9,11 +9,11 @@
   import { toast } from "../../lib/ui/toast.svelte";
 
   /**
-   * `value` is the bundle id chosen or typed but not added yet; the page binds it so that text counts
-   * as an unsaved change and its save can add it first. `exclude` holds the bundle ids already in the
-   * page's list; they are left out of the picker.
+   * One button that opens the list of running applications; picking one adds it at once. A bundle
+   * id typed into the search that matches nothing can be added as typed. `exclude` holds the bundle
+   * ids already in the page's list; they are left out.
    */
-  let { onadd, value = $bindable(""), exclude = [] }: { onadd: (id: string) => void; value?: string; exclude?: string[] } = $props();
+  let { onadd, exclude = [] }: { onadd: (id: string) => void; exclude?: string[] } = $props();
   let apps = $state<RunningApp[]>([]);
   onMount(async () => {
     try { apps = await runningApps(); } catch (e) { toast.error(errorMessage(e)); }
@@ -29,11 +29,15 @@
   let button: HTMLButtonElement | undefined = $state();
   let list: HTMLDivElement | undefined = $state();
 
-  const chosen = $derived(apps.find((a) => a.bundle_id === value.trim()));
   const offered = $derived(apps.filter((a) => !exclude.includes(a.bundle_id)));
   const shown = $derived.by(() => {
     const q = query.trim().toLowerCase();
     return q ? offered.filter((a) => (a.name + " " + a.bundle_id).toLowerCase().includes(q)) : offered;
+  });
+  // A typed bundle id (a dotted name) that is no listed application can be added as typed.
+  const typedId = $derived.by(() => {
+    const q = query.trim();
+    return q.includes(".") && !/\s/.test(q) && !shown.some((a) => a.bundle_id === q) && !exclude.includes(q) ? q : "";
   });
 
   const options = () => [...(list?.querySelectorAll<HTMLButtonElement>("[role=option]") ?? [])];
@@ -52,7 +56,7 @@
     if (refocus) button?.focus();
   }
   function pick(id: string) {
-    value = id;
+    onadd(id);
     hide();
   }
   function onkeydown(e: KeyboardEvent) {
@@ -83,54 +87,43 @@
       window.removeEventListener("blur", blur);
     };
   });
-
-  function add() {
-    const id = value.trim();
-    if (!id) return;
-    onadd(id);
-    value = "";
-  }
 </script>
 
 <Row>
   <div class="apps" bind:this={root}>
-    <button type="button" class="current" class:empty={!chosen} bind:this={button} aria-haspopup="listbox" aria-expanded={open} aria-label={t("general.pick_app")} onclick={() => (open ? hide() : show())}>
-      {#if chosen}<AppIcon bundleId={chosen.bundle_id} size={18} />{/if}
-      <span class="name">{chosen ? chosen.name : t("general.pick_app")}</span>
-      <Icon name="chevron-down" size={14} />
+    <button type="button" class="btn" bind:this={button} aria-haspopup="listbox" aria-expanded={open} onclick={() => (open ? hide() : show())}>
+      <Icon name="plus" size={14} />{t("general.add_app")}
     </button>
     {#if open}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="menu" class:upwards bind:this={list} {onkeydown}>
         <input type="search" bind:value={query} placeholder={t("general.search_app")} aria-label={t("general.search_app")} />
-        <div class="options" role="listbox" aria-label={t("general.pick_app")}>
+        <div class="options" role="listbox" aria-label={t("general.add_app")}>
           {#each shown as a (a.bundle_id)}
-            <button type="button" class="option" class:on={a.bundle_id === chosen?.bundle_id} role="option" aria-selected={a.bundle_id === chosen?.bundle_id} onclick={() => pick(a.bundle_id)}>
+            <button type="button" class="option" role="option" aria-selected="false" onclick={() => pick(a.bundle_id)}>
               <AppIcon bundleId={a.bundle_id} size={24} />
               <span class="text">
                 <span class="name">{a.name}</span>
                 <span class="id">{a.bundle_id}</span>
               </span>
             </button>
-          {:else}
-            <p class="none">{t(offered.length === 0 ? "general.no_apps" : "general.no_app_match")}</p>
           {/each}
+          {#if typedId}
+            <button type="button" class="option typed" role="option" aria-selected="false" onclick={() => pick(typedId)}>
+              <Icon name="plus" size={14} />
+              <span class="text"><span class="name">{t("general.add_id", { id: typedId })}</span></span>
+            </button>
+          {:else if shown.length === 0}
+            <p class="none">{t(offered.length === 0 ? "general.no_apps" : "general.no_app_match")}</p>
+          {/if}
         </div>
       </div>
     {/if}
   </div>
-  <input class="add-input" type="text" placeholder="com.example.app" aria-label={t("general.bundle_id")} bind:value onkeydown={(e) => { if (e.key === "Enter" && !isImeKey(e)) add(); }} />
-  <button type="button" class="btn" disabled={!value.trim()} onclick={add}><Icon name="plus" size={14} />{t("common.add")}</button>
 </Row>
 
 <style>
-  /* The picker gives way first, so the text box keeps the width of the other add rows. */
-  .apps { position: relative; width: 170px; flex: 0 4 auto; min-width: 0; }
-  .current { display: flex; align-items: center; gap: 8px; width: 100%; height: var(--control); padding: 0 10px; border-radius: var(--radius); border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font-size: var(--text-control); cursor: default; }
-  .current:hover, .current[aria-expanded="true"] { background: var(--sunken); }
-  .current.empty { color: var(--ink-2); }
-  .current :global(svg) { flex: none; margin-left: auto; color: var(--ink-3); }
-  .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .apps { position: relative; }
   .menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; display: flex; flex-direction: column; width: 340px; max-width: calc(100vw - 2 * var(--page-x) - 248px); max-height: 300px; padding: 6px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); }
   .menu.upwards { top: auto; bottom: calc(100% + 6px); }
   .menu input { flex: none; width: 100%; margin-bottom: 4px; }
@@ -138,9 +131,8 @@
   .option { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 10px; border: 0; border-radius: 9px; background: none; color: var(--ink); text-align: left; font-size: var(--text-control); cursor: default; }
   .option .text { min-width: 0; flex: 1; }
   .option:hover, .option:focus-visible { background: var(--sunken); }
-  .option.on { background: var(--accent-soft); }
-  .option .name { display: block; }
+  .option.typed :global(svg) { flex: none; width: 24px; color: var(--ink-2); }
+  .name { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .id { display: block; color: var(--ink-2); font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .none { margin: 0; padding: 12px; color: var(--ink-2); font-size: var(--text-sm); }
-  .add-input { margin-left: auto; }
 </style>

@@ -51,7 +51,6 @@
   let saving = $state(false);
   let problem = $state<string | undefined>(undefined);
   // A bundle id chosen or typed but not added yet: counts as a change, and Save adds it first.
-  let newApp = $state("");
   // True while the widget is kept on screen so it can be dragged into place.
   let placing = $state(false);
   // What the previewed widget shows, and whether a slider of the faint widget is being dragged.
@@ -63,7 +62,7 @@
 
   const clientDirty = $derived(draft !== null && JSON.stringify(draft) !== baseClient);
   const generalDirty = $derived(general !== null && JSON.stringify(general) !== baseGeneral);
-  const dirty = $derived(clientDirty || generalDirty || newApp.trim() !== "");
+  const dirty = $derived(clientDirty || generalDirty);
   // The stored device is not connected now: still shown, as the selected option.
   const micAbsent = $derived(!!draft && draft.microphone !== "builtin" && draft.microphone !== "default" && !mics.includes(draft.microphone));
 
@@ -126,7 +125,6 @@
   }
 
   function reset() {
-    newApp = "";
     const c = structuredClone($state.snapshot(client.value!));
     draft = c;
     baseClient = JSON.stringify(c);
@@ -274,7 +272,6 @@
   async function save() {
     const bad = invalid();
     if (bad.length) { problem = t("common.invalid_number", { field: t(bad[0]) }); return; }
-    if (newApp.trim()) { addApp(newApp.trim()); newApp = ""; }
     saving = true;
     try {
       const languageChanged = clientDirty && draft!.ui_language !== JSON.parse(baseClient).ui_language;
@@ -331,6 +328,12 @@
     try { await widgetResetPosition(); toast.ok(t("general.widget_reset_done")); } catch (e) { toast.error(errorMessage(e)); }
   }
 
+  const methodOptions = $derived<{ value: InsertMethod; label: string }[]>([
+    { value: "paste", label: t("general.method_paste") },
+    { value: "type", label: t("general.method_type") },
+    { value: "ax", label: t("general.method_ax") },
+    { value: "copy", label: t("general.method_copy_short") },
+  ]);
   function addApp(id: string) {
     if (draft && !(id in draft.insertion.per_app)) draft.insertion.per_app[id] = draft.insertion.default;
   }
@@ -528,16 +531,11 @@
         <Row>
           <AppIcon bundleId={bundle} size={22} />
           <span class="bundle" use:tip={bundle}>{appName(bundle)}</span>
-          <select class="method" value={method} onchange={(e) => setMethod(bundle, e.currentTarget.value)} aria-label={t("general.method")}>
-            <option value="paste">{t("general.method_paste")}</option>
-            <option value="type">{t("general.method_type")}</option>
-            <option value="ax">{t("general.method_ax")}</option>
-            <option value="copy">{t("general.method_copy")}</option>
-          </select>
+          <Segmented options={methodOptions} bind:value={() => method, (v) => setMethod(bundle, v)} label={t("general.method")} />
           <button type="button" class="btn quiet icon-btn" onclick={() => { delete draft!.insertion.per_app[bundle]; }} aria-label={t("common.remove")} use:tip={t("common.remove")}><Icon name="trash" /></button>
         </Row>
       {/each}
-      <AddPerApp onadd={addApp} bind:value={newApp} exclude={Object.keys(draft.insertion.per_app)} />
+      <AddPerApp onadd={addApp} exclude={Object.keys(draft.insertion.per_app)} />
     </Group>
   {/if}
 {:else if section === "data"}
@@ -646,7 +644,6 @@
   .folder .sub { display: block; margin-top: 6px; color: var(--ink-2); font-size: var(--text-sm); overflow-wrap: anywhere; }
   /* The selects of the value column share one width. */
   .wide { width: 240px; }
-  .method { width: 190px; }
   .bundle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .icon-btn { width: var(--control); padding: 0; margin-right: -8px; color: var(--ink-2); }
   .icon-btn:hover { color: var(--ink); }
