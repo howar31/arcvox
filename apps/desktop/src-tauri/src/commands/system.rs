@@ -318,6 +318,92 @@ pub fn app_name(bundle_id: &str) -> Option<String> {
     }
 }
 
+/// The icon of the installed application with this bundle id as a PNG
+/// data URL, from the icon's representation nearest to `ICON_PIXELS`.
+pub fn app_icon(bundle_id: &str) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        use base64::Engine;
+        use objc2::AnyThread;
+        use objc2_app_kit::{
+            NSBitmapImageFileType, NSBitmapImageRep, NSCalibratedRGBColorSpace,
+            NSCompositingOperation, NSGraphicsContext,
+        };
+        use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize, NSString};
+        if bundle_id.is_empty() {
+            return None;
+        }
+        let ws = objc2_app_kit::NSWorkspace::sharedWorkspace();
+        let url = ws.URLForApplicationWithBundleIdentifier(&NSString::from_str(bundle_id))?;
+        let path = url.path()?;
+        let icon = ws.iconForFile(&path);
+        // The icon is drawn once at the size the lists show, into a bitmap
+        // of its own; its stored representations are left undrawn.
+        // SAFETY: a fresh bitmap of the given geometry with its own
+        // storage (null planes), 8 bits per sample, RGBA.
+        let bitmap = unsafe {
+            NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
+                NSBitmapImageRep::alloc(),
+                std::ptr::null_mut(),
+                ICON_PIXELS,
+                ICON_PIXELS,
+                8,
+                4,
+                true,
+                false,
+                NSCalibratedRGBColorSpace,
+                0,
+                0,
+            )
+        }?;
+        let context = NSGraphicsContext::graphicsContextWithBitmapImageRep(&bitmap)?;
+        let rect = NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(ICON_PIXELS as f64, ICON_PIXELS as f64),
+        );
+        NSGraphicsContext::saveGraphicsState_class();
+        NSGraphicsContext::setCurrentContext(Some(&context));
+        icon.drawInRect_fromRect_operation_fraction(
+            rect,
+            NSRect::ZERO,
+            NSCompositingOperation::SourceOver,
+            1.0,
+        );
+        context.flushGraphics();
+        NSGraphicsContext::restoreGraphicsState_class();
+        // SAFETY: the type is a PNG and the properties are an empty
+        // dictionary, both plain values the method documents.
+        let png = unsafe {
+            bitmap.representationUsingType_properties(
+                NSBitmapImageFileType::PNG,
+                &NSDictionary::new(),
+            )
+        }?;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(png.to_vec());
+        Some(format!("data:image/png;base64,{encoded}"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = bundle_id;
+        None
+    }
+}
+
+/// Icon size drawn: 2x of the largest size the lists show it at.
+#[cfg(target_os = "macos")]
+const ICON_PIXELS: isize = 64;
+
+#[tauri::command(async)]
+pub fn system_app_icons(bundle_ids: Vec<String>) -> HashMap<String, Option<String>> {
+    bundle_ids
+        .into_iter()
+        .map(|id| {
+            let icon = app_icon(&id);
+            (id, icon)
+        })
+        .collect()
+}
+
 #[tauri::command(async)]
 pub fn system_app_names(bundle_ids: Vec<String>) -> HashMap<String, Option<String>> {
     bundle_ids

@@ -4,14 +4,16 @@
   import { t } from "../../lib/i18n";
   import { isImeKey } from "../../lib/ime";
   import Row from "../../lib/ui/Row.svelte";
+  import AppIcon from "../../lib/ui/AppIcon.svelte";
   import Icon from "../../lib/ui/Icon.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
 
   /**
    * `value` is the bundle id chosen or typed but not added yet; the page binds it so that text counts
-   * as an unsaved change and its save can add it first.
+   * as an unsaved change and its save can add it first. `exclude` holds the bundle ids already in the
+   * page's list; they are left out of the picker.
    */
-  let { onadd, value = $bindable("") }: { onadd: (id: string) => void; value?: string } = $props();
+  let { onadd, value = $bindable(""), exclude = [] }: { onadd: (id: string) => void; value?: string; exclude?: string[] } = $props();
   let apps = $state<RunningApp[]>([]);
   onMount(async () => {
     try { apps = await runningApps(); } catch (e) { toast.error(errorMessage(e)); }
@@ -28,9 +30,10 @@
   let list: HTMLDivElement | undefined = $state();
 
   const chosen = $derived(apps.find((a) => a.bundle_id === value.trim()));
+  const offered = $derived(apps.filter((a) => !exclude.includes(a.bundle_id)));
   const shown = $derived.by(() => {
     const q = query.trim().toLowerCase();
-    return q ? apps.filter((a) => (a.name + " " + a.bundle_id).toLowerCase().includes(q)) : apps;
+    return q ? offered.filter((a) => (a.name + " " + a.bundle_id).toLowerCase().includes(q)) : offered;
   });
 
   const options = () => [...(list?.querySelectorAll<HTMLButtonElement>("[role=option]") ?? [])];
@@ -92,6 +95,7 @@
 <Row>
   <div class="apps" bind:this={root}>
     <button type="button" class="current" class:empty={!chosen} bind:this={button} aria-haspopup="listbox" aria-expanded={open} aria-label={t("general.pick_app")} onclick={() => (open ? hide() : show())}>
+      {#if chosen}<AppIcon bundleId={chosen.bundle_id} size={18} />{/if}
       <span class="name">{chosen ? chosen.name : t("general.pick_app")}</span>
       <Icon name="chevron-down" size={14} />
     </button>
@@ -102,11 +106,14 @@
         <div class="options" role="listbox" aria-label={t("general.pick_app")}>
           {#each shown as a (a.bundle_id)}
             <button type="button" class="option" class:on={a.bundle_id === chosen?.bundle_id} role="option" aria-selected={a.bundle_id === chosen?.bundle_id} onclick={() => pick(a.bundle_id)}>
-              <span class="name">{a.name}</span>
-              <span class="id">{a.bundle_id}</span>
+              <AppIcon bundleId={a.bundle_id} size={24} />
+              <span class="text">
+                <span class="name">{a.name}</span>
+                <span class="id">{a.bundle_id}</span>
+              </span>
             </button>
           {:else}
-            <p class="none">{t(apps.length === 0 ? "general.no_apps" : "general.no_app_match")}</p>
+            <p class="none">{t(offered.length === 0 ? "general.no_apps" : "general.no_app_match")}</p>
           {/each}
         </div>
       </div>
@@ -128,7 +135,8 @@
   .menu.upwards { top: auto; bottom: calc(100% + 6px); }
   .menu input { flex: none; width: 100%; margin-bottom: 4px; }
   .options { overflow-y: auto; min-height: 0; }
-  .option { display: block; width: 100%; padding: 7px 12px; border: 0; border-radius: 9px; background: none; color: var(--ink); text-align: left; font-size: var(--text-control); cursor: default; }
+  .option { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 10px; border: 0; border-radius: 9px; background: none; color: var(--ink); text-align: left; font-size: var(--text-control); cursor: default; }
+  .option .text { min-width: 0; flex: 1; }
   .option:hover, .option:focus-visible { background: var(--sunken); }
   .option.on { background: var(--accent-soft); }
   .option .name { display: block; }

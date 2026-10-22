@@ -267,6 +267,8 @@ export const onProblemPages = (cb: (pages: PageProblem[]) => void) => listen<Pag
 export const openPrivacyPane = (pane: "accessibility" | "microphone" | "files" | "intelligence") => invoke<void>("system_open_privacy_pane", { pane });
 export const runningApps = () => invoke<RunningApp[]>("system_running_apps");
 export const appNames = (bundleIds: string[]) => invoke<Record<string, string | null>>("system_app_names", { bundleIds });
+/** PNG data URLs of the installed applications' icons; null when the app is not installed. */
+export const appIcons = (bundleIds: string[]) => invoke<Record<string, string | null>>("system_app_icons", { bundleIds });
 export const systemInfo = () => invoke<SystemInfo>("system_info");
 export const reveal = (path: string) => invoke<void>("system_reveal", { path });
 export const openFolder = (path: string) => invoke<void>("system_open_folder", { path });

@@ -194,6 +194,7 @@ pub fn run() {
             crate::commands::system::system_problem_pages,
             crate::commands::system::system_running_apps,
             crate::commands::system::system_app_names,
+            crate::commands::system::system_app_icons,
             crate::commands::system::system_info,
             crate::commands::system::system_reveal,
             crate::commands::system::system_open_link,
@@ -562,6 +563,13 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         Some(manifest_url(settings.manifest_url.as_deref())),
     ));
     let version = app.package_info().version.to_string();
+    // The first application icon costs seconds (the launch services lookup
+    // and the image frameworks come up); drawn once here so the settings
+    // window's lists do not wait for it.
+    #[cfg(target_os = "macos")]
+    std::thread::spawn(|| {
+        let _ = crate::commands::system::app_icon("com.apple.finder");
+    });
     let (engine, engine_error, runtime, native) = tauri::async_runtime::block_on(async {
         let runtime = tokio::runtime::Handle::current();
         // The platform's services: a new config starts with their engines,

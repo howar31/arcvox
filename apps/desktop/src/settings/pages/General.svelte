@@ -28,6 +28,7 @@
   import Icon from "../../lib/ui/Icon.svelte";
   import PageLink from "../../lib/ui/PageLink.svelte";
   import AddPerApp from "./AddPerApp.svelte";
+  import AppIcon from "../../lib/ui/AppIcon.svelte";
   import StorageUsage from "./StorageUsage.svelte";
   import { DEMO, SCENES, lookOf, previewRequest, sceneFor, type Look, type Scene } from "../../lib/widgetPreview";
 
@@ -525,6 +526,7 @@
     <Group title={t("general.insertion")} help={t("general.insertion_note")}>
       {#each Object.entries(draft.insertion.per_app) as [bundle, method] (bundle)}
         <Row>
+          <AppIcon bundleId={bundle} size={22} />
           <span class="bundle" use:tip={bundle}>{appName(bundle)}</span>
           <select class="method" value={method} onchange={(e) => setMethod(bundle, e.currentTarget.value)} aria-label={t("general.method")}>
             <option value="paste">{t("general.method_paste")}</option>
@@ -535,7 +537,7 @@
           <button type="button" class="btn quiet icon-btn" onclick={() => { delete draft!.insertion.per_app[bundle]; }} aria-label={t("common.remove")} use:tip={t("common.remove")}><Icon name="trash" /></button>
         </Row>
       {/each}
-      <AddPerApp onadd={addApp} bind:value={newApp} />
+      <AddPerApp onadd={addApp} bind:value={newApp} exclude={Object.keys(draft.insertion.per_app)} />
     </Group>
   {/if}
 {:else if section === "data"}

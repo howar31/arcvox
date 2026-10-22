@@ -31,6 +31,7 @@
   import Switch from "../../lib/ui/Switch.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
   import AddPerApp from "./AddPerApp.svelte";
+  import AppIcon from "../../lib/ui/AppIcon.svelte";
   import EnginePicker from "./flow/EnginePicker.svelte";
   import LastPanel from "./flow/LastPanel.svelte";
   import ManageProfiles from "./flow/ManageProfiles.svelte";
@@ -500,13 +501,13 @@
       <Row label={t("profiles.apps_label")}>
         <div class="chips end-chips">
           {#each draft.matcher.app_ids as id, i (i)}
-            <Chip onremove={() => draft!.matcher.app_ids.splice(i, 1)}><span use:tip={id}>{appName(id)}</span></Chip>
+            <Chip onremove={() => draft!.matcher.app_ids.splice(i, 1)}><AppIcon bundleId={id} size={18} /><span use:tip={id}>{appName(id)}</span></Chip>
           {:else}
             <span class="sub">{t("profiles.no_apps")}</span>
           {/each}
         </div>
       </Row>
-      <AddPerApp onadd={addApp} bind:value={newApp} />
+      <AddPerApp onadd={addApp} bind:value={newApp} exclude={draft.matcher.app_ids} />
     </Group>
     <Group>
       <Row label={t("profiles.urls")} help={t("profiles.urls_help")}>
