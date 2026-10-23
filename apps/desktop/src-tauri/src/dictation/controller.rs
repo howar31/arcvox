@@ -1,7 +1,6 @@
 //! State machine: Idle -> Armed (fn down, stream open) -> Recording ->
 //! Processing -> insertion -> Idle. See the design's section 6.2.
 
-use std::ops::Range;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
@@ -101,12 +100,11 @@ struct Stopped {
 }
 
 impl Stopped {
-    /// The part of the recording that holds speech, or `None` when nothing
-    /// was said. Only the frames after the last audio message are looked
-    /// at here; the rest were seen as they arrived.
-    fn speech(&mut self) -> Option<Range<usize>> {
+    /// What the recording held. Only the frames after the last audio
+    /// message are looked at here; the rest were seen as they arrived.
+    fn speech(&mut self) -> vad::Found {
         self.speech.feed(&self.samples);
-        self.speech.range(self.samples.len())
+        self.speech.found(self.samples.len())
     }
 }
 
@@ -716,23 +714,31 @@ impl Controller {
             return;
         };
         let mut stopped = capture.stop();
-        let range = stopped.speech();
+        let found = stopped.speech();
         // The widget changes first: everything below is a channel send.
-        if range.is_some() {
+        if matches!(found, vad::Found::Speech(_)) {
             self.deps.ui.set_state(UiState::Processing);
         }
         // The engine has the whole recording, and keeps it when recordings
         // are kept, before anything is done with it here: a failure from
         // this point on leaves it in the history to be processed again.
         session.push_audio(&stopped.samples[stopped.sent..]);
-        session.store();
-        match range {
-            None => {
+        match found {
+            vad::Found::Nothing => {
                 session.cancel();
                 self.deps.ui.message(UiMessage::info(Msg::WidgetNoSpeech));
                 self.go_idle();
             }
-            Some(range) => {
+            // A long recording with next to no speech is not transcribed,
+            // but stays in the history as cancelled, with its recording
+            // when recordings are kept, for the user to judge.
+            vad::Found::Sparse(range) => {
+                session.cancel_keep(Some(range));
+                self.deps.ui.message(UiMessage::info(Msg::WidgetNoSpeech));
+                self.go_idle();
+            }
+            vad::Found::Speech(range) => {
+                session.store();
                 session.finish_range(range);
                 self.state = State::Processing {
                     session,
@@ -758,8 +764,8 @@ impl Controller {
             } => {
                 let mut stopped = capture.stop();
                 match stopped.speech() {
-                    None => session.cancel(),
-                    Some(range) => {
+                    vad::Found::Nothing => session.cancel(),
+                    vad::Found::Sparse(range) | vad::Found::Speech(range) => {
                         session.push_audio(&stopped.samples[stopped.sent..]);
                         session.cancel_keep(Some(range));
                     }
@@ -1526,6 +1532,41 @@ mod tests {
             "nothing kept",
         )
         .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_long_recording_with_next_to_no_speech_is_kept_as_cancelled() {
+        let r = rig_with(fast_settings(), Vec::new(), |c| {
+            c.general.keep_recordings = true;
+        })
+        .await;
+        r.modifier.send(fn_down()).unwrap();
+        wait_state(&r, UiState::Recording, "recording").await;
+        // The key's press and release around a long silence.
+        r.audio.speech(0.1);
+        r.audio.silence(25.0);
+        speak_and_wait(&r, 0.1).await;
+        r.modifier.send(fn_up()).unwrap();
+        wait_for(
+            || {
+                r.ui.messages
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|m| m.msg == Msg::WidgetNoSpeech)
+            },
+            "no speech",
+        )
+        .await;
+        let rows = wait_rows(&r).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].error_code.as_deref(), Some("cancelled"));
+        assert!(rows[0].audio_path.as_ref().is_some_and(|p| p.is_file()));
+        assert!(r.asr.received_requests().await.unwrap().is_empty());
+        assert!(
+            !r.ui.states.lock().unwrap().contains(&UiState::Processing),
+            "nothing was processed"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

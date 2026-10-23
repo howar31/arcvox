@@ -50,6 +50,24 @@ impl Vad for EarshotVad {
     }
 }
 
+/// A range this long or longer with less than `SPARSE_RATIO` of its frames
+/// speech is sparse: a key pressed and released around a long silence, as
+/// the detector hears the press and the release.
+pub const SPARSE_MIN_SAMPLES: usize = 20 * 16_000;
+pub const SPARSE_RATIO: f32 = 0.05;
+
+/// What a recording held.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Found {
+    /// No frame contained speech.
+    Nothing,
+    /// Speech frames few and far apart over a long range: not worth a
+    /// transcription, but kept for the user to judge.
+    Sparse(Range<usize>),
+    /// The range to keep: the speech with `PAD_SAMPLES` on both sides.
+    Speech(Range<usize>),
+}
+
 /// Where the speech is in a recording, found frame by frame as the
 /// recording grows, so the range to keep is known the moment it ends.
 #[derive(Default)]
@@ -58,6 +76,8 @@ struct Scan {
     seen: usize,
     first: Option<usize>,
     last_end: usize,
+    /// Frames that contained speech.
+    speech: usize,
 }
 
 impl Scan {
@@ -68,18 +88,28 @@ impl Scan {
             if vad.is_speech(frame) {
                 self.first.get_or_insert(self.seen);
                 self.last_end = self.seen + FRAME_SAMPLES;
+                self.speech += 1;
             }
             self.seen += FRAME_SAMPLES;
         }
     }
 
-    /// The range of `len` samples to keep, or `None` when no frame
-    /// contained speech. A trailing partial frame is not looked at but
-    /// kept in the range when it follows speech.
-    fn range(&self, len: usize) -> Option<Range<usize>> {
-        let start = self.first?.saturating_sub(PAD_SAMPLES);
+    /// What the `len` samples fed so far held. A trailing partial frame is
+    /// not looked at but kept in the range when it follows speech.
+    fn found(&self, len: usize) -> Found {
+        let Some(first) = self.first else {
+            return Found::Nothing;
+        };
+        let start = first.saturating_sub(PAD_SAMPLES);
         let end = (self.last_end + PAD_SAMPLES).min(len);
-        Some(start..end)
+        let span = self.last_end - first;
+        let sparse = span >= SPARSE_MIN_SAMPLES
+            && ((self.speech * FRAME_SAMPLES) as f32) < span as f32 * SPARSE_RATIO;
+        if sparse {
+            Found::Sparse(start..end)
+        } else {
+            Found::Speech(start..end)
+        }
     }
 }
 
@@ -88,7 +118,10 @@ impl Scan {
 pub fn trim(samples: &[f32], vad: &mut dyn Vad) -> Option<Range<usize>> {
     let mut scan = Scan::default();
     scan.feed(samples, vad);
-    scan.range(samples.len())
+    match scan.found(samples.len()) {
+        Found::Nothing => None,
+        Found::Sparse(r) | Found::Speech(r) => Some(r),
+    }
 }
 
 /// `trim` for a recording that is still being made: fed as the audio
@@ -112,9 +145,9 @@ impl SpeechSpan {
         self.scan.feed(samples, self.vad.as_mut());
     }
 
-    /// The range to keep out of the `len` samples fed so far.
-    pub fn range(&self, len: usize) -> Option<Range<usize>> {
-        self.scan.range(len)
+    /// What the `len` samples fed so far held.
+    pub fn found(&self, len: usize) -> Found {
+        self.scan.found(len)
     }
 }
 
@@ -239,8 +272,41 @@ mod tests {
             span.feed(&s[..fed]);
         }
         assert_eq!(fed, s.len());
-        assert_eq!(span.range(s.len()), trim(&s, &mut PeakVad));
-        assert_eq!(SpeechSpan::new(Box::new(PeakVad)).range(16_000), None);
+        assert_eq!(
+            span.found(s.len()),
+            Found::Speech(trim(&s, &mut PeakVad).unwrap())
+        );
+        assert_eq!(
+            SpeechSpan::new(Box::new(PeakVad)).found(16_000),
+            Found::Nothing
+        );
+    }
+
+    #[test]
+    fn a_long_range_with_little_speech_is_sparse() {
+        // A key pressed and released around a long silence: a few frames
+        // of noise at each end, nothing in between.
+        let mut s = signal(0, 512, 0);
+        s.extend(signal(30 * 16_000, 1_024, 0));
+        let mut span = SpeechSpan::new(Box::new(PeakVad));
+        span.feed(&s);
+        let Found::Sparse(r) = span.found(s.len()) else {
+            panic!("sparse expected");
+        };
+        assert_eq!(r, 0..s.len());
+        // The same ends with speech in between are speech.
+        let mut s = signal(0, 512, 0);
+        s.extend(signal(16_000, 20 * 16_000, 0));
+        s.extend(signal(9 * 16_000, 1_024, 0));
+        let mut span = SpeechSpan::new(Box::new(PeakVad));
+        span.feed(&s);
+        assert!(matches!(span.found(s.len()), Found::Speech(_)));
+        // Under 20 s the proportion does not count.
+        let mut s = signal(0, 512, 0);
+        s.extend(signal(15 * 16_000, 512, 0));
+        let mut span = SpeechSpan::new(Box::new(PeakVad));
+        span.feed(&s);
+        assert!(matches!(span.found(s.len()), Found::Speech(_)));
     }
 
     #[test]
