@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use arcvox_core::history::{
-    Attempt, AttemptId, CorrectionSource, HistoryStore, ListFilter, StageKind, StageRecord,
+    Attempt, AttemptId, CorrectionSource, HistoryStore, ListFilter, StageKind, StageRecord, Tag,
     Utterance,
 };
 use arcvox_core::types::{HistoryId, ProfileId};
@@ -319,6 +319,7 @@ pub fn history_list(
     limit: Option<usize>,
     query: Option<String>,
     with_audio: Option<bool>,
+    tag: Option<Tag>,
     since: Option<i64>,
     until: Option<i64>,
     before_ts: Option<i64>,
@@ -328,6 +329,7 @@ pub fn history_list(
     let filter = ListFilter {
         query,
         with_audio: with_audio.unwrap_or(false),
+        tag,
         since,
         until,
         before: before_ts.zip(before_id),
@@ -396,10 +398,11 @@ pub fn history_days(
     state: State<'_, AppState>,
     tz_offset_secs: i32,
     with_audio: Option<bool>,
+    tag: Option<Tag>,
 ) -> CmdResult<Vec<arcvox_core::history::DayCount>> {
     let e = engine(&state)?;
     Ok(e.history()
-        .day_counts(tz_offset_secs, with_audio.unwrap_or(false))?)
+        .day_counts(tz_offset_secs, with_audio.unwrap_or(false), tag)?)
 }
 
 /// Rows per local hour between `since` and `until`, for the picker's hour row.
@@ -410,10 +413,16 @@ pub fn history_hours(
     until: i64,
     tz_offset_secs: i32,
     with_audio: Option<bool>,
+    tag: Option<Tag>,
 ) -> CmdResult<Vec<u32>> {
     let e = engine(&state)?;
-    Ok(e.history()
-        .hour_counts(since, until, tz_offset_secs, with_audio.unwrap_or(false))?)
+    Ok(e.history().hour_counts(
+        since,
+        until,
+        tz_offset_secs,
+        with_audio.unwrap_or(false),
+        tag,
+    )?)
 }
 
 #[tauri::command]

@@ -745,6 +745,7 @@
   "history.clear_recordings": "Clear all recordings",
   "history.recordings_cleared": "Deleted {n} recordings",
   "history.search": "Search dictations",
+  "history.filter.button": "Show",
   "history.filter.label": "Rows shown",
   "history.filter.all": "All",
   "history.filter.with_audio": "With recording",

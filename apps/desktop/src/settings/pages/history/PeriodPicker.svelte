@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tip } from "../../../lib/tip";
-  import { errorMessage, historyDays, historyHours, type DayCount } from "../../../lib/api";
+  import { errorMessage, historyDays, historyHours, type DayCount, type HistoryTag } from "../../../lib/api";
   import { periodLabel, periodRange, type PeriodSel } from "../../../lib/historyView";
   import { t } from "../../../lib/i18n";
   import Icon from "../../../lib/ui/Icon.svelte";
@@ -12,7 +12,7 @@
    * day a row of hours. The popover stays open until Done, Escape, or the button is pressed again;
    * every change is applied at once through `onchange`.
    */
-  let { value, withAudio = false, onchange }: { value: PeriodSel; withAudio?: boolean; onchange: (v: PeriodSel) => void } = $props();
+  let { value, withAudio = false, tag = null, onchange }: { value: PeriodSel; withAudio?: boolean; tag?: HistoryTag | null; onchange: (v: PeriodSel) => void } = $props();
 
   let open = $state(false);
   let days = $state<Record<string, number>>({});
@@ -35,7 +35,7 @@
 
   async function loadDays() {
     try {
-      const got = await historyDays(tz(), withAudio);
+      const got = await historyDays(tz(), withAudio, tag);
       days = Object.fromEntries(got.map((d: DayCount) => [d.day, d.count]));
     } catch (e) {
       toast.error(errorMessage(e));
@@ -44,7 +44,7 @@
   async function loadHours(day: string) {
     const { since, until } = periodRange({ kind: "range", from: day, to: day }, new Date());
     if (since === null || until === null) return;
-    try { hours = await historyHours(since, until, tz(), withAudio); } catch (e) { toast.error(errorMessage(e)); }
+    try { hours = await historyHours(since, until, tz(), withAudio, tag); } catch (e) { toast.error(errorMessage(e)); }
   }
   $effect(() => {
     if (!open) return;

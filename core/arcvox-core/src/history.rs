@@ -406,12 +406,60 @@ pub struct DayCount {
     pub count: u32,
 }
 
+/// A kind of row the History page shows on its own, named by the tag the
+/// row carries there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Tag {
+    Cancelled,
+    /// Failed, other than by cancelling.
+    Failed,
+    /// The rewrite failed and the raw transcript was used.
+    NotRewritten,
+    /// The final text differs from the rewrite's.
+    Corrected,
+    /// Processed again at least once.
+    Redone,
+}
+
+impl Tag {
+    /// The condition a row with this tag meets, on `utterances`.
+    fn clause(self) -> &'static str {
+        match self {
+            Tag::Cancelled => "error_code = 'cancelled'",
+            Tag::Failed => "(error IS NOT NULL AND error_code IS NOT 'cancelled')",
+            Tag::NotRewritten => "degraded != 0",
+            Tag::Corrected => {
+                "(error IS NULL AND TRIM(refined_text) != '' AND TRIM(final_text) != TRIM(refined_text))"
+            }
+            Tag::Redone => {
+                "EXISTS (SELECT 1 FROM attempts a WHERE a.utterance_id = utterances.id AND a.origin = 0)"
+            }
+        }
+    }
+}
+
+/// The conditions of `with_audio` and `tag`, each starting with ` AND `.
+fn kind_clauses(with_audio: bool, tag: Option<Tag>) -> String {
+    let mut out = String::new();
+    if with_audio {
+        out.push_str(" AND audio_path IS NOT NULL");
+    }
+    if let Some(tag) = tag {
+        out.push_str(" AND ");
+        out.push_str(tag.clause());
+    }
+    out
+}
+
 /// What `HistoryStore::list_page` selects. Times are unix seconds.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ListFilter {
     /// Matches the final and the raw text literally.
     pub query: Option<String>,
     pub with_audio: bool,
+    /// Rows carrying this tag only.
+    pub tag: Option<Tag>,
     /// Rows at or after this time.
     pub since: Option<i64>,
     /// Rows before this time.
@@ -1913,14 +1961,11 @@ impl HistoryStore {
         &self,
         tz_offset_secs: i32,
         with_audio: bool,
+        tag: Option<Tag>,
     ) -> Result<Vec<DayCount>, HistoryError> {
-        let audio = if with_audio {
-            "WHERE audio_path IS NOT NULL"
-        } else {
-            ""
-        };
+        let kind = kind_clauses(with_audio, tag);
         let sql = format!(
-            "SELECT date(ts + ?1, 'unixepoch') AS d, COUNT(*) FROM utterances {audio} GROUP BY d ORDER BY d"
+            "SELECT date(ts + ?1, 'unixepoch') AS d, COUNT(*) FROM utterances WHERE 1{kind} GROUP BY d ORDER BY d"
         );
         let conn = self.conn();
         let mut stmt = conn.prepare(&sql)?;
@@ -1941,15 +1986,12 @@ impl HistoryStore {
         until: i64,
         tz_offset_secs: i32,
         with_audio: bool,
+        tag: Option<Tag>,
     ) -> Result<Vec<u32>, HistoryError> {
-        let audio = if with_audio {
-            "AND audio_path IS NOT NULL"
-        } else {
-            ""
-        };
+        let kind = kind_clauses(with_audio, tag);
         let sql = format!(
             "SELECT CAST(strftime('%H', ts + ?1, 'unixepoch') AS INTEGER) AS h, COUNT(*)
-             FROM utterances WHERE ts >= ?2 AND ts < ?3 {audio} GROUP BY h"
+             FROM utterances WHERE ts >= ?2 AND ts < ?3{kind} GROUP BY h"
         );
         let conn = self.conn();
         let mut stmt = conn.prepare(&sql)?;
@@ -2003,6 +2045,9 @@ impl HistoryStore {
         }
         if f.with_audio {
             clauses.push("audio_path IS NOT NULL".into());
+        }
+        if let Some(tag) = f.tag {
+            clauses.push(tag.clause().into());
         }
         if let Some(since) = f.since {
             let n = bind(&mut values, since.into());
@@ -4167,14 +4212,14 @@ INSERT INTO stats_meta (key, value) VALUES ('backfilled', '1');
             s.insert(new(ts, audio.then(|| PathBuf::from("/r/x.wav"))))
                 .unwrap();
         }
-        let days = s.day_counts(8 * 3600, false).unwrap();
+        let days = s.day_counts(8 * 3600, false, None).unwrap();
         assert_eq!(
             days.iter()
                 .map(|d| (d.day.as_str(), d.count))
                 .collect::<Vec<_>>(),
             vec![("2026-10-05", 1), ("2026-10-07", 1), ("2026-10-08", 3)]
         );
-        let with_audio = s.day_counts(8 * 3600, true).unwrap();
+        let with_audio = s.day_counts(8 * 3600, true, None).unwrap();
         assert_eq!(
             with_audio
                 .iter()
@@ -4185,7 +4230,7 @@ INSERT INTO stats_meta (key, value) VALUES ('backfilled', '1');
         // The 8th in UTC+8 runs from 2026-10-07T16:00Z.
         let day_start = base - 8 * 3600 - 1800;
         let hours = s
-            .hour_counts(day_start, day_start + 86_400, 8 * 3600, false)
+            .hour_counts(day_start, day_start + 86_400, 8 * 3600, false, None)
             .unwrap();
         assert_eq!(hours.len(), 24);
         assert_eq!(hours[7], 1);
@@ -4248,6 +4293,71 @@ INSERT INTO stats_meta (key, value) VALUES ('backfilled', '1');
             ..ListFilter::default()
         };
         assert_eq!(s.list_page(10, &searched).unwrap().len(), 5);
+    }
+
+    #[test]
+    fn a_tag_keeps_the_rows_that_carry_it() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let plain = s.insert(new(100, None)).unwrap();
+        let mut u = new(200, None);
+        u.degraded = true;
+        let not_rewritten = s.insert(u).unwrap();
+        let mut u = new(300, None);
+        u.final_text = "corrected by hand".into();
+        let corrected = s.insert(u).unwrap();
+        let redone = s.insert(new(400, None)).unwrap();
+        s.record_attempt(redone, &redo_with(vec![]), false).unwrap();
+        let failed_of = |ts: i64, code: ErrorCode| FailedUtterance {
+            ts,
+            profile_id: ProfileId("default".into()),
+            app_name: None,
+            audio_path: None,
+            audio_ms: None,
+            code,
+            error: "x".into(),
+            raw_text: String::new(),
+            final_text: String::new(),
+        };
+        let failed = s
+            .insert_failed(failed_of(500, ErrorCode::ProviderTimeout))
+            .unwrap();
+        let cancelled = s
+            .insert_failed(failed_of(600, ErrorCode::Cancelled))
+            .unwrap();
+        let ids = |tag: Tag| {
+            s.list_page(
+                10,
+                &ListFilter {
+                    tag: Some(tag),
+                    ..ListFilter::default()
+                },
+            )
+            .unwrap()
+            .iter()
+            .map(|u| u.id)
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(Tag::Cancelled), vec![cancelled]);
+        assert_eq!(ids(Tag::Failed), vec![failed]);
+        assert_eq!(ids(Tag::NotRewritten), vec![not_rewritten]);
+        assert_eq!(ids(Tag::Corrected), vec![corrected]);
+        assert_eq!(ids(Tag::Redone), vec![redone]);
+        let _ = plain;
+        // The counts follow the same tag.
+        let days = s.day_counts(0, false, Some(Tag::Failed)).unwrap();
+        assert_eq!(days.iter().map(|d| d.count).sum::<u32>(), 1);
+        let hours = s
+            .hour_counts(0, 1000, 0, false, Some(Tag::Corrected))
+            .unwrap();
+        assert_eq!(hours.iter().sum::<u32>(), 1);
+        assert_eq!(
+            s.day_counts(0, false, None)
+                .unwrap()
+                .iter()
+                .map(|d| d.count)
+                .sum::<u32>(),
+            6
+        );
     }
 
     #[test]

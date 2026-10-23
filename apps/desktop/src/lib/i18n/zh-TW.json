@@ -745,6 +745,7 @@
   "history.clear_recordings": "清除所有錄音",
   "history.recordings_cleared": "已刪除 {n} 個錄音",
   "history.search": "搜尋聽寫內容",
+  "history.filter.button": "顯示",
   "history.filter.label": "顯示的紀錄",
   "history.filter.all": "全部",
   "history.filter.with_audio": "有錄音",

@@ -181,11 +181,14 @@ export const getTranslatePrompt = () => invoke<string>("translate_prompt_get");
 export const setTranslatePrompt = (text: string) => invoke<void>("translate_prompt_set", { text });
 export const defaultTranslatePrompt = () => invoke<string>("translate_prompt_default");
 export const restoreTranslatePrompt = () => invoke<string>("translate_prompt_restore");
-/** Recent rows; `query` keeps rows whose text contains it, `withAudio` rows with a recording. */
-/** One page of history rows, newest first. `since` and `until` are unix seconds (end exclusive); `before` is the last row shown. */
-export interface HistoryPage { limit: number; query?: string; withAudio?: boolean; since?: number | null; until?: number | null; before?: { ts: number; id: number } | null }
+/** A kind of row the History page shows on its own, named by the tag the row carries. */
+export type HistoryTag = "cancelled" | "failed" | "not_rewritten" | "corrected" | "redone";
+export const HISTORY_TAGS: readonly HistoryTag[] = ["cancelled", "failed", "not_rewritten", "corrected", "redone"];
+/** One page of history rows, newest first. `query` keeps rows whose text contains it, `withAudio` rows with a recording,
+ * `tag` rows carrying that tag. `since` and `until` are unix seconds (end exclusive); `before` is the last row shown. */
+export interface HistoryPage { limit: number; query?: string; withAudio?: boolean; tag?: HistoryTag | null; since?: number | null; until?: number | null; before?: { ts: number; id: number } | null }
 export const listHistory = (p: HistoryPage) =>
-  invoke<Utterance[]>("history_list", { limit: p.limit, query: p.query ?? "", withAudio: p.withAudio ?? false, since: p.since ?? null, until: p.until ?? null, beforeTs: p.before?.ts ?? null, beforeId: p.before?.id ?? null });
+  invoke<Utterance[]>("history_list", { limit: p.limit, query: p.query ?? "", withAudio: p.withAudio ?? false, tag: p.tag ?? null, since: p.since ?? null, until: p.until ?? null, beforeTs: p.before?.ts ?? null, beforeId: p.before?.id ?? null });
 export const historyAudio = (id: number) => invoke<ArrayBuffer>("history_audio", { id });
 export const reprocessHistory = (id: number, profileId: string | null) => invoke<RedoOutcome>("history_reprocess", { id, profileId });
 /** Every result a row had, newest first. */
@@ -215,9 +218,9 @@ export const clearHistoryRange = (since: number | null, until: number | null) =>
 export const clearRecordingsRange = (since: number | null, until: number | null) => invoke<number>("history_clear_recordings_range", { since, until });
 /** Rows per local day (`day` is YYYY-MM-DD), days without rows left out. */
 export interface DayCount { day: string; count: number }
-export const historyDays = (tzOffsetSecs: number, withAudio = false) => invoke<DayCount[]>("history_days", { tzOffsetSecs, withAudio });
+export const historyDays = (tzOffsetSecs: number, withAudio = false, tag: HistoryTag | null = null) => invoke<DayCount[]>("history_days", { tzOffsetSecs, withAudio, tag });
 /** Rows per local hour (24 counts) between `since` and `until`, unix seconds. */
-export const historyHours = (since: number, until: number, tzOffsetSecs: number, withAudio = false) => invoke<number[]>("history_hours", { since, until, tzOffsetSecs, withAudio });
+export const historyHours = (since: number, until: number, tzOffsetSecs: number, withAudio = false, tag: HistoryTag | null = null) => invoke<number[]>("history_hours", { since, until, tzOffsetSecs, withAudio, tag });
 /** The folder recordings are kept in, and what the last change of it moved. */
 export interface RecordingsDir { path: string; is_default: boolean; moved: number; left: number }
 export const recordingsDir = () => invoke<RecordingsDir>("recordings_dir_get");

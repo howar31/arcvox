@@ -134,6 +134,7 @@ fn rows_of(
             let filter = ListFilter {
                 query: None,
                 with_audio: true,
+                tag: None,
                 since: *since,
                 until: *until,
                 before: None,

@@ -3,7 +3,7 @@
   import { onMount } from "svelte";
   import {
     chooseAttempt, clearHistoryRange, clearRecordingsRange, deleteAttempt, historyAttempts, historyStages, deleteHistory, deleteRecording, errorMessage, formatBytes, historyStorage, listHistory, onHistoryChanged, openRecordingsDir, reprocessHistory, revealRecording, widgetCopy,
-    type Attempt, type HistoryStorage, type Stage, type Utterance,
+    type Attempt, type HistoryStorage, type HistoryTag, type Stage, type Utterance,
   } from "../../lib/api";
   import { setFinalText } from "../../lib/api";
   import { storedOpen, rememberOpen, type DetailBlock } from "../../lib/detailMemory";
@@ -20,7 +20,6 @@
   import Icon from "../../lib/ui/Icon.svelte";
   import Modal from "../../lib/ui/Modal.svelte";
   import PageHead from "../../lib/ui/PageHead.svelte";
-  import Segmented from "../../lib/ui/Segmented.svelte";
   import Fold from "../../lib/ui/Fold.svelte";
   import PageLink from "../../lib/ui/PageLink.svelte";
   import Tag from "../../lib/ui/Tag.svelte";
@@ -28,6 +27,7 @@
   import Attempts from "./history/Attempts.svelte";
   import DetailFold from "./history/DetailFold.svelte";
   import PeriodPicker from "./history/PeriodPicker.svelte";
+  import ShownPicker, { type Shown } from "./history/ShownPicker.svelte";
   import Player from "./history/Player.svelte";
   import TextFlow from "./history/TextFlow.svelte";
 
@@ -42,7 +42,9 @@
   // Set when the list could not be read and nothing has been shown yet.
   let failed = $state(false);
   let query = $state("");
-  let filter = $state<"all" | "audio">("all");
+  let filter = $state<Shown>("all");
+  const withAudio = $derived(filter === "audio");
+  const tag = $derived<HistoryTag | null>(filter === "all" || filter === "audio" ? null : filter);
   // The time window shown, chosen in the period picker.
   let period = $state<PeriodSel>({ kind: "all" });
   // Paging: how many rows the list shows at most (grows by a page as the user scrolls), whether the next
@@ -97,7 +99,7 @@
   async function reload() {
     clearTimeout(timer);
     try {
-      const got = await listHistory({ limit: want, query, withAudio: filter === "audio", ...window_() });
+      const got = await listHistory({ limit: want, query, withAudio, tag, ...window_() });
       rows = got;
       exhausted = got.length < want;
       now = new Date();
@@ -145,7 +147,7 @@
     loadingMore = true;
     const last = rows[rows.length - 1];
     try {
-      const got = await listHistory({ limit: PAGE_SIZE, query, withAudio: filter === "audio", ...window_(), before: { ts: last.ts, id: last.id } });
+      const got = await listHistory({ limit: PAGE_SIZE, query, withAudio, tag, ...window_(), before: { ts: last.ts, id: last.id } });
       rows = [...rows, ...got];
       want = Math.max(want, Math.ceil(rows.length / PAGE_SIZE) * PAGE_SIZE);
       exhausted = got.length < PAGE_SIZE;
@@ -188,7 +190,7 @@
     clearTimeout(timer);
     timer = setTimeout(reset, SEARCH_DELAY_MS);
   }
-  function setFilter(v: "all" | "audio") {
+  function setFilter(v: Shown) {
     filter = v;
     reset();
   }
@@ -198,7 +200,7 @@
   }
 
   const windowed = $derived.by(() => { const w = window_(); return w.since !== null || w.until !== null; });
-  const filtered = $derived(query.trim() !== "" || filter === "audio" || windowed);
+  const filtered = $derived(query.trim() !== "" || filter !== "all" || windowed);
   const groups = $derived(groupByDay(rows ?? [], now));
   function dayTitle(key: string): string {
     if (key === "today" || key === "yesterday") return t(`history.${key}`);
@@ -398,11 +400,8 @@
         oninput={search} onkeydown={(e) => { if (e.key === "Enter" && !isImeKey(e)) reload(); }}
       />
     </label>
-    <PeriodPicker value={period} withAudio={filter === "audio"} onchange={setPeriod} />
-    <Segmented
-      options={[{ value: "all", label: t("history.filter.all") }, { value: "audio", label: t("history.filter.with_audio") }]}
-      bind:value={() => filter, setFilter} label={t("history.filter.label")}
-    />
+    <PeriodPicker value={period} {withAudio} {tag} onchange={setPeriod} />
+    <ShownPicker value={filter} onchange={setFilter} />
   </div>
 
   {#each groups as g (g.key)}
