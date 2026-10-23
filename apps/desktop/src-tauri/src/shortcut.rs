@@ -168,13 +168,19 @@ impl Key {
         self.between("MouseMiddle", "Mouse10")
     }
 
+    /// A key of the numeric keypad; a shortcut on its own, like a mouse
+    /// button, since the main keyboard has the same characters.
+    fn is_numpad(self) -> bool {
+        self.between("Numpad0", "NumpadEnter")
+    }
+
     fn is_function(self) -> bool {
         self.between("F1", "F20")
     }
 
     /// Moves the caret or edits text when pressed alone.
     fn is_editing(self) -> bool {
-        self.between("NumpadEnter", "PageDown")
+        self.between("Enter", "PageDown")
     }
 
     pub fn is_escape(self) -> bool {
@@ -316,7 +322,7 @@ pub fn refusal(keys: &[Key], existing: &[Shortcut]) -> Option<Refusal> {
     if s.0.iter().filter(|k| !k.is_modifier()).count() > 1 {
         return Some(Refusal::TwoKeys);
     }
-    if let Some(main) = s.main().filter(|k| !k.is_mouse()) {
+    if let Some(main) = s.main().filter(|k| !k.is_mouse() && !k.is_numpad()) {
         let mut mods = s.modifiers().peekable();
         if mods.peek().is_none() {
             return Some(if main.is_function() {
@@ -669,6 +675,10 @@ mod tests {
             vec!["Mouse4"],
             vec!["ShiftLeft", "Mouse5"],
             vec!["MetaRight", "Numpad1"],
+            vec!["Numpad5"],
+            vec!["NumpadEnter"],
+            vec!["NumpadAdd"],
+            vec!["ShiftLeft", "Numpad1"],
         ] {
             assert_eq!(check(&ok), None, "{ok:?}");
         }
@@ -682,7 +692,6 @@ mod tests {
             (vec!["Digit1"], Refusal::CharacterAlone),
             (vec!["Space"], Refusal::CharacterAlone),
             (vec!["Comma"], Refusal::CharacterAlone),
-            (vec!["Numpad5"], Refusal::CharacterAlone),
             (vec!["Enter"], Refusal::EditingAlone),
             (vec!["ArrowUp"], Refusal::EditingAlone),
             (vec!["Backspace"], Refusal::EditingAlone),
