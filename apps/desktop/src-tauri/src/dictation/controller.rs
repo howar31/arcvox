@@ -1,6 +1,7 @@
 //! State machine: Idle -> Armed (fn down, stream open) -> Recording ->
 //! Processing -> insertion -> Idle. See the design's section 6.2.
 
+use std::ops::Range;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
@@ -31,15 +32,29 @@ struct Capture {
     recorder: Option<Recorder>,
     /// Set for a hands-free dictation that ends by itself after a pause.
     pause: Option<vad::SilenceWatch>,
+    /// Follows the speech as the audio arrives, so the part to keep is
+    /// known as soon as the recording ends, however long it is.
+    speech: vad::SpeechSpan,
     /// How many of the recorder's samples the session has been given.
     sent: usize,
 }
 
 impl Capture {
+    fn new(handle: Box<dyn AudioHandle>, vad: Box<dyn vad::Vad>) -> Capture {
+        Capture {
+            handle: Some(handle),
+            recorder: None,
+            pause: None,
+            speech: vad::SpeechSpan::new(vad),
+            sent: 0,
+        }
+    }
+
     fn push(&mut self, rate: u32, mono: &[f32]) -> f32 {
-        self.recorder
-            .get_or_insert_with(|| Recorder::new(rate))
-            .push(mono)
+        let recorder = self.recorder.get_or_insert_with(|| Recorder::new(rate));
+        let level = recorder.push(mono);
+        self.speech.feed(recorder.samples());
+        level
     }
     /// Hands the session the samples it has not seen yet, so the recording
     /// is kept as it is made.
@@ -62,15 +77,36 @@ impl Capture {
     fn secs(&self) -> f32 {
         self.recorder.as_ref().map(|r| r.len_secs()).unwrap_or(0.0)
     }
-    /// Ends the capture: the whole recording, and how much of it the
-    /// session already has.
-    fn stop(mut self) -> (Vec<f32>, usize) {
+    /// Ends the capture.
+    fn stop(mut self) -> Stopped {
         if let Some(h) = self.handle.take() {
             h.stop();
         }
         let samples = self.recorder.take().map(|r| r.finish()).unwrap_or_default();
         let sent = self.sent.min(samples.len());
-        (samples, sent)
+        Stopped {
+            samples,
+            sent,
+            speech: self.speech,
+        }
+    }
+}
+
+/// A capture that has ended: the whole recording and how much of it the
+/// session already has.
+struct Stopped {
+    samples: Vec<f32>,
+    sent: usize,
+    speech: vad::SpeechSpan,
+}
+
+impl Stopped {
+    /// The part of the recording that holds speech, or `None` when nothing
+    /// was said. Only the frames after the last audio message are looked
+    /// at here; the rest were seen as they arrived.
+    fn speech(&mut self) -> Option<Range<usize>> {
+        self.speech.feed(&self.samples);
+        self.speech.range(self.samples.len())
     }
 }
 
@@ -295,8 +331,8 @@ impl Controller {
             State::Recording {
                 session, capture, ..
             } => {
-                let (samples, sent) = capture.stop();
-                session.push_audio(&samples[sent..]);
+                let stopped = capture.stop();
+                session.push_audio(&stopped.samples[stopped.sent..]);
                 session.store();
             }
             State::Processing { .. } => {}
@@ -435,12 +471,7 @@ impl Controller {
         {
             Ok(handle) => {
                 self.state = State::Armed {
-                    capture: Capture {
-                        handle: Some(handle),
-                        recorder: None,
-                        pause: None,
-                        sent: 0,
-                    },
+                    capture: Capture::new(handle, (self.deps.vad_factory)()),
                 };
             }
             Err(e) => {
@@ -553,12 +584,7 @@ impl Controller {
                 .audio
                 .start(&self.settings.microphone_choice(), self.audio_tx())
             {
-                Ok(handle) => Capture {
-                    handle: Some(handle),
-                    recorder: None,
-                    pause: None,
-                    sent: 0,
-                },
+                Ok(handle) => Capture::new(handle, (self.deps.vad_factory)()),
                 Err(e) => {
                     self.deps.ui.message(UiMessage::error(
                         Msg::WidgetMicrophoneUnavailable,
@@ -689,14 +715,18 @@ impl Controller {
         else {
             return;
         };
-        let (samples, sent) = capture.stop();
+        let mut stopped = capture.stop();
+        let range = stopped.speech();
+        // The widget changes first: everything below is a channel send.
+        if range.is_some() {
+            self.deps.ui.set_state(UiState::Processing);
+        }
         // The engine has the whole recording, and keeps it when recordings
         // are kept, before anything is done with it here: a failure from
         // this point on leaves it in the history to be processed again.
-        session.push_audio(&samples[sent..]);
+        session.push_audio(&stopped.samples[stopped.sent..]);
         session.store();
-        let mut vad = (self.deps.vad_factory)();
-        match vad::trim(&samples, vad.as_mut()) {
+        match range {
             None => {
                 session.cancel();
                 self.deps.ui.message(UiMessage::info(Msg::WidgetNoSpeech));
@@ -704,7 +734,6 @@ impl Controller {
             }
             Some(range) => {
                 session.finish_range(range);
-                self.deps.ui.set_state(UiState::Processing);
                 self.state = State::Processing {
                     session,
                     captured,
@@ -727,12 +756,11 @@ impl Controller {
             State::Recording {
                 session, capture, ..
             } => {
-                let (samples, sent) = capture.stop();
-                let mut vad = (self.deps.vad_factory)();
-                match vad::trim(&samples, vad.as_mut()) {
+                let mut stopped = capture.stop();
+                match stopped.speech() {
                     None => session.cancel(),
                     Some(range) => {
-                        session.push_audio(&samples[sent..]);
+                        session.push_audio(&stopped.samples[stopped.sent..]);
                         session.cancel_keep(Some(range));
                     }
                 }
@@ -1361,16 +1389,14 @@ mod tests {
         mock_ok(&r, "原文", "整理後").await;
         r.modifier.send(fn_down()).unwrap();
         wait_state(&r, UiState::Recording, "recording").await;
-        let before = r.ui.levels.lock().unwrap().len();
         let tx = r.audio.tx.lock().unwrap().clone().unwrap();
         tx.send(AudioMsg::Frames {
             rate: 16_000,
             mono: vec![100.0; 16_000],
         })
         .unwrap();
-        wait_for(|| r.ui.levels.lock().unwrap().len() > before, "level").await;
         r.modifier.send(fn_up()).unwrap();
-        // The step that trims the recording fails: the user is told, and
+        // The speech detector fails on the frames: the user is told, and
         // the widget is not left on "listening".
         wait_for(
             || {
@@ -1443,17 +1469,16 @@ mod tests {
         .await;
         r.modifier.send(fn_down()).unwrap();
         wait_state(&r, UiState::Recording, "recording").await;
-        let before = r.ui.levels.lock().unwrap().len();
         let tx = r.audio.tx.lock().unwrap().clone().unwrap();
         tx.send(AudioMsg::Frames {
             rate: 16_000,
             mono: vec![100.0; 16_000],
         })
         .unwrap();
-        wait_for(|| r.ui.levels.lock().unwrap().len() > before, "level").await;
         r.modifier.send(fn_up()).unwrap();
-        // Trimming the recording fails. The engine already has it: the
-        // history lists it as not finished, with its recording.
+        // The speech detector fails on the frames. The engine gets the
+        // whole recording anyway: the history lists it as not finished,
+        // with its recording.
         let history = r.engine.history();
         wait_for(
             || {

@@ -50,25 +50,72 @@ impl Vad for EarshotVad {
     }
 }
 
-/// Returns the sample range to keep, or `None` when no frame contains
-/// speech. A trailing partial frame is ignored by the detector but kept in
-/// the range when it follows speech.
-pub fn trim(samples: &[f32], vad: &mut dyn Vad) -> Option<Range<usize>> {
-    let mut first: Option<usize> = None;
-    let mut last_end: usize = 0;
-    for (i, frame) in samples.as_chunks::<FRAME_SAMPLES>().0.iter().enumerate() {
-        if vad.is_speech(frame) {
-            let start = i * FRAME_SAMPLES;
-            if first.is_none() {
-                first = Some(start);
+/// Where the speech is in a recording, found frame by frame as the
+/// recording grows, so the range to keep is known the moment it ends.
+#[derive(Default)]
+struct Scan {
+    /// Samples already looked at.
+    seen: usize,
+    first: Option<usize>,
+    last_end: usize,
+}
+
+impl Scan {
+    /// Looks at the whole frames added to `samples` since the last call.
+    fn feed(&mut self, samples: &[f32], vad: &mut dyn Vad) {
+        while self.seen + FRAME_SAMPLES <= samples.len() {
+            let frame = &samples[self.seen..self.seen + FRAME_SAMPLES];
+            if vad.is_speech(frame) {
+                self.first.get_or_insert(self.seen);
+                self.last_end = self.seen + FRAME_SAMPLES;
             }
-            last_end = start + FRAME_SAMPLES;
+            self.seen += FRAME_SAMPLES;
         }
     }
-    let first = first?;
-    let start = first.saturating_sub(PAD_SAMPLES);
-    let end = (last_end + PAD_SAMPLES).min(samples.len());
-    Some(start..end)
+
+    /// The range of `len` samples to keep, or `None` when no frame
+    /// contained speech. A trailing partial frame is not looked at but
+    /// kept in the range when it follows speech.
+    fn range(&self, len: usize) -> Option<Range<usize>> {
+        let start = self.first?.saturating_sub(PAD_SAMPLES);
+        let end = (self.last_end + PAD_SAMPLES).min(len);
+        Some(start..end)
+    }
+}
+
+/// Returns the sample range to keep, or `None` when no frame contains
+/// speech.
+pub fn trim(samples: &[f32], vad: &mut dyn Vad) -> Option<Range<usize>> {
+    let mut scan = Scan::default();
+    scan.feed(samples, vad);
+    scan.range(samples.len())
+}
+
+/// `trim` for a recording that is still being made: fed as the audio
+/// arrives, it has the range ready when the recording ends, whatever its
+/// length.
+pub struct SpeechSpan {
+    vad: Box<dyn Vad>,
+    scan: Scan,
+}
+
+impl SpeechSpan {
+    pub fn new(vad: Box<dyn Vad>) -> Self {
+        Self {
+            vad,
+            scan: Scan::default(),
+        }
+    }
+
+    /// Looks at the whole frames added to `samples` since the last call.
+    pub fn feed(&mut self, samples: &[f32]) {
+        self.scan.feed(samples, self.vad.as_mut());
+    }
+
+    /// The range to keep out of the `len` samples fed so far.
+    pub fn range(&self, len: usize) -> Option<Range<usize>> {
+        self.scan.range(len)
+    }
 }
 
 /// Watches a growing recording for a pause after speech.
@@ -179,6 +226,21 @@ mod tests {
     fn speech_at_the_very_start_and_end() {
         let s = signal(0, 2_000, 0);
         assert_eq!(trim(&s, &mut PeakVad).unwrap(), 0..2_000);
+    }
+
+    #[test]
+    fn a_span_fed_in_pieces_equals_the_trim_of_the_whole() {
+        let s = signal(16_000, 8_000, 16_000);
+        let mut span = SpeechSpan::new(Box::new(PeakVad));
+        // Pieces that do not end on a frame boundary.
+        let mut fed = 0;
+        for piece in [100usize, 15_000, 9_000, 15_900] {
+            fed += piece;
+            span.feed(&s[..fed]);
+        }
+        assert_eq!(fed, s.len());
+        assert_eq!(span.range(s.len()), trim(&s, &mut PeakVad));
+        assert_eq!(SpeechSpan::new(Box::new(PeakVad)).range(16_000), None);
     }
 
     #[test]
