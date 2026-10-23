@@ -1,6 +1,6 @@
 import type { StatsDay, StatsNamed } from "./api";
 
-export type Period = "today" | "week" | "month" | "all";
+export type Period = "today" | "week" | "month" | "year" | "all";
 
 const DAY = 86400;
 
@@ -11,6 +11,7 @@ function midnight(d: Date, daysBack: number): number {
 /** Start of the period in seconds since the epoch, at a local midnight; 0 for all. */
 export function periodStart(period: Period, now: Date): number {
   if (period === "all") return 0;
+  if (period === "year") return new Date(now.getFullYear(), 0, 1).getTime() / 1000;
   return midnight(now, period === "today" ? 0 : period === "week" ? 6 : 29);
 }
 

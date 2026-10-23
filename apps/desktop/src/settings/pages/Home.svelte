@@ -23,7 +23,9 @@
   import Columns from "../../lib/ui/Columns.svelte";
   import Empty from "../../lib/ui/Empty.svelte";
   import Heatmap from "../../lib/ui/Heatmap.svelte";
+  import Icon from "../../lib/ui/Icon.svelte";
   import PageHead from "../../lib/ui/PageHead.svelte";
+  import ShareDialog from "./home/ShareDialog.svelte";
   import Segmented from "../../lib/ui/Segmented.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
 
@@ -46,6 +48,7 @@
   let models = $state<InstalledModel[] | null>(null);
   let mics = $state<string[]>([]);
   let now = $state(new Date());
+  let sharing = $state(false);
 
   async function load(of: Period = period) {
     now = new Date();
@@ -489,10 +492,12 @@
       <button type="button" class="btn quiet" onclick={() => apply(DEFAULT_LAYOUT)}>{t("home.customize_reset")}</button>
       <button type="button" class="btn primary" onclick={() => { editing = false; picker = null; }}>{t("home.customize_done")}</button>
     {:else}
-      <button type="button" class="btn" onclick={() => { editing = true; }} disabled={!stats}>{t("home.customize")}</button>
+      <button type="button" class="btn icon-btn" aria-label={t("share.button")} use:tip={t("share.button")} onclick={() => (sharing = true)} disabled={!stats}><Icon name="share" /></button>
+      <button type="button" class="btn icon-btn" aria-label={t("home.customize")} use:tip={t("home.customize")} onclick={() => { editing = true; }} disabled={!stats}><Icon name="view-cards" /></button>
     {/if}
   {/snippet}
 </PageHead>
+<ShareDialog bind:open={sharing} pagePeriod={period} />
 
 {#snippet figureList(id: CardId, w: number)}
   {@const rows = figures(id)}
@@ -655,6 +660,8 @@
 {/if}
 
 <style>
+  .icon-btn { width: var(--control); padding: 0; color: var(--ink-2); }
+  .icon-btn:hover { color: var(--ink); }
   .grow { flex: 1; min-width: 0; }
   .hint { margin: 0 4px 18px; color: var(--ink-2); }
 

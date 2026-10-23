@@ -122,6 +122,10 @@ impl Platform for MacPlatform {
         pasteboard::write_text(text)
     }
 
+    fn clipboard_write_png(&self, png: &[u8]) -> bool {
+        pasteboard::write_png(png)
+    }
+
     fn clipboard_write_passing(&self, text: &str) -> bool {
         pasteboard::write_passing(text)
     }

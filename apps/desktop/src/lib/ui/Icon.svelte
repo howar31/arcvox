@@ -14,6 +14,7 @@
     "chevron-up": '<path d="M4 10l4-4 4 4"/>',
     "view-cards": '<rect x="2" y="2.5" width="5" height="4.5" rx="1.2"/><rect x="9" y="2.5" width="5" height="4.5" rx="1.2"/><rect x="2" y="9" width="5" height="4.5" rx="1.2"/><rect x="9" y="9" width="5" height="4.5" rx="1.2"/>',
     "view-list": '<path d="M2.5 4h11M2.5 8h11M2.5 12h11"/>',
+    share: '<path d="M5 6.5H4a1 1 0 0 0-1 1V13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V7.5a1 1 0 0 0-1-1h-1M8 10V2M5.3 4.7 8 2l2.7 2.7"/>',
     "view-panes": '<rect x="2" y="2.5" width="12" height="11" rx="2"/><path d="M6.5 2.5v11"/>',
     storage: '<ellipse cx="8" cy="4" rx="5" ry="2"/><path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>',
     backup: '<path d="M2.5 9.5V12a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V9.5"/><path d="M8 10V3M5.5 5.5 8 3l2.5 2.5"/>',

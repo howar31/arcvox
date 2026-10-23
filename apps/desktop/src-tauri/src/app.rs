@@ -171,6 +171,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             crate::commands::system::ui_language,
             crate::commands::system::widget_copy,
+            crate::commands::share::share_copy_image,
+            crate::commands::share::share_save_image,
             crate::commands::system::widget_dismiss,
             crate::commands::system::widget_drag_start,
             crate::commands::system::widget_placing,

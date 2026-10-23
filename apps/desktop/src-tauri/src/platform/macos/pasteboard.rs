@@ -3,7 +3,10 @@
 //! files, rich text, or images the user had copied.
 
 use objc2::runtime::ProtocolObject;
-use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardTypeString, NSPasteboardWriting};
+use objc2_app_kit::{
+    NSPasteboard, NSPasteboardItem, NSPasteboardTypePNG, NSPasteboardTypeString,
+    NSPasteboardWriting,
+};
 use objc2_foundation::{NSArray, NSData, NSString};
 
 use crate::platform::ClipboardSnapshot;
@@ -50,6 +53,21 @@ pub fn write_text(text: &str) -> bool {
     let ok = pb.setString_forType(&NSString::from_str(text), ty);
     if !ok {
         tracing::warn!("the pasteboard refused the text");
+    }
+    ok
+}
+
+/// Puts a PNG image on the pasteboard. `false` when the system refused the
+/// write; the pasteboard is then empty.
+pub fn write_png(png: &[u8]) -> bool {
+    let pb = NSPasteboard::generalPasteboard();
+    pb.clearContents();
+    // SAFETY: `NSPasteboardTypePNG` is a process-lifetime extern static;
+    // objc2 requires unsafe to read it.
+    let ty = unsafe { NSPasteboardTypePNG };
+    let ok = pb.setData_forType(Some(&NSData::with_bytes(png)), ty);
+    if !ok {
+        tracing::warn!("the pasteboard refused the image");
     }
     ok
 }

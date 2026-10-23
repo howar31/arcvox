@@ -8,6 +8,7 @@ describe("statsView", () => {
     expect(periodStart("today", now)).toBe(new Date(2026, 9, 1).getTime() / 1000);
     expect(periodStart("week", now)).toBe(new Date(2026, 8, 25).getTime() / 1000);
     expect(periodStart("month", now)).toBe(new Date(2026, 8, 2).getTime() / 1000);
+    expect(periodStart("year", now)).toBe(new Date(2026, 0, 1).getTime() / 1000);
     expect(periodStart("all", now)).toBe(0);
   });
 

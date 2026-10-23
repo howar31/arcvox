@@ -242,6 +242,11 @@ export interface Stats {
 }
 /** Statistics from `since` (seconds since the epoch) on, grouped by the local time `tzOffsetSecs` east of UTC. */
 export const getStats = (since: number, tzOffsetSecs: number) => invoke<Stats>("stats_get", { since, tzOffsetSecs });
+/** Puts the share card's PNG on the clipboard. */
+export const shareCopyImage = (png: Uint8Array) => invoke<void>("share_copy_image", png, { headers: { "Content-Type": "application/octet-stream" } });
+/** Writes the share card's PNG to `path` (`.png` appended when missing); returns the path written. */
+export const shareSaveImage = (path: string, png: Uint8Array) =>
+  invoke<string>("share_save_image", png, { headers: { "Content-Type": "application/octet-stream", "x-path": encodeURIComponent(path) } });
 export const resetStats = () => invoke<void>("stats_reset");
 export const deleteHistory = (id: number) => invoke<void>("history_delete", { id });
 /** The user's correction of a row's final text; the result's own text takes the correction away. */

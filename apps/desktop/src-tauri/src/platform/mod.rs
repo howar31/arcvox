@@ -143,6 +143,8 @@ pub trait Platform: Send + Sync {
     fn clipboard_snapshot(&self) -> ClipboardSnapshot;
     /// Puts `text` on the clipboard; `false` when the system refused it.
     fn clipboard_write_text(&self, text: &str) -> bool;
+    /// Puts a PNG image on the clipboard; `false` when the system refused it.
+    fn clipboard_write_png(&self, png: &[u8]) -> bool;
     /// Writes text that is on the clipboard only to be pasted and is taken
     /// off again; marked so that clipboard histories can leave it out.
     fn clipboard_write_passing(&self, text: &str) -> bool {
@@ -300,6 +302,10 @@ pub mod fake {
             }
             *self.clipboard.lock().unwrap() = Some(text.to_string());
             true
+        }
+        fn clipboard_write_png(&self, png: &[u8]) -> bool {
+            self.record(format!("png:{}", png.len()));
+            !*self.clipboard_failure.lock().unwrap()
         }
         fn clipboard_write_passing(&self, text: &str) -> bool {
             self.record(format!("passing:{text}"));
