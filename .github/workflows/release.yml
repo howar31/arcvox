@@ -1,0 +1,160 @@
+name: Release
+
+# A tag `vX.Y.Z` (or `vX.Y.Z-rc.N`, published as a prerelease) builds the
+# macOS app, signs and notarizes it, and publishes the release with the
+# updater feed. The tag's annotation is the release description.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches the app version and the updater key is set
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          CORE="${TAG%%-*}"
+          APP="$(jq -r .version apps/desktop/package.json)"
+          echo "tag=$TAG core=$CORE app=$APP"
+          test "$CORE" = "$APP"
+          test -n "$(jq -r '.plugins.updater.pubkey' apps/desktop/src-tauri/tauri.conf.json)"
+
+  mac:
+    needs: version-gate
+    # The Swift bridge needs the macOS 26 SDK (Speech and FoundationModels).
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - run: npm ci
+        working-directory: apps/desktop
+      - name: Import signing certificate (temporary keychain)
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security import "$RUNNER_TEMP/cert.p12" -k build.keychain -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          security list-keychains -d user -s build.keychain login.keychain
+          rm "$RUNNER_TEMP/cert.p12"
+          IDENTITY="$(security find-identity -v -p codesigning build.keychain | grep 'Developer ID Application' | head -1 | awk '{print $2}')"
+          test -n "$IDENTITY"
+          echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+      - name: App Store Connect key
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          printf '%s' "$ASC_KEY_P8" > "$RUNNER_TEMP/asc.p8"
+          echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/asc.p8" >> "$GITHUB_ENV"
+      # The asset compiler fails on the icon document when its standard
+      # input is closed, as the bundler starts it.
+      - name: Asset compiler with an open standard input
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          printf '#!/bin/sh\nexec /usr/bin/actool "$@" </dev/null\n' > "$RUNNER_TEMP/bin/actool"
+          chmod +x "$RUNNER_TEMP/bin/actool"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      # The tag (minus v) is the version, so a release candidate carries its
+      # -rc.N suffix and is compared as a prerelease; the run number is the
+      # build number.
+      - name: Build, sign and notarize
+        working-directory: apps/desktop
+        env:
+          APPLE_API_KEY: ${{ secrets.ASC_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.ASC_ISSUER_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          CONF="$(jq -n --arg v "$VER" --arg b "$GITHUB_RUN_NUMBER" \
+            '{version: $v, bundle: {createUpdaterArtifacts: true, macOS: {bundleVersion: $b}}}')"
+          npx tauri build --bundles app,dmg --config "$CONF"
+      - name: Collect the assets
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          B=target/release/bundle
+          codesign --verify --deep --strict "$B/macos/Arcvox.app"
+          codesign -dv "$B/macos/Arcvox.app" 2>&1 | grep -q 'flags=0x10000(runtime)'
+          xcrun stapler validate "$B/macos/Arcvox.app"
+          mkdir -p out
+          cp "$B"/dmg/*.dmg "out/Arcvox-macOS-$VER.dmg"
+          cp "$B/macos/Arcvox.app.tar.gz" "out/Arcvox-macOS-$VER.app.tar.gz"
+          cp "$B/macos/Arcvox.app.tar.gz.sig" "out/Arcvox-macOS-$VER.app.tar.gz.sig"
+          # The signature names the version it was made for.
+          base64 --decode < "out/Arcvox-macOS-$VER.app.tar.gz.sig" | grep -q "$VER"
+      - name: Notarize and staple the disk image
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          xcrun notarytool submit "out/Arcvox-macOS-$VER.dmg" \
+            --key "$APPLE_API_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
+            --wait --timeout 30m
+          xcrun stapler staple "out/Arcvox-macOS-$VER.dmg"
+          rm "$APPLE_API_KEY_PATH"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: out/*
+
+  release:
+    needs: mac
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: mac
+          path: out
+      - name: Release description from the tag
+        run: |
+          git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          git for-each-ref "refs/tags/$GITHUB_REF_NAME" --format='%(contents)' > notes.md
+          test -s notes.md
+      - name: Updater feed
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/Arcvox-macOS-$VER.app.tar.gz"
+          jq -n --arg v "$VER" --rawfile notes notes.md \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --rawfile sig "out/Arcvox-macOS-$VER.app.tar.gz.sig" --arg url "$URL" \
+            '{version: $v, notes: $notes, pub_date: $date,
+              platforms: {"darwin-aarch64": {signature: $sig, url: $url}}}' > out/latest.json
+      - name: Create or update the release (idempotent)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          PRERELEASE=""
+          case "$GITHUB_REF_NAME" in *-*) PRERELEASE="--prerelease";; esac
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag $PRERELEASE
+          gh release upload "$GITHUB_REF_NAME" \
+            "out/Arcvox-macOS-$VER.dmg" "out/Arcvox-macOS-$VER.app.tar.gz" \
+            "out/Arcvox-macOS-$VER.app.tar.gz.sig" out/latest.json --clobber

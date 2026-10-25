@@ -1,7 +1,10 @@
 name: CI
 
-# Started by hand: the Actions tab, or `gh workflow run ci.yml --ref <branch>`.
+# Runs on pull requests; `main` only takes commits fast-forwarded from one,
+# so a push to it is not checked again. Also started by hand from the
+# Actions tab, or with `gh workflow run ci.yml --ref <branch>`.
 on:
+  pull_request:
   workflow_dispatch:
 
 concurrency:
