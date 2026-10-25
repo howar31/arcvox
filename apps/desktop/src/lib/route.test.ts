@@ -41,6 +41,8 @@ test("the licences page sits under About and can name a package", () => {
   expect(parseRoute("#licenses/tokio")).toEqual({ page: "licenses", arg: "tokio" });
   expect(parseRoute(routeHash("licenses", "beta@rust"))).toEqual({ page: "licenses", arg: "beta@rust" });
   expect(navPage("licenses")).toBe("about");
+  expect(parseRoute("#whatsnew")).toEqual({ page: "whatsnew", arg: null });
+  expect(navPage("whatsnew")).toBe("about");
 });
 
 test("the first-launch guide is a page without a sidebar entry", () => {

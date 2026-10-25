@@ -45,6 +45,7 @@
     code: '<path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5M9.2 2.5 6.8 13.5"/>',
     bug: '<rect x="4.5" y="5" width="7" height="8.5" rx="3.5"/><path d="M6 2.5l1 1.5M10 2.5 9 4M2 8h2.5M11.5 8H14M2.5 12l2-1M13.5 12l-2-1M3 4.5l1.8 1M13 4.5l-1.8 1"/>',
     external: '<path d="M6 3H3.5A1.5 1.5 0 0 0 2 4.5v8A1.5 1.5 0 0 0 3.5 14h8a1.5 1.5 0 0 0 1.5-1.5V10M9 2h5v5M14 2 7.5 8.5"/>',
+    sparkle: '<path d="M7 2.5 8.3 6 11.5 7.3 8.3 8.6 7 12 5.7 8.6 2.5 7.3 5.7 6z"/><path d="M12.5 10.5v3M11 12h3"/>',
     scale: '<path d="M8 2v12M3 5h10M3 5l-1.8 4.5a2 2 0 0 0 3.6 0L3 5M13 5l-1.8 4.5a2 2 0 0 0 3.6 0L13 5M5.5 14h5"/>',
   } as const;
   export type IconName = keyof typeof PATHS;

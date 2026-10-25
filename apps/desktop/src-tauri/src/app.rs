@@ -96,12 +96,15 @@ pub fn tray_action(app: &tauri::AppHandle<Wry>, id: &str) {
         tray::ID_HISTORY => tray::open_settings(app, Some("history")),
         tray::ID_STATISTICS => tray::open_settings(app, Some("home")),
         tray::ID_ABOUT => tray::open_settings(app, Some("about")),
-        // The About page shows the update; without one found it looks again.
+        // A found update opens What's new, read before installing from the
+        // About page; without one found the About page looks again.
         tray::ID_UPDATE => {
-            tray::open_settings(app, Some("about"));
-            let found = app
-                .try_state::<crate::update::Updates>()
+            let updates = app.try_state::<crate::update::Updates>();
+            let found = updates
+                .as_ref()
                 .is_some_and(|u| matches!(u.status(), crate::update::Status::Available { .. }));
+            let notes = updates.as_ref().is_some_and(|u| !u.releases().is_empty());
+            tray::open_settings(app, Some(if found && notes { "whatsnew" } else { "about" }));
             if !found {
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
@@ -213,6 +216,7 @@ pub fn run() {
             crate::commands::system::system_app_icons,
             crate::commands::system::system_info,
             crate::commands::update::update_status,
+            crate::commands::update::update_releases,
             crate::commands::update::update_check,
             crate::commands::update::update_install,
             crate::commands::system::system_reveal,

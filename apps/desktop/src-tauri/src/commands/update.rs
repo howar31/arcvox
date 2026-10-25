@@ -3,11 +3,17 @@
 use tauri::{AppHandle, State, Wry};
 
 use super::{CmdError, CmdResult};
-use crate::update::{Status, Updates};
+use crate::update::{Release, Status, Updates};
 
 #[tauri::command]
 pub fn update_status(updates: State<'_, Updates>) -> Status {
     updates.status()
+}
+
+/// The releases the What's new page shows, newest first.
+#[tauri::command]
+pub fn update_releases(updates: State<'_, Updates>) -> Vec<Release> {
+    updates.releases()
 }
 
 #[tauri::command]

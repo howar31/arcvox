@@ -290,10 +290,13 @@ export type UpdateStatus =
 export const updateStatus = () => invoke<UpdateStatus>("update_status");
 export const updateCheck = () => invoke<UpdateStatus>("update_check");
 export const updateInstall = () => invoke<void>("update_install");
+/** A published release and its description. */
+export interface Release { version: string; notes: string }
+export const updateReleases = () => invoke<Release[]>("update_releases");
 export function onUpdateStatus(cb: (s: UpdateStatus) => void): Promise<UnlistenFn> { return listen<UpdateStatus>("update-status", (e) => cb(e.payload)); }
 export const reveal = (path: string) => invoke<void>("system_reveal", { path });
 export const openFolder = (path: string) => invoke<void>("system_open_folder", { path });
-export type AboutLink = "sponsor" | "source" | "issue" | "website";
+export type AboutLink = "sponsor" | "source" | "issue" | "website" | "releases";
 export const openLink = (link: AboutLink) => invoke<void>("system_open_link", { link });
 export const uiLanguage = () => invoke<string>("ui_language");
 export const widgetCopy = (text: string) => invoke<void>("widget_copy", { text });

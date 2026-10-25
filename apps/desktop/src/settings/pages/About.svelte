@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { errorMessage, onUpdateStatus, openLink, reveal, systemInfo, updateCheck, updateInstall, updateStatus, type AboutLink, type SystemInfo, type UpdateStatus } from "../../lib/api";
+  import { errorMessage, onUpdateStatus, openLink, reveal, systemInfo, updateCheck, updateInstall, updateReleases, updateStatus, type AboutLink, type Release, type SystemInfo, type UpdateStatus } from "../../lib/api";
   import { currentLanguage, t } from "../../lib/i18n";
-  import { releaseNotes } from "../../lib/releaseNotes";
+  import { sections, title } from "../../lib/whatsNew";
   import { tip } from "../../lib/tip";
   import { go } from "../../lib/route";
   import { toast } from "../../lib/ui/toast.svelte";
@@ -15,7 +15,8 @@
 
   let info = $state<SystemInfo | null>(null);
   let update = $state<UpdateStatus>({ state: "idle" });
-  const notes = $derived(update.state === "available" ? releaseNotes(update.notes, currentLanguage()) : []);
+  let releases = $state<Release[]>([]);
+  const whatsNew = $derived(title(sections(releases, currentLanguage()), t));
   const percent = $derived(update.state === "installing" && update.total ? Math.min(100, Math.round((update.received / update.total) * 100)) : 0);
   const links: { link: AboutLink; icon: IconName; label: string }[] = [
     { link: "sponsor", icon: "heart", label: "about.sponsor" },
@@ -27,7 +28,10 @@
   onMount(() => {
     systemInfo().then((i) => { info = i; }).catch((e) => toast.error(errorMessage(e)));
     updateStatus().then((s) => { update = s; }).catch(() => {});
-    const off = onUpdateStatus((s) => { update = s; });
+    const loadReleases = () => updateReleases().then((r) => { releases = r; }).catch(() => {});
+    loadReleases();
+    // The releases are read before a state is announced.
+    const off = onUpdateStatus((s) => { update = s; loadReleases(); });
     return () => { off.then((f) => f()); };
   });
 
@@ -76,13 +80,11 @@
   {/if}
 </div>
 
-{#if update.state === "available" && notes.length}
-  <Group title={t("about.update.notes", { version: update.version })}>
-    {#each notes as n, i (i)}
-      <Row>
-        <div class="note">{#if n.lead}<b>{n.lead}</b>{/if}{#if n.lead && n.detail}<span class="sep">{t("about.update.note_sep")}</span>{/if}<span>{n.detail}</span></div>
-      </Row>
-    {/each}
+{#if whatsNew}
+  <Group>
+    <Row label={whatsNew} onclick={() => go("whatsnew")}>
+      {#snippet leading()}<span class="lead"><Icon name="sparkle" size={18} /></span>{/snippet}
+    </Row>
   </Group>
 {/if}
 
@@ -128,7 +130,5 @@
   .update .bad { color: var(--live); }
   .update .bar { width: 160px; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
   .update .bar i { display: block; height: 100%; background: var(--accent); }
-  .note { line-height: 1.5; }
-  .note .sep { color: var(--ink-3); }
   .foot { margin-top: 40px; text-align: center; color: var(--ink-3); font-size: var(--text-xs); line-height: 1.7; }
 </style>

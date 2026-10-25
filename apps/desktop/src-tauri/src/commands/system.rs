@@ -444,6 +444,7 @@ fn link_url(link: &str) -> Option<&'static str> {
         "source" => "https://github.com/howar31/arcvox",
         "issue" => "https://github.com/howar31/arcvox/issues/new/choose",
         "website" => "https://arcvox.howar31.com/",
+        "releases" => "https://github.com/howar31/arcvox/releases",
         _ => return None,
     })
 }

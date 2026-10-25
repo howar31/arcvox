@@ -820,6 +820,7 @@ const SETTINGS_PAGES: &[&str] = &[
     "models",
     "speed",
     "about",
+    "whatsnew",
     "welcome",
 ];
 
