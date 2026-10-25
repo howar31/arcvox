@@ -376,6 +376,12 @@
           {#if r.model?.custom}<Tag title={t("engines.tip.imported")}>{t("engines.tag.imported")}</Tag>{/if}
           {#if recommended(r.id)}<Tag tone="accent" title={t("engines.tip.recommended")}>{t("engines.recommended")}</Tag>{/if}
           {@render defaultTag(r.engine)}
+          {#if r.state === "installed" && r.model?.update}
+            {@const up = progress[r.id]}
+            {#if up && !up.done}<Tag tone="warn">{t("engines.downloading")}</Tag>
+            {:else if up?.error}<Tag tone="warn" title={up.error}>{t("engines.download_failed")}</Tag>
+            {:else}<Tag tone="accent" title={t("engines.tip.update")}>{t("engines.update_tag")}</Tag>{/if}
+          {/if}
           {#if r.state === "downloading"}<Tag tone="warn">{t("engines.downloading")}</Tag>
           {:else if r.state === "error"}<Tag tone={rowLevel(r) ?? "warn"} title={r.error}>{t("engines.download_failed")}</Tag>
           {:else if r.state === "gone"}<Tag tone={rowLevel(r) ?? "warn"} title={t("engines.tip.file_missing")}>{t("engines.file_missing")}</Tag>
@@ -389,7 +395,13 @@
         {#if r.state === "error"}<small class="probe bad">{r.error}</small>{/if}
         {@render probeLine(r.id)}
       </div>
-      {#if r.state === "installed"}
+      {#if r.state === "installed" && progress[r.id] && !progress[r.id].done}
+        {@const pct = percent(progress[r.id].received, progress[r.id].total)}
+        <div class="bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label={r.label}><i style:width="{pct}%"></i></div>
+        <span class="sub num pct">{pct}%</span>
+        <button type="button" class="btn quiet" onclick={() => cancel(r.id)}>{t("common.cancel")}</button>
+      {:else if r.state === "installed"}
+        {#if r.model?.update}<button type="button" class="btn" onclick={() => download(r.id)}><Icon name="download" />{t("engines.update")}</button>{/if}
         {#if !(r.model && encoderMissing(r.model))}{@render defaultButton(r.engine)}{/if}
         {#if r.engine && !(r.model && encoderMissing(r.model))}<button type="button" class="btn quiet" onclick={() => test(r.engine!)} disabled={rowProbes[r.id]?.state === "wait"}>{t("engines.test")}</button>{/if}
         <button type="button" class="btn quiet danger" onclick={() => { deleting = r.model; }}>{t("engines.delete_model")}</button>

@@ -54,7 +54,7 @@ describe("labels", () => {
   it("names an installed model: its catalogue label, else its id, or the file name when imported", () => {
     const m = (id: string, custom = false, path = `/m/${id}.bin`): InstalledModel => ({
       id, runtime: "whisper", path, size_bytes: 1, custom,
-      capabilities: { transcribe: true, chat: false, streaming: false, language_hint: true, hotwords: true }, encoder: null, facts: { shape: null, quantization: null, license: null },
+      capabilities: { transcribe: true, chat: false, streaming: false, language_hint: true, hotwords: true }, encoder: null, facts: { shape: null, quantization: null, license: null }, update: false,
     });
     expect(modelLabel(manifest, m("breeze-asr-25-q5_0"))).toBe("Breeze-ASR-25 (q5_0)");
     expect(modelLabel(null, m("unknown-id"))).toBe("unknown-id");

@@ -15,6 +15,71 @@ use url::Url;
 
 const CUSTOM_DIR: &str = "custom";
 const MANIFEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// The files a catalogue download put in a model's folder, written once they
+/// are checked. Hidden, so no catalogue file name can take it.
+const RECORD: &str = ".installed.json";
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+struct RecordFile {
+    file: String,
+    sha256: String,
+}
+
+/// What is installed in a model's folder: the folder keeps working when the
+/// catalogue later names other files, and a catalogue entry whose files
+/// changed shows as an update.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+struct Record {
+    model: RecordFile,
+    #[serde(default)]
+    mmproj: Option<RecordFile>,
+}
+
+impl Record {
+    fn of(entry: &ModelEntry) -> Record {
+        Record {
+            model: RecordFile {
+                file: entry.file_name(),
+                sha256: entry.sha256.clone(),
+            },
+            mmproj: entry.mmproj.as_ref().map(|m| RecordFile {
+                file: m.file_name(),
+                sha256: m.sha256.clone(),
+            }),
+        }
+    }
+
+    fn files(&self) -> impl Iterator<Item = &RecordFile> {
+        std::iter::once(&self.model).chain(self.mmproj.as_ref())
+    }
+
+    fn named(&self, file: &str) -> Option<&RecordFile> {
+        self.files().find(|f| f.file == file)
+    }
+
+    /// The same bytes, whatever the files are called.
+    fn same_bytes(&self, other: &Record) -> bool {
+        let same = |a: &RecordFile, b: &RecordFile| a.sha256.eq_ignore_ascii_case(&b.sha256);
+        same(&self.model, &other.model)
+            && match (&self.mmproj, &other.mmproj) {
+                (Some(a), Some(b)) => same(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+
+    fn safe(&self) -> bool {
+        self.files().all(|f| safe_segment(&f.file))
+    }
+}
+
+/// A catalogue model's files in its folder.
+struct CatalogueFiles {
+    path: PathBuf,
+    encoder: Option<PathBuf>,
+    /// The catalogue lists other bytes than the ones installed.
+    update: bool,
+}
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct InstalledModel {
@@ -32,6 +97,8 @@ pub struct InstalledModel {
     pub encoder: Option<PathBuf>,
     /// What the file's structure says about it.
     pub facts: ModelFacts,
+    /// The catalogue has other files for this model than the ones installed.
+    pub update: bool,
 }
 
 impl InstalledModel {
@@ -47,6 +114,7 @@ impl InstalledModel {
             capabilities: m.capabilities,
             encoder: m.encoder,
             facts: m.facts,
+            update: false,
         })
     }
 
@@ -214,6 +282,65 @@ impl ModelStore {
         safe_segment(&file).then(|| main.with_file_name(file))
     }
 
+    fn read_record(&self, id: &str) -> Option<Record> {
+        let text = std::fs::read_to_string(self.models_dir().join(id).join(RECORD)).ok()?;
+        serde_json::from_str::<Record>(&text)
+            .ok()
+            .filter(Record::safe)
+    }
+
+    fn write_record(&self, id: &str, record: &Record) -> std::io::Result<()> {
+        let dir = self.models_dir().join(id);
+        let tmp = dir.join(format!("{RECORD}.tmp"));
+        std::fs::write(&tmp, serde_json::to_vec_pretty(record)?)?;
+        std::fs::rename(&tmp, dir.join(RECORD))
+    }
+
+    /// The record of a catalogue model's folder. A folder from before records
+    /// whose files are the ones the catalogue names was checked against the
+    /// same entry when it arrived, so the record is written from the entry.
+    fn record_or_adopt(&self, manifest: &Manifest, id: &str) -> Option<Record> {
+        if let Some(r) = self.read_record(id) {
+            return Some(r);
+        }
+        let entry = manifest.get(id)?;
+        let complete = self.path_in(manifest, id).is_file()
+            && self
+                .encoder_path_in(manifest, id)
+                .is_none_or(|p| p.is_file());
+        if !complete {
+            return None;
+        }
+        let record = Record::of(entry);
+        if let Err(e) = self.write_record(id, &record) {
+            tracing::warn!(model = id, error = %e, "model record not written");
+        }
+        Some(record)
+    }
+
+    /// Where a catalogue model's files are: the ones its record names, else,
+    /// for a folder from before records, the only model in the folder.
+    fn catalogue_files(&self, manifest: &Manifest, entry: &ModelEntry) -> Option<CatalogueFiles> {
+        let dir = self.models_dir().join(&entry.id);
+        match self.record_or_adopt(manifest, &entry.id) {
+            Some(r) => {
+                let path = dir.join(&r.model.file);
+                let encoder = r.mmproj.as_ref().map(|m| dir.join(&m.file));
+                let complete = path.is_file() && encoder.as_ref().is_none_or(|p| p.is_file());
+                complete.then(|| CatalogueFiles {
+                    path,
+                    encoder,
+                    update: !r.same_bytes(&Record::of(entry)),
+                })
+            }
+            None => lone_model(&dir).map(|m| CatalogueFiles {
+                path: m.path,
+                encoder: m.encoder,
+                update: true,
+            }),
+        }
+    }
+
     pub fn installed(&self) -> Vec<InstalledModel> {
         let manifest = self.known_manifest();
         let mut out = Vec::new();
@@ -226,24 +353,25 @@ impl ModelStore {
             if id == CUSTOM_DIR || !safe_segment(&id) || !entry.path().is_dir() {
                 continue;
             }
-            let found = match manifest.get(&id) {
-                Some(e) => {
-                    let path = self.path_in(&manifest, &id);
-                    let encoder = self.encoder_path_in(&manifest, &id);
-                    let complete = path.is_file() && encoder.as_ref().is_none_or(|p| p.is_file());
-                    complete.then(|| FoundModel {
-                        facts: file_facts(&path),
-                        path,
-                        runtime: e.runtime,
-                        capabilities: e.capabilities(),
-                        encoder,
-                    })
-                }
+            let (found, update) = match manifest.get(&id) {
+                Some(e) => match self.catalogue_files(&manifest, e) {
+                    Some(f) => (
+                        Some(FoundModel {
+                            facts: file_facts(&f.path),
+                            path: f.path,
+                            runtime: e.runtime,
+                            capabilities: e.capabilities(),
+                            encoder: f.encoder,
+                        }),
+                        f.update,
+                    ),
+                    None => (None, false),
+                },
                 // Left over from a catalogue that no longer lists it: accept a lone model.
-                None => lone_model(&entry.path()),
+                None => (lone_model(&entry.path()), false),
             };
             if let Some(m) = found.and_then(|m| InstalledModel::found(id, m, false)) {
-                out.push(m);
+                out.push(InstalledModel { update, ..m });
             }
         }
         out.sort_by(|a, b| a.id.cmp(&b.id));
@@ -295,11 +423,10 @@ impl ModelStore {
         }
         let manifest = self.known_manifest();
         let path = match manifest.get(id) {
-            Some(_) => self.path_in(&manifest, id),
-            None => lone_model(&self.models_dir().join(id))
-                .map(|m| m.path)
-                .ok_or_else(|| ModelError::NotInstalled(id.to_string()))?,
-        };
+            Some(e) => self.catalogue_files(&manifest, e).map(|f| f.path),
+            None => lone_model(&self.models_dir().join(id)).map(|m| m.path),
+        }
+        .ok_or_else(|| ModelError::NotInstalled(id.to_string()))?;
         if path.is_file() {
             Ok(path)
         } else {
@@ -313,12 +440,11 @@ impl ModelStore {
         let main = self.resolve(cfg)?;
         if cfg.model_path.is_none() {
             let manifest = self.known_manifest();
-            if let Some(id) = cfg
-                .model_id
-                .as_deref()
-                .filter(|id| manifest.get(id).is_some())
-            {
-                return Ok(self.encoder_path_in(&manifest, id).filter(|p| p.is_file()));
+            if let Some(entry) = cfg.model_id.as_deref().and_then(|id| manifest.get(id)) {
+                return Ok(self
+                    .catalogue_files(&manifest, entry)
+                    .and_then(|f| f.encoder)
+                    .filter(|p| p.is_file()));
             }
         }
         Ok(kind::encoder_beside(&main))
@@ -485,10 +611,24 @@ impl ModelStore {
         }
         let dir = dest.parent().expect("model path has a parent");
         tokio::fs::create_dir_all(dir).await?;
+        let old = self.read_record(&entry.id);
+        // A file arrives in place only after its check: it stays unless the
+        // record says it holds other bytes than the catalogue's.
+        let in_place = |path: &Path, sha256: &str| {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            path.is_file()
+                && old
+                    .as_ref()
+                    .and_then(|r| r.named(&name))
+                    .is_none_or(|f| f.sha256.eq_ignore_ascii_case(sha256))
+        };
         let total = entry.total_bytes();
         let mut missing = 0u64;
-        for (_, _, size, path) in &files {
-            if !path.is_file() {
+        for (_, sha256, size, path) in &files {
+            if !in_place(path, sha256) {
                 let existing = tokio::fs::metadata(part_of(path))
                     .await
                     .map(|m| m.len())
@@ -504,7 +644,7 @@ impl ModelStore {
         }
         let mut before = 0u64;
         for (url, sha256, size, path) in &files {
-            if !path.is_file() {
+            if !in_place(path, sha256) {
                 let part = part_of(path);
                 let tx = self.progress.clone();
                 let id = entry.id.clone();
@@ -540,6 +680,16 @@ impl ModelStore {
             }
             before += size;
         }
+        let record = Record::of(entry);
+        self.write_record(&entry.id, &record)?;
+        // What else the folder holds is from a version before; it goes once
+        // the new files are in place.
+        for item in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let name = item.file_name().to_string_lossy().into_owned();
+            if safe_segment(&name) && record.named(&name).is_none() && item.path().is_file() {
+                let _ = tokio::fs::remove_file(item.path()).await;
+            }
+        }
         Ok(InstalledModel {
             id: entry.id.clone(),
             runtime: entry.runtime,
@@ -549,6 +699,7 @@ impl ModelStore {
             custom: false,
             capabilities: entry.capabilities(),
             encoder,
+            update: false,
         })
     }
 

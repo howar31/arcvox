@@ -28,12 +28,12 @@ describe("rowStatus", () => {
     expect(rowStatus(entry, [], { a: { id: "a", received: 4, total: 10, done: false, error: null } })).toEqual({ kind: "downloading", received: 4, total: 10 });
   });
   it("is installed when the file exists", () => {
-    expect(rowStatus(entry, [{ id: "a", runtime: "whisper", path: "/p", size_bytes: 10, custom: false, capabilities: caps, encoder: null, facts: { shape: null, quantization: null, license: null } }], {})).toEqual({ kind: "installed", size: 10, custom: false });
+    expect(rowStatus(entry, [{ id: "a", runtime: "whisper", path: "/p", size_bytes: 10, custom: false, capabilities: caps, encoder: null, facts: { shape: null, quantization: null, license: null }, update: false }], {})).toEqual({ kind: "installed", size: 10, custom: false });
   });
   it("shows the error from a finished failed download", () => {
     expect(rowStatus(entry, [], { a: { id: "a", received: 0, total: 10, done: true, error: "checksum mismatch" } })).toEqual({ kind: "error", message: "checksum mismatch" });
   });
   it("installed wins over a stale error", () => {
-    expect(rowStatus(entry, [{ id: "a", runtime: "whisper", path: "/p", size_bytes: 10, custom: false, capabilities: caps, encoder: null, facts: { shape: null, quantization: null, license: null } }], { a: { id: "a", received: 0, total: 10, done: true, error: "x" } }).kind).toBe("installed");
+    expect(rowStatus(entry, [{ id: "a", runtime: "whisper", path: "/p", size_bytes: 10, custom: false, capabilities: caps, encoder: null, facts: { shape: null, quantization: null, license: null }, update: false }], { a: { id: "a", received: 0, total: 10, done: true, error: "x" } }).kind).toBe("installed");
   });
 });

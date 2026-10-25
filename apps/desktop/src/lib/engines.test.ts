@@ -7,7 +7,7 @@ import { ASR_CAPS, blankFor, LLM_CAPS } from "./providerForm";
 const provider = (id: string, extra: Partial<ProviderConfig>): ProviderConfig => ({ ...blankFor("embedded"), id, label: id, ...extra });
 const file = (id: string, runtime: "whisper" | "llama", custom = false): InstalledModel => ({
   id, runtime, path: `/models/${id}${custom ? "" : "/model.bin"}`, size_bytes: 1, custom,
-  capabilities: runtime === "whisper" ? { ...ASR_CAPS } : { ...LLM_CAPS }, encoder: null, facts: { shape: null, quantization: null, license: null },
+  capabilities: runtime === "whisper" ? { ...ASR_CAPS } : { ...LLM_CAPS }, encoder: null, facts: { shape: null, quantization: null, license: null }, update: false,
 });
 const entry = (id: string, role: "asr" | "llm", recommended: boolean): ModelEntry => ({
   id, runtime: role === "asr" ? "whisper" : "llama", role, label: id, description: "", languages: [], url: "", sha256: "",

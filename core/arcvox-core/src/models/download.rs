@@ -162,6 +162,137 @@ mod tests {
         )
     }
 
+    fn body2() -> Vec<u8> {
+        (0..80_000u32).map(|i| (i % 241) as u8).collect()
+    }
+
+    /// Serves `body()` at `/m.bin` and `body2()` at `/m2.bin`.
+    async fn server_with_two() -> wiremock::MockServer {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let s = MockServer::start().await;
+        Mock::given(wiremock::matchers::path("/m.bin"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body()))
+            .mount(&s)
+            .await;
+        Mock::given(wiremock::matchers::path("/m2.bin"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body2()))
+            .mount(&s)
+            .await;
+        s
+    }
+
+    fn manifest_with(url: &str, sha256: &str, size: u64) -> String {
+        format!(
+            r#"{{"schema_version":1,"models":[{{"id":"m","runtime":"whisper","role":"asr","label":"M","url":"{url}","sha256":"{sha256}","size_bytes":{size},"license":"MIT","recommended":true}}]}}"#
+        )
+    }
+
+    fn cfg() -> crate::config::ProviderConfig {
+        crate::config::ProviderConfig::embedded("e", "E", crate::config::Runtime::Whisper, "m")
+    }
+
+    /// The first version, installed from `/m.bin`; the store is then dropped.
+    async fn install_first(tmp: &std::path::Path, s: &wiremock::MockServer) -> std::path::PathBuf {
+        let m = manifest_with(
+            &format!("{}/m.bin", s.uri()),
+            &sha(&body()),
+            body().len() as u64,
+        );
+        store_for(tmp, m).download("m").await.unwrap().path
+    }
+
+    #[tokio::test]
+    async fn a_renamed_catalogue_file_keeps_the_installed_model() {
+        let s = server_with_two().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let first = install_first(tmp.path(), &s).await;
+        // Same bytes under another name.
+        let m = manifest_with(
+            &format!("{}/other.bin", s.uri()),
+            &sha(&body()),
+            body().len() as u64,
+        );
+        let store = store_for(tmp.path(), m);
+        let listed = store.installed();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].path, first);
+        assert!(!listed[0].update);
+        assert_eq!(store.resolve(&cfg()).unwrap(), first);
+    }
+
+    #[tokio::test]
+    async fn changed_bytes_are_an_update_that_replaces_the_files() {
+        let s = server_with_two().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let first = install_first(tmp.path(), &s).await;
+        let m = manifest_with(
+            &format!("{}/m2.bin", s.uri()),
+            &sha(&body2()),
+            body2().len() as u64,
+        );
+        let store = store_for(tmp.path(), m);
+        assert!(store.installed()[0].update);
+        // The version before keeps working until the update is in place.
+        assert_eq!(store.resolve(&cfg()).unwrap(), first);
+        let updated = store.download("m").await.unwrap();
+        assert_eq!(std::fs::read(&updated.path).unwrap(), body2());
+        assert!(!first.exists());
+        let listed = store.installed();
+        assert_eq!(listed[0].path, updated.path);
+        assert!(!listed[0].update);
+    }
+
+    #[tokio::test]
+    async fn new_bytes_under_the_same_name_are_downloaded_again() {
+        let s = server_with_two().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let first = install_first(tmp.path(), &s).await;
+        let s2 = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::path("/m.bin"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_bytes(body2()))
+            .mount(&s2)
+            .await;
+        let m = manifest_with(
+            &format!("{}/m.bin", s2.uri()),
+            &sha(&body2()),
+            body2().len() as u64,
+        );
+        let store = store_for(tmp.path(), m);
+        assert!(store.installed()[0].update);
+        let updated = store.download("m").await.unwrap();
+        assert_eq!(updated.path, first);
+        assert_eq!(std::fs::read(&first).unwrap(), body2());
+        assert!(!store.installed()[0].update);
+    }
+
+    #[tokio::test]
+    async fn a_failed_update_keeps_the_version_before() {
+        let s = server_with_two().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let first = install_first(tmp.path(), &s).await;
+        let m = manifest_with(&format!("{}/m2.bin", s.uri()), "00", body2().len() as u64);
+        let store = store_for(tmp.path(), m);
+        let err = store.download("m").await.unwrap_err();
+        assert!(matches!(err, ModelError::Sha256Mismatch { .. }));
+        assert_eq!(std::fs::read(&first).unwrap(), body());
+        assert_eq!(store.resolve(&cfg()).unwrap(), first);
+        assert!(store.installed()[0].update);
+    }
+
+    #[tokio::test]
+    async fn a_folder_from_before_records_is_taken_as_the_catalogue_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let m = manifest_with("https://h/m.bin", &sha(&body()), body().len() as u64);
+        let store = store_for(tmp.path(), m);
+        let path = store.model_path("m");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, body()).unwrap();
+        let listed = store.installed();
+        assert_eq!(listed[0].path, path);
+        assert!(!listed[0].update);
+        assert!(path.parent().unwrap().join(".installed.json").is_file());
+    }
+
     #[tokio::test]
     async fn downloads_verifies_and_reports_progress() {
         let s = server_with_range().await;
