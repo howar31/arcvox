@@ -3,7 +3,7 @@
   import { onMount, untrack } from "svelte";
   import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
-  import { errorMessage, openRecordingsDir, recordingsDir, setRecordingsDir, type RecordingsDir, listDisplays, listMicrophones, onWidgetPlacing, onWidgetPreviewScene, widgetIsPlacing, widgetPreview, openPrivacyPane, permissions, requestAccessibility, requestMicrophone, updateGeneral, widgetPlacing, widgetResetPosition, type ClientSettings, type DisplayName, type General, type InsertMethod, type Permissions } from "../../lib/api";
+  import { errorMessage, openRecordingsDir, recordingsDir, setRecordingsDir, type RecordingsDir, listDisplays, listMicrophones, onDisplaysChanged, onWidgetPlacing, onWidgetPreviewScene, widgetIsPlacing, widgetPreview, openPrivacyPane, permissions, requestAccessibility, requestMicrophone, updateGeneral, widgetPlacing, widgetResetPosition, type ClientSettings, type DisplayName, type General, type InsertMethod, type Permissions } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { t } from "../../lib/i18n";
   import { client, config, defaults } from "../../lib/store.svelte";
@@ -226,7 +226,9 @@
   let displays = $state<DisplayName[]>([]);
 
   onMount(() => {
-    listDisplays().then((d) => { displays = d; }).catch(() => {});
+    const loadDisplays = () => { listDisplays().then((d) => { displays = d; }).catch(() => {}); };
+    loadDisplays();
+    const plugged = onDisplaysChanged(loadDisplays);
     // The same switch is in the menus.
     const placed = onWidgetPlacing((on) => { stopDemo(); scene = "place"; placing = on; });
     // A real dictation or a drag took the place of the state that was shown.
@@ -241,6 +243,7 @@
     window.addEventListener("focus", onFocus);
     return () => {
       window.removeEventListener("focus", onFocus);
+      plugged.then((off) => off());
       placed.then((off) => off());
       scened.then((off) => off());
       stopDemo();

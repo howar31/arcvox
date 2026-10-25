@@ -485,6 +485,14 @@ impl Layout {
         );
     }
 
+    /// A display was connected, disconnected or rearranged: a widget on
+    /// screen goes to its place on the display it now belongs on.
+    pub fn displays_changed<R: Runtime>(&mut self, app: &AppHandle<R>) {
+        if self.display.is_some() && self.drag.is_none() {
+            self.place(app);
+        }
+    }
+
     /// Forgets every saved position.
     pub fn reset<R: Runtime>(&mut self, app: &AppHandle<R>) {
         self.positions.positions.clear();
@@ -506,18 +514,15 @@ impl Layout {
         };
         let displays = displays(app);
         let rects: Vec<Rect> = displays.iter().map(|d| d.rect).collect();
-        let named = |key: &Option<String>| {
-            key.as_ref()
-                .and_then(|key| displays.iter().position(|d| &d.key == key))
-        };
+        let keys: Vec<&str> = displays.iter().map(|d| d.key.as_str()).collect();
         let under_pointer = || pointer(app).and_then(|p| placement::display_at(&rects, p));
-        // The display the user chose, while it is connected; else the one
-        // the widget is on, or the one under the pointer when it appears.
-        let Some(display) = named(&self.fixed)
-            .or_else(|| named(&self.display))
-            .or_else(under_pointer)
-            .and_then(|i| displays.get(i))
-        else {
+        let Some(display) = placement::choose_display(
+            &keys,
+            self.fixed.as_deref(),
+            self.display.as_deref(),
+            under_pointer,
+        )
+        .and_then(|i| displays.get(i)) else {
             return;
         };
         self.display = Some(display.key.clone());

@@ -308,6 +308,12 @@ impl TauriUi {
             .run_on_main_thread(move || layout.lock().unwrap().set_fixed(&app, display));
     }
 
+    /// A display was connected, disconnected or rearranged. Main thread only.
+    pub fn displays_changed(&self) {
+        self.layout.lock().unwrap().displays_changed(&self.app);
+        let _ = self.app.emit_to(SETTINGS, "displays-changed", ());
+    }
+
     /// Opens the menu of the menu-bar icon over the widget, at the pointer.
     pub fn popup_menu(&self) {
         let app = self.app.clone();

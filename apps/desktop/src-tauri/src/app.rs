@@ -550,6 +550,11 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         &dirs.config_dir,
     )?);
     ui.set_display(settings.widget_display.clone());
+    #[cfg(target_os = "macos")]
+    {
+        let ui = ui.clone();
+        crate::platform::macos::screens::watch(Box::new(move || ui.displays_changed()));
+    }
     ui.set_idle(settings.widget_idle);
     ui.set_fade(settings.widget_fade);
 

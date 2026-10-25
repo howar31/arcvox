@@ -345,7 +345,6 @@ pub fn anchor_after_drag(display: Rect, dropped: Rect, wide: f64) -> Anchor {
     }
 }
 
-/// The display that contains the point, else the nearest one.
 /// Whether a drop on the display `dropped` is kept as that display's
 /// position. Not when the widget stays on another display that is
 /// connected: it goes back there, and the place it was let go at was not
@@ -357,6 +356,22 @@ pub fn keeps_drop(fixed: Option<&str>, connected: &[&str], dropped: &str) -> boo
     }
 }
 
+/// The display the widget goes on: the one the user chose while it is
+/// connected, else the one it is on while that is still connected, else
+/// the one under the pointer.
+pub fn choose_display(
+    keys: &[&str],
+    fixed: Option<&str>,
+    current: Option<&str>,
+    under_pointer: impl FnOnce() -> Option<usize>,
+) -> Option<usize> {
+    let named = |key: Option<&str>| key.and_then(|key| keys.iter().position(|k| *k == key));
+    named(fixed)
+        .or_else(|| named(current))
+        .or_else(under_pointer)
+}
+
+/// The display that contains the point, else the nearest one.
 pub fn display_at(displays: &[Rect], point: (f64, f64)) -> Option<usize> {
     displays.iter().position(|d| d.contains(point)).or_else(|| {
         displays
@@ -413,6 +428,31 @@ mod tests {
         assert!(!keeps_drop(Some("A"), &connected, "B"));
         // The chosen display is not connected: the widget stays where it is dropped.
         assert!(keeps_drop(Some("C"), &connected, "B"));
+    }
+
+    #[test]
+    fn the_widget_goes_on_the_chosen_display_then_its_own_then_the_pointers() {
+        let both = ["A", "B"];
+        let pointer = || Some(0);
+        assert_eq!(
+            choose_display(&both, Some("B"), Some("A"), pointer),
+            Some(1)
+        );
+        // The chosen display was unplugged: the widget stays on the one it is on.
+        let one = ["A"];
+        assert_eq!(choose_display(&one, Some("B"), Some("A"), pointer), Some(0));
+        // The display it was on was unplugged too: the one under the pointer.
+        let other = ["C", "D"];
+        assert_eq!(
+            choose_display(&other, Some("B"), Some("A"), || Some(1)),
+            Some(1)
+        );
+        // The chosen display is plugged in again: the widget goes back there.
+        assert_eq!(
+            choose_display(&both, Some("B"), Some("A"), pointer),
+            Some(1)
+        );
+        assert_eq!(choose_display(&[], None, None, || None), None);
     }
 
     const MAIN: Rect = Rect {

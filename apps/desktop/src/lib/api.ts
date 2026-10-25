@@ -264,6 +264,8 @@ export const listMicrophones = () => invoke<string[]>("system_list_microphones")
 /** A connected display: the key the setting stores, and the name the system shows for it. */
 export interface DisplayName { key: string; name: string }
 export const listDisplays = () => invoke<DisplayName[]>("system_list_displays");
+/** A display was connected, disconnected or rearranged. */
+export function onDisplaysChanged(cb: () => void): Promise<UnlistenFn> { return listen("displays-changed", () => cb()); }
 export const permissions = () => invoke<Permissions>("system_permissions");
 export const requestAccessibility = () => invoke<boolean>("system_request_accessibility");
 export const requestMicrophone = () => invoke<MicAccess>("system_request_microphone");
