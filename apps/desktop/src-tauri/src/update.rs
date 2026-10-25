@@ -190,6 +190,16 @@ pub async fn install(app: &AppHandle<tauri::Wry>) -> Result<(), String> {
     match update.download_and_install(progress, || {}).await {
         Ok(()) => {
             tracing::info!(version = %version, "update installed, restarting");
+            #[cfg(target_os = "macos")]
+            {
+                if let Err(e) = relaunch_after_exit() {
+                    tracing::warn!(error = %e, "the app will not start again by itself");
+                }
+                // The usual exit, the same as Quit in the menu-bar menu.
+                app.exit(0);
+                Ok(())
+            }
+            #[cfg(not(target_os = "macos"))]
             app.restart();
         }
         Err(e) => {
@@ -207,6 +217,34 @@ pub async fn install(app: &AppHandle<tauri::Wry>) -> Result<(), String> {
             Err(e.to_string())
         }
     }
+}
+
+/// Starts the app again once this process has ended: a detached shell waits
+/// for the process id to go away, then opens the bundle, which by then holds
+/// the new version. The app's exit ends the process with `_exit`, so a
+/// relaunch has to come from outside the process.
+#[cfg(target_os = "macos")]
+fn relaunch_after_exit() -> std::io::Result<()> {
+    use std::process::{Command, Stdio};
+    let exe = std::env::current_exe()?;
+    let bundle = exe
+        .ancestors()
+        .find(|p| p.extension().is_some_and(|e| e == "app"))
+        .ok_or_else(|| std::io::Error::other("not inside an app bundle"))?;
+    // The bundle path goes in as $0, so no quoting is needed.
+    let script = format!(
+        "while /bin/kill -0 {} 2>/dev/null; do /bin/sleep 0.1; done; /usr/bin/open \"$0\"",
+        std::process::id()
+    );
+    Command::new("/bin/sh")
+        .arg("-c")
+        .arg(script)
+        .arg(bundle)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    Ok(())
 }
 
 #[cfg(test)]
