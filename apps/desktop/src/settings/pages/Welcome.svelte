@@ -49,6 +49,18 @@
   const listening = $derived(dictation === "recording" || dictation === "locked");
   const busyRing = $derived(dictation === "processing" || dictation === "inserting");
 
+  // The language can be changed before anything is downloaded: the change
+  // reloads the window, which starts the guide over.
+  const languages = $derived([{ value: "system", label: t("general.lang_system") }, { value: "zh-tw", label: "正體中文" }, { value: "en", label: "English" }]);
+  async function setLanguage(value: string) {
+    const current = client.value;
+    if (!current || current.ui_language === value) return;
+    try {
+      await client.save({ ...$state.snapshot(current), ui_language: value as typeof current.ui_language });
+      location.reload();
+    } catch (e) { toast.error(errorMessage(e)); }
+  }
+
   function isInstalled(id: string) { return installedIds.has(id); }
   function progressOf(id: string) { return guide.progress[id]; }
   function pick(role: Role, id: string) {
@@ -174,6 +186,14 @@
 
 <div class="guide">
   <div class="titlebar" data-tauri-drag-region></div>
+  {#if guide.step === 1 && !guide.started && client.value}
+    <!-- Named in both languages, so it is found whichever one is shown. -->
+    <label class="lang"><span>Language · 語言</span>
+      <select value={client.value.ui_language} onchange={(e) => setLanguage(e.currentTarget.value)} aria-label={t("general.language")}>
+        {#each languages as l (l.value)}<option value={l.value}>{l.label}</option>{/each}
+      </select>
+    </label>
+  {/if}
   <header>
     <div class="brand"><Mark size={26} /><span><em>A</em>rcvox</span></div>
     <ol class="steps" aria-label={t("welcome.steps")}>
@@ -307,7 +327,9 @@
 </div>
 
 <style>
-  .guide { height: 100vh; display: flex; flex-direction: column; background: var(--page); }
+  .guide { position: relative; height: 100vh; display: flex; flex-direction: column; background: var(--page); }
+  .lang { position: absolute; top: 12px; right: 16px; display: flex; align-items: center; gap: 8px; color: var(--ink-3); font-size: var(--text-sm); }
+  .lang select { width: auto; }
   .titlebar { flex: none; height: var(--titlebar); }
   header { flex: none; display: flex; flex-direction: column; align-items: center; gap: 18px; padding-bottom: 8px; }
   .brand { display: flex; align-items: center; gap: 9px; font: 800 24px/1 var(--font-round); letter-spacing: -.035em; }
