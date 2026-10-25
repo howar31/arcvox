@@ -62,7 +62,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYyODFBNjEyN0E5NTY1ODgKUldTSVpaVjZFcWFCWXBLZnJTVWVCekFJd1FzVlM1WEIra1U0RmpJNGt4QVFiaDdCSEJFMmFmZDUK",
       "endpoints": ["https://github.com/howar31/arcvox/releases/latest/download/latest.json"],
       "requireSignedVersion": true
     }
