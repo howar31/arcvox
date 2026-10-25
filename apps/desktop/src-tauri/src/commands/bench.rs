@@ -281,7 +281,7 @@ fn clip_path(state: &State<'_, AppState>) -> std::path::PathBuf {
     state.dirs.bench_clip_path()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn bench_clip_status(state: State<'_, AppState>) -> CmdResult<ClipStatus> {
     Ok(clip_status(&clip_path(&state)))
 }
@@ -315,7 +315,7 @@ pub async fn bench_record_stop(state: State<'_, AppState>) -> CmdResult<ClipStat
     Ok(clip_status(&path))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn bench_history_candidates(state: State<'_, AppState>) -> CmdResult<Vec<ClipCandidate>> {
     history_candidates(&engine(&state)?.history())
 }

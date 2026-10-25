@@ -68,6 +68,22 @@ export function go(page: Page, arg?: string | null, section?: string | null): vo
 
 export type Route = ReturnType<typeof parseRoute>;
 
+/** How far a route sits under its sidebar entry: 0 on the entry's own page, 1 on a page under it, 2 under that. */
+export function depth(r: Route): number {
+  switch (r.page) {
+    case "whatsnew": case "prompt": case "speed": return 1;
+    case "licenses": return r.arg ? 2 : 1;
+    case "quality": return r.arg === "result" || r.arg === "compare" ? 2 : 1;
+    default: return 0;
+  }
+}
+
+/** 1 into a page under the current one, -1 back up towards the entry, 0 to another entry or at the same depth. */
+export function direction(from: Route, to: Route): -1 | 0 | 1 {
+  if (navPage(from.page) !== navPage(to.page)) return 0;
+  return Math.sign(depth(to) - depth(from)) as -1 | 0 | 1;
+}
+
 /**
  * Whether a hash change that did not go through the guard (for example one from the tray)
  * has to wait for the user: only when the page has unsaved changes and the route really changes.

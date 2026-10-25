@@ -4,7 +4,8 @@
   import { onProblemPages, problemPages, systemInfo, uiLanguage, type PageProblem, type SystemInfo } from "../lib/api";
   import { setLanguage, t, type Lang } from "../lib/i18n";
   import { client, config, defaults } from "../lib/store.svelte";
-  import { go, NAV, navPage, parseRoute, routeHash, routeSection, SETTINGS_PAGES, shouldIntercept, type SettingsPage } from "../lib/route";
+  import { direction, go, NAV, navPage, parseRoute, routeHash, routeSection, SETTINGS_PAGES, shouldIntercept, type SettingsPage } from "../lib/route";
+  import { cancelRestore, restoreScroll, slide } from "../lib/pageSlide";
   import { guard } from "../lib/guard.svelte";
   import { pause } from "../lib/pause.svelte";
   import Icon from "../lib/ui/Icon.svelte";
@@ -35,6 +36,9 @@
   // The version of this build, at the foot of the sidebar.
   let info = $state<SystemInfo | null>(null);
   let main: HTMLElement | undefined = $state();
+  let shell: HTMLElement | undefined = $state();
+  // Where a page was scrolled to when a page under it was opened, by route, for the way back.
+  const scrolledTo = new Map<string, number>();
   // Shown after a first press of the quit shortcut, for as long as a second press quits.
   let quitHint = $state(false);
   let quitTimer: ReturnType<typeof setTimeout> | undefined;
@@ -89,9 +93,24 @@
         guard.request(() => { location.hash = target; });
         return;
       }
-      if (next.page !== route.page) main?.scrollTo(0, 0);
-      route = next;
-      reveal(location.hash);
+      const dir = direction(route, next);
+      cancelRestore();
+      const nextKey = routeHash(next.page, next.arg);
+      if (dir > 0 && main) scrolledTo.set(routeHash(route.page, route.arg), main.scrollTop);
+      // The way back returns to where the page was left; the page renders first.
+      const back = dir < 0 ? scrolledTo.get(nextKey) : undefined;
+      if (dir < 0) scrolledTo.delete(nextKey);
+      const show = () => {
+        if (next.page !== route.page || dir) main?.scrollTo(0, 0);
+        route = next;
+        reveal(location.hash);
+        if (back && main && !routeSection(location.hash)) {
+          const el = main;
+          tick().then(() => restoreScroll(el, back));
+        }
+      };
+      if (dir && main && shell) slide(shell, main, dir, show);
+      else show();
     };
     const onFocus = () => { checkProblems(); };
     window.addEventListener("hashchange", onHash);
@@ -129,7 +148,7 @@
   <Welcome />
   <Toasts />
 {:else}
-  <div class="shell">
+  <div class="shell" bind:this={shell}>
     <aside class="sidebar">
       <div class="titlebar" data-tauri-drag-region></div>
       <div class="brand"><Mark size={25} /><span><em>A</em>rcvox</span></div>
@@ -194,7 +213,7 @@
 
 <style>
   .loading { height: 100vh; display: grid; place-items: center; color: var(--ink-2); }
-  .shell { display: grid; grid-template-columns: 248px minmax(0, 1fr); height: 100vh; }
+  .shell { display: grid; grid-template-columns: 248px minmax(0, 1fr); height: 100vh; overflow: hidden; }
   .sidebar { background: var(--sidebar); border-right: 1px solid var(--line); padding: 0 14px 14px; display: flex; flex-direction: column; gap: 3px; min-height: 0; overflow-y: auto; }
   /* The title bar is transparent and the content runs behind it; this band keeps the window controls clear and moves the window. */
   .titlebar { flex: none; height: var(--titlebar); }
@@ -216,7 +235,12 @@
   .version { margin-top: auto; padding: 16px; font-size: 11.5px; font-weight: 500; color: var(--ink-3); white-space: nowrap; }
   /* Positioned: absolutely placed descendants (visually hidden labels) stay inside the scroll area. */
   /* No scroll anchoring: a fold opening below the view must not drag the view along with it. */
-  .main { position: relative; overflow-x: hidden; overflow-y: auto; overflow-anchor: none; min-width: 0; }
+  .main { position: relative; z-index: 1; grid-area: 1 / 2; background: var(--page); overflow-x: hidden; overflow-y: auto; overflow-anchor: none; min-width: 0; }
+  /* The page sliding in over the copy of the one it covers (lib/pageSlide.ts). */
+  .main:global(.sliding) { box-shadow: -12px 0 32px rgba(0, 0, 0, .12); }
+  :global(.slide-shot) { grid-area: 1 / 2; position: relative; overflow: hidden; background: var(--page); pointer-events: none; }
+  :global(.slide-shot.under) { z-index: 0; }
+  :global(.slide-shot.over) { z-index: 2; box-shadow: -12px 0 32px rgba(0, 0, 0, .12); }
   /* Centered once the window is wider than the content; pages can lay themselves out by this width. */
   .page { padding: var(--page-top) var(--page-x) 80px; --page-max: 880px; max-width: var(--page-max); min-height: 100%; margin: 0 auto; container-type: inline-size; }
   /* Pages that show data use more of a wide window than pages of settings. */

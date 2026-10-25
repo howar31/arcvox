@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { NAV, navPage, parseRoute, routeHash, routeSection, shouldIntercept } from "./route";
+import { depth, direction, NAV, navPage, parseRoute, routeHash, routeSection, shouldIntercept } from "./route";
 
 test("a hash can name a section of the page", () => {
   expect(parseRoute("#general@permissions")).toEqual({ page: "general", arg: null });
@@ -100,4 +100,23 @@ test("the backup page is a settings entry of its own, after data", () => {
   expect(settings).toEqual(["general", "recording", "data", "storage", "backup"]);
   expect(parseRoute("#backup")).toEqual({ page: "backup", arg: null });
   expect(navPage("backup")).toBe("backup");
+});
+
+test("a page under an entry slides in, the way back slides out, other moves do not slide", () => {
+  const r = (hash: string) => parseRoute(hash);
+  expect(depth(r("#about"))).toBe(0);
+  expect(depth(r("#licenses"))).toBe(1);
+  expect(depth(r("#licenses/tokio"))).toBe(2);
+  expect(depth(r("#quality"))).toBe(1);
+  expect(depth(r("#quality/compare"))).toBe(2);
+  expect(direction(r("#about"), r("#whatsnew"))).toBe(1);
+  expect(direction(r("#licenses/tokio"), r("#about"))).toBe(-1);
+  expect(direction(r("#flow/default"), r("#prompt/rewrite"))).toBe(1);
+  expect(direction(r("#engines/llm"), r("#speed"))).toBe(1);
+  expect(direction(r("#quality/result"), r("#quality"))).toBe(-1);
+  // Another sidebar entry, a profile switch, a tab, a sibling package.
+  expect(direction(r("#licenses"), r("#engines"))).toBe(0);
+  expect(direction(r("#flow/a"), r("#flow/b"))).toBe(0);
+  expect(direction(r("#engines/asr"), r("#engines/llm"))).toBe(0);
+  expect(direction(r("#licenses/a"), r("#licenses/b"))).toBe(0);
 });

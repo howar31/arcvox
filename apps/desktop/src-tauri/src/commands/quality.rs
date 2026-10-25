@@ -211,7 +211,7 @@ pub struct StartArgs {
     pub llm: Vec<String>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn quality_source_info(source: Source, state: State<'_, AppState>) -> CmdResult<SourceInfo> {
     source_info(&engine(&state)?, &source)
 }
@@ -443,7 +443,7 @@ pub fn save_report(dir: &Path, report: &Report) -> CmdResult<ReportHead> {
 }
 
 /// The saved reports, newest first.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn quality_list(state: State<'_, AppState>) -> CmdResult<Vec<ReportHead>> {
     Ok(list_reports(&state.dirs.quality_dir()))
 }
@@ -474,7 +474,7 @@ pub fn load_report(dir: &Path, file: &str) -> CmdResult<Report> {
         .map_err(|e| CmdError::with("quality_bad_report", e.to_string(), &[]))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn quality_open(file: String, state: State<'_, AppState>) -> CmdResult<OpenedReport> {
     let report = load_report(&state.dirs.quality_dir(), &file)?;
     let summaries = summarize(&report);
@@ -489,7 +489,7 @@ pub fn quality_delete(file: String, state: State<'_, AppState>) -> CmdResult<()>
 }
 
 /// Two saved reports side by side.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn quality_compare(
     before: String,
     after: String,
