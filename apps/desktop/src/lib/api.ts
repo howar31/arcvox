@@ -280,6 +280,17 @@ export const appNames = (bundleIds: string[]) => invoke<Record<string, string | 
 /** PNG data URLs of the installed applications' icons; null when the app is not installed. */
 export const appIcons = (bundleIds: string[]) => invoke<Record<string, string | null>>("system_app_icons", { bundleIds });
 export const systemInfo = () => invoke<SystemInfo>("system_info");
+/** The app's own updates: `unsupported` in a build that is not updated. */
+export type UpdateStatus =
+  | { state: "idle" } | { state: "unsupported" } | { state: "checking" }
+  | { state: "current"; checked_at: number }
+  | { state: "available"; version: string; notes: string | null }
+  | { state: "installing"; version: string; received: number; total: number | null }
+  | { state: "failed"; message: string };
+export const updateStatus = () => invoke<UpdateStatus>("update_status");
+export const updateCheck = () => invoke<UpdateStatus>("update_check");
+export const updateInstall = () => invoke<void>("update_install");
+export function onUpdateStatus(cb: (s: UpdateStatus) => void): Promise<UnlistenFn> { return listen<UpdateStatus>("update-status", (e) => cb(e.payload)); }
 export const reveal = (path: string) => invoke<void>("system_reveal", { path });
 export const openFolder = (path: string) => invoke<void>("system_open_folder", { path });
 export type AboutLink = "sponsor" | "source" | "issue" | "website";

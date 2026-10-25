@@ -324,12 +324,21 @@ impl TauriUi {
         let paused = self.is_paused();
         let notices = self.tray.notices();
         let profiles = self.tray.profiles();
+        let update = self.tray.update();
         let _ = self.app.run_on_main_thread(move || {
             let Some(window) = app.get_webview_window(widget::WINDOW) else {
                 return;
             };
             match tray::menu(
-                &app, language, state, idle, placing, paused, &notices, &profiles,
+                &app,
+                language,
+                state,
+                idle,
+                placing,
+                paused,
+                &notices,
+                &profiles,
+                update.as_ref().map(|u| u.as_deref()),
             ) {
                 Ok((menu, _)) => {
                     if let Err(e) = menu.popup(window.as_ref().window()) {

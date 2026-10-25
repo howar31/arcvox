@@ -19,6 +19,7 @@ pub mod settings;
 pub mod shortcut;
 pub mod trust;
 pub mod ui;
+pub mod update;
 pub mod vad;
 
 pub fn run() {

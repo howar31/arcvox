@@ -34,6 +34,7 @@ pub const ID_STATISTICS: &str = "statistics";
 pub const ID_PAUSE: &str = "pause";
 pub const ID_SETTINGS: &str = "settings";
 pub const ID_ABOUT: &str = "about";
+pub const ID_UPDATE: &str = "update";
 pub const ID_QUIT: &str = "quit";
 pub const ID_PLACE: &str = "widget-place";
 pub const ID_PROFILES_MANAGE: &str = "profiles-manage";
@@ -275,6 +276,9 @@ pub struct Tray<R: Runtime> {
     paused: Mutex<bool>,
     notices: Mutex<Vec<Notice>>,
     profiles: Mutex<Vec<ProfileEntry>>,
+    /// The update item: `None` in a build that is not updated, else the
+    /// version of an update found, when there is one.
+    update: Mutex<Option<Option<String>>>,
 }
 
 /// The menu of the menu-bar icon; the widget opens the same one. What its
@@ -289,6 +293,7 @@ pub(super) fn menu<R: Runtime>(
     paused: bool,
     notices: &[Notice],
     profiles: &[ProfileEntry],
+    update: Option<Option<&str>>,
 ) -> tauri::Result<(Menu<R>, MenuItem<R>)> {
     // The first line names the app and the running version, so the version
     // can be read without opening the settings window.
@@ -440,7 +445,7 @@ pub(super) fn menu<R: Runtime>(
     }
     menu.append(&widget_menu)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
-    // The app itself: about, settings (and, later, updates).
+    // The app itself: about, updates, settings.
     menu.append(&MenuItem::with_id(
         app,
         ID_ABOUT,
@@ -448,6 +453,19 @@ pub(super) fn menu<R: Runtime>(
         true,
         None::<&str>,
     )?)?;
+    if let Some(found) = update {
+        let label = match found {
+            Some(version) => text(language, Msg::TrayUpdateFound).replace("{version}", version),
+            None => text(language, Msg::TrayUpdateCheck).to_string(),
+        };
+        menu.append(&MenuItem::with_id(
+            app,
+            ID_UPDATE,
+            label,
+            true,
+            None::<&str>,
+        )?)?;
+    }
     menu.append(&MenuItem::with_id(
         app,
         ID_SETTINGS,
@@ -477,6 +495,7 @@ impl Tray<tauri::Wry> {
             false,
             &[],
             &[],
+            None,
         )?;
         let icon = TrayIconBuilder::with_id("arcvox")
             .icon(Phase::Rest.image())
@@ -501,6 +520,7 @@ impl Tray<tauri::Wry> {
             paused: Mutex::new(false),
             notices: Mutex::new(Vec::new()),
             profiles: Mutex::new(Vec::new()),
+            update: Mutex::new(None),
         })
     }
 }
@@ -515,8 +535,17 @@ impl<R: Runtime> Tray<R> {
         let paused = *self.paused.lock().unwrap();
         let notices = self.notices();
         let profiles = self.profiles.lock().unwrap().clone();
+        let update = self.update.lock().unwrap().clone();
         let Ok((next, status)) = menu(
-            &self.app, language, state, idle, placing, paused, &notices, &profiles,
+            &self.app,
+            language,
+            state,
+            idle,
+            placing,
+            paused,
+            &notices,
+            &profiles,
+            update.as_ref().map(|u| u.as_deref()),
         ) else {
             return;
         };
@@ -606,6 +635,20 @@ impl<R: Runtime> Tray<R> {
         all.extend(now);
         all.sort();
         self.set_notices(all);
+    }
+
+    /// The update item: `None` leaves it out, else it carries the version
+    /// of an update found, when there is one.
+    pub fn set_update(&self, next: Option<Option<String>>) {
+        let before = std::mem::replace(&mut *self.update.lock().unwrap(), next.clone());
+        if before != next {
+            self.rebuild();
+        }
+    }
+
+    /// The update item as the menu shows it now.
+    pub fn update(&self) -> Option<Option<String>> {
+        self.update.lock().unwrap().clone()
     }
 
     /// The profiles as the menu lists them now.

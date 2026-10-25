@@ -33,6 +33,7 @@ rubato = "0.16"
 earshot = "1"
 url = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+tauri-plugin-updater = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 arcvox-inference = { path = "../../../core/arcvox-inference", features = ["metal"] }

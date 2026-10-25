@@ -17,6 +17,7 @@ pub mod secrets;
 pub mod share;
 pub mod stats;
 pub mod system;
+pub mod update;
 
 use std::collections::BTreeMap;
 

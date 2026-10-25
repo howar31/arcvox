@@ -96,6 +96,19 @@ pub fn tray_action(app: &tauri::AppHandle<Wry>, id: &str) {
         tray::ID_HISTORY => tray::open_settings(app, Some("history")),
         tray::ID_STATISTICS => tray::open_settings(app, Some("home")),
         tray::ID_ABOUT => tray::open_settings(app, Some("about")),
+        // The About page shows the update; without one found it looks again.
+        tray::ID_UPDATE => {
+            tray::open_settings(app, Some("about"));
+            let found = app
+                .try_state::<crate::update::Updates>()
+                .is_some_and(|u| matches!(u.status(), crate::update::Status::Available { .. }));
+            if !found {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    crate::update::check(&app).await;
+                });
+            }
+        }
         tray::ID_QUIT => app.exit(0),
         tray::ID_PLACE => state.ui.set_placing(!state.ui.is_placing()),
         tray::ID_PAUSE => set_pause(&state, !state.ui.is_paused()),
@@ -159,6 +172,7 @@ pub fn run() {
             crate::ui::tray::open_settings(app, None);
         }))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -198,6 +212,9 @@ pub fn run() {
             crate::commands::system::system_app_names,
             crate::commands::system::system_app_icons,
             crate::commands::system::system_info,
+            crate::commands::update::update_status,
+            crate::commands::update::update_check,
+            crate::commands::update::update_install,
             crate::commands::system::system_reveal,
             crate::commands::system::system_open_link,
             crate::commands::config::config_get,
@@ -682,6 +699,8 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         backup: backup.clone(),
         version,
     });
+
+    crate::update::start(&app);
 
     // A quit request from outside the app's own menus (the Dock menu, a
     // quit Apple event) takes the same two steps as the menu item.
