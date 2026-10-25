@@ -2280,7 +2280,21 @@ mod tests {
             .await;
         hold_and_speak(&r, 0.3).await;
         wait_state(&r, UiState::Processing, "processing").await;
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        // The rewrite has been asked for, so recognition is done.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while r
+            .llm
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty()
+        {
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for the rewrite"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
         r.modifier.send(key_down(KEY_ESCAPE)).unwrap();
         wait_for(
             || {
