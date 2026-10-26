@@ -49,7 +49,7 @@ export function deviceLine(d: BackupDevice): string {
 
 /** What the folder row offers for a folder that cannot be used: making it again, or the system's settings. */
 export type FolderFix = "create" | "system";
-const FOLDER_FIX: Record<Exclude<FolderState, "usable">, FolderFix | null> = { missing: "create", not_writable: null, blocked: "system" };
+const FOLDER_FIX: Record<Exclude<FolderState, "usable" | "unmade">, FolderFix | null> = { missing: "create", not_writable: null, blocked: "system" };
 /** How often the page looks whether the folder is still there, while it is open. */
 export const FOLDER_LOOK_MS = 5000;
 
@@ -81,7 +81,8 @@ export function writtenLine(r: WriteReport, c: BackupCategories): string {
 /** `folder` is null until the page has looked at the folder once; the row then claims nothing about it. */
 export function statusView(s: BackupStatus, time: (ts: number) => string, c: BackupCategories, folder: FolderState | null = "usable"): StatusView {
   if (folder === null && s.state !== "running") return { tone: "idle", title: t("backup.status_checking"), detail: "", fix: null, run: false };
-  if (folder !== null && folder !== "usable" && s.state !== "running") {
+  if (folder === "unmade" && s.state === "never") return { tone: "idle", title: t("backup.status_never"), detail: t("backup.status_unmade_detail"), fix: null, run: true };
+  if (folder !== null && folder !== "usable" && folder !== "unmade" && s.state !== "running") {
     // The folder as it is now comes before what the last write said.
     const last = s.state === "ok" ? s.at : s.state === "failed" ? s.last_ok : null;
     const detail = t(`backup.folder_${folder}_detail`);

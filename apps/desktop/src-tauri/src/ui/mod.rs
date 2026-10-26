@@ -204,7 +204,7 @@ impl TauriUi {
     pub fn set_backup_folder(&self, state: arcvox_core::backup::FolderState) {
         use arcvox_core::backup::FolderState;
         let notices = match state {
-            FolderState::Usable => vec![],
+            FolderState::Usable | FolderState::Unmade => vec![],
             FolderState::Missing => vec![tray::Notice::BackupFolderMissing],
             FolderState::NotWritable | FolderState::Blocked => {
                 vec![tray::Notice::BackupFolderNotWritable]

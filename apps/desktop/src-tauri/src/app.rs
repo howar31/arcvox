@@ -10,7 +10,7 @@ use tauri::{Emitter, Manager, Wry};
 
 use crate::audio::capture::CpalSource;
 use crate::audio::AudioSource;
-use crate::backup_auto::{BackupAuto, BackupStatus, Failure, LastWrite};
+use crate::backup_auto::{look, target, BackupAuto, BackupStatus, Failure, LastWrite};
 use crate::commands::bench::BenchState;
 use crate::commands::quality::QualityState;
 use crate::commands::CmdError;
@@ -328,6 +328,7 @@ pub fn run() {
             crate::commands::backup::backup_status,
             crate::commands::backup::backup_run_now,
             crate::commands::backup::backup_folder_state,
+            crate::commands::backup::backup_suggested_folder,
             crate::commands::backup::backup_folder_create,
             crate::commands::backup::backup_folder_open,
             crate::commands::backup::devices_list,
@@ -423,28 +424,26 @@ fn backup_auto(
     let busy_engine = engine.clone();
     let app = app.clone();
     let state_dir = dirs.config_dir.clone();
+    let suggested = dirs.backup_dir.clone();
+    let suggested_n = dirs.backup_dir.clone();
     let chosen = ClientSettings::load(&state_dir).backup.folder;
-    let last = LastWrite::load(&state_dir).and_then(|l| l.status_for(chosen.as_deref()));
+    let last = LastWrite::load(&state_dir)
+        .and_then(|l| l.status_for(&target(chosen.as_deref(), &suggested)));
     let auto = BackupAuto::spawn(
         Box::new(move |manual| {
             let client = ClientSettings::load(&config_dir);
-            let Some(folder) = client.backup.folder.clone() else {
-                return if manual {
-                    Err(Failure::error(CmdError::new(
-                        "no_backup_folder",
-                        "no folder is chosen",
-                    )))
-                } else {
-                    Ok(None)
-                };
-            };
             if !manual && !client.backup.auto {
                 return Ok(None);
             }
-            // A folder that is gone is made again only when the user chose that.
+            let chosen = client.backup.folder.as_deref();
+            let folder = target(chosen, &suggested);
+            let last = LastWrite::load(&config_dir).map(|l| l.folder);
+            let found = look(chosen, &suggested, last.as_deref(), true);
+            // The suggested folder is made by its first write; any other
+            // folder that is gone is made again only when the user chose that.
+            let unmade = found == FolderState::Unmade;
             let recreate = client.backup.recreate;
-            let found = folder_state(&folder, true);
-            if !(found.usable() || (found == FolderState::Missing && recreate)) {
+            if !(found.usable() || unmade || (found == FolderState::Missing && recreate)) {
                 return Err(Failure::folder(found));
             }
             let engine = engine.clone().ok_or_else(|| {
@@ -465,17 +464,30 @@ fn backup_auto(
                     &folder,
                     client.backup.categories.into(),
                     snapshot,
-                    recreate,
+                    recreate || unmade,
                 ))
-                .map(Some)
-                .map_err(|e| Failure::error(e.into()))
+                .map(|mut report| {
+                    report.recreated &= !unmade;
+                    Some(report)
+                })
+                .map_err(|e| {
+                    // Making the folder can be refused by the system, which
+                    // the folder's state says better than the error.
+                    let now = folder_state(&folder, false);
+                    if unmade && matches!(now, FolderState::NotWritable | FolderState::Blocked) {
+                        Failure::folder(now)
+                    } else {
+                        Failure::error(e.into())
+                    }
+                })
         }),
         Box::new(move || busy_engine.as_ref().is_some_and(Engine::busy)),
         Box::new(move |status| {
             if let BackupStatus::Ok { at, report } = status {
-                if let Some(folder) = ClientSettings::load(&state_dir).backup.folder {
+                {
+                    let chosen = ClientSettings::load(&state_dir).backup.folder;
                     let last = LastWrite {
-                        folder,
+                        folder: target(chosen.as_deref(), &suggested_n),
                         at: *at,
                         report: report.clone(),
                     };
@@ -667,10 +679,14 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         }));
         // A folder that went away while the app was not running.
         let chosen = ClientSettings::load(&dirs.config_dir).backup;
-        if let Some(folder) = chosen.folder {
-            let remake = chosen.auto && chosen.recreate;
-            backup.saw_with(folder_state(&folder, false), false, remake);
-        }
+        let last = LastWrite::load(&dirs.config_dir).map(|l| l.folder);
+        let found = look(
+            chosen.folder.as_deref(),
+            &dirs.backup_dir,
+            last.as_deref(),
+            false,
+        );
+        backup.saw_with(found, false, chosen.auto && chosen.recreate);
     }
     let controller = dictation::spawn(
         Deps {

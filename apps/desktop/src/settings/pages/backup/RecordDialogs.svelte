@@ -3,7 +3,7 @@
   import { backupSizes, errorMessage, exportBackup, formatBytes, importBackup, inspectBackup, type BackupCategories, type BackupInfo, type BackupSizes, type ImportReport } from "../../../lib/api";
   import { deviceLine, importLines } from "../../../lib/backupView";
   import { t } from "../../../lib/i18n";
-  import { client, config } from "../../../lib/store.svelte";
+  import { config } from "../../../lib/store.svelte";
   import Modal from "../../../lib/ui/Modal.svelte";
   import { toast } from "../../../lib/ui/toast.svelte";
   import Checks, { type CheckItem } from "./Checks.svelte";
@@ -62,8 +62,12 @@
     mode = "export";
   }
 
-  export function openItems() {
-    cats = { ...(client.value?.backup.categories ?? {}) };
+  /** Items of the backup folder, starting from `current`; `apply` takes the choice. */
+  let applyItems: ((c: BackupCategories) => void) | null = null;
+
+  export function openItems(current: BackupCategories, apply: (c: BackupCategories) => void) {
+    cats = { ...current };
+    applyItems = apply;
     loadSizes();
     mode = "folder";
   }
@@ -96,12 +100,9 @@
     busy = false;
   }
 
-  async function saveItems() {
-    if (!client.value) return;
-    try {
-      await client.save({ ...client.value, backup: { ...client.value.backup, categories: asCategories(cats) } });
-      mode = null;
-    } catch (e) { toast.error(errorMessage(e)); }
+  function saveItems() {
+    applyItems?.(asCategories(cats));
+    mode = null;
   }
 
   async function doImport() {

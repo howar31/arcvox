@@ -104,6 +104,12 @@ describe("backupView", () => {
     expect(statusView({ state: "failed", at: 9, reason: "disk full", last_ok: null, folder: null }, time, all).detail).toBe("disk full");
   });
 
+  it("says the suggested folder is made by the first backup", () => {
+    const time = (ts: number) => `T${ts}`;
+    expect(statusView({ state: "never" }, time, all, "unmade")).toEqual({ tone: "idle", title: "尚未備份", detail: "資料夾在第一次備份時建立。", fix: null, run: true });
+    expect(statusView({ state: "ok", at: 5, report: none }, time, all, "unmade").tone).toBe("ok");
+  });
+
   it("says when a write made the folder again", () => {
     const time = (ts: number) => `T${ts}`;
     expect(statusView({ state: "ok", at: 5, report: { ...none, rows: 3, recreated: true } }, time, all).detail).toBe("T5 · 資料夾已重新建立 · 已寫入：歷史紀錄 3 筆");

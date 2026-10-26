@@ -14,7 +14,7 @@ use tauri::State;
 use super::client::apply_client;
 use super::{engine, CmdError, CmdResult};
 use crate::app::AppState;
-use crate::backup_auto::BackupStatus;
+use crate::backup_auto::{look, target, BackupStatus, LastWrite};
 use crate::settings::{BackupCategories, ClientSettings};
 
 /// What a settings file says about itself, for the import dialog.
@@ -325,24 +325,46 @@ pub async fn backup_folder_state(
     probe: bool,
 ) -> CmdResult<FolderState> {
     let chosen = ClientSettings::load(&state.dirs.config_dir).backup;
-    Ok(match chosen.folder {
-        Some(folder) => state.backup.saw_with(
-            folder_state(&folder, probe),
-            probe,
-            chosen.auto && chosen.recreate,
-        ),
-        None => state.backup.saw(FolderState::Usable, true),
-    })
+    let last = LastWrite::load(&state.dirs.config_dir).map(|l| l.folder);
+    let found = look(
+        chosen.folder.as_deref(),
+        &state.dirs.backup_dir,
+        last.as_deref(),
+        probe,
+    );
+    Ok(state
+        .backup
+        .saw_with(found, probe, chosen.auto && chosen.recreate))
 }
 
-/// Makes the chosen folder again and writes to it. Answers with what the
-/// folder is afterwards; nothing is written unless it can be used.
+#[derive(Serialize)]
+pub struct SuggestedFolder {
+    path: String,
+    /// The path with the home folder as `~`.
+    short: String,
+}
+
+/// The folder backups go to while the user has chosen none.
+#[tauri::command]
+pub fn backup_suggested_folder(state: State<'_, AppState>) -> SuggestedFolder {
+    let dir = &state.dirs.backup_dir;
+    SuggestedFolder {
+        path: dir.display().to_string(),
+        short: arcvox_core::paths::tilde(dir),
+    }
+}
+
+/// The folder backups go to now.
+fn backup_target(state: &AppState) -> PathBuf {
+    let chosen = ClientSettings::load(&state.dirs.config_dir).backup.folder;
+    target(chosen.as_deref(), &state.dirs.backup_dir)
+}
+
+/// Makes the folder again and writes to it. Answers with what the folder is
+/// afterwards; nothing is written unless it can be used.
 #[tauri::command]
 pub async fn backup_folder_create(state: State<'_, AppState>) -> CmdResult<FolderState> {
-    let folder = ClientSettings::load(&state.dirs.config_dir)
-        .backup
-        .folder
-        .ok_or_else(|| CmdError::new("no_backup_folder", "no folder is chosen"))?;
+    let folder = backup_target(&state);
     if let Err(e) = std::fs::create_dir_all(&folder) {
         tracing::warn!(error = %e, "the backup folder was not made");
     }
@@ -356,10 +378,7 @@ pub async fn backup_folder_create(state: State<'_, AppState>) -> CmdResult<Folde
 /// Opens the backup folder in the file manager.
 #[tauri::command]
 pub fn backup_folder_open(state: State<'_, AppState>) -> CmdResult<()> {
-    let folder = ClientSettings::load(&state.dirs.config_dir)
-        .backup
-        .folder
-        .ok_or_else(|| CmdError::new("no_backup_folder", "no folder is chosen"))?;
+    let folder = backup_target(&state);
     if !folder.is_dir() {
         return Err(CmdError::with(
             "folder_missing",

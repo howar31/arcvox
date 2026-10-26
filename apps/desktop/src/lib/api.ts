@@ -538,11 +538,13 @@ export const backupStatus = () => invoke<BackupStatus>("backup_status");
 export const backupRunNow = () => invoke<void>("backup_run_now");
 export const openBackupFolder = () => invoke<void>("backup_folder_open");
 /** What the backup folder is right now: there, gone, or refusing a write. */
-export type FolderState = "usable" | "missing" | "not_writable" | "blocked";
+export type FolderState = "usable" | "missing" | "not_writable" | "blocked" | "unmade";
 /** Looks at the backup folder; `probe` writes a small file to find out whether it takes one. */
 export const backupFolderState = (probe: boolean) => invoke<FolderState>("backup_folder_state", { probe });
 /** Makes the chosen folder again and backs up to it; answers with what the folder is afterwards. */
 export const backupFolderCreate = () => invoke<FolderState>("backup_folder_create");
+export interface SuggestedFolder { path: string; short: string }
+export const backupSuggestedFolder = () => invoke<SuggestedFolder>("backup_suggested_folder");
 export function onBackupFolder(cb: (s: FolderState) => void): Promise<UnlistenFn> { return listen<FolderState>("backup-folder", (e) => cb(e.payload)); }
 export const listDevices = () => invoke<DeviceRow[]>("devices_list");
 export const renameDevice = (id: string, name: string) => invoke<void>("device_rename", { id, name });

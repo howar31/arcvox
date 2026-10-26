@@ -101,6 +101,8 @@ pub struct DevSettings {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct BackupSettings {
+    /// The folder the user chose; `None` is the suggested one
+    /// (`DataDir::backup_dir`), which every device places for itself.
     pub folder: Option<PathBuf>,
     pub categories: BackupCategories,
     /// Writes to the folder by itself a few minutes after a change.

@@ -8,7 +8,7 @@ use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use arcvox_core::backup::{FolderState, WriteReport};
+use arcvox_core::backup::{folder_state, FolderState, WriteReport};
 use serde::{Deserialize, Serialize};
 
 /// How long after the last change the folder is written.
@@ -68,12 +68,34 @@ impl LastWrite {
         std::fs::rename(&tmp, config_dir.join(Self::FILE_NAME))
     }
 
-    /// The status this stands for while `folder` is the one chosen.
-    pub fn status_for(self, folder: Option<&Path>) -> Option<BackupStatus> {
-        (folder == Some(self.folder.as_path())).then_some(BackupStatus::Ok {
+    /// The status this stands for while backups go to `folder`.
+    pub fn status_for(self, folder: &Path) -> Option<BackupStatus> {
+        (folder == self.folder.as_path()).then_some(BackupStatus::Ok {
             at: self.at,
             report: self.report,
         })
+    }
+}
+
+/// The folder backups go to: the chosen one, or else the suggested one.
+pub fn target(chosen: Option<&Path>, suggested: &Path) -> PathBuf {
+    chosen.unwrap_or(suggested).to_path_buf()
+}
+
+/// What the backup folder is. `last` is the folder the last write that
+/// worked went to. The suggested folder is looked at only once a write has
+/// gone to it: until then it need not exist, and a look into Documents makes
+/// macOS ask for access before the user has asked for a backup.
+pub fn look(
+    chosen: Option<&Path>,
+    suggested: &Path,
+    last: Option<&Path>,
+    probe: bool,
+) -> FolderState {
+    match chosen {
+        Some(folder) => folder_state(folder, probe),
+        None if last == Some(suggested) => folder_state(suggested, probe),
+        None => FolderState::Unmade,
     }
 }
 
@@ -137,6 +159,7 @@ impl Failure {
         let reason = match state {
             FolderState::Missing => "the folder does not exist",
             FolderState::Blocked => "the system does not let the app into the folder",
+            FolderState::Unmade => "the folder is not made yet",
             _ => "the folder cannot be written",
         };
         Failure {
@@ -553,16 +576,50 @@ mod tests {
         assert!(!dir.path().join("backup-status.json.tmp").exists());
         assert_eq!(LastWrite::load(dir.path()), Some(last.clone()));
         assert_eq!(
-            last.clone().status_for(Some(Path::new("/sync/arcvox"))),
+            last.clone().status_for(Path::new("/sync/arcvox")),
             Some(BackupStatus::Ok {
                 at: 42,
                 report: last.report.clone()
             })
         );
-        assert_eq!(last.clone().status_for(Some(Path::new("/other"))), None);
-        assert_eq!(last.status_for(None), None);
+        assert_eq!(last.status_for(Path::new("/other")), None);
         std::fs::write(dir.path().join("backup-status.json"), b"{ not json").unwrap();
         assert_eq!(LastWrite::load(dir.path()), None);
+    }
+
+    #[test]
+    fn the_suggested_folder_is_looked_at_once_a_write_went_to_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let suggested = dir.path().join("Arcvox Backup");
+        let chosen = dir.path().join("chosen");
+        std::fs::create_dir(&chosen).unwrap();
+        assert_eq!(target(None, &suggested), suggested);
+        assert_eq!(target(Some(&chosen), &suggested), chosen);
+        // Not there and never written to: made by the first write.
+        assert_eq!(look(None, &suggested, None, true), FolderState::Unmade);
+        assert_eq!(
+            look(None, &suggested, Some(&chosen), true),
+            FolderState::Unmade
+        );
+        // Written to and gone since: missing, like a chosen folder.
+        assert_eq!(
+            look(None, &suggested, Some(&suggested), false),
+            FolderState::Missing
+        );
+        std::fs::create_dir(&suggested).unwrap();
+        assert_eq!(
+            look(None, &suggested, Some(&suggested), true),
+            FolderState::Usable
+        );
+        assert_eq!(
+            look(Some(&chosen), &suggested, None, true),
+            FolderState::Usable
+        );
+        std::fs::remove_dir(&chosen).unwrap();
+        assert_eq!(
+            look(Some(&chosen), &suggested, Some(&chosen), false),
+            FolderState::Missing
+        );
     }
 
     #[test]

@@ -17,6 +17,18 @@ pub struct DataDir {
     pub data_dir: PathBuf,
     /// `bench/` and import staging: what can be lost without harm.
     pub cache_dir: PathBuf,
+    /// The backup folder used while the user has chosen none:
+    /// `<Documents>/<name> Backup`. Nothing makes it but a write to it.
+    pub backup_dir: PathBuf,
+}
+
+/// `path` with the home folder written as `~`, for a short mention of it.
+pub fn tilde(path: &Path) -> String {
+    match dirs::home_dir().and_then(|home| path.strip_prefix(home).ok().map(Path::to_path_buf)) {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+        Some(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
+        None => path.display().to_string(),
+    }
 }
 
 /// The folder name for an app name: as given on macOS and Windows, lower
@@ -35,6 +47,9 @@ impl DataDir {
     /// OS gives no home directory.
     pub fn resolve(app_name: &str) -> Option<Self> {
         let name = dir_name(app_name);
+        let backup = dirs::document_dir()
+            .or_else(dirs::home_dir)?
+            .join(dir_name(&format!("{app_name} Backup")));
         if cfg!(target_os = "windows") {
             let config = dirs::config_dir()?.join(&name);
             let local = dirs::data_local_dir()?.join(&name);
@@ -42,6 +57,7 @@ impl DataDir {
                 config_dir: config,
                 data_dir: local.clone(),
                 cache_dir: local,
+                backup_dir: backup,
             })
         } else if cfg!(target_os = "macos") {
             let support = dirs::data_dir()?.join(&name);
@@ -50,12 +66,14 @@ impl DataDir {
                 config_dir: support.clone(),
                 data_dir: support,
                 cache_dir: cache,
+                backup_dir: backup,
             })
         } else {
             Some(Self {
                 config_dir: dirs::config_dir()?.join(&name),
                 data_dir: dirs::data_dir()?.join(&name),
                 cache_dir: dirs::cache_dir()?.join(&name),
+                backup_dir: backup,
             })
         }
     }
@@ -67,6 +85,7 @@ impl DataDir {
             config_dir: root.join("config"),
             data_dir: root.join("data"),
             cache_dir: root.join("cache"),
+            backup_dir: root.join("backup"),
         }
     }
 
@@ -190,5 +209,27 @@ mod tests {
         assert_ne!(a.data_dir, b.data_dir);
         assert_ne!(a.cache_dir, b.cache_dir);
         assert_ne!(a.config_dir, b.config_dir);
+        assert_ne!(a.backup_dir, b.backup_dir);
+    }
+
+    #[test]
+    fn tilde_writes_the_home_folder_short() {
+        let home = dirs::home_dir().unwrap();
+        assert_eq!(tilde(&home), "~");
+        assert_eq!(
+            tilde(&home.join("Documents").join("Arcvox Backup")),
+            format!("~{0}Documents{0}Arcvox Backup", std::path::MAIN_SEPARATOR)
+        );
+        assert_eq!(tilde(Path::new("/Volumes/Nine")), "/Volumes/Nine");
+    }
+
+    #[test]
+    fn the_suggested_backup_folder_is_named_after_the_app() {
+        let d = DataDir::resolve("Arcvox Dev").unwrap();
+        assert!(d.backup_dir.is_absolute());
+        assert!(d.backup_dir.ends_with(dir_name("Arcvox Dev Backup")));
+        if cfg!(target_os = "macos") {
+            assert!(d.backup_dir.parent().unwrap().ends_with("Documents"));
+        }
     }
 }

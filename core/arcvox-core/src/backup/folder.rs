@@ -15,6 +15,9 @@ pub enum FolderState {
     NotWritable,
     /// There, but the system keeps this app out of it.
     Blocked,
+    /// The suggested folder before any write went to it: not looked at,
+    /// since it need not exist yet and the first write makes it.
+    Unmade,
 }
 
 impl FolderState {
