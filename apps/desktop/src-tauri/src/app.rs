@@ -221,6 +221,8 @@ pub fn run() {
             crate::commands::update::update_install,
             crate::commands::system::system_reveal,
             crate::commands::system::system_open_link,
+            crate::commands::system::system_diagnostics,
+            crate::commands::system::system_open_issue,
             crate::commands::config::config_get,
             crate::commands::config::config_update_general,
             crate::commands::providers::providers_upsert,

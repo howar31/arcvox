@@ -154,7 +154,12 @@ export interface Permissions {
   microphone: MicAccess;
 }
 export interface RunningApp { bundle_id: string; name: string }
-export interface SystemInfo { name: string; version: string; dev: boolean; config_dir: string; data_dir: string; cache_dir: string; recordings_dir: string; memory_bytes: number }
+export interface SystemInfo { name: string; version: string; dev: boolean; memory_bytes: number }
+/** A place the app keeps files in; `is_default` for the folders the user can choose. */
+export interface Location { kind: "app" | "data" | "recordings" | "models" | "backup" | "log" | "cache"; path: string; is_default: boolean | null; exists: boolean }
+/** The report page's snapshot, in English, and the places the app keeps files in. */
+export interface IssueFields { version: string; system: string; engines: string; diagnostics: string }
+export interface Diagnostics { text: string; issue: IssueFields; locations: Location[] }
 /** A failed command: `code` names the kind of failure for the interface's wording, with `params` for its placeholders; `message` is the reason as the backend gives it. */
 export interface CmdError { message: string; code?: string | null; params?: Record<string, string> }
 
@@ -296,8 +301,11 @@ export const updateReleases = () => invoke<Release[]>("update_releases");
 export function onUpdateStatus(cb: (s: UpdateStatus) => void): Promise<UnlistenFn> { return listen<UpdateStatus>("update-status", (e) => cb(e.payload)); }
 export const reveal = (path: string) => invoke<void>("system_reveal", { path });
 export const openFolder = (path: string) => invoke<void>("system_open_folder", { path });
-export type AboutLink = "sponsor" | "source" | "issue" | "website" | "releases";
+export type AboutLink = "sponsor" | "source" | "website" | "releases";
 export const openLink = (link: AboutLink) => invoke<void>("system_open_link", { link });
+export const diagnostics = () => invoke<Diagnostics>("system_diagnostics");
+/** Opens the bug report form with these fields filled in. */
+export const openIssue = (fields: IssueFields) => invoke<void>("system_open_issue", { fields });
 export const uiLanguage = () => invoke<string>("ui_language");
 export const widgetCopy = (text: string) => invoke<void>("widget_copy", { text });
 export const widgetDismiss = () => invoke<void>("widget_dismiss");

@@ -1,11 +1,11 @@
-export type Page = "home" | "history" | "flow" | "dictionary" | "prompt" | "engines" | "speed" | "quality" | "general" | "recording" | "data" | "storage" | "backup" | "about" | "licenses" | "whatsnew" | "welcome";
+export type Page = "home" | "history" | "flow" | "dictionary" | "prompt" | "engines" | "speed" | "quality" | "general" | "recording" | "data" | "storage" | "backup" | "about" | "licenses" | "whatsnew" | "report" | "welcome";
 
 /** The pages of settings: one set of settings shown in parts. */
 export const SETTINGS_PAGES = ["general", "recording", "data", "storage"] as const;
 export type SettingsPage = (typeof SETTINGS_PAGES)[number];
 
 /** The pages with a sidebar entry (and an icon of their own). */
-export type NavPage = Exclude<Page, "speed" | "quality" | "licenses" | "whatsnew" | "prompt" | "welcome">;
+export type NavPage = Exclude<Page, "speed" | "quality" | "licenses" | "whatsnew" | "report" | "prompt" | "welcome">;
 
 /** Sidebar layout: an optional group label key and its pages, in order. */
 export const NAV: { group: string | null; pages: NavPage[] }[] = [
@@ -16,7 +16,7 @@ export const NAV: { group: string | null; pages: NavPage[] }[] = [
 ];
 
 /** Pages without a sidebar entry, and the entry that stands for each. */
-const UNDER: Partial<Record<Page, Page>> = { speed: "engines", quality: "engines", licenses: "about", whatsnew: "about", prompt: "flow", welcome: "home" };
+const UNDER: Partial<Record<Page, Page>> = { speed: "engines", quality: "engines", licenses: "about", whatsnew: "about", report: "about", prompt: "flow", welcome: "home" };
 
 /** The sidebar entry that is current while `page` is shown. */
 export function navPage(page: Page): Page {
@@ -71,7 +71,7 @@ export type Route = ReturnType<typeof parseRoute>;
 /** How far a route sits under its sidebar entry: 0 on the entry's own page, 1 on a page under it, 2 under that. */
 export function depth(r: Route): number {
   switch (r.page) {
-    case "whatsnew": case "prompt": case "speed": return 1;
+    case "whatsnew": case "report": case "prompt": case "speed": return 1;
     case "licenses": return r.arg ? 2 : 1;
     case "quality": return r.arg === "result" || r.arg === "compare" ? 2 : 1;
     default: return 0;

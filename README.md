@@ -48,7 +48,7 @@ npx tauri build
 
 Bug reports and feature requests go to
 [GitHub Issues](https://github.com/howar31/arcvox/issues/new/choose).
-In the app, Settings > About > Report an issue opens the form.
+In the app, Settings > About > Report an issue shows the diagnostics (version, system, settings and counts of recent results; no dictated text, file paths or names) and the folders the app keeps its data in, and opens the form with the version, system, engines and diagnostics filled in.
 
 If Arcvox is useful to you, you can sponsor development:
 [Sponsor](https://donate.howar31.com/) · [Ko-fi](https://ko-fi.com/howar31)

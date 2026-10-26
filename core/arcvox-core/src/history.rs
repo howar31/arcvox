@@ -324,6 +324,27 @@ pub struct TermHits {
     pub last_ts: i64,
 }
 
+/// How this device's dictations ended, by kind only: no text, no message.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Outcomes {
+    pub rows: u64,
+    pub cancelled: u64,
+    /// The rewrite failed and the raw transcript was used.
+    pub not_rewritten: u64,
+    /// Failures other than cancelling, by `ErrorCode::name`, most first;
+    /// rows stored before the kind was kept count as `unknown`.
+    pub failed: Vec<(String, u64)>,
+}
+
+/// The newest failure of this device's dictations, other than a cancel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LastFailure {
+    pub ts: i64,
+    pub code: String,
+    pub profile_id: ProfileId,
+    pub audio_ms: Option<u64>,
+}
+
 /// Row and recording counts of the history.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Storage {
@@ -2144,6 +2165,54 @@ impl HistoryStore {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
+    /// How this device's dictations from `since` (unix seconds) ended.
+    pub fn outcomes(&self, since: i64) -> Result<Outcomes, HistoryError> {
+        let conn = self.conn();
+        let (rows, cancelled, not_rewritten) = conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(error_code = 'cancelled'), 0), COALESCE(SUM(degraded != 0), 0)
+             FROM utterances WHERE ts >= ?1 AND device_id = ?2",
+            params![since, self.device_id],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)),
+        )?;
+        let mut stmt = conn.prepare(
+            "SELECT COALESCE(error_code, 'unknown'), COUNT(*) FROM utterances
+             WHERE ts >= ?1 AND device_id = ?2 AND error IS NOT NULL AND error_code IS NOT 'cancelled'
+             GROUP BY 1 ORDER BY 2 DESC, 1",
+        )?;
+        let failed = stmt
+            .query_map(params![since, self.device_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Outcomes {
+            rows: rows as u64,
+            cancelled: cancelled as u64,
+            not_rewritten: not_rewritten as u64,
+            failed,
+        })
+    }
+
+    /// The newest failure of this device's dictations, other than a cancel.
+    pub fn last_failure(&self) -> Result<Option<LastFailure>, HistoryError> {
+        let conn = self.conn();
+        Ok(conn
+            .query_row(
+                "SELECT ts, COALESCE(error_code, 'unknown'), profile_id, audio_ms FROM utterances
+                 WHERE device_id = ?1 AND error IS NOT NULL AND error_code IS NOT 'cancelled'
+                 ORDER BY ts DESC, id DESC LIMIT 1",
+                params![self.device_id],
+                |r| {
+                    Ok(LastFailure {
+                        ts: r.get(0)?,
+                        code: r.get(1)?,
+                        profile_id: ProfileId(r.get(2)?),
+                        audio_ms: r.get::<_, Option<i64>>(3)?.map(|v| v as u64),
+                    })
+                },
+            )
+            .optional()?)
+    }
+
     /// Row count and the recordings of `recordings_dir` that exist.
     pub fn storage(&self, recordings_dir: &Path) -> Result<Storage, HistoryError> {
         self.storage_in(None, None, recordings_dir)
@@ -2818,6 +2887,55 @@ mod tests {
             dict_hits: Vec::new(),
             stages: Vec::new(),
         }
+    }
+
+    fn failed(ts: i64, code: ErrorCode) -> FailedUtterance {
+        FailedUtterance {
+            ts,
+            profile_id: ProfileId("casual".into()),
+            app_name: None,
+            audio_path: None,
+            audio_ms: Some(4200),
+            code,
+            error: "the engine said no".into(),
+            raw_text: String::new(),
+            final_text: String::new(),
+        }
+    }
+
+    #[test]
+    fn outcomes_count_the_kinds_from_a_time_and_the_last_failure_of_any_time() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        s.insert_failed(failed(50, ErrorCode::ModelMissing))
+            .unwrap();
+        s.insert(new(100, None)).unwrap();
+        s.insert(NewUtterance {
+            degraded: true,
+            ..new(110, None)
+        })
+        .unwrap();
+        s.insert_failed(failed(120, ErrorCode::ProviderTimeout))
+            .unwrap();
+        s.insert_failed(failed(130, ErrorCode::ProviderTimeout))
+            .unwrap();
+        s.insert_failed(failed(140, ErrorCode::Cancelled)).unwrap();
+        let o = s.outcomes(100).unwrap();
+        assert_eq!(o.rows, 5);
+        assert_eq!(o.cancelled, 1);
+        assert_eq!(o.not_rewritten, 1);
+        assert_eq!(o.failed, vec![("provider_timeout".to_string(), 2)]);
+        let last = s.last_failure().unwrap().unwrap();
+        assert_eq!(
+            (last.ts, last.code.as_str(), last.audio_ms),
+            (130, "provider_timeout", Some(4200))
+        );
+        assert_eq!(
+            HistoryStore::open_in_memory()
+                .unwrap()
+                .last_failure()
+                .unwrap(),
+            None
+        );
     }
 
     fn stage(position: u32, kind: StageKind, text: &str) -> StageRecord {

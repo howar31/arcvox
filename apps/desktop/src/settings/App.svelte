@@ -26,6 +26,7 @@
   import About from "./pages/About.svelte";
   import Licenses from "./pages/Licenses.svelte";
   import WhatsNew from "./pages/WhatsNew.svelte";
+  import Report from "./pages/Report.svelte";
   import Backup from "./pages/Backup.svelte";
   import Welcome from "./pages/Welcome.svelte";
 
@@ -185,6 +186,7 @@
         {:else if route.page === "about"}<About />
         {:else if route.page === "licenses"}<Licenses arg={route.arg} />
         {:else if route.page === "whatsnew"}<WhatsNew />
+        {:else if route.page === "report"}<Report />
         {:else if route.page === "backup"}<Backup />
         {:else if route.page === "engines"}<Engines arg={route.arg} />
         {:else if route.page === "flow"}<Flow arg={route.arg} />

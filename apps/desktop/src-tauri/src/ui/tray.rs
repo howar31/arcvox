@@ -111,6 +111,21 @@ pub enum Notice {
 }
 
 impl Notice {
+    /// The kind of problem, without the names it carries.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Notice::MicrophoneDenied => "microphone_denied",
+            Notice::MicrophoneRestricted => "microphone_restricted",
+            Notice::ProfileOnDefault(..) => "profile_on_default",
+            Notice::ProfileStyleMoved(..) => "profile_style_moved",
+            Notice::DefaultAsrNotReady => "default_asr_not_ready",
+            Notice::DefaultLlmNotReady => "default_llm_not_ready",
+            Notice::ModelFileMissing(..) => "model_file_missing",
+            Notice::BackupFolderMissing => "backup_folder_missing",
+            Notice::BackupFolderNotWritable => "backup_folder_not_writable",
+        }
+    }
+
     /// What is wrong, as a line of the menu.
     fn line(&self, language: Language) -> String {
         let (msg, name) = match self {

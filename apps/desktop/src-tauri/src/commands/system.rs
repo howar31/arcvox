@@ -159,10 +159,6 @@ pub struct SystemInfo {
     pub version: String,
     /// A development build, shown as such beside the version.
     pub dev: bool,
-    pub config_dir: String,
-    pub data_dir: String,
-    pub cache_dir: String,
-    pub recordings_dir: String,
     /// The machine's memory, for the model entries that state what they need.
     pub memory_bytes: u64,
 }
@@ -416,25 +412,189 @@ pub fn system_app_names(bundle_ids: Vec<String>) -> HashMap<String, Option<Strin
 }
 
 #[tauri::command]
-pub fn system_info(app: AppHandle<Wry>, state: State<'_, AppState>) -> SystemInfo {
+pub fn system_info(app: AppHandle<Wry>) -> SystemInfo {
     SystemInfo {
         name: crate::identity::name(app.package_info()),
         version: crate::identity::version(app.package_info()),
         dev: crate::identity::is_dev(app.package_info()),
-        config_dir: state.dirs.config_dir.display().to_string(),
-        data_dir: state.dirs.data_dir.display().to_string(),
-        cache_dir: state.dirs.cache_dir.display().to_string(),
-        recordings_dir: state
-            .engine
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|e| e.recordings_dir())
-            .unwrap_or_else(|| state.dirs.recordings_dir())
-            .display()
-            .to_string(),
         memory_bytes: memory_bytes(),
     }
+}
+
+/// A place the app keeps files in, for the report page.
+#[derive(Serialize)]
+pub struct Location {
+    /// `app`, `data` (only where it is not the app folder), `recordings`,
+    /// `models`, `backup`, `log` or `cache`.
+    pub kind: &'static str,
+    pub path: String,
+    /// For the folders the user can choose: whether it is the default one.
+    pub is_default: Option<bool>,
+    pub exists: bool,
+}
+
+#[derive(Serialize)]
+pub struct Diagnostics {
+    pub text: String,
+    /// What the bug form is opened with.
+    pub issue: crate::diagnostics::IssueFields,
+    pub locations: Vec<Location>,
+}
+
+/// The report page's snapshot and the places the app keeps files in;
+/// collected when the page opens, nothing runs in the background.
+#[tauri::command(async)]
+pub fn system_diagnostics(app: AppHandle<Wry>, state: State<'_, AppState>) -> Diagnostics {
+    let engine = state.engine.lock().unwrap().clone();
+    let client = crate::settings::ClientSettings::load(&state.dirs.config_dir);
+    let config = match &engine {
+        Some(e) => (*e.config().current()).clone(),
+        None => arcvox_core::config::ConfigStore::read_only(&state.dirs)
+            .unwrap_or_else(|_| arcvox_core::config::Config::first_run()),
+    };
+    let now = arcvox_core::history::now_unix();
+    let (outcomes, last_failure) = match &engine {
+        Some(e) => {
+            let h = e.history();
+            (
+                h.outcomes(now - 7 * 86_400).ok(),
+                h.last_failure().ok().flatten(),
+            )
+        }
+        None => (None, None),
+    };
+    let microphone_connected = match client.microphone_choice() {
+        crate::settings::MicrophoneChoice::Named(name) => {
+            Some(state.audio.list_devices().contains(&name))
+        }
+        _ => None,
+    };
+    state.refresh_problems();
+    let mut problems: Vec<&'static str> =
+        state.ui.tray().notices().iter().map(|n| n.kind()).collect();
+    problems.dedup();
+    let backup_folder =
+        crate::backup_auto::target(client.backup.folder.as_deref(), &state.dirs.backup_dir);
+    let machine = crate::diagnostics::Machine {
+        version: crate::identity::version(app.package_info()),
+        dev: crate::identity::is_dev(app.package_info()),
+        os: crate::diagnostics::sysctl_string(c"kern.osproductversion"),
+        os_build: crate::diagnostics::sysctl_string(c"kern.osversion"),
+        arch: std::env::consts::ARCH,
+        chip: crate::diagnostics::sysctl_string(c"machdep.cpu.brand_string"),
+        memory_bytes: memory_bytes(),
+        interface: state.language.lock().unwrap().tag(),
+        system_language: crate::i18n::system_preferred_language(),
+        install: crate::diagnostics::install_place(),
+    };
+    let live = crate::diagnostics::Live {
+        permissions: system_permissions(state.clone()),
+        microphone_connected,
+        displays: system_list_displays(app.clone()).len(),
+        engine_error: state.engine_error.lock().unwrap().as_ref().map(|e| e.code),
+        problems,
+        backup_folder: crate::diagnostics::folder_state_name(state.backup.folder()),
+        outcomes,
+        last_failure,
+        now,
+    };
+    let text = crate::diagnostics::report(&machine, &live, &config, &client);
+    let issue = crate::diagnostics::issue_fields(&machine, &config, text.clone());
+
+    let dirs = &state.dirs;
+    let place = |kind: &'static str, path: std::path::PathBuf, is_default: Option<bool>| Location {
+        kind,
+        exists: path.exists(),
+        path: path.display().to_string(),
+        is_default,
+    };
+    let mut locations = vec![place("app", dirs.config_dir.clone(), None)];
+    if dirs.data_dir != dirs.config_dir {
+        locations.push(place("data", dirs.data_dir.clone(), None));
+    }
+    let recordings = engine
+        .as_ref()
+        .map_or_else(|| dirs.recordings_dir(), |e| e.recordings_dir());
+    locations.push(place(
+        "recordings",
+        recordings,
+        Some(config.general.recordings_dir.is_none()),
+    ));
+    locations.push(place(
+        "models",
+        state.models.models_dir(),
+        Some(config.general.models_dir.is_none()),
+    ));
+    locations.push(place(
+        "backup",
+        backup_folder,
+        Some(client.backup.folder.is_none()),
+    ));
+    locations.push(place("log", newest_log(&dirs.data_dir), None));
+    locations.push(place("cache", dirs.cache_dir.clone(), None));
+    Diagnostics {
+        text,
+        issue,
+        locations,
+    }
+}
+
+/// The log file written last; the day's name when there is none yet.
+fn newest_log(dir: &std::path::Path) -> std::path::PathBuf {
+    std::fs::read_dir(dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("arcvox.") && n.ends_with(".log"))
+        })
+        .max()
+        .unwrap_or_else(|| dir.join("arcvox.log"))
+}
+
+/// The bug report form; its fields fill from query parameters named by
+/// their ids.
+const ISSUE_FORM: &str = "https://github.com/howar31/arcvox/issues/new?template=bug_report.yml";
+
+/// The longest form address made, well under where the server refuses one.
+const ISSUE_URL_MAX: usize = 4000;
+
+/// The form's address with the fields filled in. When the snapshot would
+/// make the address too long it is left out and the other fields stay; the
+/// page's copy button covers it.
+fn issue_url(fields: &crate::diagnostics::IssueFields) -> String {
+    let build = |with_diagnostics: bool| {
+        let mut url = url::Url::parse(ISSUE_FORM).expect("the form address parses");
+        {
+            let mut q = url.query_pairs_mut();
+            q.append_pair("version", &fields.version);
+            q.append_pair("system", &fields.system);
+            q.append_pair("engines", &fields.engines);
+            if with_diagnostics && !fields.diagnostics.is_empty() {
+                q.append_pair("diagnostics", &fields.diagnostics);
+            }
+        }
+        url.to_string()
+    };
+    let url = build(true);
+    if url.len() > ISSUE_URL_MAX {
+        build(false)
+    } else {
+        url
+    }
+}
+
+/// Opens the bug report form with the fields the page was given.
+#[tauri::command]
+pub fn system_open_issue(fields: crate::diagnostics::IssueFields) -> CmdResult<()> {
+    std::process::Command::new("open")
+        .arg(issue_url(&fields))
+        .spawn()?;
+    Ok(())
 }
 
 /// The pages the About page links to, by name; the page never passes a URL.
@@ -442,7 +602,6 @@ fn link_url(link: &str) -> Option<&'static str> {
     Some(match link {
         "sponsor" => "https://donate.howar31.com/",
         "source" => "https://github.com/howar31/arcvox",
-        "issue" => "https://github.com/howar31/arcvox/issues/new/choose",
         "website" => "https://arcvox.howar31.com/",
         "releases" => "https://github.com/howar31/arcvox/releases",
         _ => return None,
@@ -491,6 +650,61 @@ mod tests {
     #[test]
     fn app_name_is_none_for_an_unknown_bundle_id() {
         assert_eq!(app_name("invalid.bundle.id.zz"), None);
+    }
+
+    fn query(url: &str) -> Vec<(String, String)> {
+        url::Url::parse(url)
+            .unwrap()
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn the_issue_form_takes_every_field_and_drops_only_a_long_snapshot() {
+        let mut f = crate::diagnostics::IssueFields {
+            version: "0.4.0".into(),
+            system: "macOS 26.0 (25A354), aarch64".into(),
+            engines: "asr=breeze-asr-25-q5_0, llm=gemma-3-4b-it-q4_k_m (default profile: casual)"
+                .into(),
+            diagnostics: "Arcvox 0.4.0\nChip: Apple M4 & more".into(),
+        };
+        let url = issue_url(&f);
+        assert!(url.starts_with(ISSUE_FORM), "{url}");
+        let pairs = query(&url);
+        let get = |k: &str| {
+            pairs
+                .iter()
+                .find(|(key, _)| key == k)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(get("template"), Some("bug_report.yml"));
+        assert_eq!(get("version"), Some("0.4.0"));
+        assert_eq!(get("system"), Some("macOS 26.0 (25A354), aarch64"));
+        assert_eq!(get("engines"), Some(f.engines.as_str()));
+        assert_eq!(
+            get("diagnostics"),
+            Some("Arcvox 0.4.0\nChip: Apple M4 & more")
+        );
+        f.diagnostics = "x y".repeat(2000);
+        let url = issue_url(&f);
+        assert!(url.len() <= ISSUE_URL_MAX);
+        let pairs = query(&url);
+        assert!(pairs.iter().any(|(k, v)| k == "version" && v == "0.4.0"));
+        assert!(!pairs.iter().any(|(k, _)| k == "diagnostics"));
+    }
+
+    #[test]
+    fn the_newest_log_is_the_latest_day() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(newest_log(dir.path()), dir.path().join("arcvox.log"));
+        std::fs::write(dir.path().join("arcvox.2026-10-25.log"), "").unwrap();
+        std::fs::write(dir.path().join("arcvox.2026-10-26.log"), "").unwrap();
+        std::fs::write(dir.path().join("other.log"), "").unwrap();
+        assert_eq!(
+            newest_log(dir.path()),
+            dir.path().join("arcvox.2026-10-26.log")
+        );
     }
 
     #[test]

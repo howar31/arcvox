@@ -6,37 +6,37 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for the report. Fill in what you can; the version and the steps help us reproduce the problem.
-        感謝回報。請盡量填寫，版本與重現步驟能幫助我們重現問題。
-  - type: dropdown
-    id: platform
-    attributes:
-      label: Platform / 平台
-      options:
-        - macOS
-        - Windows
-    validations:
-      required: true
+        Thanks for the report. Opened from Settings > About > Report an issue, the first four fields are filled in; the steps and results below are yours to write.
+        感謝回報。從「設定 > 關於 > 回報問題」開啟時，前四欄會自動填入；請填寫下方的重現步驟與結果。
   - type: input
     id: version
     attributes:
       label: Version / 版本
-      description: Settings > About shows it, and so does the first line of the menu-bar menu. / 設定 > 關於，或選單列選單的第一行。
-      placeholder: v0.1.0
+      description: Filled in when the form is opened from Settings > About > Report an issue. / 從「設定 > 關於 > 回報問題」開啟本表單時會自動填入。
+      placeholder: 0.4.0
     validations:
       required: true
   - type: input
     id: system
     attributes:
-      label: System version / 系統版本
-      placeholder: macOS 26.0
+      label: System / 系統
+      description: Filled in when the form is opened from the app. / 從 app 開啟時會自動填入。
+      placeholder: macOS 26.0 (25A354), aarch64
     validations:
       required: true
-  - type: textarea
+  - type: input
     id: engines
     attributes:
       label: Engines in use / 使用中的引擎
-      description: The speech recognition and text engines of the profile, with the model when local. / 情境所用的語音辨識與文字引擎，本機引擎請附模型名稱。
+      description: Filled in when the form is opened from the app; change it if the problem happened with another profile. / 從 app 開啟時會填入預設情境的引擎；問題發生在其他情境時請修改。
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics / 診斷資訊
+      description: |
+        Filled in when the form is opened from the app; or press "Copy diagnostics" on that page and paste it here.
+        從 app 開啟時會自動帶入；或在該頁按「複製診斷資訊」後貼到這裡。
+      render: text
   - type: textarea
     id: steps
     attributes:

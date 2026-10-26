@@ -5,6 +5,7 @@ pub mod audio;
 pub mod backup_auto;
 pub mod commands;
 pub mod context;
+pub mod diagnostics;
 pub mod dictation;
 pub mod hotkey;
 pub mod i18n;

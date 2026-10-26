@@ -48,7 +48,7 @@ npx tauri build
 
 問題回報與功能建議請到
 [GitHub Issues](https://github.com/howar31/arcvox/issues/new/choose)。
-在 app 中，設定 > 關於 > 回報問題會開啟回報表單。
+在 app 中，設定 > 關於 > 回報問題會列出診斷資訊（版本、系統、設定與最近結果的統計，不含聽寫文字、檔案路徑與名稱）及 app 存放資料的資料夾，並開啟已填入版本、系統、引擎與診斷資訊的回報表單。
 
 如果 Arcvox 對你有幫助，歡迎贊助開發：
 [贊助](https://donate.howar31.com/) · [Ko-fi](https://ko-fi.com/howar31)
