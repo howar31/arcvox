@@ -445,14 +445,7 @@ pub(super) fn menu<R: Runtime>(
     }
     menu.append(&widget_menu)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
-    // The app itself: about, updates, settings.
-    menu.append(&MenuItem::with_id(
-        app,
-        ID_ABOUT,
-        text(language, Msg::TrayAbout),
-        true,
-        None::<&str>,
-    )?)?;
+    // The app itself: updates, about, settings.
     if let Some(found) = update {
         let label = match found {
             Some(version) => text(language, Msg::TrayUpdateFound).replace("{version}", version),
@@ -468,6 +461,14 @@ pub(super) fn menu<R: Runtime>(
     }
     menu.append(&MenuItem::with_id(
         app,
+        ID_ABOUT,
+        text(language, Msg::TrayAbout)
+            .replace("{app}", &identity::name_and_version(app.package_info())),
+        true,
+        None::<&str>,
+    )?)?;
+    menu.append(&MenuItem::with_id(
+        app,
         ID_SETTINGS,
         text(language, Msg::TraySettings),
         true,
@@ -477,7 +478,7 @@ pub(super) fn menu<R: Runtime>(
     menu.append(&MenuItem::with_id(
         app,
         ID_QUIT,
-        text(language, Msg::TrayQuit),
+        text(language, Msg::TrayQuit).replace("{app}", &identity::name(app.package_info())),
         true,
         None::<&str>,
     )?)?;
