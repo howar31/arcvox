@@ -30,17 +30,17 @@ pub struct Release {
 pub enum Status {
     /// Not looked at yet.
     Idle,
-    /// A build that is not updated: the development identity.
-    Unsupported,
     Checking,
     /// The installed version is the newest; seconds since the epoch.
     Current {
         checked_at: u64,
     },
-    /// `notes` is the release description.
+    /// `notes` is the release description; `installable` is false for a
+    /// copy the app cannot replace (see `installable`).
     Available {
         version: String,
         notes: Option<String>,
+        installable: bool,
     },
     Installing {
         version: String,
@@ -94,7 +94,6 @@ fn publish<R: Runtime>(app: &AppHandle<R>, status: Status) {
     };
     *updates.status.lock().unwrap() = status.clone();
     let item = match &status {
-        Status::Unsupported => None,
         Status::Available { version, .. } | Status::Installing { version, .. } => {
             Some(Some(version.clone()))
         }
@@ -106,20 +105,10 @@ fn publish<R: Runtime>(app: &AppHandle<R>, status: Status) {
     let _ = app.emit_to(crate::ui::window_state::SETTINGS_WINDOW, EVENT, status);
 }
 
-/// Looks at the feed now and then every `INTERVAL`. The development
-/// identity is never updated: its bundle is another app than the release;
-/// it reads the releases once, for its What's new page.
+/// Looks at the feed now and then every `INTERVAL`, in every build; only
+/// an installable copy installs what it finds.
 pub fn start(app: &AppHandle<tauri::Wry>) {
     app.manage(Updates::default());
-    if crate::identity::is_dev(app.package_info()) {
-        publish(app, Status::Unsupported);
-        let app = app.clone();
-        tauri::async_runtime::spawn(async move {
-            read_releases(&app).await;
-            publish(&app, Status::Unsupported);
-        });
-        return;
-    }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         loop {
@@ -135,9 +124,7 @@ pub async fn check<R: Runtime>(app: &AppHandle<R>) -> Status {
         return Status::Idle;
     };
     let before = updates.status();
-    if matches!(before, Status::Unsupported | Status::Checking)
-        || updates.installing.load(Ordering::SeqCst)
-    {
+    if matches!(before, Status::Checking) || updates.installing.load(Ordering::SeqCst) {
         return before;
     }
     publish(app, Status::Checking);
@@ -150,6 +137,7 @@ pub async fn check<R: Runtime>(app: &AppHandle<R>) -> Status {
             let status = Status::Available {
                 version: update.version.clone(),
                 notes: update.body.clone(),
+                installable: installable(),
             };
             *updates.found.lock().unwrap() = Some(update);
             status
@@ -183,6 +171,9 @@ pub async fn install(app: &AppHandle<tauri::Wry>) -> Result<(), String> {
     let Some(update) = updates.found.lock().unwrap().clone() else {
         return Err("no update to install".into());
     };
+    if !installable() {
+        return Err("this copy cannot be replaced".into());
+    }
     if updates.installing.swap(true, Ordering::SeqCst) {
         return Ok(());
     }
@@ -238,11 +229,39 @@ pub async fn install(app: &AppHandle<tauri::Wry>) -> Result<(), String> {
                 Status::Available {
                     version,
                     notes: update.body.clone(),
+                    installable: true,
                 },
             );
             Err(e.to_string())
         }
     }
+}
+
+/// Whether this copy can replace itself: an app in /Applications whose
+/// folder can be written. Another copy (the development build, one opened
+/// from the disk image) gets the release page instead.
+fn installable() -> bool {
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let Some(bundle) = exe
+        .ancestors()
+        .find(|p| p.extension().is_some_and(|e| e == "app"))
+    else {
+        return false;
+    };
+    let Some(folder) = bundle.parent() else {
+        return false;
+    };
+    if !bundle.starts_with("/Applications") {
+        return false;
+    }
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(path) = std::ffi::CString::new(folder.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: `path` is a valid NUL-terminated string for the call.
+    unsafe { libc::access(path.as_ptr(), libc::W_OK) == 0 }
 }
 
 /// Keeps the earlier list when the releases cannot be read.
@@ -412,17 +431,14 @@ mod tests {
         let s = serde_json::to_value(Status::Available {
             version: "0.2.0".into(),
             notes: None,
+            installable: false,
         })
         .unwrap();
         assert_eq!(
             s,
-            serde_json::json!({"state": "available", "version": "0.2.0", "notes": null})
+            serde_json::json!({"state": "available", "version": "0.2.0", "notes": null, "installable": false})
         );
         let s = serde_json::to_value(Status::Current { checked_at: 5 }).unwrap();
         assert_eq!(s, serde_json::json!({"state": "current", "checked_at": 5}));
-        assert_eq!(
-            serde_json::to_value(Status::Unsupported).unwrap(),
-            serde_json::json!({"state": "unsupported"})
-        );
     }
 }

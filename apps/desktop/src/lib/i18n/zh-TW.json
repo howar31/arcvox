@@ -1301,6 +1301,7 @@
   "about.update.current": "已是最新版本",
   "about.update.available": "有新版本：{version}",
   "about.update.install": "安裝並重新啟動",
+  "about.update.download": "在 GitHub 下載",
   "about.update.installing": "正在下載 {version}",
   "about.update.failed": "無法檢查更新",
   "about.update.notes": "{version} 的新內容",

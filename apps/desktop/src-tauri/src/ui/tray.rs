@@ -643,6 +643,7 @@ impl<R: Runtime> Tray<R> {
     pub fn set_update(&self, next: Option<Option<String>>) {
         let before = std::mem::replace(&mut *self.update.lock().unwrap(), next.clone());
         if before != next {
+            self.show_icon(self.state());
             self.rebuild();
         }
     }
@@ -672,7 +673,8 @@ impl<R: Runtime> Tray<R> {
 
     fn show_icon(&self, state: UiState) {
         let noticed = !self.notices.lock().unwrap().is_empty();
-        let goal = Goal::of(state, noticed);
+        let update = matches!(*self.update.lock().unwrap(), Some(Some(_)));
+        let goal = Goal::of(state, noticed, update);
         let still = reduce_motion();
         self.motion.drive(&self.icon, |m| {
             m.goal = goal;
@@ -894,15 +896,30 @@ mod tests {
     #[test]
     fn a_problem_shows_in_the_icon_itself() {
         assert_ne!(Phase::Problem.image().rgba(), Phase::Rest.image().rgba());
-        assert_eq!(Goal::of(UiState::NoAccessibility, false), Goal::Problem);
-        assert_eq!(Goal::of(UiState::EngineError, false), Goal::Problem);
-        assert_eq!(Goal::of(UiState::Idle, false), Goal::Rest);
+        assert_eq!(
+            Goal::of(UiState::NoAccessibility, false, false),
+            Goal::Problem
+        );
+        assert_eq!(Goal::of(UiState::EngineError, false, false), Goal::Problem);
+        assert_eq!(Goal::of(UiState::Idle, false, false), Goal::Rest);
+    }
+
+    #[test]
+    fn an_update_shows_in_the_icon_while_idle_and_a_problem_outranks_it() {
+        assert_eq!(Goal::of(UiState::Idle, false, true), Goal::Update);
+        assert_eq!(Goal::of(UiState::Idle, true, true), Goal::Problem);
+        assert_eq!(Goal::of(UiState::Paused, false, true), Goal::Paused);
+        assert_eq!(Goal::of(UiState::Recording, false, true), Goal::Recording);
+        assert_ne!(Phase::Update.image().rgba(), Phase::Rest.image().rgba());
+        assert_ne!(Phase::Update.image().rgba(), Phase::Problem.image().rgba());
+        assert_eq!(Phase::Update.toward(Goal::Rest, false), Phase::Rest);
+        assert_eq!(Phase::Problem.toward(Goal::Update, false), Phase::Update);
     }
 
     #[test]
     fn a_pause_is_neither_rest_nor_a_problem() {
-        assert_eq!(Goal::of(UiState::Paused, false), Goal::Paused);
-        assert_eq!(Goal::of(UiState::Paused, true), Goal::Paused);
+        assert_eq!(Goal::of(UiState::Paused, false, false), Goal::Paused);
+        assert_eq!(Goal::of(UiState::Paused, true, false), Goal::Paused);
         assert_ne!(Phase::Paused.image().rgba(), Phase::Rest.image().rgba());
         assert_ne!(Phase::Paused.image().rgba(), Phase::Problem.image().rgba());
         assert_eq!(fix_msg(UiState::Paused), None);
@@ -911,7 +928,7 @@ mod tests {
 
     #[test]
     fn a_problem_that_leaves_dictation_working_shows_while_idle() {
-        assert_eq!(Goal::of(UiState::Idle, true), Goal::Problem);
+        assert_eq!(Goal::of(UiState::Idle, true, false), Goal::Problem);
         // A dictation in progress keeps its own motion; the text going in is part of it.
         for state in [
             UiState::Recording,
@@ -919,8 +936,8 @@ mod tests {
             UiState::Processing,
             UiState::Inserting,
         ] {
-            assert_eq!(Goal::of(state, true), Goal::of(state, false));
-            assert_ne!(Goal::of(state, true), Goal::Problem);
+            assert_eq!(Goal::of(state, true, false), Goal::of(state, false, false));
+            assert_ne!(Goal::of(state, true, false), Goal::Problem);
         }
     }
 

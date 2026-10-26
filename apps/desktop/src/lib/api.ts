@@ -280,11 +280,11 @@ export const appNames = (bundleIds: string[]) => invoke<Record<string, string | 
 /** PNG data URLs of the installed applications' icons; null when the app is not installed. */
 export const appIcons = (bundleIds: string[]) => invoke<Record<string, string | null>>("system_app_icons", { bundleIds });
 export const systemInfo = () => invoke<SystemInfo>("system_info");
-/** The app's own updates: `unsupported` in a build that is not updated. */
+/** The app's own updates; `installable` is false for a copy that cannot replace itself. */
 export type UpdateStatus =
-  | { state: "idle" } | { state: "unsupported" } | { state: "checking" }
+  | { state: "idle" } | { state: "checking" }
   | { state: "current"; checked_at: number }
-  | { state: "available"; version: string; notes: string | null }
+  | { state: "available"; version: string; notes: string | null; installable: boolean }
   | { state: "installing"; version: string; received: number; total: number | null }
   | { state: "failed"; message: string };
 export const updateStatus = () => invoke<UpdateStatus>("update_status");

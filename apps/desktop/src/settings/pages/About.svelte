@@ -59,7 +59,7 @@
     <div class="version">
       <span>{t("about.version", { version: info.version })}</span>
       {#if info.dev}<Tag>{t("about.dev")}</Tag>{/if}
-      {#if update.state !== "unsupported" && update.state !== "installing"}
+      {#if update.state !== "installing"}
         <button type="button" class="icon-btn" class:spin={update.state === "checking"} onclick={check} disabled={update.state === "checking"} aria-label={t("about.update.check")} use:tip={t("about.update.check")}><Icon name="refresh" size={14} /></button>
       {/if}
     </div>
@@ -70,7 +70,11 @@
       {:else if update.state === "failed"}<span class="bad" use:tip={update.message}>{t("about.update.failed")}</span>
       {:else if update.state === "available"}
         <span class="new">{t("about.update.available", { version: update.version })}</span>
-        <button type="button" class="btn" onclick={install}><Icon name="download" size={14} />{t("about.update.install")}</button>
+        {#if update.installable}
+          <button type="button" class="btn" onclick={install}><Icon name="download" size={14} />{t("about.update.install")}</button>
+        {:else}
+          <button type="button" class="btn" onclick={() => open("releases")}><Icon name="external" size={14} />{t("about.update.download")}</button>
+        {/if}
       {:else if update.state === "installing"}
         <span>{t("about.update.installing", { version: update.version })}</span>
         <div class="bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-label={t("about.update.installing", { version: update.version })}><i style:width="{percent}%"></i></div>

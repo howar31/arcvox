@@ -1301,6 +1301,7 @@
   "about.update.current": "Up to date",
   "about.update.available": "Update available: {version}",
   "about.update.install": "Install and restart",
+  "about.update.download": "Download from GitHub",
   "about.update.installing": "Downloading {version}",
   "about.update.failed": "Could not check for updates",
   "about.update.notes": "New in {version}",

@@ -21,6 +21,7 @@ const SIDE: u32 = 36;
 const SHEET_IDLE: Image<'static> = tauri::include_image!("./icons/tray-idle.png");
 const SHEET_PAUSED: Image<'static> = tauri::include_image!("./icons/tray-paused.png");
 const SHEET_PROBLEM: Image<'static> = tauri::include_image!("./icons/tray-problem.png");
+const SHEET_UPDATE: Image<'static> = tauri::include_image!("./icons/tray-update.png");
 const SHEET_START: Image<'static> = tauri::include_image!("./icons/tray-start.png");
 const SHEET_STOP: Image<'static> = tauri::include_image!("./icons/tray-stop.png");
 const SHEET_RECORDING: Image<'static> = tauri::include_image!("./icons/tray-recording.png");
@@ -34,6 +35,7 @@ enum Sheet {
     Idle,
     Paused,
     Problem,
+    Update,
     Start,
     Stop,
     Recording,
@@ -43,10 +45,11 @@ enum Sheet {
     Failed,
 }
 
-const SHEETS: [(Sheet, Image<'static>); 10] = [
+const SHEETS: [(Sheet, Image<'static>); 11] = [
     (Sheet::Idle, SHEET_IDLE),
     (Sheet::Paused, SHEET_PAUSED),
     (Sheet::Problem, SHEET_PROBLEM),
+    (Sheet::Update, SHEET_UPDATE),
     (Sheet::Start, SHEET_START),
     (Sheet::Stop, SHEET_STOP),
     (Sheet::Recording, SHEET_RECORDING),
@@ -97,15 +100,19 @@ pub enum Goal {
     /// The shortcuts are paused: the mark, faint.
     Paused,
     Problem,
+    /// A newer version can be installed.
+    Update,
     Recording,
     Processing,
 }
 
 impl Goal {
-    /// `noticed`: something needs attention although dictation works.
-    pub fn of(state: UiState, noticed: bool) -> Self {
+    /// `noticed`: something needs attention although dictation works;
+    /// `update`: a newer version was found. A problem outranks an update.
+    pub fn of(state: UiState, noticed: bool, update: bool) -> Self {
         match state {
             UiState::Idle if noticed => Goal::Problem,
+            UiState::Idle if update => Goal::Update,
             UiState::Idle => Goal::Rest,
             UiState::Recording | UiState::Locked => Goal::Recording,
             UiState::Processing | UiState::Inserting => Goal::Processing,
@@ -135,6 +142,7 @@ pub enum Phase {
     Rest,
     Paused,
     Problem,
+    Update,
     /// The gap closing, frame by frame.
     Start(usize),
     /// The dot breathing.
@@ -166,13 +174,17 @@ impl Phase {
                 Phase::Outcome(_) => self,
                 _ => Phase::Problem,
             },
+            Goal::Update => match self {
+                Phase::Outcome(_) => self,
+                _ => Phase::Update,
+            },
             Goal::Paused => match self {
                 Phase::Outcome(_) => self,
                 _ => Phase::Paused,
             },
             Goal::Rest => match self {
                 Phase::Rest | Phase::Outcome(_) | Phase::Stop(_) => self,
-                Phase::Problem | Phase::Paused => Phase::Rest,
+                Phase::Problem | Phase::Update | Phase::Paused => Phase::Rest,
                 _ if still => Phase::Rest,
                 _ => Phase::Stop(0),
             },
@@ -192,7 +204,7 @@ impl Phase {
     /// How long this frame stays, or `None` for a picture that stays as it is.
     pub fn wait(self, still: bool) -> Option<Duration> {
         match self {
-            Phase::Rest | Phase::Paused | Phase::Problem => None,
+            Phase::Rest | Phase::Paused | Phase::Problem | Phase::Update => None,
             Phase::Start(_) | Phase::Stop(_) => Some(TICK),
             Phase::Recording(_) => (!still).then_some(BREATH),
             Phase::Processing(_) => (!still).then_some(TICK),
@@ -209,12 +221,14 @@ impl Phase {
                 Goal::Processing => Phase::Processing(0),
                 Goal::Rest => Phase::Stop(0),
                 Goal::Problem => Phase::Problem,
+                Goal::Update => Phase::Update,
                 Goal::Paused => Phase::Paused,
             },
             Phase::Recording(i) => Phase::Recording((i + 1) % RECORDING_FRAMES),
             Phase::Processing(i) => Phase::Processing((i + 1) % PROCESSING_FRAMES),
             Phase::Outcome(_) => match goal {
                 Goal::Problem => Phase::Problem,
+                Goal::Update => Phase::Update,
                 Goal::Paused => Phase::Paused,
                 _ if still => Phase::Rest,
                 _ => Phase::Stop(0),
@@ -222,10 +236,11 @@ impl Phase {
             Phase::Stop(i) if i + 1 < STOP_FRAMES => Phase::Stop(i + 1),
             Phase::Stop(_) => match goal {
                 Goal::Problem => Phase::Problem,
+                Goal::Update => Phase::Update,
                 Goal::Paused => Phase::Paused,
                 _ => Phase::Rest,
             },
-            Phase::Rest | Phase::Paused | Phase::Problem => self,
+            Phase::Rest | Phase::Paused | Phase::Problem | Phase::Update => self,
         }
     }
 
@@ -234,6 +249,7 @@ impl Phase {
             Phase::Rest => frame(Sheet::Idle, 0),
             Phase::Paused => frame(Sheet::Paused, 0),
             Phase::Problem => frame(Sheet::Problem, 0),
+            Phase::Update => frame(Sheet::Update, 0),
             Phase::Start(i) => frame(Sheet::Start, i),
             Phase::Recording(i) => frame(Sheet::Recording, i),
             Phase::Processing(i) => frame(Sheet::Processing, i),
