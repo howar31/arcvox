@@ -54,6 +54,16 @@ pub fn notices(config: &Config, usable: impl Fn(&ProviderConfig) -> bool) -> Vec
     out
 }
 
+/// Whether the default profile can dictate now: every engine it resolves to
+/// can run.
+pub fn default_profile_ready(config: &Config, usable: impl Fn(&ProviderConfig) -> bool) -> bool {
+    let resolved = config.resolve_engines(config.default_profile(), &usable);
+    let ready = resolved
+        .ids()
+        .all(|id| config.provider(id).is_some_and(&usable));
+    ready
+}
+
 /// Reads the profiles and the engines again and reports what is wrong
 /// with them.
 pub fn refresh(engine: Option<&Engine>, ui: &TauriUi) {
@@ -149,5 +159,17 @@ mod tests {
             notices(&config(), have(&["local"])),
             vec![Notice::ModelFileMissing("Own file".into(), "asr")]
         );
+    }
+
+    #[test]
+    fn the_default_profile_is_ready_when_every_engine_it_resolves_to_can_run() {
+        assert!(default_profile_ready(&config(), have(&["local"])));
+        // Its named speech engine is gone and falls back to a default that
+        // cannot run either.
+        let mut c = config();
+        c.default_engines.asr = ProviderId("local".into());
+        assert!(!default_profile_ready(&c, have(&[])));
+        // A default that can run takes over.
+        assert!(default_profile_ready(&config(), have(&[])));
     }
 }

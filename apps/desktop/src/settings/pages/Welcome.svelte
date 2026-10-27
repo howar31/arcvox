@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { enable, isEnabled } from "@tauri-apps/plugin-autostart";
-  import { errorMessage, formatBytes, historyLast, modelsInstalled, modelsManifest, nativeStatus, onDictationState, onHistoryChanged, openPrivacyPane, permissions, requestAccessibility, requestMicrophone, systemInfo, type ClientSettings, type InstalledModel, type ManifestView, type ModelEntry, type NativeStatusKind, type Permissions, type Utterance, type WidgetState } from "../../lib/api";
+  import { dictationReady, errorMessage, formatBytes, historyLast, modelsInstalled, modelsManifest, nativeStatus, onDictationState, onHistoryChanged, openPrivacyPane, permissions, requestAccessibility, requestMicrophone, systemInfo, type ClientSettings, type InstalledModel, type ManifestView, type ModelEntry, type NativeStatusKind, type Permissions, type Utterance, type WidgetState } from "../../lib/api";
   import type { Role } from "../../lib/engines";
   import { guide } from "../../lib/guide.svelte";
   import { applePath, downloadTotals, engineStepDone, guideEntries, memoryShort, permissionStepDone } from "../../lib/guideView";
@@ -31,6 +31,10 @@
   let perms = $state<Permissions | null>(null);
   let dictation = $state<WidgetState>("idle");
   let last = $state<Utterance | null>(null);
+  /** Whether the default profile can dictate now; null until known. */
+  let ready = $state<boolean | null>(null);
+  /** Whether it could when the guide opened: the engines that keeping refers to. */
+  let hadEngines = $state(false);
 
   const apple = $derived(applePath(fm));
   const entriesOf = (role: Role): ModelEntry[] => guideEntries(manifest, role, showAll);
@@ -46,7 +50,7 @@
   );
   const shortcuts = $derived((client.value?.hotkey.shortcuts ?? []).map(shortcutLabel));
   const hasFn = $derived((client.value?.hotkey.shortcuts ?? []).some((s) => s.includes("Fn")));
-  const noEngine = $derived(guide.choice === "later");
+  const noEngine = $derived(ready === false && !downloading);
   const listening = $derived(dictation === "recording" || dictation === "locked");
   const busyRing = $derived(dictation === "processing" || dictation === "inserting");
 
@@ -82,6 +86,9 @@
   async function checkAccess() {
     try { perms = await permissions(); } catch { perms = null; }
   }
+  async function checkReady() {
+    try { ready = await dictationReady(); } catch { ready = false; }
+  }
 
   function startDownload() {
     const wanted = (["asr", "llm"] as Role[]).map((role) => ({ role, id: guide.picked[role] }));
@@ -92,6 +99,12 @@
     if (guide.step === 1 && guide.choice === "apple") {
       busy = true;
       try { await guide.useApple(config.value); } catch (e) { toast.error(errorMessage(e)); return; } finally { busy = false; }
+    }
+    // Models that were all installed already were never downloaded, so nothing made them the default yet.
+    if (guide.step === 1 && guide.choice === "models" && !guide.started) {
+      busy = true;
+      const wanted = (["asr", "llm"] as Role[]).map((role) => ({ role, id: guide.picked[role] }));
+      try { await guide.useModels(wanted, config.value); } catch (e) { toast.error(errorMessage(e)); return; } finally { busy = false; }
     }
     if (guide.step < 3) guide.step = (guide.step + 1) as 2 | 3;
   }
@@ -109,7 +122,8 @@
       toast.error(errorMessage(e));
       return;
     }
-    go(noEngine ? "engines" : "home");
+    await checkReady();
+    go(ready ? "home" : "engines");
   }
 
   async function askAccessibility() {
@@ -140,7 +154,13 @@
     systemInfo().then((i) => { memoryBytes = i.memory_bytes; }).catch(() => {});
     checkApple();
     checkAccess();
-    const onFocus = () => { checkAccess(); if (apple !== "ready") checkApple(); };
+    // Engines that can run already are kept unless the user picks others.
+    dictationReady().then((r) => {
+      ready = r;
+      hadEngines = r;
+      if (r && !guide.started && guide.choice === "models") guide.choice = "later";
+    }).catch(() => { ready = false; });
+    const onFocus = () => { checkAccess(); checkReady(); if (apple !== "ready") checkApple(); };
     window.addEventListener("focus", onFocus);
     // A download finishing shows as installed; the system switching Apple Intelligence on shows as ready;
     // a permission granted in System Settings shows as granted.
@@ -161,7 +181,13 @@
   $effect(() => {
     // Every chosen model arrived: the list of installed models follows.
     const done = Object.values(guide.progress).filter((p) => p.done).length;
-    if (done) refreshInstalled();
+    if (done) { refreshInstalled(); checkReady(); }
+  });
+
+  $effect(() => {
+    // A step taken may have changed the engines; the last step shows what they allow.
+    void guide.step;
+    checkReady();
   });
 </script>
 
@@ -227,7 +253,7 @@
 
       <button type="button" class="pick wide" class:on={guide.choice === "later"} class:dim={guide.started} role="radio" aria-checked={guide.choice === "later"} disabled={guide.started} onclick={() => choose("later")}>
         <span class="dot"></span>
-        <span class="body"><span class="name">{t("welcome.later")}</span><small>{t("welcome.later_note")}</small></span>
+        <span class="body"><span class="name">{t(hadEngines ? "welcome.keep" : "welcome.later")}</span><small>{t(hadEngines ? "welcome.keep_note" : "welcome.later_note")}</small></span>
       </button>
 
       {#if guide.choice === "models"}
@@ -268,6 +294,9 @@
       {#if hasFn}<p class="note">{t("general.fn_key_note")}</p>{/if}
     {:else}
       <h1>{t("welcome.try.title")}</h1>
+      {#if noEngine}
+      <p class="sub">{t("welcome.result.no_engine")}</p>
+      {:else}
       <p class="sub">{t("welcome.try.desc")}</p>
 
       <h2>{t("welcome.keys")}<span class="sp"></span><small>{t("welcome.keys_note")}</small></h2>
@@ -283,7 +312,6 @@
           <span>
             {#if dictation === "recording" || dictation === "locked"}{t("welcome.result.recording")}
             {:else if dictation === "processing" || dictation === "inserting"}{t("welcome.result.processing")}
-            {:else if noEngine}{t("welcome.result.no_engine")}
             {:else if downloading}{t("welcome.result.waiting_models", { done: formatBytes(totals.received), total: formatBytes(totals.total) })}
             {:else}{t("welcome.result.ready")}{/if}
           </span>
@@ -296,6 +324,7 @@
           </dl>
         {/if}
       </div>
+      {/if}
 
       <h2>{t("welcome.launch")}</h2>
       <div class="group">

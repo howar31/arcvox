@@ -26,7 +26,7 @@ Voice dictation for macOS: hold a key, speak, and the text is put into the appli
 
 ## Install
 
-**macOS 14+ on Apple silicon** (Apple's dictation and language model as engines require macOS 26): download the DMG from [Releases](https://github.com/howar31/arcvox/releases) and drag Arcvox to Applications. The first launch opens a short guide that downloads a speech model and a rewrite model and asks for the Accessibility and Microphone permissions.
+**macOS 14+ on Apple silicon** (Apple's dictation and language model as engines require macOS 26): download the DMG from [Releases](https://github.com/howar31/arcvox/releases) and drag Arcvox to Applications. The first launch opens a short guide that downloads a speech model and a rewrite model and asks for the Accessibility and Microphone permissions. The guide can be opened again from the About page.
 
 Installed copies update themselves: when a new release is out, the About page and the menu-bar menu offer it, and installing it restarts the app. The About page also opens the changes of each release.
 

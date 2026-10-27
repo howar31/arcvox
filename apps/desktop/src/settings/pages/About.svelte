@@ -5,6 +5,7 @@
   import { sections, title } from "../../lib/whatsNew";
   import { tip } from "../../lib/tip";
   import { go } from "../../lib/route";
+  import { guide } from "../../lib/guide.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
   import Group from "../../lib/ui/Group.svelte";
   import Row from "../../lib/ui/Row.svelte";
@@ -101,6 +102,7 @@
   </Row>
 </Group>
 
+<div class="again"><button type="button" onclick={() => { guide.reset(); go("welcome"); }}>{t("about.guide_again")}</button></div>
 
 <footer class="foot">{t("about.copyright")}<br>{t("about.license")}</footer>
 
@@ -122,5 +124,8 @@
   .update .bad { color: var(--live); }
   .update .bar { width: 160px; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
   .update .bar i { display: block; height: 100%; background: var(--accent); }
-  .foot { margin-top: 40px; text-align: center; color: var(--ink-3); font-size: var(--text-xs); line-height: 1.7; }
+  .again { display: flex; justify-content: center; margin-top: 18px; }
+  .again button { padding: 4px 8px; border: 0; border-radius: 6px; background: none; color: var(--ink-3); font-size: var(--text-sm); cursor: default; }
+  .again button:hover { background: var(--sunken); color: var(--ink-2); }
+  .foot { margin-top: 18px; text-align: center; color: var(--ink-3); font-size: var(--text-xs); line-height: 1.7; }
 </style>

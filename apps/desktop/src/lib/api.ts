@@ -278,6 +278,8 @@ export const requestMicrophone = () => invoke<MicAccess>("system_request_microph
 /** A settings page with a problem, at its worst problem's level: dictation fails, or it goes on and asks for attention. */
 export interface PageProblem { page: string; level: "fails" | "attention" }
 export const problemPages = () => invoke<PageProblem[]>("system_problem_pages");
+/** Whether the default profile can dictate now. */
+export const dictationReady = () => invoke<boolean>("system_dictation_ready");
 export const onProblemPages = (cb: (pages: PageProblem[]) => void) => listen<PageProblem[]>("problem-pages", (e) => cb(e.payload));
 export const openPrivacyPane = (pane: "accessibility" | "microphone" | "files" | "intelligence") => invoke<void>("system_open_privacy_pane", { pane });
 export const runningApps = () => invoke<RunningApp[]>("system_running_apps");

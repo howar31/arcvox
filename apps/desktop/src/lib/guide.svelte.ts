@@ -19,7 +19,7 @@ class GuideStore {
   error = $state<string | null>(null);
   launchAtLogin = $state(true);
   /** When the guide opened, in seconds; a dictation made since counts as the trial. */
-  readonly openedAt = Math.floor(Date.now() / 1000);
+  openedAt = Math.floor(Date.now() / 1000);
   #watching = false;
   #cancelling = false;
 
@@ -56,6 +56,23 @@ class GuideStore {
     this.#cancelling = true;
     if (this.current) modelsCancel(this.current).catch(() => {});
     this.started = false;
+  }
+
+  /** Starts over from the first step, for a guide opened again; downloads under way keep their state. */
+  reset() {
+    if (this.started) return;
+    this.step = 1;
+    this.choice = "models";
+    this.picked = { asr: GUIDE_MODELS.asr[0], llm: GUIDE_MODELS.llm[0] };
+    this.progress = {};
+    this.error = null;
+    this.openedAt = Math.floor(Date.now() / 1000);
+  }
+
+  /** Makes the chosen models, all of them installed, the default pair. */
+  async useModels(wanted: { role: Role; id: string }[], config: Config | null) {
+    let c = config;
+    for (const { role, id } of wanted) c = await this.makeDefault(role, id, c);
   }
 
   /** Looks for the Apple services again and makes them the default pair. */

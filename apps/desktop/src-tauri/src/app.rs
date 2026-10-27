@@ -188,6 +188,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             crate::commands::system::ui_language,
             crate::commands::system::ui_language_system,
+            crate::commands::system::system_dictation_ready,
             crate::commands::system::widget_copy,
             crate::commands::share::share_copy_image,
             crate::commands::share::share_save_image,
@@ -369,6 +370,13 @@ pub fn run() {
                 if window.label() == SETTINGS_WINDOW {
                     api.prevent_close();
                     let _ = window.hide();
+                    // A guide opened again from the About page ends with the
+                    // window; a new installation's guide shows by its flag.
+                    if let Some(w) = window.app_handle().get_webview_window(SETTINGS_WINDOW) {
+                        let _ = w.eval(
+                            "if (location.hash.startsWith('#welcome')) location.hash = '#home'",
+                        );
+                    }
                     // The speed test page is gone, so nothing will stop its
                     // recording; release the microphone now.
                     if let Some(state) = window.app_handle().try_state::<AppState>() {

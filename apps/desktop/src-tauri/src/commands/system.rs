@@ -240,6 +240,15 @@ pub fn system_problem_pages(state: State<'_, AppState>) -> Vec<crate::ui::tray::
     state.ui.tray().problem_pages()
 }
 
+/// Whether the default profile can dictate now.
+#[tauri::command]
+pub fn system_dictation_ready(state: State<'_, AppState>) -> bool {
+    let engine = state.engine.lock().unwrap().clone();
+    engine.is_some_and(|e| {
+        crate::problems::default_profile_ready(&e.config().current(), |cfg| e.can_run(cfg))
+    })
+}
+
 /// Asks the system for the microphone; answers once the user has chosen.
 #[tauri::command(async)]
 pub fn system_request_microphone(state: State<'_, AppState>) -> crate::platform::MicAccess {
