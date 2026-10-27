@@ -5,12 +5,24 @@ use tauri::{AppHandle, State, Wry};
 
 use super::{CmdError, CmdResult};
 use crate::app::AppState;
-use crate::settings::{WidgetFade, WidgetIdle, WidgetSize};
+use crate::i18n::Language;
+use crate::settings::{UiLanguage, WidgetFade, WidgetIdle, WidgetSize};
 use crate::ui::preview::{Look, Sample, Scene};
 
 #[tauri::command]
 pub fn ui_language(state: State<'_, AppState>) -> String {
     state.language.lock().unwrap().tag().to_string()
+}
+
+/// The interface language that "follow the system" resolves to, whatever is set.
+#[tauri::command]
+pub fn ui_language_system() -> String {
+    Language::from_setting(
+        UiLanguage::System,
+        crate::i18n::system_preferred_language().as_deref(),
+    )
+    .tag()
+    .to_string()
 }
 
 #[tauri::command]

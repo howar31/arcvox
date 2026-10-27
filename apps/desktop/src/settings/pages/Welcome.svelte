@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { enable, isEnabled } from "@tauri-apps/plugin-autostart";
-  import { errorMessage, formatBytes, historyLast, modelsInstalled, modelsManifest, nativeStatus, onDictationState, onHistoryChanged, openPrivacyPane, permissions, requestAccessibility, requestMicrophone, systemInfo, type InstalledModel, type ManifestView, type ModelEntry, type NativeStatusKind, type Permissions, type Utterance, type WidgetState } from "../../lib/api";
+  import { errorMessage, formatBytes, historyLast, modelsInstalled, modelsManifest, nativeStatus, onDictationState, onHistoryChanged, openPrivacyPane, permissions, requestAccessibility, requestMicrophone, systemInfo, type ClientSettings, type InstalledModel, type ManifestView, type ModelEntry, type NativeStatusKind, type Permissions, type Utterance, type WidgetState } from "../../lib/api";
   import type { Role } from "../../lib/engines";
   import { guide } from "../../lib/guide.svelte";
   import { applePath, downloadTotals, engineStepDone, guideEntries, memoryShort, permissionStepDone } from "../../lib/guideView";
@@ -17,6 +17,7 @@
   import Switch from "../../lib/ui/Switch.svelte";
   import Tag from "../../lib/ui/Tag.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
+  import LanguagePicker from "./welcome/LanguagePicker.svelte";
 
   const STEPS = [1, 2, 3] as const;
   const STEP_KEYS: Record<number, string> = { 1: "welcome.step.engines", 2: "welcome.step.permissions", 3: "welcome.step.try" };
@@ -51,12 +52,11 @@
 
   // The language can be changed before anything is downloaded: the change
   // reloads the window, which starts the guide over.
-  const languages = $derived([{ value: "system", label: t("general.lang_system") }, { value: "zh-tw", label: "正體中文" }, { value: "en", label: "English" }]);
-  async function setLanguage(value: string) {
+  async function setLanguage(value: ClientSettings["ui_language"]) {
     const current = client.value;
     if (!current || current.ui_language === value) return;
     try {
-      await client.save({ ...$state.snapshot(current), ui_language: value as typeof current.ui_language });
+      await client.save({ ...$state.snapshot(current), ui_language: value });
       location.reload();
     } catch (e) { toast.error(errorMessage(e)); }
   }
@@ -186,14 +186,6 @@
 
 <div class="guide">
   <div class="titlebar" data-tauri-drag-region></div>
-  {#if guide.step === 1 && !guide.started && client.value}
-    <!-- Named in both languages, so it is found whichever one is shown. -->
-    <label class="lang"><span>Language · 語言</span>
-      <select value={client.value.ui_language} onchange={(e) => setLanguage(e.currentTarget.value)} aria-label={t("general.language")}>
-        {#each languages as l (l.value)}<option value={l.value}>{l.label}</option>{/each}
-      </select>
-    </label>
-  {/if}
   <header>
     <div class="brand"><Mark size={26} /><span><em>A</em>rcvox</span></div>
     <ol class="steps" aria-label={t("welcome.steps")}>
@@ -316,6 +308,7 @@
   </main>
 
   <footer>
+    {#if guide.step === 1 && !guide.started && client.value}<LanguagePicker value={client.value.ui_language} onchange={setLanguage} />{/if}
     {#if guide.step > 1 && downloading}
       <span class="dl"><span class="bar"><i style:width="{totals.total ? (totals.received / totals.total) * 100 : 0}%"></i></span>{t("welcome.downloading", { done: formatBytes(totals.received), total: formatBytes(totals.total) })}</span>
     {/if}
@@ -328,8 +321,6 @@
 
 <style>
   .guide { position: relative; height: 100vh; display: flex; flex-direction: column; background: var(--page); }
-  .lang { position: absolute; top: 12px; right: 16px; display: flex; align-items: center; gap: 8px; color: var(--ink-3); font-size: var(--text-sm); }
-  .lang select { width: auto; }
   .titlebar { flex: none; height: var(--titlebar); }
   header { flex: none; display: flex; flex-direction: column; align-items: center; gap: 18px; padding-bottom: 8px; }
   .brand { display: flex; align-items: center; gap: 9px; font: 800 24px/1 var(--font-round); letter-spacing: -.035em; }

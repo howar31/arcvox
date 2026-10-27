@@ -307,6 +307,7 @@ export const diagnostics = () => invoke<Diagnostics>("system_diagnostics");
 /** Opens the bug report form with these fields filled in. */
 export const openIssue = (fields: IssueFields) => invoke<void>("system_open_issue", { fields });
 export const uiLanguage = () => invoke<string>("ui_language");
+export const uiLanguageSystem = () => invoke<string>("ui_language_system");
 export const widgetCopy = (text: string) => invoke<void>("widget_copy", { text });
 export const widgetDismiss = () => invoke<void>("widget_dismiss");
 export const widgetDragStart = () => invoke<void>("widget_drag_start");
