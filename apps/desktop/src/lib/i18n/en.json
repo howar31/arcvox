@@ -1689,6 +1689,7 @@
   "welcome.later_note": "Dictation does not work after the guide until an engine is set up on the Engines page.",
   "welcome.keep": "Keep the current engines",
   "welcome.keep_note": "Uses the recognition and rewriting engines set up now.",
+  "welcome.leave": "Leave the guide",
   "welcome.permissions.title": "Allow the permissions",
   "welcome.permissions.desc": "Two macOS permissions. The state here updates once they are granted.",
   "welcome.try.title": "Try a sentence",

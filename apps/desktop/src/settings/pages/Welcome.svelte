@@ -342,6 +342,8 @@
       <span class="dl"><span class="bar"><i style:width="{totals.total ? (totals.received / totals.total) * 100 : 0}%"></i></span>{t("welcome.downloading", { done: formatBytes(totals.received), total: formatBytes(totals.total) })}</span>
     {/if}
     <span class="sp"></span>
+    <!-- A guide opened again from the About page can be left; a new installation's cannot. -->
+    {#if client.value?.guide_done}<button type="button" class="btn quiet" onclick={() => go("about")}>{t("welcome.leave")}</button>{/if}
     {#if guide.step > 1}<button type="button" class="btn quiet" onclick={back}>{t("welcome.back")}</button>{/if}
     {#if guide.step < 3}<button type="button" class="btn primary big" disabled={!canContinue} onclick={next}>{t("welcome.continue")}</button>
     {:else}<button type="button" class="btn primary big" onclick={finish}>{t("welcome.done")}</button>{/if}
