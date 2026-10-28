@@ -36,6 +36,13 @@
     };
   });
 
+  /** Moves the dialog to the end of the document: a page lays itself out by its width (a size container),
+   *  which would otherwise hold the fixed scrim to the page's area instead of the whole window. */
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return { destroy: () => node.remove() };
+  }
+
   function dismiss() {
     if (beforeclose && !beforeclose()) return;
     open = false;
@@ -56,7 +63,7 @@
 
 {#if open}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) dismiss(); }} {onkeydown}>
+  <div class="scrim" use:portal onclick={(e) => { if (e.target === e.currentTarget) dismiss(); }} {onkeydown}>
     <div class="modal" class:lg={size === "lg"} role="dialog" aria-modal="true" aria-labelledby={titleId} tabindex="-1" bind:this={box}>
       <h2 id={titleId}>{title}</h2>
       <div class="body">{@render children()}</div>
