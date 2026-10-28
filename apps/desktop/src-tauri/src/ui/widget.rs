@@ -57,6 +57,17 @@ pub fn convert_to_panel<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                 | NSWindowCollectionBehavior::FullScreenAuxiliary
                 | NSWindowCollectionBehavior::Stationary,
         );
+        // The widget moves itself while it is dragged. Not movable by the window
+        // system, so a drag to the top edge is not taken for a window being
+        // dragged there (the system's fill-the-screen preview).
+        if label == WINDOW {
+            if let Ok(ptr) = window.ns_window() {
+                // SAFETY: the pointer is the window's live NSWindow and this runs
+                // on the main thread during setup.
+                let ns_window = unsafe { &*ptr.cast::<objc2_app_kit::NSWindow>() };
+                ns_window.setMovable(false);
+            }
+        }
     }
     watch_pointer(app);
     Ok(())
@@ -326,6 +337,8 @@ pub struct Layout {
     fixed: Option<String>,
     /// The widget is turned over: its ring is at the bottom.
     flipped: bool,
+    /// The widget is turned around: its ring is at the right end.
+    mirrored: bool,
 }
 
 impl Layout {
@@ -343,13 +356,19 @@ impl Layout {
             full: None,
             fixed: None,
             flipped: false,
+            mirrored: false,
         }
     }
 
-    /// Tells the widget which way up it is at `frame` on `display`.
-    fn turn<R: Runtime>(&mut self, app: &AppHandle<R>, display: Rect, frame: Rect) {
+    /// Tells the widget which way up it is at `frame` on `display`, and
+    /// whether it is turned around with the ring at its right end.
+    fn turn<R: Runtime>(&mut self, app: &AppHandle<R>, display: Rect, frame: Rect, mirrored: bool) {
         self.flipped = placement::flipped(display, frame);
         let _ = app.emit_to(WINDOW, "widget-flip", self.flipped);
+        if self.mirrored != mirrored {
+            self.mirrored = mirrored;
+            let _ = app.emit_to(WINDOW, "widget-mirror", mirrored);
+        }
     }
 
     /// The user chose the display the widget stays on, or none: then it
@@ -373,6 +392,12 @@ impl Layout {
         }
         let short = self.short();
         Rect {
+            // The ring is at the right end of a widget that is turned around.
+            x: if self.mirrored {
+                frame.right() - short
+            } else {
+                frame.x
+            },
             // The ring is at the bottom of a widget that is turned over.
             y: if self.flipped {
                 frame.bottom() - short
@@ -381,7 +406,6 @@ impl Layout {
             },
             w: short,
             h: short,
-            ..frame
         }
     }
 
@@ -533,12 +557,14 @@ impl Layout {
             .copied()
             .unwrap_or_else(|| placement::default_anchor(display.rect, self.short()));
         let size = placement::size_for(anchor.dock, self.long, self.short());
-        let frame = placement::clear_of(
-            display.housing,
-            placement::frame(display.rect, anchor, size),
-        );
+        let frame = placement::frame_at(display.rect, display.housing, anchor, size);
         self.full = Some(size);
-        self.turn(app, display.rect, frame);
+        self.turn(
+            app,
+            display.rect,
+            frame,
+            placement::mirrored(anchor, display.housing),
+        );
         apply_frame(&window, self.shown(frame), &displays);
         self.place_panel(app, &displays, frame);
     }
@@ -554,6 +580,11 @@ impl Layout {
         // A folded widget is dragged as the whole widget it stands for.
         let frame = match self.full {
             Some(size) if self.folded => Rect {
+                x: if self.mirrored {
+                    frame.right() - size.w
+                } else {
+                    frame.x
+                },
                 y: if self.flipped {
                     frame.bottom() - size.h
                 } else {
@@ -561,7 +592,6 @@ impl Layout {
                 },
                 w: size.w,
                 h: size.h,
-                ..frame
             },
             _ => frame,
         };
@@ -594,14 +624,20 @@ impl Layout {
         let (moved, preview) = match placement::display_at(&rects, moved.center()) {
             Some(i) => {
                 let moved = placement::snapped(rects[i], moved);
-                let anchor = placement::anchor_after_drag(rects[i], moved, self.long.wide);
-                let size = placement::size_for(anchor.dock, self.long, self.short());
-                let preview = placement::clear_of(
+                let anchor = placement::beside_housing(
                     displays[i].housing,
-                    placement::frame(rects[i], anchor, size),
+                    moved,
+                    placement::anchor_after_drag(rects[i], moved, self.long.wide),
                 );
+                let size = placement::size_for(anchor.dock, self.long, self.short());
+                let preview = placement::frame_at(rects[i], displays[i].housing, anchor, size);
                 if primary_button_down() {
-                    self.turn(app, rects[i], preview);
+                    self.turn(
+                        app,
+                        rects[i],
+                        preview,
+                        placement::mirrored(anchor, displays[i].housing),
+                    );
                 }
                 (moved, preview)
             }
@@ -621,7 +657,11 @@ impl Layout {
             {
                 self.positions.positions.insert(
                     display.key.clone(),
-                    placement::anchor_after_drag(display.rect, moved, self.long.wide),
+                    placement::beside_housing(
+                        display.housing,
+                        moved,
+                        placement::anchor_after_drag(display.rect, moved, self.long.wide),
+                    ),
                 );
                 self.save();
                 self.display = Some(display.key.clone());

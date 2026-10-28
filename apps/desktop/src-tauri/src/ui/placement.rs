@@ -112,6 +112,10 @@ pub enum Dock {
     None,
     Left,
     Right,
+    /// Horizontal, at the top of the display beside the camera housing,
+    /// its ring next to the housing.
+    NotchLeft,
+    NotchRight,
 }
 
 /// The widget's place on one display: its center as fractions of the
@@ -136,7 +140,7 @@ pub fn default_anchor(display: Rect, short: f64) -> Anchor {
 
 /// A widget docked to a left or right edge is vertical.
 pub fn size_for(dock: Dock, long: Long, short: f64) -> Size {
-    if dock == Dock::None {
+    if !matches!(dock, Dock::Left | Dock::Right) {
         Size {
             w: long.wide,
             h: short,
@@ -280,7 +284,8 @@ pub fn frame(display: Rect, anchor: Anchor, size: Size) -> Rect {
     let x = match anchor.dock {
         Dock::Left => display.x + EDGE_MARGIN,
         Dock::Right => display.right() - size.w - EDGE_MARGIN,
-        Dock::None => {
+        // Beside a housing the display no longer has, the widget stays where its center was.
+        Dock::None | Dock::NotchLeft | Dock::NotchRight => {
             let center_x = display.x + unit(anchor.x) * display.w;
             fit_within(
                 display.x,
@@ -297,6 +302,69 @@ pub fn frame(display: Rect, anchor: Anchor, size: Size) -> Rect {
         w: size.w,
         h: size.h,
     }
+}
+
+/// The widget's frame on a display with the camera housing `housing`:
+/// beside the housing, the edge margin below the top edge like any widget
+/// at the top, when it is docked there;
+/// anywhere else kept inside the display and clear of the housing.
+pub fn frame_at(display: Rect, housing: Option<Rect>, anchor: Anchor, size: Size) -> Rect {
+    match (anchor.dock, housing) {
+        (Dock::NotchLeft, Some(h)) => Rect {
+            x: h.x - HOUSING_GAP - size.w,
+            y: display.y + EDGE_MARGIN,
+            w: size.w,
+            h: size.h,
+        },
+        (Dock::NotchRight, Some(h)) => Rect {
+            x: h.right() + HOUSING_GAP,
+            y: display.y + EDGE_MARGIN,
+            w: size.w,
+            h: size.h,
+        },
+        _ => clear_of(housing, frame(display, anchor, size)),
+    }
+}
+
+/// A widget beside the housing on its left is turned around: the ring at the
+/// right end, next to the housing, and the label to the left of it.
+pub fn mirrored(anchor: Anchor, housing: Option<Rect>) -> bool {
+    anchor.dock == Dock::NotchLeft && housing.is_some()
+}
+
+/// How close a dragged widget must come to dock beside the housing: its top
+/// no further than this below the top margin, where it docks, so the pointer
+/// need not reach the top edge; and its end no further than this beyond the
+/// place 6 from the housing, or under the housing by no more than this.
+/// Much closer than the other docks, so a widget near the top is not pulled
+/// there.
+const NOTCH_DISTANCE: f64 = 4.0;
+
+/// `anchor` for a widget dropped at `dropped`, docked beside the housing
+/// when it was dropped right at that place: on the side of the housing its
+/// center is on.
+pub fn beside_housing(housing: Option<Rect>, dropped: Rect, anchor: Anchor) -> Anchor {
+    let Some(h) = housing else {
+        return anchor;
+    };
+    let left = dropped.center().0 < h.center().0;
+    // The gap to the housing on that side; negative where the widget reaches under it.
+    let gap = if left {
+        h.x - dropped.right()
+    } else {
+        dropped.x - h.right()
+    };
+    if dropped.y > h.y + EDGE_MARGIN + NOTCH_DISTANCE
+        || !(-NOTCH_DISTANCE..=HOUSING_GAP + NOTCH_DISTANCE).contains(&gap)
+    {
+        return anchor;
+    }
+    let dock = if left {
+        Dock::NotchLeft
+    } else {
+        Dock::NotchRight
+    };
+    Anchor { dock, ..anchor }
 }
 
 /// A dragged widget whose center comes this close to a center line of the
@@ -784,5 +852,67 @@ mod tests {
         );
         let left = Rect { x: 12.0, ..right };
         assert_eq!(facing_edge(left, panel_frame(MAIN, left, size)), Edge::Left);
+    }
+
+    #[test]
+    fn a_widget_dropped_beside_the_housing_docks_there() {
+        let housing = Some(Rect {
+            x: 646.0,
+            y: 0.0,
+            w: 220.0,
+            h: 38.0,
+        });
+        let free = |d: Rect| anchor_after_drag(MAIN, d, LONG.wide);
+        // Its label end at the place beside the housing's left side, at the top: docked on the left.
+        let left = rect(646.0 - 6.0 - 140.0 - 3.0, 2.0, WIDE);
+        let anchor = beside_housing(housing, left, free(left));
+        assert_eq!(anchor.dock, Dock::NotchLeft);
+        assert!(mirrored(anchor, housing));
+        // At the top margin like any widget at the top, its right end 6 from the housing.
+        assert_eq!(
+            frame_at(MAIN, housing, anchor, WIDE),
+            rect(646.0 - 6.0 - 140.0, 12.0, WIDE)
+        );
+        // Reaching a little under the housing on the right: docked on the right, not turned around.
+        let over = rect(866.0 - 3.0, -10.0, WIDE);
+        let anchor = beside_housing(housing, over, free(over));
+        assert_eq!(anchor.dock, Dock::NotchRight);
+        assert!(!mirrored(anchor, housing));
+        assert_eq!(
+            frame_at(MAIN, housing, anchor, WIDE),
+            rect(866.0 + 6.0, 12.0, WIDE)
+        );
+        // A little lower, further to the side, further under it, or on a display without a housing: as before.
+        let low = rect(866.0 + 6.0, 17.0, WIDE);
+        assert_eq!(beside_housing(housing, low, free(low)).dock, Dock::None);
+        let aside = rect(866.0 + 6.0 + 5.0, 0.0, WIDE);
+        assert_eq!(beside_housing(housing, aside, free(aside)).dock, Dock::None);
+        let under = rect(866.0 - 5.0, 0.0, WIDE);
+        assert_eq!(beside_housing(housing, under, free(under)).dock, Dock::None);
+        // Pushed against the housing: docked.
+        let touching = rect(866.0, -10.0, WIDE);
+        assert_eq!(
+            beside_housing(housing, touching, free(touching)).dock,
+            Dock::NotchRight
+        );
+        assert_eq!(beside_housing(None, over, free(over)).dock, Dock::None);
+        // Docked beside a housing the display no longer has: where its center was, clear of nothing.
+        let kept = Anchor {
+            dock: Dock::NotchRight,
+            ..free(rect(900.0, 300.0, WIDE))
+        };
+        assert_eq!(
+            frame_at(MAIN, None, kept, WIDE),
+            frame(
+                MAIN,
+                Anchor {
+                    dock: Dock::None,
+                    ..kept
+                },
+                WIDE
+            )
+        );
+        assert!(!mirrored(kept, None));
+        assert_eq!(size_for(Dock::NotchLeft, LONG, SHORT), WIDE);
     }
 }

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { onWidgetFlip, widgetDragStart, widgetMeasure, widgetMenu } from "../lib/api";
+  import { onWidgetFlip, onWidgetMirror, widgetDragStart, widgetMeasure, widgetMenu } from "../lib/api";
   import { t } from "../lib/i18n";
   import { LevelHistory, TICK, eased, mapped } from "../lib/level";
   import { LABEL_KEYS, READY, RING_AT_REST, faintOpacity, labelKey, ringView } from "../lib/widgetView";
@@ -16,11 +16,14 @@
 
   // A vertical widget at the bottom of the display is turned over: the ring at the bottom, the label above it.
   let flipped = $state(false);
+  // Beside the camera housing on its left the widget is turned around: the ring at the right end, the label to its left.
+  let mirrored = $state(false);
 
   onMount(() => {
     const stop = feed.listen();
     const flip = onWidgetFlip((f) => { flipped = f; });
-    return () => { stop(); flip.then((off) => off()); };
+    const mirror = onWidgetMirror((m) => { mirrored = m; });
+    return () => { stop(); flip.then((off) => off()); mirror.then((off) => off()); };
   });
 
   // The widget has one size for a language: its long side holds the longest label in each shape.
@@ -95,6 +98,7 @@
     const upright = h > w;
     if (upright && flipped) g.setTransform(0, -dpr, dpr, 0, 0, canvas.height);
     else if (upright) g.setTransform(0, dpr, dpr, 0, 0, 0);
+    else if (mirrored) g.setTransform(-dpr, 0, 0, dpr, canvas.width, 0);
     else g.setTransform(dpr, 0, 0, dpr, 0, 0);
     const along = upright ? h : w, mid = (upright ? w : h) / 2;
     const step = WAVE.step * u, pitch = WAVE.pitch * u, thick = WAVE.thick * u, reach = mid - 3 * u;
@@ -162,7 +166,7 @@
 <svelte:window {oncontextmenu} />
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="pill" class:listening class:open={feed.open || (resting && feed.idle === "label")} class:rest={resting && feed.idle === "ring"} class:flipped class:faint={faint || (fades && feed.faintNow)} style:--faint={faintOpacity(feed.fade.transparency)} {onpointerdown}>
+<div class="pill" class:listening class:open={feed.open || (resting && feed.idle === "label")} class:rest={resting && feed.idle === "ring"} class:flipped class:mirrored class:faint={faint || (fades && feed.faintNow)} style:--faint={faintOpacity(feed.fade.transparency)} {onpointerdown}>
   <canvas class="wave" bind:this={canvas} aria-hidden="true"></canvas>
   <!-- A new ring when its colour or its motion changes, so the motion plays from its start. -->
   {#key ring.tone + ring.motion}
@@ -238,6 +242,11 @@
   .ring.settle { animation: settle 320ms ease-out; }
   .ring.shake { animation: shake 380ms ease-in-out; }
   .probe.down { writing-mode: vertical-rl; letter-spacing: .12em; }
+  /* Turned around: the ring at the right end, and the widget opens leftwards from it. */
+  @media (orientation: landscape) {
+    .pill.mirrored { flex-direction: row-reverse; padding: 0 calc(14 * var(--u)) 0 calc(18 * var(--u)); }
+    .pill.mirrored:not(.open) { clip-path: inset(0 0 0 calc(100% - 48 * var(--u)) round calc(24 * var(--u))); }
+  }
   /* Vertical: the ring on top, the label written downwards. */
   @media (orientation: portrait) {
     .pill { flex-direction: column; padding: calc(14 * var(--u)) 0 calc(18 * var(--u)); }

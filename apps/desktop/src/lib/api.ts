@@ -372,6 +372,7 @@ export const dictationState = () => invoke<WidgetState>("dictation_state");
 export function onDictationState(cb: (state: WidgetState) => void): Promise<UnlistenFn> { return listen<WidgetState>("dictation-state", (e) => cb(e.payload)); }
 /** Whether the widget is turned over: its ring at the bottom, opening upwards. */
 export function onWidgetFlip(cb: (flipped: boolean) => void): Promise<UnlistenFn> { return listen<boolean>("widget-flip", (e) => cb(e.payload)); }
+export function onWidgetMirror(cb: (mirrored: boolean) => void): Promise<UnlistenFn> { return listen<boolean>("widget-mirror", (e) => cb(e.payload)); }
 export function onWidgetLevel(cb: (p: LevelPayload) => void): Promise<UnlistenFn> { return listen<LevelPayload>("widget-level", (e) => cb(e.payload)); }
 export function onWidgetMessage(cb: (p: MessagePayload) => void): Promise<UnlistenFn> { return listen<MessagePayload>("widget-message", (e) => cb(e.payload)); }
 
