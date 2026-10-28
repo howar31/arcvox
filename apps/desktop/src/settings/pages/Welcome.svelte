@@ -364,7 +364,7 @@
   .steps .dash { width: 28px; height: 1px; background: var(--line-strong); }
   main { flex: 1; min-height: 0; overflow-y: auto; overflow-anchor: none; padding: 16px var(--page-x) 20px; }
   .pg { width: 720px; margin: 0 auto; }
-  h1 { margin: 0; font: 700 28px/1.2 var(--font-round); }
+  h1 { margin: 0; font: 700 var(--text-title)/1.2 var(--font-round); }
   .sub { margin: 4px 0 2px; color: var(--ink-2); font-size: var(--text-control); }
   h2 { display: flex; align-items: center; gap: 8px; margin: 14px 0 8px; padding: 0 4px; font: 600 var(--text-sm)/1 var(--font); color: var(--ink-2); }
   h2 small { font-weight: 500; color: var(--ink-3); font-size: var(--text-sm); }
@@ -409,7 +409,7 @@
   .out dt { color: var(--ink-3); font-size: var(--text-sm); padding-top: 3px; }
   .out dd { margin: 0; line-height: 1.6; overflow-wrap: anywhere; }
   .muted { color: var(--ink-2); } .small { font-size: var(--text-sm); }
-  footer { flex: none; display: flex; align-items: center; gap: 10px; padding: 16px 32px 24px; }
+  footer { flex: none; display: flex; align-items: center; gap: 10px; padding: 16px 28px 20px; }
   .dl { display: flex; align-items: center; gap: 10px; color: var(--ink-3); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
   .dl .bar { width: 120px; margin: 0; }
   .btn.big { height: 38px; padding: 0 18px; font-size: var(--text); }

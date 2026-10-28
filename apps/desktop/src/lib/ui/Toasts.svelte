@@ -18,7 +18,7 @@
 
 <style>
   /* Centred under the page, clear of the sidebar; above the save bar while it shows. */
-  .toasts { position: fixed; bottom: 26px; left: 248px; right: 0; z-index: 60; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 0 24px; pointer-events: none; }
+  .toasts { position: fixed; bottom: 26px; left: var(--sidebar-w); right: 0; z-index: 60; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 0 24px; pointer-events: none; }
   :global(body:has(.savebar)) .toasts { bottom: 78px; }
   .toast { pointer-events: auto; display: flex; align-items: center; gap: 10px; max-width: min(520px, 100%); min-height: 46px; padding: 9px 20px 9px 16px; background: var(--ink); color: var(--page); border-radius: 23px; box-shadow: var(--shadow); font-weight: 600; animation: enter .3s cubic-bezier(.2, .9, .3, 1.25); }
   .glyph { display: inline-flex; flex: none; color: color-mix(in srgb, var(--ok) 65%, var(--page)); }

@@ -171,7 +171,7 @@
   .cb:disabled { opacity: .35; }
   .text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
   .line { display: flex; align-items: center; gap: 8px; min-width: 0; }
-  .label { font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .label { font-weight: 600; font-size: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .where { color: var(--ink-2); font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .name { width: 100%; height: 30px; }
   .acts { display: flex; gap: 0; flex: none; }

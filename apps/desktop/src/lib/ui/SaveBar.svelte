@@ -69,7 +69,7 @@
 <style>
   /* `top` holds it at the bottom of the window when the page is shorter, `bottom` when it is longer. */
   /* The bar spans the whole area beside the sidebar; what it holds stays in line with the page. */
-  .slot { --side: calc((100vw - 248px - min(var(--page-max), 100vw - 248px)) / 2 + var(--page-x)); position: sticky; top: calc(100% - var(--control) - 49px); bottom: 0; z-index: 5; margin: 0 calc(-1 * var(--side)) -80px; padding-top: 24px; min-height: calc(var(--control) + 49px); box-sizing: border-box; overflow: hidden; pointer-events: none; }
+  .slot { --side: calc((100vw - var(--sidebar-w) - min(var(--page-max), 100vw - var(--sidebar-w))) / 2 + var(--page-x)); position: sticky; top: calc(100% - var(--control) - 49px); bottom: 0; z-index: 5; margin: 0 calc(-1 * var(--side)) calc(-1 * var(--page-bottom)); padding-top: 24px; min-height: calc(var(--control) + 49px); box-sizing: border-box; overflow: hidden; pointer-events: none; }
   .savebar { animation: rise .2s ease-out; pointer-events: auto; padding: 12px var(--side); min-height: calc(var(--control) + 25px); display: flex; align-items: center; gap: 10px; background: color-mix(in srgb, var(--page) 88%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-top: 1px solid var(--line); }
   .message { flex: 1; min-width: 0; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .done { background: color-mix(in srgb, var(--ok) 14%, var(--page)); border-top-color: color-mix(in srgb, var(--ok) 45%, transparent); transition: transform .25s ease-in, opacity .25s; }

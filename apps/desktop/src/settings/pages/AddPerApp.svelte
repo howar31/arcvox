@@ -124,7 +124,7 @@
 
 <style>
   .apps { position: relative; }
-  .menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; display: flex; flex-direction: column; width: 340px; max-width: calc(100vw - 2 * var(--page-x) - 248px); max-height: 300px; padding: 6px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); }
+  .menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; display: flex; flex-direction: column; width: 340px; max-width: calc(100vw - 2 * var(--page-x) - var(--sidebar-w)); max-height: 300px; padding: 6px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); }
   .menu.upwards { top: auto; bottom: calc(100% + 6px); }
   .menu input { flex: none; width: 100%; margin-bottom: 4px; }
   .options { overflow-y: auto; min-height: 0; }

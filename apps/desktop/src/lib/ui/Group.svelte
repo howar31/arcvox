@@ -32,7 +32,7 @@
 </section>
 
 <style>
-  h2 { display: flex; align-items: center; gap: 6px; font: 600 var(--text-sm)/1 var(--font); color: var(--ink-2); margin: var(--gap-group) 4px 12px; }
+  h2 { display: flex; align-items: center; gap: 6px; font: 600 var(--text-sm)/1 var(--font); color: var(--ink-2); margin: var(--gap-group) 4px 10px; }
   /* The actions hang into the title's top margin, so the title stays where it is without them. */
   .top { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
   .top .actions { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; }

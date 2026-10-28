@@ -20,9 +20,9 @@
   --pill-line: rgba(21,23,28,.16); --pill-button: rgba(21,23,28,.07); --pill-button-hover: rgba(21,23,28,.13);
 
   /* Type scale and density of the settings window. */
-  --text: 16px; --text-control: 14.5px; --text-sm: 13.5px; --text-xs: 12.5px; --text-lg: 18px; --text-title: 31px; --text-stat: 36px;
-  --control: 36px; --radius: 10px; --radius-group: 18px;
-  --row-min: 70px; --row-y: 17px; --row-x: 24px; --page-x: 48px; --page-top: 52px; --titlebar: 52px; --gap-group: 36px; --card-pad: 28px;
+  --text: 14.5px; --text-control: 13.5px; --text-sm: 12.5px; --text-xs: 11.5px; --text-lg: 16px; --text-title: 25px; --text-stat: 30px;
+  --control: 34px; --radius: 9px; --radius-group: 16px;
+  --row-min: 54px; --row-y: 10px; --row-x: 18px; --page-x: 28px; --page-top: 52px; --page-bottom: 32px; --sidebar-w: 212px; --titlebar: 52px; --gap-group: 22px; --card-pad: 18px;
 
   --font: -apple-system, BlinkMacSystemFont, "PingFang TC", "Segoe UI", "Microsoft JhengHei", sans-serif;
   --font-round: ui-rounded, "SF Pro Rounded", -apple-system, "PingFang TC", "Segoe UI", sans-serif;

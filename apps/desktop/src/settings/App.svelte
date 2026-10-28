@@ -174,7 +174,7 @@
 
     <main class="main" bind:this={main}>
       <div class="titlebar main-titlebar" data-tauri-drag-region></div>
-      <div class="page" class:wide={route.page === "home" || route.page === "history"}>
+      <div class="page" class:wide={route.page === "home" || route.page === "history"} class:narrow={route.page === "about"}>
         {#if config.error}
           <div class="banner" role="alert"><Ring tone="live" /><span>{t("common.engine_error", { detail: config.error })}</span></div>
         {/if}
@@ -215,7 +215,7 @@
 
 <style>
   .loading { height: 100vh; display: grid; place-items: center; color: var(--ink-2); }
-  .shell { display: grid; grid-template-columns: 248px minmax(0, 1fr); height: 100vh; overflow: hidden; }
+  .shell { display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr); height: 100vh; overflow: hidden; }
   .sidebar { background: var(--sidebar); border-right: 1px solid var(--line); padding: 0 14px 14px; display: flex; flex-direction: column; gap: 3px; min-height: 0; overflow-y: auto; }
   /* The title bar is transparent and the content runs behind it; this band keeps the window controls clear and moves the window. */
   .titlebar { flex: none; height: var(--titlebar); }
@@ -225,7 +225,7 @@
   nav { display: flex; flex-direction: column; gap: 3px; }
   .nav-group { font-size: var(--text-xs); font-weight: 600; color: var(--ink-2); padding: 14px 12px 6px; }
   .nav-gap { height: 12px; flex: none; }
-  .nav { display: flex; align-items: center; gap: 12px; height: 40px; padding: 0 12px; border-radius: 10px; font-size: var(--text); border: 0; background: none; color: var(--ink); text-align: left; cursor: default; white-space: nowrap; }
+  .nav { display: flex; align-items: center; gap: 11px; height: 38px; padding: 0 12px; border-radius: 9px; font-size: 14px; border: 0; background: none; color: var(--ink); text-align: left; cursor: default; white-space: nowrap; }
   .nav span { overflow: hidden; text-overflow: ellipsis; }
   .nav :global(.icon) { opacity: .75; }
   /* Out of the row's flow and close to its edge: the name starts where the others do, and the longest names keep their full length. */
@@ -244,9 +244,11 @@
   :global(.slide-shot.under) { z-index: 0; }
   :global(.slide-shot.over) { z-index: 2; box-shadow: -12px 0 32px rgba(0, 0, 0, .12); }
   /* Centered once the window is wider than the content; pages can lay themselves out by this width. */
-  .page { padding: var(--page-top) var(--page-x) 80px; --page-max: 880px; max-width: var(--page-max); min-height: 100%; margin: 0 auto; container-type: inline-size; }
+  .page { padding: var(--page-top) var(--page-x) var(--page-bottom); --page-max: 880px; max-width: var(--page-max); min-height: 100%; margin: 0 auto; container-type: inline-size; }
   /* Pages that show data use more of a wide window than pages of settings. */
   .page.wide { --page-max: 1320px; }
+  /* A page of fixed, centered content around the lockup. */
+  .page.narrow { --page-max: calc(560px + 2 * var(--page-x)); }
   .banner { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 22px; padding: 12px var(--row-x); border-radius: var(--radius-group); background: color-mix(in srgb, var(--live) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--live) 35%, transparent); }
   .quit-hint { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 80; padding: 14px 24px; border-radius: 14px; background: var(--pill-bg); color: var(--pill-ink); font-size: var(--text-lg); font-weight: 600; white-space: nowrap; box-shadow: var(--shadow); pointer-events: none; }
   .banner :global(.ring) { margin-top: 3px; }

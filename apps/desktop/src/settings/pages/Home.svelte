@@ -667,7 +667,7 @@
 
   /* Three columns, rows of one height; a card names its own row, column and span. */
   .grid { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: 240px; gap: 14px; }
-  .card { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-group); padding: 22px 24px; }
+  .card { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-group); padding: var(--card-pad); }
   .card.plain { display: block; }
   h2 { margin: 0 0 4px; font-size: var(--text-lg); font-weight: 600; display: flex; align-items: baseline; gap: 12px; }
   h2 em { font-style: normal; font-weight: 400; font-size: var(--text-sm); color: var(--ink-2); margin-left: auto; text-align: right; white-space: nowrap; }
@@ -694,7 +694,7 @@
   .heatroom { flex: 1; min-width: 0; display: flex; }
   /* A little air on the right, so the widest label does not sit on the padding edge. */
   .facts { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding-right: 8px; }
-  .facts b { display: block; font: 700 20px/1.1 var(--font-round); }
+  .facts b { display: block; font: 700 18px/1.1 var(--font-round); }
   .facts span { display: block; color: var(--ink-2); font-size: var(--text-xs); line-height: 1.3; }
   /* Room for the resize handle at the corner while editing. */
   .grid.editing .facts { padding-right: 20px; }
@@ -705,7 +705,7 @@
   .kv dd { margin: 0; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .cells { display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); gap: 8px; align-content: start; }
   .cells div { background: var(--sunken); border-radius: var(--radius); padding: 9px 12px; min-width: 0; }
-  .cells b { display: block; font: 700 17px/1.2 var(--font-round); margin-bottom: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cells b { display: block; font: 700 15px/1.2 var(--font-round); margin-bottom: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .cells span { display: block; color: var(--ink-2); font-size: var(--text-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* Editing */
