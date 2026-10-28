@@ -3,6 +3,7 @@
   import type { Profile } from "../../../lib/api";
   import { t } from "../../../lib/i18n";
   import { placeMenu, type Placement } from "../../../lib/popover";
+  import { tip } from "../../../lib/tip";
   import Icon from "../../../lib/ui/Icon.svelte";
   import Bang from "../../../lib/ui/Bang.svelte";
   import Tag from "../../../lib/ui/Tag.svelte";
@@ -105,7 +106,7 @@
 
 <div class="picker" bind:this={root}>
   <button type="button" class="current" bind:this={button} aria-haspopup="listbox" aria-expanded={open} aria-label={t("flow.profiles") + " " + name} onclick={() => (open ? hide() : show())}>
-    <span class="label">{name}</span>
+    <span class="label" use:tip={name}>{name}</span>
     {#if isDefault}<Tag tone="accent">{t("profiles.default")}</Tag>{/if}
     <!-- The closed list says, beside its count, when any profile in it runs on the default engine or keeps a style its template has moved past. -->
     <span class="count">{#if faulty.size > 0 || moved.size > 0}<Bang tone="warn" title={[faulty.size > 0 ? t("flow.profiles_fallback", { count: String(faulty.size) }) : "", moved.size > 0 ? t("flow.profiles_style_moved", { count: String(moved.size) }) : ""].filter(Boolean).join(" ")} />{/if}{t("flow.count", { count: String(profiles.length) })}</span>
@@ -147,7 +148,7 @@
 </div>
 
 <style>
-  .picker { position: relative; flex: 0 1 360px; min-width: 0; }
+  .picker { position: relative; flex: 1 1 auto; min-width: 0; }
   .current { display: flex; align-items: center; gap: 10px; width: 100%; height: 44px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font-size: var(--text); font-weight: 600; cursor: default; }
   .current:hover, .current[aria-expanded="true"] { background: var(--sunken); }
   .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -161,7 +162,10 @@
   .option.on { background: var(--accent-soft); }
   .tick { flex: none; width: 16px; height: 22px; display: grid; place-items: center; color: var(--accent); }
   .text { min-width: 0; flex: 1; }
-  .line { display: flex; align-items: center; gap: 8px; }
+  /* A long name wraps in the list; the tag and the mark stay beside its first line. */
+  .line { display: flex; align-items: flex-start; gap: 8px; }
+  .line .label { white-space: normal; overflow-wrap: anywhere; padding-top: 1px; }
+  .line :global(.bang) { margin-top: 4px; }
   .where { display: block; color: var(--ink-2); font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .none { margin: 0; padding: 12px; color: var(--ink-2); font-size: var(--text-sm); }
   .foot .acts { display: flex; gap: 2px; }
