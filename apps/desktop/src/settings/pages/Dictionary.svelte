@@ -24,8 +24,6 @@
   /** An entry being edited: `key` keeps each row's elements stable, `pending` is the alias being typed. */
   type Item = DictionaryEntry & { key: number; pending: string };
   type Tab = "terms" | "suggestions" | "ignored";
-  /** The card grid's columns; the editor opens under the chosen card's row. Kept with the `.grid` style. */
-  const CARD_COLUMNS = 3;
 
   let nextKey = 0;
   const toItems = (entries: DictionaryEntry[]): Item[] =>
@@ -58,6 +56,10 @@
   // The page's own state: the tab, the view, the sort and the search; view and sort are remembered.
   let tab = $state<Tab>("terms");
   let view = $state<View>(storedView());
+  // The card grid has three columns, two where it is narrower than this; the editor opens under the chosen card's row.
+  const CARDS_NARROW = 600;
+  let gridWidth = $state(0);
+  const cardColumns = $derived(gridWidth > 0 && gridWidth < CARDS_NARROW ? 2 : 3);
   let sort = $state<Sort>(storedSort());
   let query = $state("");
   let selected = $state<number | null>(null);
@@ -348,14 +350,14 @@
     {:else if !shownItems.length}
       <Group><Empty text={t("dictionary.no_match")} /></Group>
     {:else}
-      <div class="body" class:railed={sectioned && view !== "panes"}>
+      <div class="body" class:railed={sectioned}>
         <div class="content">
 
         {#if view === "cards"}
-          <div class="grid">
+          <div class="grid" style:--cols={cardColumns} bind:clientWidth={gridWidth}>
             {#each sections as s (s.key)}
               {@const at = s.items.findIndex((i) => i.key === selected)}
-              {@const after = at < 0 ? -1 : Math.min(Math.floor(at / CARD_COLUMNS) * CARD_COLUMNS + CARD_COLUMNS - 1, s.items.length - 1)}
+              {@const after = at < 0 ? -1 : Math.min(Math.floor(at / cardColumns) * cardColumns + cardColumns - 1, s.items.length - 1)}
               {#if s.label}<div class="gsec" id="dict-sec-{s.key}">{s.label}</div>{/if}
               {#each s.items as item, i (item.key)}
                 <button type="button" class="card" class:sel={selected === item.key} aria-expanded={selected === item.key} onclick={() => choose(item)}>
@@ -373,7 +375,7 @@
               {/each}
             {/each}
           </div>
-        {:else if view === "list"}
+        {:else}
           <Group>
             {#each sections as s (s.key)}
               {#if s.label}<div class="lsec" id="dict-sec-{s.key}">{s.label}</div>{/if}
@@ -381,7 +383,7 @@
                 <button type="button" class="row" class:sel={selected === item.key} aria-expanded={selected === item.key} onclick={() => choose(item)}>
                   <span class="name" class:blank={!item.term.trim()}>{firstLine(item.term) || t("dictionary.term")}</span>
                   <span class="als">{#each item.aliases as a, i (i)}<span class="chip">{a}</span>{/each}</span>
-                  <span class="right">{#if when(item)}<span class="num">{when(item)}</span>{/if}{#if hitsOf(item)}<span class="num" use:tip={t("dictionary.hits_note")}>{hitsText(item)}</span>{/if}{#if status(item)}<Tag tone={status(item)!.tone}>{status(item)!.text}</Tag>{:else}<span class="num">{aliasText(item.aliases.length)}</span>{/if}</span>
+                  <span class="right">{#if when(item)}<span class="num when">{when(item)}</span>{/if}{#if hitsOf(item)}<span class="num" use:tip={t("dictionary.hits_note")}>{hitsText(item)}</span>{/if}{#if status(item)}<Tag tone={status(item)!.tone}>{status(item)!.text}</Tag>{:else}<span class="num">{aliasText(item.aliases.length)}</span>{/if}</span>
                 </button>
                 {#if selected === item.key}
                   <Fold><div class="edrow"><DictionaryEditor bind:item={items[items.findIndex((i) => i.key === item.key)]} examples={examplesFor(item)} hits={hitsOf(item)} invalid={!!problem && blocks(item)} autofocus={fresh === item.key} onremove={() => remove(item)} /></div></Fold>
@@ -389,32 +391,9 @@
               {/each}
             {/each}
           </Group>
-        {:else}
-          <div class="panes">
-            <Group>
-              {#each sections as s (s.key)}
-                {#if s.label}<div class="lsec" id="dict-sec-{s.key}">{s.label}</div>{/if}
-                {#each s.items as item (item.key)}
-                  <button type="button" class="prow" class:sel={selected === item.key} aria-pressed={selected === item.key} onclick={() => { selected = item.key; fresh = null; }}>
-                    <span class="name" class:blank={!item.term.trim()}>{firstLine(item.term) || t("dictionary.term")}</span>
-                    <span class="meta">{#if status(item)}{status(item)!.text}{:else if hitsOf(item)}<span use:tip={t("dictionary.hits_note")}>{hitsText(item)}</span>{:else if item.aliases.length}{aliasText(item.aliases.length)}{/if}</span>
-                  </button>
-                {/each}
-              {/each}
-            </Group>
-            <div class="pane">
-              <Group>
-                {#if selectedItem}
-                  <div class="edrow pane-ed"><DictionaryEditor bind:item={items[items.findIndex((i) => i.key === selectedItem!.key)]} examples={examplesFor(selectedItem)} hits={hitsOf(selectedItem)} invalid={!!problem && blocks(selectedItem)} autofocus={fresh === selectedItem.key} onremove={() => remove(selectedItem!)} /></div>
-                {:else}
-                  <Empty text={t("dictionary.select_hint")} />
-                {/if}
-              </Group>
-            </div>
-          </div>
         {/if}
         </div>
-        {#if sectioned && view !== "panes"}
+        {#if sectioned}
           <nav class="rail" aria-label={t("dictionary.sort")}>
             <button type="button" class="top" use:tip={t("dictionary.to_top")} onclick={toTop}><Icon name="chevron-up" size={12} /></button>
             {#each sections as s (s.key)}<button type="button" onclick={() => jump(s.key)}>{s.label}</button>{/each}
@@ -507,7 +486,7 @@
   .chip.more { color: var(--ink-2); }
   .num { color: var(--ink-3); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
   /* cards */
-  .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .grid { display: grid; grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); gap: 8px; }
   .gsec { grid-column: 1 / -1; padding: 8px var(--row-x) 0; font-size: var(--text-xs); font-weight: 700; color: var(--ink-3); }
   /* The same side padding as a list row, so the text starts at one edge in every view. */
   .card { display: flex; flex-direction: column; gap: 6px; min-height: 74px; padding: 10px var(--row-x); border: 1px solid var(--line); border-radius: 12px; background: var(--surface); text-align: left; color: var(--ink); cursor: default; min-width: 0; }
@@ -535,16 +514,12 @@
   .row .als { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
   .row .right { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 14px; }
   .edrow { padding: 12px var(--row-x) 14px; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--sunken) 55%, transparent); }
-  /* panes */
-  .panes { display: grid; grid-template-columns: 268px minmax(0, 1fr); gap: 8px; align-items: start; }
-  .prow { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px; padding: 8px var(--row-x); border: 0; border-top: 1px solid var(--line); background: none; color: var(--ink); text-align: left; cursor: default; }
-  .prow:first-child, .lsec + .prow { border-top: 0; }
-  .prow:hover { background: color-mix(in srgb, var(--sunken) 55%, transparent); }
-  .prow.sel { background: var(--accent-soft); }
-  .prow .name { font-weight: 500; font-size: var(--text-control); flex: 1; }
+  /* In a narrow window the name column narrows and the date goes, so the aliases keep a line of their own. */
+  @container (max-width: 639px) {
+    .row .name { flex-basis: 140px; }
+    .row .right .when { display: none; }
+  }
   .meta { color: var(--ink-3); font-size: var(--text-xs); white-space: nowrap; }
-  .pane { position: sticky; top: 8px; }
-  .pane-ed { border-top: 0; background: none; }
   /* suggestions */
   .sr { display: flex; align-items: flex-start; gap: 12px; padding: 11px var(--row-x); border-top: 1px solid var(--line); }
   .sr:first-child { border-top: 0; }

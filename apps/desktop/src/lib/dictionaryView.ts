@@ -3,16 +3,21 @@
 import type { DictionaryEntry, TermHits, TermIndex } from "./api";
 import { isSnippet } from "./dictionary";
 
-export type View = "cards" | "list" | "panes";
+export type View = "cards" | "list";
 export type Sort = "added" | "updated" | "hits" | "strokes" | "zhuyin" | "pinyin" | "aliases" | "origin" | "kind";
-export const VIEWS: View[] = ["cards", "list", "panes"];
+export const VIEWS: View[] = ["cards", "list"];
 export const SORTS: Sort[] = ["added", "updated", "hits", "strokes", "zhuyin", "pinyin", "aliases", "origin", "kind"];
 
 const VIEW_KEY = "dictionary.view";
 const SORT_KEY = "dictionary.sort";
 
 export function storedView(): View {
-  try { const v = localStorage.getItem(VIEW_KEY); return VIEWS.includes(v as View) ? (v as View) : "cards"; } catch { return "cards"; }
+  try {
+    const v = localStorage.getItem(VIEW_KEY);
+    // The two-pane view is gone; the list is the closest to it.
+    if (v === "panes") return "list";
+    return VIEWS.includes(v as View) ? (v as View) : "cards";
+  } catch { return "cards"; }
 }
 export function rememberView(v: View): void {
   try { localStorage.setItem(VIEW_KEY, v); } catch { /* The choice is not remembered. */ }

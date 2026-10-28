@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { DictionaryEntry, TermIndex } from "./api";
-import { arrange, matches, scriptOf, type Labels } from "./dictionaryView";
+import { arrange, matches, scriptOf, storedView, type Labels } from "./dictionaryView";
 
 const e = (term: string, aliases: string[] = [], extra: Partial<DictionaryEntry> = {}): DictionaryEntry => ({ term, aliases, asr_hint: true, ...extra });
 const labels: Labels = { strokes: (n) => `${n} 劃`, latin: "英文", kana: "假名", other: "其他", unknown: "其他中文", manual: "手動加入", suggestion: "從建議加入", snippet: "片段", term: "詞彙" };
@@ -45,5 +45,19 @@ describe("arrange", () => {
     expect(arrange(items, "aliases", index, labels)[0].items[0].term).toBe("Slack");
     expect(arrange(items, "origin", index, labels).map((s) => [s.label, s.items.length])).toEqual([["從建議加入", 1], ["手動加入", 4]]);
     expect(arrange(items, "kind", index, labels).map((s) => [s.label, s.items.length])).toEqual([["詞彙", 4], ["片段", 1]]);
+  });
+});
+
+describe("storedView", () => {
+  it("opens the list for the two-pane view kept by an earlier version", () => {
+    const kept = new Map<string, string>();
+    vi.stubGlobal("localStorage", { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => kept.set(k, v) });
+    kept.set("dictionary.view", "panes");
+    expect(storedView()).toBe("list");
+    kept.set("dictionary.view", "list");
+    expect(storedView()).toBe("list");
+    kept.delete("dictionary.view");
+    expect(storedView()).toBe("cards");
+    vi.unstubAllGlobals();
   });
 });
