@@ -481,8 +481,9 @@
 {/if}
 
 <style>
-  .bar { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
-  .search { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: var(--control); padding: 0 10px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); color: var(--ink-3); }
+  /* In a narrow window the search box goes to a line of its own rather than pushing the controls out. */
+  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px; }
+  .search { flex: 1 1 180px; min-width: 0; display: flex; align-items: center; gap: 8px; height: var(--control); padding: 0 10px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); color: var(--ink-3); }
   .search input { flex: 1; min-width: 0; height: 100%; border: 0; background: none; padding: 0; font-size: var(--text-control); }
   .sort { height: var(--control); flex: none; }
   .views { display: inline-flex; padding: 3px; gap: 2px; border-radius: var(--radius); background: var(--sunken); flex: none; }

@@ -587,9 +587,11 @@
   .final.none { color: var(--ink-2); }
   .problem { color: var(--live); line-height: 1.55; overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }
   .tech { color: var(--ink-2); font: var(--text-sm)/1.5 var(--font-mono); overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }
-  .again { display: flex; align-items: center; gap: 10px; }
-  .again select { width: 240px; flex: none; }
+  .again { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+  .again select { flex: 0 1 240px; min-width: 0; }
   .again .btn { flex: none; }
+  /* The help sits on its own line, so a long profile name never squeezes it. */
+  .again .hint { flex-basis: 100%; }
   .hint { min-width: 0; color: var(--ink-2); font-size: var(--text-sm); }
   .busy { display: flex; align-items: center; gap: 9px; min-height: var(--control); color: var(--ink-2); font-size: var(--text-control); }
   .spin { width: 16px; height: 16px; flex: none; border-radius: 50%; border: 2.5px solid var(--accent); border-right-color: transparent; animation: spin .9s linear infinite; }
