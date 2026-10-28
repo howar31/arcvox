@@ -62,6 +62,7 @@
   const cardColumns = $derived(gridWidth > 0 && gridWidth < CARDS_NARROW ? 2 : 3);
   let sort = $state<Sort>(storedSort());
   let query = $state("");
+  const searchHint = $derived(t(tab === "terms" ? "dictionary.search" : tab === "suggestions" ? "dictionary.search_suggestions" : "dictionary.search_ignored"));
   let selected = $state<number | null>(null);
   let fresh = $state<number | null>(null);
   function setView(v: View) { view = v; rememberView(v); }
@@ -320,9 +321,10 @@
     {/snippet}
   </PageHead>
 
+  <!-- The tabs on a line of their own; under them the search and what the tab offers, so nothing wraps by width. -->
+  <div class="tabs"><Segmented options={tabs} bind:value={tab} label={t("nav.dictionary")} /></div>
   <div class="bar">
-    <Segmented options={tabs} bind:value={tab} label={t("nav.dictionary")} />
-    <label class="search"><Icon name="search" /><input type="search" bind:value={query} placeholder={t("dictionary.search")} aria-label={t("dictionary.search")} onkeydown={searchKey} /></label>
+    <label class="search"><Icon name="search" /><input type="search" bind:value={query} placeholder={searchHint} aria-label={searchHint} onkeydown={searchKey} /></label>
     {#if tab === "terms"}
       <select class="sort" value={sort} onchange={(e) => setSort(e.currentTarget.value as Sort)} aria-label={t("dictionary.sort")}>
         {#each SORTS as s (s)}<option value={s}>{t(`dictionary.sort_${s}`)}</option>{/each}
@@ -460,9 +462,9 @@
 {/if}
 
 <style>
-  /* In a narrow window the search box goes to a line of its own rather than pushing the controls out. */
-  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px; }
-  .search { flex: 1 1 180px; min-width: 0; display: flex; align-items: center; gap: 8px; height: var(--control); padding: 0 10px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); color: var(--ink-3); }
+  .tabs { margin: 0 0 12px; }
+  .bar { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
+  .search { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: var(--control); padding: 0 10px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); color: var(--ink-3); }
   .search input { flex: 1; min-width: 0; height: 100%; border: 0; background: none; padding: 0; font-size: var(--text-control); }
   .sort { height: var(--control); flex: none; }
   .views { display: inline-flex; padding: 3px; gap: 2px; border-radius: var(--radius); background: var(--sunken); flex: none; }

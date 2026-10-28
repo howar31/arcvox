@@ -336,17 +336,25 @@
 </script>
 
 {#snippet description()}{t("engines.description_before")}<PageLink page="flow" label={t("nav.flow")} />{t("engines.description_after")}{/snippet}
-<PageHead title={t("nav.engines")} {description} />
+<PageHead title={t("nav.engines")} {description}>
+  {#snippet actions()}
+    <button type="button" class="btn icon-btn" class:spin={refreshing} aria-label={t("common.refresh")} use:tip={t("common.refresh")} onclick={refreshAll} disabled={refreshing}><Icon name="refresh" /></button>
+  {/snippet}
+</PageHead>
 
+<!-- The roles on a line of their own; under them the search and the filter of the local models. -->
 <div class="toolbar">
   <Segmented options={roles} bind:value={() => role, (v) => guard.request(() => go("engines", v))} label={t("engines.role")} />
+  {#if missingRecommended.length > 0}
+    <button type="button" class="btn quiet" disabled={busy} onclick={downloadRecommended}><Icon name="download" />{t("engines.download_recommended")}</button>
+  {/if}
+</div>
+<div class="toolbar">
   <label class="search">
     <Icon name="search" />
     <input type="search" bind:value={query} placeholder={t("engines.search")} aria-label={t("engines.search")} />
   </label>
-  {#if missingRecommended.length > 0}
-    <button type="button" class="btn quiet" disabled={busy} onclick={downloadRecommended}><Icon name="download" />{t("engines.download_recommended")}</button>
-  {/if}
+  <span class="filter" use:tip={t("engines.filter_tip")}><Segmented options={filters.map((f) => ({ value: f.value, label: `${f.label} ${f.count}` }))} bind:value={filter} label={t("engines.filter")} /></span>
 </div>
 
 {#snippet probeLine(id: string)}
@@ -420,14 +428,6 @@
 
 <!-- Every installed model is an engine of its own; a file still to download is listed with it. -->
 <Group title={t("engines.local_models")}>
-  {#snippet actions()}
-    <div class="pills" role="radiogroup" aria-label={t("engines.filter")}>
-      {#each filters as f (f.value)}
-        <button type="button" class="pill" class:on={filter === f.value} role="radio" aria-checked={filter === f.value} onclick={() => (filter = f.value)}>{f.label}<span class="num">{f.count}</span></button>
-      {/each}
-    </div>
-    <button type="button" class="btn" onclick={refreshAll} disabled={refreshing}><Icon name="refresh" size={14} />{t("common.refresh")}</button>
-  {/snippet}
   {#if !manifest || !installedKnown}
     <Row><span class="sub">{t("common.loading")}</span></Row>
   {/if}
@@ -560,8 +560,9 @@
 <style>
   .info { flex: 1; min-width: 0; }
   .info.dim .name, .info.dim small { color: var(--ink-3); }
-  .toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
-  .toolbar .search { flex: 1 1 200px; max-width: 320px; display: flex; align-items: center; gap: 9px; height: var(--control); padding: 0 12px; border-radius: var(--radius); border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink-3); cursor: text; }
+  .toolbar { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
+  .filter { display: inline-flex; flex: none; }
+  .toolbar .search { flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px; height: var(--control); padding: 0 12px; border-radius: var(--radius); border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink-3); cursor: text; }
   .toolbar .search input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; background: none; color: var(--ink); font-size: var(--text-control); outline: none; -webkit-appearance: none; appearance: none; }
   .toolbar .search:focus-within { border-color: var(--accent); }
   .toolbar > .btn { margin-left: auto; }
@@ -582,11 +583,11 @@
   .rowfoot .links { margin-top: 2px; }
   .rowfoot :global(.info-btn) { margin-left: 2px; }
   .rowfoot .links .link { margin: 0 14px 0 0; }
-  .pills { display: flex; gap: 6px; margin-right: 6px; }
-  .pill { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 15px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink-2); font-size: var(--text-sm); cursor: default; }
-  .pill .num { color: var(--ink-3); font-variant-numeric: tabular-nums; }
-  .pill.on { border-color: transparent; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-  .pill.on .num { color: inherit; }
+  .icon-btn { width: var(--control); padding: 0; color: var(--ink-2); }
+  .icon-btn:hover { color: var(--ink); }
+  .icon-btn.spin :global(svg) { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .icon-btn.spin :global(svg) { animation: none; } }
   /* The last row of the full list: the catalogue models still to download, shown on request. */
   .foldrow { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 54px; padding: 0 var(--row-x, 20px); border: 0; border-top: 1px solid var(--line); background: none; color: var(--ink); font-size: var(--text-control); font-weight: 600; text-align: left; cursor: default; }
   .foldrow .sub { color: var(--ink-2); font-weight: 400; font-size: var(--text-sm); }
