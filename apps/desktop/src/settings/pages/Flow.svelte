@@ -2,12 +2,12 @@
   import { tip } from "../../lib/tip";
   import { onMount, untrack } from "svelte";
   import {
-    errorMessage, historyLast, listMicrophones, modelsDownload, modelsInstalled, modelsManifestNow, onHistoryChanged, onModelDownloadProgress, openFolder, profilesAddPreset,
+    errorMessage, formatBytes, historyLast, listMicrophones, modelsDownload, modelsInstalled, modelsManifestNow, onHistoryChanged, onModelDownloadProgress, openFolder, profilesAddPreset,
     profilesPresets, profilesTemplateStyle, setDefaultProfile, upsertProfile, type InstalledModel, type LastRun, type ManifestView, type PresetView, type Profile,
   } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { appliesDictionary, PUNCTUATION_CONFIGS, RULE_KEYS, rulesAt, SCRIPT_CONFIGS, SCRIPT_GROUPS, scriptAt, scriptLabel, selectedProfile, translateAt, enableTranslate, withDictionary, withRule, withRules, withScript, withScriptPunctuationBoth, withTranslate, type RuleKey, type TranslateStep } from "../../lib/flowEdit";
-  import { CELL_IDS, cellLine, cellsOf, cellTime, moduleAdded, MODULE_IDS, runHeadline, stageName, type CellId } from "../../lib/flowLast";
+  import { CELL_IDS, cellLine, cellsOf, cellTime, hasText, insertLines, moduleAdded, MODULE_IDS, recordLines, runHeadline, stageName, type CellId } from "../../lib/flowLast";
   import { rememberProfile, rememberStage, storedProfile, storedStage } from "../../lib/stageMemory";
   import { guard } from "../../lib/guard.svelte";
   import { t } from "../../lib/i18n";
@@ -36,7 +36,7 @@
   import LastPanel from "./flow/LastPanel.svelte";
   import ManageProfiles from "./flow/ManageProfiles.svelte";
   import ProfilePicker from "./flow/ProfilePicker.svelte";
-  import StageRail, { type Cell, type Pick } from "./flow/StageRail.svelte";
+  import StageRoute, { type Cell, type Pick } from "./flow/StageRoute.svelte";
 
   /** `arg` is the id of the profile to show; without it the default profile is shown. */
   let { arg }: { arg: string | null } = $props();
@@ -50,6 +50,7 @@
   // The stage shown first is the one shown when the page was left last.
   // A stage, or "enable": the right column lists the modules not enabled.
   let stage = $state<Pick>(storedStage());
+  let routeHeight = $state(0);
   $effect(() => { if (stage !== "enable") rememberStage(stage); });
   let managing = $state(false);
   // The profile's newest dictation with its stages: undefined while it is being read, null when there is none.
@@ -234,7 +235,11 @@
   // What each stage did in the last dictation, computed when that run changes, not with every edit of the draft.
   const runLines = $derived.by((): Record<CellId, string> => {
     const run = last?.stages ?? null;
-    return Object.fromEntries(CELL_IDS.map((id) => [id, cellLine(id, run)])) as Record<CellId, string>;
+    // The insertion and the record tell the method and what was kept in full: they have no text to open.
+    const line = (id: CellId) => run && id === "insert" ? insertLines(run).join(t("flow.panel.sep"))
+      : run && id === "record" ? recordLines(run, last?.row ?? null, formatBytes).join(t("flow.panel.sep"))
+      : cellLine(id, run);
+    return Object.fromEntries(CELL_IDS.map((id) => [id, line(id)])) as Record<CellId, string>;
   });
   const runTimes = $derived.by((): Record<CellId, string | null> => {
     const run = last?.stages ?? null;
@@ -522,23 +527,16 @@
     </Group>
   {/if}
 
+  {#snippet lastText()}{#if last && stage !== "enable"}<LastPanel id={stage} stages={last.stages} />{/if}{/snippet}
   <div class="gt">
     <span>{t("flow.stages")}</span>
-    {#if last}<span class="r">{runHeadline(last.row, last.stages, new Date())}</span>{/if}
+    {#if last}<span class="r">{runHeadline(last.row, last.stages, new Date())}</span>{:else if last === null}<span class="r">{t("flow.last_none")}</span>{/if}
   </div>
-  <div class="split">
-    <!-- The rail stays in view while the right column scrolls; at the window's minimum height it fits whole. -->
-    <div class="railwrap"><StageRail {cells} selected={stage} onpick={(id) => (stage = id)} label={t("flow.stages")} entry={addable.length ? t("flow.enable_module") : ""} /></div>
-    <div class="right">
-      {#if current}
-        <div class="ttl"><b>{current.name}</b><span class:warn={current.warn} class:unknown={current.unknown}>{titleMeta}</span></div>
-      {/if}
-      {#if stage !== "enable" && last !== undefined}
-        <LastPanel id={stage} stages={last?.stages ?? null} row={last?.row ?? null} />
-      {/if}
-
+  <StageRoute {cells} selected={stage} onpick={(id) => (stage = id)} label={t("flow.stages")} entry={addable.length ? t("flow.enable_module") : ""} meta={titleMeta} detail={last && stage !== "enable" && hasText(stage, last.stages) ? lastText : undefined} bind:stuckHeight={routeHeight} />
+  <!-- At least the window's height under the stuck route: a stage with few settings picked while the route is
+       stuck leaves room to stay scrolled where it is, instead of the page pulling the route back down. -->
+  <div class="right" style:min-height="calc(100vh - {routeHeight}px - var(--page-bottom))">
       {#if stage === "enable"}
-        <div class="ttl"><b>{t("flow.enable_module")}</b></div>
         <Group help={t("flow.enable_help")}>
           {#each addable as m (m.id)}
             <Row label={m.name} help={m.help}>
@@ -733,7 +731,6 @@
           <Row label={t("flow.record_recordings")} onclick={() => guard.request(() => go("general"))} />
         </Group>
       {/if}
-    </div>
   </div>
 
   <SaveBar {dirty} {saving} message={problem} onsave={save} onrevert={revert} />
@@ -773,17 +770,9 @@
 
   .gt { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 22px 4px 12px; font: 600 var(--text-sm)/1 var(--font); color: var(--ink-2); }
   .gt .r { font-weight: 400; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  /* The rail can only stick while its container is taller than it, so the split reaches the bottom of the
-     scroll area even when the selected stage's settings are short: it takes the page's bottom padding as its own. */
-  /* Either column may be the taller one; each carries the page's bottom padding so the split ends with the content. */
-  .split { display: grid; grid-template-columns: 236px minmax(0, 1fr); gap: 16px; align-items: start; margin-bottom: -80px; }
-  .railwrap { position: sticky; top: 28px; padding-bottom: 80px; }
-  .right { display: flex; flex-direction: column; min-width: 0; padding-bottom: 80px; }
-  .right .ttl { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 2px 4px 10px; }
-  .right .ttl b { font: 700 19px/1.3 var(--font-round); flex: none; }
-  .right .ttl span { color: var(--ink-2); font-size: var(--text-sm); text-align: right; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .right .ttl span.warn { color: var(--warn); }
-  .right .ttl span.unknown { color: var(--live); }
+  /* The selected stage's settings, under the route. */
+  /* Padding, not margin: the route's bottom margin while stuck must not collapse with it. */
+  .right { display: flex; flex-direction: column; min-width: 0; padding-top: 12px; }
   /* The first group under the panel keeps the page's usual distance; the panel sits right under the title. */
   .right :global(.section:first-of-type h2) { margin-top: var(--gap-group); }
 

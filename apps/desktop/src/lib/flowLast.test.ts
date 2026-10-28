@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import type { Profile, Stage, Utterance } from "./api";
-import { cellInput, cellLine, cellNumber, cellOutput, cellsOf, cellTime, changedCells, changedCount, inputOf, insertLines, moduleAdded, promptLine, recordLines, runHeadline, stageAt, stageName, summaryLine, timeLabel } from "./flowLast";
+import { cellInput, cellLine, cellNumber, cellOutput, cellsOf, cellTime, changedCells, changedCount, inputOf, insertLines, moduleAdded, hasText, promptLine, recordLines, runHeadline, sentLine, stageAt, stageName, timeLabel } from "./flowLast";
 import { setLanguage } from "./i18n";
 
 const profile: Profile = {
@@ -82,8 +82,6 @@ describe("flowLast", () => {
     expect(cellTime("llm", failed)).toBe("20.0 s");
     expect(timeLabel(999)).toBe("999 ms");
     expect(timeLabel(1000)).toBe("1.0 s");
-    expect(summaryLine("asr", run)).toBe("1.2 s, 12 characters, 2 converted");
-    expect(summaryLine("asr", run.filter((s) => s.position !== 4))).toBe("1.2 s, 12 characters");
   });
 
   it("tells the insertion without an application name when none was captured", () => {
@@ -133,9 +131,14 @@ describe("flowLast", () => {
     expect(changedCount("same", "same")).toBe(0);
   });
 
-  it("writes the panel head and the prompt line of the rewrite", () => {
-    expect(summaryLine("llm", run)).toBe("1.4 s · 12 characters sent, 14 received");
-    expect(summaryLine("asr", run)).toBe("1.2 s, 12 characters, 2 converted");
+  it("writes the sent and received line and the prompt line of the rewrite", () => {
+    expect(sentLine("llm", run)).toBe("12 characters sent, 14 received");
+    expect(sentLine("asr", run)).toBe("");
+    expect(sentLine("llm", run.map((s) => (s.position === 5 ? { ...s, text: null } : s)))).toBe("");
+    expect(hasText("llm", run)).toBe(true);
+    expect(hasText("insert", run)).toBe(false);
+    expect(hasText("llm", run.filter((s) => s.position !== 5))).toBe(false);
+    expect(hasText("llm", null)).toBe(false);
     expect(promptLine(stageAt(run, "llm")!)).toBe('Prompt: base 412 characters · profile addition 0 characters · 12 dictionary terms · 0 examples · front window "Slack"');
   });
 

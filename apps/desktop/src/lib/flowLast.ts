@@ -172,21 +172,16 @@ export function timeLabel(ms: number): string {
   return ms < 1 ? t("flow.time_under_ms") : t("flow.time_ms", { ms: String(Math.round(ms)) });
 }
 
-/** The head line of the "last run" panel for a cell; recognition and the rewrite tell their time too. */
-export function summaryLine(id: CellId, stages: Stage[]): string {
+/** The stages whose last run can be opened to its text: what came in and what went out. */
+export function hasText(id: CellId, stages: Stage[] | null): boolean {
+  return stages !== null && (id === "asr" || id === "llm" || id === "rules" || id === "translate") && stageAt(stages, id) !== undefined;
+}
+
+/** How much text a model stage sent and got back in the last run; "" for the other stages and a failed run. */
+export function sentLine(id: CellId, stages: Stage[]): string {
   const s = stageAt(stages, id);
-  if (id === "asr" && s?.text != null) {
-    const n = converted(stages, "asr");
-    const vars = { secs: secs(num(s.ms)), chars: String(num(s.detail.chars, s.text.length)), n: String(n) };
-    return n > 0 ? t("flow.panel.asr_converted", vars) : t("flow.panel.asr", vars);
-  }
-  if (id === "llm" && s?.text != null) {
-    return t("flow.panel.sent_received", { secs: secs(num(s.ms)), in: String(num(s.detail.in_chars)), out: String(num(s.detail.out_chars)) });
-  }
-  if (id === "translate" && s?.text != null) {
-    return t("flow.panel.translated", { secs: secs(num(s.ms)), target: str(s.detail.target) ?? "", in: String(num(s.detail.in_chars)), out: String(num(s.detail.out_chars)) });
-  }
-  return cellLine(id, stages);
+  if ((id !== "llm" && id !== "translate") || s?.text == null) return "";
+  return t("flow.panel.sent", { in: String(num(s.detail.in_chars)), out: String(num(s.detail.out_chars)) });
 }
 
 /** The prompt line of the rewrite panel: what the model was given. */
