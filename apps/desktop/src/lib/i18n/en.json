@@ -1498,6 +1498,7 @@
   "common.list_sep": ", ",
   "flow.enable_module": "Enable a module",
   "flow.enable": "Enable",
+  "flow.enable_sure": "Enable?",
   "flow.enable_help": "An enabled module sits at its fixed stage position.",
   "flow.module.llm_help": "A language model turns the recognised text into text ready to paste",
   "flow.module.rules_help": "Dictionary replacements, and the punctuation and spacing rules",

@@ -264,15 +264,30 @@
       insert: () => cell("insert", lines!.out.name),
       record: () => cell("record", t("flow.record_meta")),
     };
-    return cellsOf(draft).map((id) => settings[id]());
+    // A module waiting for the second press shows where it would go; the numbers after it move on already.
+    const ids = cellsOf(draft);
+    return CELL_IDS.filter((id) => ids.includes(id) || id === pendingAdd)
+      .map((id) => (id === pendingAdd ? { ...settings[id](), ghost: true, problem: undefined } : settings[id]()));
   });
   // The modules the draft has not enabled, listed in the right column from the row between the modules and the insertion.
   const addable = $derived.by((): { id: CellId; name: string; help: string }[] => {
     if (!draft) return [];
     return MODULE_IDS.filter((id) => !moduleAdded(draft!, id)).map((id) => ({ id, name: stageName(id), help: t(`flow.module.${id}_help`) }));
   });
+  // Enabling asks once more: the first press shows on the route where the module goes, a second press within a
+  // few seconds enables it.
+  let pendingAdd = $state<CellId | null>(null);
+  let addTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => { stage; source?.id; clearTimeout(addTimer); pendingAdd = null; });
+  function askAdd(id: CellId) {
+    clearTimeout(addTimer);
+    pendingAdd = id;
+    addTimer = setTimeout(() => { pendingAdd = null; }, 4000);
+  }
   /** Enables a module at its fixed place and shows it; a module turned off earlier keeps its settings. A new translation starts with English as its target. */
   function addModule(id: CellId) {
+    clearTimeout(addTimer);
+    pendingAdd = null;
     if (!draft) return;
     if (id === "llm") draft = withLlm(snapshot(), "");
     else if (id === "rules") draft = withRules(snapshot(), true);
@@ -540,7 +555,11 @@
         <Group help={t("flow.enable_help")}>
           {#each addable as m (m.id)}
             <Row label={m.name} help={m.help}>
-              <button type="button" class="btn" onclick={() => addModule(m.id)}>{t("flow.enable")}</button>
+              {#if pendingAdd === m.id}
+                <button type="button" class="btn primary" onclick={() => addModule(m.id)}>{t("flow.enable_sure")}</button>
+              {:else}
+                <button type="button" class="btn" onclick={() => askAdd(m.id)}>{t("flow.enable")}</button>
+              {/if}
             </Row>
           {/each}
         </Group>

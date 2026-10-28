@@ -1498,6 +1498,7 @@
   "common.list_sep": "、",
   "flow.enable_module": "啟用模組",
   "flow.enable": "啟用",
+  "flow.enable_sure": "確定啟用？",
   "flow.enable_help": "模組啟用後在固定的階段位置。",
   "flow.module.llm_help": "用語言模型把辨識結果整理成可以直接貼上的文字",
   "flow.module.rules_help": "字典替換，以及標點和空格的規則",

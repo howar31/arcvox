@@ -18,6 +18,8 @@
     unknown: boolean;
     /** Set when the stage runs on another engine than the one the profile names: the problem mark, with this text. */
     problem?: string;
+    /** A module not enabled yet, shown where it would go until its enabling is confirmed. */
+    ghost?: boolean;
   }
 </script>
 
@@ -27,6 +29,7 @@
    * The summary's last-run line opens the stage's text from the last run in the same card, under the route.
    * Scrolled past, the route stays at the top of the page; the summary is cut off there so the stops take little room. */
   import { onMount, tick, type Snippet } from "svelte";
+  import { cubicOut } from "svelte/easing";
   import Bang from "../../../lib/ui/Bang.svelte";
   import Fold from "../../../lib/ui/Fold.svelte";
   import Icon from "../../../lib/ui/Icon.svelte";
@@ -63,6 +66,42 @@
   $effect.pre(() => { if (wasOpen && !open) closing = true; wasOpen = open; });
   const joined = $derived(open || closing);
 
+  // While stops open or close, every name keeps the width it has once they have settled, so no name wraps
+  // differently on the way and the route's height stays put. Stops share the row equally, 2 of padding a side.
+  const moving = new Set<HTMLElement>();
+  const leaving = new Set<HTMLElement>();
+  function holdNames(stops: HTMLElement) {
+    const all = [...stops.children] as HTMLElement[];
+    const width = stops.clientWidth / all.filter((s) => !leaving.has(s)).length - 4;
+    for (const s of all) {
+      const name = s.querySelector<HTMLElement>(".name");
+      if (!name) continue;
+      name.style.maxWidth = "none";
+      name.style.width = `${leaving.has(s) ? s.clientWidth - 4 : width}px`;
+    }
+  }
+  /** A stop coming onto or leaving the route: its width opens from or closes to nothing, the stops beside it moving along. */
+  function grow(node: HTMLElement, _: unknown, { direction }: { direction: "in" | "out" | "both" }) {
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches || !node.parentElement) return { duration: 0 };
+    if (direction === "out") leaving.add(node);
+    else leaving.delete(node);
+    moving.add(node);
+    node.style.overflow = "hidden";
+    holdNames(node.parentElement);
+    return { duration: 280, easing: cubicOut, css: (t: number) => `flex-grow: ${t}; opacity: ${t}` };
+  }
+  function settle(e: Event) {
+    const node = e.currentTarget as HTMLElement;
+    moving.delete(node);
+    leaving.delete(node);
+    node.style.overflow = "";
+    if (moving.size > 0) return;
+    for (const name of node.parentElement?.querySelectorAll<HTMLElement>(".name") ?? []) {
+      name.style.width = "";
+      name.style.maxWidth = "";
+    }
+  }
+
   /** The page scrolls in the window's main area; the route sticks to its top. */
   const scroller = () => mark?.closest<HTMLElement>(".main") ?? null;
 
@@ -91,15 +130,19 @@
 <div class="mark" bind:this={mark}></div>
 <div class="stick" class:stuck style:--cut="{cut}px" bind:offsetHeight={boxHeight}>
   <div class="route" class:joined>
-    <div class="stops" role="tablist" aria-label={label} style:--n={cells.length + (entry ? 1 : 0)}>
+    <div class="stops" role="tablist" aria-label={label}>
       {#each cells as c, i (c.id)}
-        <button type="button" class="stop" class:on={selected === c.id} role="tab" aria-selected={selected === c.id} onclick={() => pick(c.id)}>
+        <button
+          type="button" class="stop" class:on={selected === c.id} class:ghost={c.ghost} class:start={i === 0} class:end={!entry && i === cells.length - 1}
+          role="tab" aria-selected={selected === c.id} aria-disabled={c.ghost} tabindex={c.ghost ? -1 : null} onclick={() => { if (!c.ghost) pick(c.id); }}
+          in:grow out:grow onintroend={settle} onoutroend={settle}
+        >
           <span class="dot">{i + 1}{#if c.problem}<span class="bang"><Bang tone="warn" title={c.problem} /></span>{/if}</span>
           <span class="name">{c.name}</span>
         </button>
       {/each}
       {#if entry}
-        <button type="button" class="stop add" class:on={selected === "enable"} role="tab" aria-selected={selected === "enable"} onclick={() => pick("enable")}>
+        <button type="button" class="stop add end" class:on={selected === "enable"} role="tab" aria-selected={selected === "enable"} onclick={() => pick("enable")} in:grow out:grow onintroend={settle} onoutroend={settle}>
           <span class="dot"><Icon name="plus" size={13} /></span>
           <span class="name">{entry}</span>
         </button>
@@ -141,19 +184,28 @@
   .stick:not(.stuck) .route.joined { border-bottom-color: transparent; border-radius: var(--radius-group) var(--radius-group) 0 0; }
   .route.joined .summary { box-shadow: 0 1px 0 var(--line); }
   .foot { margin-top: -1px; background: var(--surface); border: 1px solid var(--line); border-top: 0; border-radius: 0 0 var(--radius-group) var(--radius-group); }
-  .stops { position: relative; display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); }
-  /* The line through the stops, from the centre of the first to the centre of the last. */
-  .stops::before { content: ""; position: absolute; top: 13px; left: calc(50% / var(--n)); right: calc(50% / var(--n)); height: 2px; background: var(--line-strong); }
-  .stop { position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; padding: 0 2px 12px; border: 0; background: none; color: var(--ink-2); font-size: var(--text-xs); line-height: 1.3; text-align: center; cursor: default; }
+  .stops { display: flex; }
+  .stop { position: relative; flex: 1 1 0; display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; padding: 0 2px 12px; border: 0; background: none; color: var(--ink-2); font-size: var(--text-xs); line-height: 1.3; text-align: center; cursor: default; }
   .stop:focus-visible { outline-offset: 2px; border-radius: 8px; }
-  .dot { position: relative; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--surface); background: var(--sunken); color: var(--ink-2); font: 600 var(--text-xs)/1 var(--font); }
+  /* The line through the stops: each stop draws the halves to its neighbours, so a stop opening or closing carries its part. */
+  .stop::before, .stop::after { content: ""; position: absolute; top: 13px; width: 50%; height: 2px; background: var(--line-strong); }
+  .stop::before { left: 0; }
+  .stop::after { right: 0; }
+  .stop.start::before, .stop.end::after { display: none; }
+  .dot { position: relative; z-index: 1; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--surface); background: var(--sunken); color: var(--ink-2); font: 600 var(--text-xs)/1 var(--font); }
   .stop:hover .dot { background: color-mix(in srgb, var(--accent) 12%, var(--sunken)); }
   .stop.on { color: var(--ink); font-weight: 600; }
   .stop.on .dot { background: var(--accent); color: var(--accent-ink); box-shadow: 0 0 0 4px var(--accent-soft); }
   .stop.add .dot { background: var(--surface); border: 1.5px dashed var(--line-strong); color: var(--ink-3); }
   .stop.add.on .dot { border-color: var(--accent); color: var(--accent); box-shadow: none; }
+  /* Where a module would go: a dashed ring and name in the accent colour, pulsing slowly, with dashed halves of the line. */
+  .stop.ghost { color: var(--accent); }
+  .stop.ghost .dot { background: var(--surface); border: 1.5px dashed var(--accent); color: var(--accent); animation: pending 1.4s ease-in-out infinite; }
+  .stop.ghost::before, .stop.ghost::after { background: repeating-linear-gradient(90deg, var(--accent) 0 4px, transparent 4px 7px); opacity: .6; }
+  @keyframes pending { 0%, 100% { box-shadow: 0 0 0 0 var(--accent-soft); } 50% { box-shadow: 0 0 0 6px var(--accent-soft); } }
+  @media (prefers-reduced-motion: reduce) { .stop.ghost .dot { animation: none; } }
   .bang { position: absolute; top: -6px; right: -9px; }
-  .name { max-width: 100%; overflow-wrap: anywhere; }
+  .name { max-width: 100%; overflow-wrap: anywhere; hyphens: auto; }
   .summary { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin: 0 4px; padding: 10px 6px 12px; border-top: 1px solid var(--line); font-size: var(--text-sm); }
   .what { display: flex; flex-direction: column; min-width: 0; }
   .what b { font-size: var(--text); }
