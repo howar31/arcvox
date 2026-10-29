@@ -114,6 +114,21 @@ pub fn services_list(state: State<'_, AppState>) -> CmdResult<Vec<ServicePreset>
     Ok(engine(&state)?.services())
 }
 
+/// Opens the page where a key for the catalogue service is made. Only an
+/// https address the catalogue gives is opened.
+#[tauri::command]
+pub fn services_open_key_page(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    let url = engine(&state)?
+        .services()
+        .into_iter()
+        .find(|s| s.id == id)
+        .and_then(|s| s.key_url)
+        .filter(|u| u.starts_with("https://"))
+        .ok_or_else(|| CmdError::new("unknown_service", format!("no key page for {id}")))?;
+    std::process::Command::new("open").arg(url).spawn()?;
+    Ok(())
+}
+
 /// The catalogue's local services, each asked for its models.
 #[tauri::command]
 pub async fn services_scan_local(state: State<'_, AppState>) -> CmdResult<Vec<LocalService>> {

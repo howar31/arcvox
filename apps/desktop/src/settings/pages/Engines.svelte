@@ -5,7 +5,7 @@
   import {
     errorMessage, formatBytes, modelsCancel, modelsCustomDir, modelsDelete, modelsDirGet, modelsDirSet, modelsDownload, modelsDownloadRecommended, modelsImport,
     modelsInstalled, modelsManifest, modelsManifestNow, nativeInstallLanguage, nativeStatus, onModelDownloadProgress, onNativeInstallProgress, openFolder,
-    probeProvider, setDefaultEngine, type DownloadProgress, type InstalledModel, type ManifestView, type ModelEntry, type ModelsDir, type NativeStatusView, type ProviderConfig,
+    engineChecks, listServices, probeProvider, putEngineCheck, setDefaultEngine, verifyProvider, type DownloadProgress, type EngineCheck, type ServicePreset, type InstalledModel, type ManifestView, type ModelEntry, type ModelsDir, type NativeStatusView, type ProviderConfig,
   } from "../../lib/api";
   import { encoderMissing, enginesOf, entryBytes, factsLine, hasRole, modelServes, recommendedMissing, runnable, type Role } from "../../lib/engines";
   import { t } from "../../lib/i18n";
@@ -13,6 +13,8 @@
   import { describeProbe, NATIVE_DICTATION } from "../../lib/providerForm";
   import { usableWith } from "../../lib/resolve";
   import { engineDescription } from "../../lib/stages";
+  import { formatShortDate, formatTime } from "../../lib/format";
+  import { checkCurrent } from "../../lib/serviceForm";
   import { guard } from "../../lib/guard.svelte";
   import { go } from "../../lib/route";
   import { config } from "../../lib/store.svelte";
@@ -65,6 +67,16 @@
   let installFraction = $state(0);
   let formOpen = $state(false);
   let formInitial = $state<ProviderConfig | null>(null);
+  // The last real request of each network engine, and the catalogue's services.
+  let checks = $state<Record<string, EngineCheck>>({});
+  let services = $state<ServicePreset[]>([]);
+  // A real request is sent on the second press; the first arms it for 4 seconds.
+  let armedReal = $state<string | null>(null);
+  let armedTimer: ReturnType<typeof setTimeout> | undefined;
+  let realBusy = $state<Record<string, boolean>>({});
+  const loadChecks = () => engineChecks().then((c) => (checks = c)).catch(() => {});
+  // A form that closes may have added engines with their checks.
+  $effect(() => { if (!formOpen) loadChecks(); });
   // The installed model waiting for the delete confirmation.
   let deleting = $state<InstalledModel | null>(null);
 
@@ -184,6 +196,7 @@
   onMount(() => {
     refreshAll();
     loadFolder();
+    listServices().then((s) => (services = s)).catch(() => {});
     let unlistenModels: (() => void) | undefined;
     let unlistenNative: (() => void) | undefined;
     let disposed = false;
@@ -276,6 +289,37 @@
       next = { state: "bad", text: `${t("engines.probe_failed")}: ${errorMessage(e)}` };
     }
     rowProbes = { ...rowProbes, [p.id]: { ...next, of } };
+  }
+  const serviceOf = (p: ProviderConfig): ServicePreset | undefined => services.find((s) => s.id === p.service);
+  const isLocal = (p: ProviderConfig): boolean => serviceOf(p)?.kind === "local";
+  async function realTest(p: ProviderConfig) {
+    if (!isLocal(p) && armedReal !== p.id) {
+      clearTimeout(armedTimer);
+      armedReal = p.id;
+      armedTimer = setTimeout(() => (armedReal = null), 4000);
+      return;
+    }
+    clearTimeout(armedTimer);
+    armedReal = null;
+    realBusy = { ...realBusy, [p.id]: true };
+    const cfg = $state.snapshot(p) as ProviderConfig;
+    let c: EngineCheck;
+    try { c = await verifyProvider(cfg, role); }
+    catch (e) { c = { ok: false, at: Math.floor(Date.now() / 1000), elapsed_ms: 0, message: errorMessage(e), role, service: cfg.service ?? null, base_url: cfg.base_url, model: cfg.model, reasoning_effort: cfg.reasoning_effort ?? null }; }
+    await putEngineCheck(p.id, c).catch(() => {});
+    checks = { ...checks, [p.id]: c };
+    realBusy = { ...realBusy, [p.id]: false };
+  }
+  /** The engine's last real request, as one line. */
+  function checkLine(p: ProviderConfig): { text: string; tone: "ok" | "bad" | "" } {
+    if (realBusy[p.id]) return { text: t("engines.check_running"), tone: "" };
+    const c = checks[p.id];
+    if (!c) return { text: t("engines.check_none"), tone: "" };
+    if (!checkCurrent(c, p, role)) return { text: t("engines.check_stale"), tone: "" };
+    const when = `${formatShortDate(c.at)} ${formatTime(c.at)}`;
+    return c.ok
+      ? { text: t("engines.check_ok_at", { when }), tone: "ok" }
+      : { text: t("engines.check_failed_at", { when, msg: c.message ?? "" }), tone: "bad" };
   }
   function openForm(p: ProviderConfig | null) {
     formInitial = p;
@@ -501,19 +545,27 @@
         {@const lamp = light(p.id, true, failed(p.id))}
         <Ring tone={lamp.tone} title={lamp.title} />
       {/snippet}
-      <div class="info">
-        <div class="title">
-          <span class="name">{p.label}</span>
-          {@render defaultTag(p)}
-          {#if !hasRole(p)}<Tag tone="warn">{t("engines.no_role")}</Tag>{/if}
+      <!-- The text and the actions share the row; when it is narrow, the actions go under the text. -->
+      <div class="ext">
+        <div class="info">
+          <div class="title">
+            <span class="name">{p.label}</span>
+            {@render defaultTag(p)}
+            {#if !hasRole(p)}<Tag tone="warn">{t("engines.no_role")}</Tag>{/if}
+            {#if p.service && services.length > 0 && !serviceOf(p)}<Tag tone="warn" title={t("engines.tip.service_missing")}>{t("engines.service_missing")}</Tag>{/if}
+          </div>
+          <small>{engineDescription(p, manifest)}</small>
+          <small>{usersLine(p.id)}</small>
+          <small class="check {checkLine(p).tone}">{checkLine(p).text}</small>
+          {@render probeLine(p.id)}
         </div>
-        <small>{engineDescription(p, manifest)}</small>
-        <small>{usersLine(p.id)}</small>
-        {@render probeLine(p.id)}
+        <span class="acts">
+          {@render defaultButton(p)}
+          <button type="button" class="btn quiet" onclick={() => test(p)} disabled={rowProbes[p.id]?.state === "wait"}>{t("engines.test_connection")}</button>
+          <button type="button" class="btn quiet" class:ask={armedReal === p.id} use:tip={t(isLocal(p) ? "engines.test_real_tip_local" : "engines.test_real_tip")} onclick={() => realTest(p)} disabled={realBusy[p.id]}>{armedReal === p.id ? t("engines.test_confirm_one") : t("engines.test_real")}</button>
+          <button type="button" class="btn quiet" onclick={() => openForm(p)}>{t("common.edit")}</button>
+        </span>
       </div>
-      {@render defaultButton(p)}
-      <button type="button" class="btn quiet" onclick={() => test(p)} disabled={rowProbes[p.id]?.state === "wait"}>{t("engines.test")}</button>
-      <button type="button" class="btn quiet" onclick={() => openForm(p)}>{t("common.edit")}</button>
     </Row>
   {:else}
     {#if q}<Row><span class="sub">{t("engines.no_match")}</span></Row>{:else}
@@ -573,6 +625,12 @@
   .info small { display: block; color: var(--ink-2); font-size: var(--text-sm); overflow-wrap: anywhere; }
   .info small.line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .probe.ok { color: var(--ok); }
+  .check.ok { color: var(--ok); }
+  .ext { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; column-gap: 16px; row-gap: 6px; }
+  .ext .info { flex: 1 1 260px; }
+  .acts { display: flex; align-items: center; gap: 16px; margin-left: auto; }
+  .check.bad { color: var(--live); }
+  .btn.quiet.ask { color: var(--live); font-weight: 600; }
   .probe.bad { color: var(--live); }
   .bar { width: 96px; height: 4px; border-radius: 2px; background: var(--sunken); overflow: hidden; flex: none; }
   .bar i { display: block; height: 100%; background: var(--accent); transition: width .2s; }

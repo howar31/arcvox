@@ -13,6 +13,23 @@ export interface ProviderConfig {
   base_url: string | null; model: string | null; api_key_ref: string | null;
   extra_headers: Record<string, string>; model_path: string | null; native_id: string | null;
   model_id: string | null; runtime: Runtime | null;
+  /** A network engine's catalogue service; its address and request formats come from there. */
+  service?: string | null;
+  /** Sent as `reasoning_effort` with chat requests; absent means not sent. */
+  reasoning_effort?: string | null;
+}
+export type Wire = "transcriptions" | "chat_audio" | "chat";
+export interface ServicePreset {
+  id: string; label: string; kind: "cloud" | "local";
+  base_url?: string | null; port?: number | null; path?: string | null;
+  key_required: boolean; key_url?: string | null;
+  asr?: Wire | null; llm?: Wire | null;
+  suggested: { asr?: string | null; llm?: string | null };
+}
+export interface LocalService { id: string; label: string; base_url: string; running: boolean; models: string[] }
+export interface EngineCheck {
+  ok: boolean; at: number; elapsed_ms: number; message?: string | null; role: "asr" | "llm";
+  service?: string | null; base_url?: string | null; model?: string | null; reasoning_effort?: string | null;
 }
 export type StepSpec =
   | { step: "asr" }
@@ -169,6 +186,12 @@ export const upsertProvider = (provider: ProviderConfig) => invoke<Config>("prov
 export const deleteProvider = (id: string) => invoke<Config>("providers_delete", { id });
 export const setDefaultEngine = (role: EngineRole, id: string) => invoke<Config>("default_engine_set", { role, id });
 export const probeProvider = (provider: ProviderConfig) => invoke<ProbeResult>("providers_probe", { provider });
+export const verifyProvider = (provider: ProviderConfig, role: "asr" | "llm") => invoke<EngineCheck>("providers_verify", { provider, role });
+export const listServices = () => invoke<ServicePreset[]>("services_list");
+export const scanLocalServices = () => invoke<LocalService[]>("services_scan_local");
+export const openServiceKeyPage = (id: string) => invoke<void>("services_open_key_page", { id });
+export const engineChecks = () => invoke<Record<string, EngineCheck>>("engine_checks");
+export const putEngineCheck = (id: string, check: EngineCheck) => invoke<null>("engine_check_put", { id, check });
 export const upsertProfile = (profile: Profile) => invoke<Config>("profiles_upsert", { profile });
 export const deleteProfile = (id: string) => invoke<Config>("profiles_delete", { id });
 export const setDefaultProfile = (id: string) => invoke<Config>("profiles_set_default", { id });

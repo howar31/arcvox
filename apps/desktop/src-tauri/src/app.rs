@@ -234,6 +234,7 @@ pub fn run() {
             crate::commands::providers::providers_verify,
             crate::commands::providers::services_list,
             crate::commands::providers::services_scan_local,
+            crate::commands::providers::services_open_key_page,
             crate::commands::providers::engine_checks,
             crate::commands::providers::engine_check_put,
             crate::commands::profiles::profiles_upsert,
