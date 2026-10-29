@@ -30,6 +30,7 @@
   import Ring from "../../lib/ui/Ring.svelte";
   import Row from "../../lib/ui/Row.svelte";
   import Segmented from "../../lib/ui/Segmented.svelte";
+  import StickyBar from "../../lib/ui/StickyBar.svelte";
   import Tag from "../../lib/ui/Tag.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
   import EngineForm from "./EngineForm.svelte";
@@ -387,19 +388,21 @@
 </PageHead>
 
 <!-- The roles on a line of their own; under them the search and the filter of the local models. -->
-<div class="toolbar">
-  <Segmented options={roles} bind:value={() => role, (v) => guard.request(() => go("engines", v))} label={t("engines.role")} />
-  {#if missingRecommended.length > 0}
-    <button type="button" class="btn quiet" disabled={busy} onclick={downloadRecommended}><Icon name="download" />{t("engines.download_recommended")}</button>
-  {/if}
-</div>
-<div class="toolbar">
-  <label class="search">
-    <Icon name="search" />
-    <input type="search" bind:value={query} placeholder={t("engines.search")} aria-label={t("engines.search")} />
-  </label>
-  <span class="filter" use:tip={t("engines.filter_tip")}><Segmented options={filters.map((f) => ({ value: f.value, label: `${f.label} ${f.count}` }))} bind:value={filter} label={t("engines.filter")} /></span>
-</div>
+<StickyBar>
+  <div class="toolbar">
+    <Segmented options={roles} bind:value={() => role, (v) => guard.request(() => go("engines", v))} label={t("engines.role")} />
+    {#if missingRecommended.length > 0}
+      <button type="button" class="btn quiet" disabled={busy} onclick={downloadRecommended}><Icon name="download" />{t("engines.download_recommended")}</button>
+    {/if}
+  </div>
+  <div class="toolbar">
+    <label class="search">
+      <Icon name="search" />
+      <input type="search" bind:value={query} placeholder={t("engines.search")} aria-label={t("engines.search")} />
+    </label>
+    <span class="filter" use:tip={t("engines.filter_tip")}><Segmented options={filters.map((f) => ({ value: f.value, label: `${f.label} ${f.count}` }))} bind:value={filter} label={t("engines.filter")} /></span>
+  </div>
+</StickyBar>
 
 {#snippet probeLine(id: string)}
   {@const probe = rowProbes[id]}

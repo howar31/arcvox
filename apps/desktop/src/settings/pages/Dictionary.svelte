@@ -16,6 +16,7 @@
   import PageHead from "../../lib/ui/PageHead.svelte";
   import SaveBar from "../../lib/ui/SaveBar.svelte";
   import Segmented from "../../lib/ui/Segmented.svelte";
+  import StickyBar from "../../lib/ui/StickyBar.svelte";
   import Tag from "../../lib/ui/Tag.svelte";
   import { tip } from "../../lib/tip";
   import { toast } from "../../lib/ui/toast.svelte";
@@ -322,25 +323,27 @@
   </PageHead>
 
   <!-- The tabs on a line of their own; under them the search and what the tab offers, so nothing wraps by width. -->
-  <div class="tabs"><Segmented options={tabs} bind:value={tab} label={t("nav.dictionary")} /></div>
-  <div class="bar">
-    <label class="search"><Icon name="search" /><input type="search" bind:value={query} placeholder={searchHint} aria-label={searchHint} onkeydown={searchKey} /></label>
-    {#if tab === "terms"}
-      <select class="sort" value={sort} onchange={(e) => setSort(e.currentTarget.value as Sort)} aria-label={t("dictionary.sort")}>
-        {#each SORTS as s (s)}<option value={s}>{t(`dictionary.sort_${s}`)}</option>{/each}
-      </select>
-      <span class="views" role="group" aria-label={t("dictionary.view_cards")}>
-        {#each VIEWS as v (v)}
-          <button type="button" class:on={view === v} aria-pressed={view === v} use:tip={t(`dictionary.view_${v}`)} onclick={() => setView(v)}><Icon name={`view-${v}`} size={16} /></button>
-        {/each}
-      </span>
-    {:else if tab === "ignored" && ignored.length}
-      {#if stale.length}
-        <button type="button" class="btn quiet" class:danger={staleSure} onclick={dropStale}>{t(staleSure ? "dictionary.drop_stale_sure" : "dictionary.drop_stale", { n: String(stale.length) })}</button>
+  <StickyBar>
+    <div class="tabs"><Segmented options={tabs} bind:value={tab} label={t("nav.dictionary")} /></div>
+    <div class="bar">
+      <label class="search"><Icon name="search" /><input type="search" bind:value={query} placeholder={searchHint} aria-label={searchHint} onkeydown={searchKey} /></label>
+      {#if tab === "terms"}
+        <select class="sort" value={sort} onchange={(e) => setSort(e.currentTarget.value as Sort)} aria-label={t("dictionary.sort")}>
+          {#each SORTS as s (s)}<option value={s}>{t(`dictionary.sort_${s}`)}</option>{/each}
+        </select>
+        <span class="views" role="group" aria-label={t("dictionary.view_cards")}>
+          {#each VIEWS as v (v)}
+            <button type="button" class:on={view === v} aria-pressed={view === v} use:tip={t(`dictionary.view_${v}`)} onclick={() => setView(v)}><Icon name={`view-${v}`} size={16} /></button>
+          {/each}
+        </span>
+      {:else if tab === "ignored" && ignored.length}
+        {#if stale.length}
+          <button type="button" class="btn quiet" class:danger={staleSure} onclick={dropStale}>{t(staleSure ? "dictionary.drop_stale_sure" : "dictionary.drop_stale", { n: String(stale.length) })}</button>
+        {/if}
+        <button type="button" class="btn quiet" class:danger={restoreSure} onclick={restoreAll}>{restoreSure ? t("dictionary.restore_all_sure", { n: String(ignored.length) }) : t("dictionary.restore_all")}</button>
       {/if}
-      <button type="button" class="btn quiet" class:danger={restoreSure} onclick={restoreAll}>{restoreSure ? t("dictionary.restore_all_sure", { n: String(ignored.length) }) : t("dictionary.restore_all")}</button>
-    {/if}
-  </div>
+    </div>
+  </StickyBar>
 
   {#if tab === "terms"}
     {#if !items.length}
