@@ -6,9 +6,11 @@ pub mod gguf;
 pub mod kind;
 pub mod magic;
 pub mod manifest;
+pub mod services;
 pub mod store;
 
 pub use manifest::{Manifest, ManifestSource, ModelEntry, ModelRole};
+pub use services::{route, Route, ServiceKind, ServiceLookup, ServicePreset, Wire};
 pub use store::{InstalledModel, ModelStore};
 
 /// Catalogue fetched when `client.json` sets no `manifest_url` override.

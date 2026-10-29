@@ -1,3 +1,4 @@
+use super::services::ServicePreset;
 use super::ModelError;
 use crate::config::{Capabilities, Runtime};
 use serde::{Deserialize, Serialize};
@@ -88,6 +89,9 @@ impl ModelEntry {
 pub struct Manifest {
     pub schema_version: u32,
     pub models: Vec<ModelEntry>,
+    /// Network services an engine can name.
+    #[serde(default)]
+    pub services: Vec<ServicePreset>,
 }
 
 impl Manifest {
@@ -98,6 +102,8 @@ impl Manifest {
         struct Raw {
             schema_version: u32,
             models: Vec<serde_json::Value>,
+            #[serde(default)]
+            services: Vec<serde_json::Value>,
         }
         let raw: Raw =
             serde_json::from_str(json).map_err(|e| ModelError::Manifest(e.to_string()))?;
@@ -133,9 +139,18 @@ impl Manifest {
             }
             models.push(e);
         }
+        let mut services: Vec<ServicePreset> = Vec::with_capacity(raw.services.len());
+        for v in raw.services {
+            match serde_json::from_value::<ServicePreset>(v) {
+                Ok(s) if s.valid() && !services.iter().any(|x| x.id == s.id) => services.push(s),
+                Ok(s) => tracing::warn!(id = %s.id, "manifest service skipped"),
+                Err(err) => tracing::warn!("manifest service skipped: {err}"),
+            }
+        }
         Ok(Manifest {
             schema_version: raw.schema_version,
             models,
+            services,
         })
     }
 
@@ -171,6 +186,25 @@ pub(crate) mod tests {
         assert_eq!(m.get("b").unwrap().runtime, Runtime::Llama);
         assert_eq!(m.recommended(ModelRole::Asr).unwrap().id, "a");
         assert!(m.recommended(ModelRole::Llm).is_none());
+    }
+
+    #[test]
+    fn services_are_read_one_by_one() {
+        let json = r#"{"schema_version":1,"models":[],"services":[
+            {"id":"gemini","label":"Gemini","kind":"cloud","base_url":"https://g.test/v1beta/openai/","key_required":true,"asr":"chat_audio","llm":"chat"},
+            {"id":"broken","label":"B","kind":"cloud","llm":"chat"},
+            {"id":"odd","label":"O","kind":"satellite","llm":"chat"},
+            {"id":"gemini","label":"Again","kind":"cloud","base_url":"https://x.test/","llm":"chat"},
+            {"id":"ollama","label":"Ollama","kind":"local","port":11434,"asr":"transcriptions","llm":"chat"}
+        ]}"#;
+        let m = Manifest::parse(json).unwrap();
+        let ids: Vec<&str> = m.services.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["gemini", "ollama"]);
+        assert_eq!(m.services[0].label, "Gemini");
+        assert!(Manifest::parse(r#"{"schema_version":1,"models":[]}"#)
+            .unwrap()
+            .services
+            .is_empty());
     }
 
     #[test]

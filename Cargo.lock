@@ -105,6 +105,7 @@ version = "0.1.0"
 dependencies = [
  "arcvox-core",
  "async-trait",
+ "base64 0.22.1",
  "dirs 6.0.0",
  "futures-util",
  "hound",

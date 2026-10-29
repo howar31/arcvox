@@ -89,7 +89,7 @@ fn whisper_language(tag: &str) -> String {
 /// The configured timeout is the allowance for a short clip; a longer clip
 /// gets twice its own length on top, since a server may transcribe slower
 /// than real time.
-fn request_timeout(base: Duration, clip_secs: f32) -> Duration {
+pub(crate) fn request_timeout(base: Duration, clip_secs: f32) -> Duration {
     base + Duration::from_secs_f32(clip_secs.max(0.0) * 2.0)
 }
 

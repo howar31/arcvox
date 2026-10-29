@@ -316,12 +316,21 @@ fn migrate(value: serde_json::Value) -> Result<serde_json::Value, MigrateError> 
         .unwrap_or(0) as u32;
     match version {
         SCHEMA_VERSION => Ok(value),
-        1 => Ok(v3_to_v4(v2_to_v3(v1_to_v2(value)))),
-        2 => Ok(v3_to_v4(v2_to_v3(value))),
-        3 => Ok(v3_to_v4(value)),
+        1 => Ok(v4_to_v5(v3_to_v4(v2_to_v3(v1_to_v2(value))))),
+        2 => Ok(v4_to_v5(v3_to_v4(v2_to_v3(value)))),
+        3 => Ok(v4_to_v5(v3_to_v4(value))),
+        4 => Ok(v4_to_v5(value)),
         v if v > SCHEMA_VERSION => Err(MigrateError::Unsupported(v)),
         v => Err(MigrateError::NoPath(v)),
     }
+}
+
+/// Version 5: a network engine may name a catalogue service and a reasoning
+/// effort. Both are optional, so nothing changes; the version keeps an older
+/// build from reading fields it does not know.
+fn v4_to_v5(mut value: serde_json::Value) -> serde_json::Value {
+    value["schema_version"] = serde_json::json!(5);
+    value
 }
 
 /// Version 4: a rules step carries its trailing-stop flag.
@@ -790,6 +799,19 @@ mod tests {
         std::fs::write(dirs.base_prompt_path(), &edited).unwrap();
         let store = ConfigStore::open(&dirs).unwrap();
         assert_eq!(store.base_prompt().unwrap(), edited);
+    }
+
+    #[test]
+    fn a_version_4_file_reads_as_version_5_unchanged() {
+        let (_tmp, store) = store();
+        let mut v = serde_json::to_value(&*store.current()).unwrap();
+        v["schema_version"] = serde_json::json!(4);
+        let Ok(out) = migrate(v.clone()) else {
+            panic!("no migration")
+        };
+        assert_eq!(out["schema_version"], 5);
+        v["schema_version"] = serde_json::json!(5);
+        assert_eq!(out, v);
     }
 
     #[test]

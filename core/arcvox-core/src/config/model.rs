@@ -8,7 +8,7 @@ use url::Url;
 
 use crate::types::{ProfileId, ProviderId};
 
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 pub const MODEL_ID_DEFAULT_ASR: &str = "breeze-asr-25-q5_0";
 pub const MODEL_ID_DEFAULT_LLM: &str = "gemma-3-4b-it-q4_k_m";
@@ -279,6 +279,14 @@ pub struct ProviderConfig {
     /// Embedded: which engine loads the file.
     #[serde(default)]
     pub runtime: Option<Runtime>,
+    /// Http: id of the catalogue's network service the engine uses; its
+    /// address and request format come from there. None: `base_url` as typed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
+    /// Http, chat requests: `reasoning_effort` sent with each request. None:
+    /// not sent, the model's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -772,6 +780,8 @@ impl ProviderConfig {
             native_id: None,
             model_id: Some(model_id.into()),
             runtime: Some(runtime),
+            service: None,
+            reasoning_effort: None,
         }
     }
 
@@ -814,6 +824,8 @@ impl ProviderConfig {
             native_id: Some(native_id.into()),
             model_id: None,
             runtime: None,
+            service: None,
+            reasoning_effort: None,
         }
     }
 
@@ -838,6 +850,8 @@ impl ProviderConfig {
             native_id: None,
             model_id: None,
             runtime: None,
+            service: None,
+            reasoning_effort: None,
         }
     }
 }

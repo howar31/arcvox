@@ -249,6 +249,18 @@ impl ModelStore {
         }
     }
 
+    /// The network services of the catalogue in use; ids it lacks come from
+    /// the one built into the app.
+    pub fn services(&self) -> Vec<super::ServicePreset> {
+        let mut out = self.manifest_now().0.services;
+        for s in &self.bundled.services {
+            if !out.iter().any(|x| x.id == s.id) {
+                out.push(s.clone());
+            }
+        }
+        out
+    }
+
     fn read_cached(&self) -> Option<Manifest> {
         let text = std::fs::read_to_string(self.dirs.manifest_cache_path()).ok()?;
         Manifest::parse(&text).ok()
@@ -835,6 +847,12 @@ fn remove_item(path: &Path) -> std::io::Result<()> {
         std::fs::remove_dir_all(path)
     } else {
         std::fs::remove_file(path)
+    }
+}
+
+impl super::ServiceLookup for ModelStore {
+    fn services(&self) -> Vec<super::ServicePreset> {
+        ModelStore::services(self)
     }
 }
 

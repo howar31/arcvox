@@ -130,6 +130,7 @@ struct Inner {
     config: ConfigStore,
     history: Arc<HistoryStore>,
     registry: ProviderRegistry,
+    checks: crate::checks::CheckStore,
     client: reqwest::Client,
     secrets: Arc<dyn SecretStore>,
     sessions: Mutex<HashMap<SessionId, HistoryId>>,
@@ -275,6 +276,7 @@ impl Engine {
         let client = reqwest::Client::builder().build().expect("reqwest client");
         let registry =
             ProviderRegistry::with_factories(client.clone(), opts.secrets.clone(), opts.factories);
+        let checks = crate::checks::CheckStore::new(&dirs);
         let engine = Engine {
             inner: Arc::new(Inner {
                 dirs,
@@ -282,6 +284,7 @@ impl Engine {
                 app_version: opts.identity.app_version,
                 config,
                 history,
+                checks,
                 registry,
                 client,
                 secrets: opts.secrets,
@@ -615,9 +618,109 @@ impl Engine {
         self.inner.registry.factory_for(kind).is_some()
     }
 
+    /// Gives the engine the catalogue's network services.
+    pub fn set_services(&self, lookup: Arc<dyn crate::models::ServiceLookup>) {
+        self.inner.registry.set_services(lookup);
+    }
+
+    pub fn services(&self) -> Vec<crate::models::ServicePreset> {
+        self.inner.registry.services()
+    }
+
+    /// The local services of the catalogue, each asked for its models.
+    pub async fn scan_local_services(&self) -> Vec<crate::checks::LocalService> {
+        crate::checks::scan_local(
+            &self.inner.client,
+            &self.services(),
+            std::time::Duration::from_secs(1),
+        )
+        .await
+    }
+
+    /// Sends one real request to a network engine: a second of silence for
+    /// speech recognition, a short message for rewriting. It passes when the
+    /// service answers in the shape of a transcript or a reply; what it says
+    /// is not judged.
+    pub async fn verify_provider(
+        &self,
+        cfg: &ProviderConfig,
+        role: crate::models::ModelRole,
+    ) -> crate::checks::EngineCheck {
+        use crate::models::ModelRole;
+        let general = self.inner.config.current().general.clone();
+        let started = std::time::Instant::now();
+        let outcome: Result<(), crate::providers::ProviderError> = match role {
+            ModelRole::Asr => match self.inner.registry.asr_uncached(cfg, &general) {
+                Ok(p) => {
+                    let silence = crate::types::AudioClip {
+                        samples: vec![0.0; 16_000],
+                        sample_rate: 16_000,
+                    };
+                    p.transcribe(&silence, &crate::providers::AsrHint::default())
+                        .await
+                        .map(|_| ())
+                }
+                Err(e) => Err(e),
+            },
+            ModelRole::Llm => match self.inner.registry.llm_uncached(cfg, &general) {
+                Ok(p) => {
+                    let opts = crate::providers::LlmOptions {
+                        temperature: 0.0,
+                        max_tokens: None,
+                        timeout: std::time::Duration::from_secs(general.llm_timeout_secs),
+                    };
+                    p.complete(
+                        vec![crate::types::ChatMessage::user("Reply with OK.")],
+                        &opts,
+                    )
+                    .await
+                    .map(|_| ())
+                }
+                Err(e) => Err(e),
+            },
+        };
+        crate::checks::EngineCheck {
+            ok: outcome.is_ok(),
+            at: crate::history::now_unix(),
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            message: outcome.err().map(|e| e.message),
+            role,
+            service: cfg.service.clone(),
+            base_url: cfg.base_url.as_ref().map(|u| u.to_string()),
+            model: cfg.model.clone(),
+            reasoning_effort: cfg.reasoning_effort.clone(),
+        }
+    }
+
+    /// The last real request of each network engine, by engine id; checks
+    /// of engines that are gone are dropped first.
+    pub fn engine_checks(&self) -> std::collections::BTreeMap<String, crate::checks::EngineCheck> {
+        let config = self.inner.config.current();
+        let _ = self
+            .inner
+            .checks
+            .retain(|id| config.providers.iter().any(|p| p.id.0 == id));
+        self.inner.checks.all()
+    }
+
+    pub fn put_engine_check(
+        &self,
+        id: &str,
+        check: crate::checks::EngineCheck,
+    ) -> std::io::Result<()> {
+        self.inner.checks.put(id, check)
+    }
+
     pub async fn probe_provider(&self, cfg: &ProviderConfig) -> ProbeResult {
         match cfg.kind {
-            ProviderKind::Http => probe_http(&self.inner.client, cfg, &self.inner.secrets).await,
+            ProviderKind::Http => {
+                // The engine's service decides the address it is reached at.
+                let mut routed = cfg.clone();
+                if let Some(r) = self.inner.registry.route(cfg) {
+                    routed.base_url = Some(r.base);
+                }
+                probe_http(&self.inner.client, &routed, &self.inner.secrets).await
+            }
             kind => match self.inner.registry.factory_for(kind) {
                 Some(f) => f.probe(cfg).await,
                 None => ProbeResult {
@@ -1916,6 +2019,54 @@ pub(crate) mod tests {
             asr,
             llm,
         }
+    }
+
+    #[tokio::test]
+    async fn a_real_request_checks_an_engine_and_the_result_is_kept() {
+        let r = rig(false).await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"text":""})))
+            .mount(&r.asr)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .set_body_string(r#"{"error":{"message":"model does not support chat"}}"#),
+            )
+            .mount(&r.llm)
+            .await;
+        let config = r.engine.config().current();
+        let (asr_cfg, llm_cfg) = (config.providers[0].clone(), config.providers[1].clone());
+
+        let ok = r
+            .engine
+            .verify_provider(&asr_cfg, crate::models::ModelRole::Asr)
+            .await;
+        assert!(ok.ok, "{:?}", ok.message);
+        assert_eq!(ok.model, asr_cfg.model);
+        let bad = r
+            .engine
+            .verify_provider(&llm_cfg, crate::models::ModelRole::Llm)
+            .await;
+        assert!(!bad.ok);
+        assert!(
+            bad.message
+                .as_deref()
+                .unwrap_or("")
+                .contains("does not support chat"),
+            "{:?}",
+            bad.message
+        );
+
+        r.engine
+            .put_engine_check(&asr_cfg.id.0, ok.clone())
+            .unwrap();
+        r.engine.put_engine_check("gone", bad).unwrap();
+        let kept = r.engine.engine_checks();
+        assert_eq!(kept.keys().collect::<Vec<_>>(), [&asr_cfg.id.0]);
+        assert_eq!(kept[&asr_cfg.id.0], ok);
     }
 
     #[tokio::test]

@@ -1,4 +1,8 @@
+use std::collections::BTreeMap;
+
+use arcvox_core::checks::{EngineCheck, LocalService};
 use arcvox_core::config::{validate, Config, EngineRole, ProviderConfig, ProviderKind};
+use arcvox_core::models::{ModelRole, ServicePreset};
 use arcvox_core::providers::probe::ProbeResult;
 use arcvox_core::types::ProviderId;
 use arcvox_core::Engine;
@@ -102,6 +106,50 @@ pub async fn providers_probe(
 ) -> CmdResult<ProbeResult> {
     let e = engine(&state)?;
     Ok(e.probe_provider(&provider).await)
+}
+
+/// The catalogue's network services, for the engine form.
+#[tauri::command]
+pub fn services_list(state: State<'_, AppState>) -> CmdResult<Vec<ServicePreset>> {
+    Ok(engine(&state)?.services())
+}
+
+/// The catalogue's local services, each asked for its models.
+#[tauri::command]
+pub async fn services_scan_local(state: State<'_, AppState>) -> CmdResult<Vec<LocalService>> {
+    let e = engine(&state)?;
+    Ok(e.scan_local_services().await)
+}
+
+/// One real request to a network engine for the role; the result is not
+/// stored here (a new engine has no id yet).
+#[tauri::command]
+pub async fn providers_verify(
+    state: State<'_, AppState>,
+    provider: ProviderConfig,
+    role: ModelRole,
+) -> CmdResult<EngineCheck> {
+    if provider.kind != ProviderKind::Http {
+        return Err(automatic());
+    }
+    let e = engine(&state)?;
+    Ok(e.verify_provider(&provider, role).await)
+}
+
+#[tauri::command]
+pub fn engine_checks(state: State<'_, AppState>) -> CmdResult<BTreeMap<String, EngineCheck>> {
+    Ok(engine(&state)?.engine_checks())
+}
+
+#[tauri::command]
+pub fn engine_check_put(
+    state: State<'_, AppState>,
+    id: ProviderId,
+    check: EngineCheck,
+) -> CmdResult<()> {
+    engine(&state)?
+        .put_engine_check(&id.0, check)
+        .map_err(|e| CmdError::new("engine_check_write", e.to_string()))
 }
 
 #[cfg(test)]

@@ -2,10 +2,12 @@
 //! is rebuilt when its config changes.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 use std::time::Duration;
 
 use crate::config::{General, ProviderConfig, ProviderKind};
+use crate::models::services::{route, Route, ServiceLookup, Wire};
+use crate::providers::chat_asr::ChatAsrProvider;
 use crate::providers::factory::ProviderFactory;
 use crate::providers::http_asr::HttpAsrProvider;
 use crate::providers::http_llm::HttpLlmProvider;
@@ -20,6 +22,8 @@ struct Cached<P: ?Sized> {
     cfg: ProviderConfig,
     timing: (u64, u32),
     key: Option<String>,
+    /// Where a network engine's requests went when it was built.
+    route: Option<Route>,
     provider: Arc<P>,
 }
 
@@ -43,10 +47,12 @@ impl<P: ?Sized> Cache<P> {
         cfg: &ProviderConfig,
         timing: (u64, u32),
         key: &Option<String>,
+        route: &Option<Route>,
     ) -> Option<Arc<P>> {
         let cache = self.lock();
         let c = cache.get(&cfg.id)?;
-        (c.cfg == *cfg && c.timing == timing && c.key == *key).then(|| c.provider.clone())
+        (c.cfg == *cfg && c.timing == timing && c.key == *key && c.route == *route)
+            .then(|| c.provider.clone())
     }
 
     fn insert(
@@ -54,6 +60,7 @@ impl<P: ?Sized> Cache<P> {
         cfg: &ProviderConfig,
         timing: (u64, u32),
         key: Option<String>,
+        route: Option<Route>,
         provider: Arc<P>,
     ) {
         self.lock().insert(
@@ -62,6 +69,7 @@ impl<P: ?Sized> Cache<P> {
                 cfg: cfg.clone(),
                 timing,
                 key,
+                route,
                 provider,
             },
         );
@@ -88,6 +96,8 @@ pub struct ProviderRegistry {
     asr: Cache<dyn AsrProvider>,
     llm: Cache<dyn LlmProvider>,
     factories: Vec<Arc<dyn ProviderFactory>>,
+    /// The catalogue's network services, set by the client once it has one.
+    services: RwLock<Option<Arc<dyn ServiceLookup>>>,
 }
 
 /// Providers removed from the cache by [`ProviderRegistry::evict_where`].
@@ -109,7 +119,33 @@ impl ProviderRegistry {
             asr: Cache::new(),
             llm: Cache::new(),
             factories,
+            services: RwLock::new(None),
         }
+    }
+
+    /// Gives the registry the catalogue's network services. Engines that
+    /// name a service take their address and request format from it.
+    pub fn set_services(&self, lookup: Arc<dyn ServiceLookup>) {
+        *self
+            .services
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Some(lookup);
+    }
+
+    /// The catalogue's network services; none before the client gave them.
+    pub fn services(&self) -> Vec<crate::models::ServicePreset> {
+        let services = self.services.read().unwrap_or_else(PoisonError::into_inner);
+        services.as_ref().map(|l| l.services()).unwrap_or_default()
+    }
+
+    /// Where a network engine's requests go; None for other kinds or an
+    /// engine without an address.
+    pub fn route(&self, cfg: &ProviderConfig) -> Option<Route> {
+        if cfg.kind != ProviderKind::Http {
+            return None;
+        }
+        let services = self.services.read().unwrap_or_else(PoisonError::into_inner);
+        route(cfg, services.as_deref())
     }
 
     pub fn factory_for(&self, kind: ProviderKind) -> Option<Arc<dyn ProviderFactory>> {
@@ -172,33 +208,12 @@ impl ProviderRegistry {
     ) -> Result<Arc<dyn AsrProvider>, ProviderError> {
         let key = self.resolve_key(cfg)?;
         let timing = (general.asr_timeout_secs, general.retry_count);
-        if let Some(p) = self.asr.get(cfg, timing, &key) {
+        let route = self.route(cfg);
+        if let Some(p) = self.asr.get(cfg, timing, &key, &route) {
             return Ok(p);
         }
-        let provider: Arc<dyn AsrProvider> = match cfg.kind {
-            ProviderKind::Http => {
-                let base = require_base_url(cfg)?;
-                Arc::new(HttpAsrProvider::new(
-                    self.client.clone(),
-                    base,
-                    cfg.model.clone().unwrap_or_default(),
-                    key.clone(),
-                    cfg.extra_headers.clone(),
-                    cfg.label.clone(),
-                    Duration::from_secs(general.asr_timeout_secs),
-                    general.retry_count,
-                    cfg.capabilities.language_hint,
-                    cfg.capabilities.hotwords,
-                ))
-            }
-            kind @ (ProviderKind::Embedded | ProviderKind::Native) => {
-                match self.factory_for(kind) {
-                    Some(f) => f.asr(cfg, general)?,
-                    None => return Err(not_available(cfg)),
-                }
-            }
-        };
-        self.asr.insert(cfg, timing, key, provider.clone());
+        let provider = self.make_asr(cfg, general, &key, &route)?;
+        self.asr.insert(cfg, timing, key, route, provider.clone());
         Ok(provider)
     }
 
@@ -209,20 +224,103 @@ impl ProviderRegistry {
     ) -> Result<Arc<dyn LlmProvider>, ProviderError> {
         let key = self.resolve_key(cfg)?;
         let timing = (general.llm_timeout_secs, general.retry_count);
-        if let Some(p) = self.llm.get(cfg, timing, &key) {
+        let route = self.route(cfg);
+        if let Some(p) = self.llm.get(cfg, timing, &key, &route) {
             return Ok(p);
         }
-        let provider: Arc<dyn LlmProvider> = match cfg.kind {
+        let provider = self.make_llm(cfg, general, &key, &route)?;
+        self.llm.insert(cfg, timing, key, route, provider.clone());
+        Ok(provider)
+    }
+
+    /// A speech provider built now and not cached, for a one-off request.
+    pub fn asr_uncached(
+        &self,
+        cfg: &ProviderConfig,
+        general: &General,
+    ) -> Result<Arc<dyn AsrProvider>, ProviderError> {
+        let key = self.resolve_key(cfg)?;
+        self.make_asr(cfg, general, &key, &self.route(cfg))
+    }
+
+    /// A text provider built now and not cached, for a one-off request.
+    pub fn llm_uncached(
+        &self,
+        cfg: &ProviderConfig,
+        general: &General,
+    ) -> Result<Arc<dyn LlmProvider>, ProviderError> {
+        let key = self.resolve_key(cfg)?;
+        self.make_llm(cfg, general, &key, &self.route(cfg))
+    }
+
+    fn make_asr(
+        &self,
+        cfg: &ProviderConfig,
+        general: &General,
+        key: &Option<String>,
+        route: &Option<Route>,
+    ) -> Result<Arc<dyn AsrProvider>, ProviderError> {
+        Ok(match cfg.kind {
             ProviderKind::Http => {
-                let base = require_base_url(cfg)?;
+                let r = route.as_ref().ok_or_else(|| missing_base_url(cfg))?;
+                let model = cfg.model.clone().unwrap_or_default();
+                let timeout = Duration::from_secs(general.asr_timeout_secs);
+                match r.asr {
+                    Wire::ChatAudio => Arc::new(ChatAsrProvider::new(
+                        self.client.clone(),
+                        &r.base,
+                        model,
+                        key.clone(),
+                        cfg.extra_headers.clone(),
+                        cfg.label.clone(),
+                        timeout,
+                        general.retry_count,
+                        cfg.capabilities.language_hint,
+                        cfg.capabilities.hotwords,
+                        cfg.reasoning_effort.clone(),
+                    )),
+                    Wire::Transcriptions | Wire::Chat => Arc::new(HttpAsrProvider::new(
+                        self.client.clone(),
+                        &r.base,
+                        model,
+                        key.clone(),
+                        cfg.extra_headers.clone(),
+                        cfg.label.clone(),
+                        timeout,
+                        general.retry_count,
+                        cfg.capabilities.language_hint,
+                        cfg.capabilities.hotwords,
+                    )),
+                }
+            }
+            kind @ (ProviderKind::Embedded | ProviderKind::Native) => {
+                match self.factory_for(kind) {
+                    Some(f) => f.asr(cfg, general)?,
+                    None => return Err(not_available(cfg)),
+                }
+            }
+        })
+    }
+
+    fn make_llm(
+        &self,
+        cfg: &ProviderConfig,
+        general: &General,
+        key: &Option<String>,
+        route: &Option<Route>,
+    ) -> Result<Arc<dyn LlmProvider>, ProviderError> {
+        Ok(match cfg.kind {
+            ProviderKind::Http => {
+                let r = route.as_ref().ok_or_else(|| missing_base_url(cfg))?;
                 Arc::new(HttpLlmProvider::new(
                     self.client.clone(),
-                    base,
+                    &r.base,
                     cfg.model.clone().unwrap_or_default(),
                     key.clone(),
                     cfg.extra_headers.clone(),
                     cfg.label.clone(),
                     general.retry_count,
+                    cfg.reasoning_effort.clone(),
                 ))
             }
             kind @ (ProviderKind::Embedded | ProviderKind::Native) => {
@@ -231,19 +329,15 @@ impl ProviderRegistry {
                     None => return Err(not_available(cfg)),
                 }
             }
-        };
-        self.llm.insert(cfg, timing, key, provider.clone());
-        Ok(provider)
+        })
     }
 }
 
-fn require_base_url(cfg: &ProviderConfig) -> Result<&url::Url, ProviderError> {
-    cfg.base_url.as_ref().ok_or_else(|| {
-        ProviderError::new(
-            ErrorCode::InvalidConfig,
-            format!("{}: base_url is missing", cfg.label),
-        )
-    })
+fn missing_base_url(cfg: &ProviderConfig) -> ProviderError {
+    ProviderError::new(
+        ErrorCode::InvalidConfig,
+        format!("{}: base_url is missing", cfg.label),
+    )
 }
 
 fn not_available(cfg: &ProviderConfig) -> ProviderError {
@@ -299,6 +393,69 @@ pub(crate) mod tests {
         p.runtime = Some(crate::config::Runtime::Whisper);
         p.model_id = Some("m".into());
         p
+    }
+
+    /// A catalogue whose services can be swapped while a registry holds it.
+    struct Services(Mutex<Vec<crate::models::ServicePreset>>);
+    impl ServiceLookup for Services {
+        fn services(&self) -> Vec<crate::models::ServicePreset> {
+            self.0.lock().unwrap().clone()
+        }
+    }
+
+    fn preset(base: &str, asr: &str) -> crate::models::ServicePreset {
+        serde_json::from_value(serde_json::json!({
+            "id": "svc", "label": "Svc", "kind": "cloud", "base_url": base,
+            "asr": asr, "llm": "chat"
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_engine_naming_a_service_goes_where_the_catalogue_says() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1beta/openai/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"choices":[{"message":{"role":"assistant","content":"你好"}}]}),
+            ))
+            .mount(&server)
+            .await;
+        let r = ProviderRegistry::new(
+            reqwest::Client::new(),
+            Arc::new(MemorySecretStore::default()),
+        );
+        let services = Arc::new(Services(Mutex::new(vec![preset(
+            &format!("{}/v1beta/openai/", server.uri()),
+            "chat_audio",
+        )])));
+        r.set_services(services.clone());
+        let mut cfg = Config::http_test_config().providers[0].clone();
+        cfg.service = Some("svc".into());
+        cfg.base_url = Some(url::Url::parse("http://127.0.0.1:9/v1").unwrap());
+        cfg.api_key_ref = None;
+        let clip = crate::types::AudioClip {
+            samples: vec![0.0; 1600],
+            sample_rate: 16_000,
+        };
+        let a = r.asr(&cfg, &General::default()).unwrap();
+        let out = a
+            .transcribe(&clip, &crate::providers::AsrHint::default())
+            .await
+            .unwrap();
+        assert_eq!(out.text, "你好");
+        assert!(Arc::ptr_eq(&a, &r.asr(&cfg, &General::default()).unwrap()));
+
+        // The catalogue moves the service: the next build follows it.
+        *services.0.lock().unwrap() = vec![preset("https://moved.test/v1/", "transcriptions")];
+        let b = r.asr(&cfg, &General::default()).unwrap();
+        assert!(!Arc::ptr_eq(&a, &b));
+        assert_eq!(
+            r.route(&cfg).unwrap().base.as_str(),
+            "https://moved.test/v1/"
+        );
     }
 
     #[test]

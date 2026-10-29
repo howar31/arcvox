@@ -231,6 +231,11 @@ pub fn run() {
             crate::commands::providers::providers_delete,
             crate::commands::providers::default_engine_set,
             crate::commands::providers::providers_probe,
+            crate::commands::providers::providers_verify,
+            crate::commands::providers::services_list,
+            crate::commands::providers::services_scan_local,
+            crate::commands::providers::engine_checks,
+            crate::commands::providers::engine_check_put,
             crate::commands::profiles::profiles_upsert,
             crate::commands::profiles::profiles_delete,
             crate::commands::profiles::profiles_set_default,
@@ -656,6 +661,8 @@ fn setup(app: tauri::AppHandle<Wry>) -> Result<(), Box<dyn std::error::Error>> {
 
     let backup = backup_auto(&app, engine.clone(), &dirs, &version, runtime.clone());
     if let Some(e) = &engine {
+        // Network engines that name a service are routed by the catalogue.
+        e.set_services(models.clone());
         // The model files are where the user keeps them; files of an earlier
         // build move out of the cache directory, once.
         match e.config().current().general.models_dir.clone() {

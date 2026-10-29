@@ -19,9 +19,11 @@ pub struct HttpLlmProvider {
     extra_headers: BTreeMap<String, String>,
     label: String,
     retries: u32,
+    reasoning_effort: Option<String>,
 }
 
 impl HttpLlmProvider {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         client: reqwest::Client,
         base_url: &Url,
@@ -30,6 +32,7 @@ impl HttpLlmProvider {
         extra_headers: BTreeMap<String, String>,
         label: impl Into<String>,
         retries: u32,
+        reasoning_effort: Option<String>,
     ) -> Self {
         Self {
             client,
@@ -39,6 +42,7 @@ impl HttpLlmProvider {
             extra_headers,
             label: label.into(),
             retries,
+            reasoning_effort,
         }
     }
 }
@@ -64,13 +68,16 @@ impl LlmProvider for HttpLlmProvider {
         messages: Vec<ChatMessage>,
         opts: &LlmOptions,
     ) -> Result<String, ProviderError> {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": self.model,
             "messages": messages,
             "temperature": opts.temperature,
             "max_tokens": opts.max_tokens,
             "stream": false,
         });
+        if let Some(effort) = &self.reasoning_effort {
+            body["reasoning_effort"] = serde_json::json!(effort);
+        }
         let resp = send_with_retry(&self.label, self.retries, || {
             let mut req = self
                 .client
@@ -167,6 +174,7 @@ mod tests {
             headers,
             "Ollama",
             1,
+            None,
         );
         let out = p
             .complete(
@@ -197,6 +205,7 @@ mod tests {
             BTreeMap::new(),
             "Ollama",
             1,
+            None,
         );
         let err = p
             .complete(vec![ChatMessage::user("U")], &opts())
@@ -229,6 +238,7 @@ mod tests {
             BTreeMap::new(),
             "Ollama",
             1,
+            None,
         );
         assert_eq!(
             p.complete(vec![ChatMessage::user("U")], &opts())
@@ -255,6 +265,7 @@ mod tests {
             BTreeMap::new(),
             "Ollama",
             1,
+            None,
         );
         let err = p
             .complete(vec![ChatMessage::user("U")], &opts())
@@ -282,6 +293,7 @@ mod tests {
             BTreeMap::new(),
             "Ollama",
             1,
+            None,
         );
         let err = p
             .complete(vec![ChatMessage::user("U")], &opts())

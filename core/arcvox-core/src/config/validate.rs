@@ -400,6 +400,8 @@ mod tests {
             native_id: None,
             model_id: None,
             runtime: None,
+            service: None,
+            reasoning_effort: None,
         };
         let _: &Profile = c.default_profile();
     }

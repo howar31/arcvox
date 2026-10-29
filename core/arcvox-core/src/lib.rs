@@ -3,6 +3,7 @@
 pub mod audio;
 pub mod backup;
 pub mod bench;
+pub mod checks;
 pub mod config;
 pub mod device;
 pub mod dictionary;
