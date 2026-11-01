@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
   import { deleteProvider, deleteSecret, errorMessage, hasSecret, listServices, openServiceKeyPage, probeProvider, putEngineCheck, scanLocalServices, setSecret, upsertProvider, verifyProvider, type EngineCheck, type LocalService, type ProbeResult, type ProviderConfig, type ServicePreset } from "../../lib/api";
   import { blankHttp, freshId, type Role } from "../../lib/engines";
   import { t } from "../../lib/i18n";
@@ -42,8 +42,11 @@
   let keyPresent = $state(false);
   // svelte-ignore state_referenced_locally
   let keyKnown = $state(!initial?.api_key_ref);
-  // A key typed for a new engine is kept here while the form is open; each engine stores its own copy on save.
-  const pendingRef = `pending-${Math.random().toString(36).slice(2)}`;
+  // A key typed for a new engine is kept under this one reference while the form is open; each engine
+  // stores its own copy on save. One fixed name, so a form ended by quitting leaves at most one behind,
+  // and the next form replaces it.
+  const pendingRef = "pending-new-engine";
+  let savedAll = false;
   // svelte-ignore state_referenced_locally
   let step = $state<"connect" | "model">(isNew ? "connect" : "model");
   let probe = $state<{ state: "wait" | "ok" | "bad"; text: string } | null>(null);
@@ -284,6 +287,7 @@
         await deleteSecret(editing.api_key_ref ?? pendingRef).catch(() => {});
       }
       if (initial?.api_key_ref && isLocal) await deleteSecret(initial.api_key_ref).catch(() => {});
+      savedAll = true;
       toast.ok(saved > 1 ? t("engines.added_n", { n: String(saved) }) : t("common.saved"));
       open = false;
     } catch (e) { toast.error(errorMessage(e)); }
@@ -309,10 +313,13 @@
   }
 
   function cancel() {
-    // A key kept for a new engine that was not added goes with the form.
-    if (isNew && editing.api_key_ref === pendingRef) deleteSecret(pendingRef).catch(() => {});
     open = false;
   }
+
+  // However the form goes, a key kept for an engine that was not added goes with it.
+  onDestroy(() => {
+    if (!savedAll && editing.api_key_ref === pendingRef) deleteSecret(pendingRef).catch(() => {});
+  });
 
   const costText = $derived(isLocal
     ? t("engines.test_cost_local", { n: String(untested.length) })
