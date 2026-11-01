@@ -5,7 +5,7 @@
   import MenuOption from "./MenuOption.svelte";
 
   /** A choice of plain items, in the app's one dropdown. The caller holds the value and takes `onchange`. */
-  let { value, options, groups, onchange, label, variable = false, disabled = false, width = "240px" }: {
+  let { search, value, options, groups, onchange, label, variable = false, disabled = false, width = "240px" }: {
     value: string;
     options?: Choice[];
     groups?: ChoiceGroup[];
@@ -14,6 +14,8 @@
     label: string;
     /** The list's length depends on the machine or the user. */
     variable?: boolean;
+    /** Whether the list has a search field; by default it depends on how long the list is. */
+    search?: boolean;
     disabled?: boolean;
     width?: string;
   } = $props();
@@ -26,7 +28,7 @@
 </script>
 
 <div class="select" style:width={width}>
-  <Dropdown {label} {disabled} search={wantsSearch(count, variable)} bind:query>
+  <Dropdown {label} {disabled} search={search ?? wantsSearch(count, variable)} bind:query>
     {#snippet button()}<span class="label">{current?.label ?? value}</span>{/snippet}
     {#snippet list(close)}
       {#each shown as g, i (g.label ?? i)}

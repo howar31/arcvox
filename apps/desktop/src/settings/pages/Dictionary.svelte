@@ -336,7 +336,7 @@
     <div class="bar">
       <label class="search"><Icon name="search" /><input type="search" bind:value={query} placeholder={searchHint} aria-label={searchHint} onkeydown={searchKey} /></label>
       {#if tab === "terms"}
-        <Select width="170px" label={t("dictionary.sort")} value={sort} onchange={(v) => setSort(v as Sort)} options={SORTS.map((s) => ({ value: s, label: t(`dictionary.sort_${s}`) }))} />
+        <Select width="170px" search={false} label={t("dictionary.sort")} value={sort} onchange={(v) => setSort(v as Sort)} options={SORTS.map((s) => ({ value: s, label: t(`dictionary.sort_${s}`) }))} />
         <span class="views" role="group" aria-label={t("dictionary.view_cards")}>
           {#each VIEWS as v (v)}
             <button type="button" class:on={view === v} aria-pressed={view === v} use:tip={t(`dictionary.view_${v}`)} onclick={() => setView(v)}><Icon name={`view-${v}`} size={16} /></button>
