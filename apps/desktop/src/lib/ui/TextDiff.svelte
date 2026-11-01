@@ -1,8 +1,8 @@
 <script lang="ts">
   /** A text with what changed from an earlier one marked: removed units struck through, added ones highlighted. */
-  import { diff } from "../textDiff";
+  import { diff, runs } from "../textDiff";
   let { from, to }: { from: string | null; to: string } = $props();
-  const changes = $derived(from === null ? [{ kind: "keep" as const, text: to }] : diff(from, to));
+  const changes = $derived(from === null ? [{ kind: "keep" as const, text: to }] : runs(diff(from, to)));
 </script>
 
 <p class="diff">

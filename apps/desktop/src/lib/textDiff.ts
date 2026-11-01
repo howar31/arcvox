@@ -26,3 +26,19 @@ export function diff(from: string, to: string): Change[] {
   while (j < m) out.push({ kind: "ins", text: b[j++] });
   return out;
 }
+
+/** The same changes with neighbouring units of a kind joined, for marking a passage rather than each character. */
+export function runs(changes: Change[]): Change[] {
+  const out: Change[] = [];
+  for (const c of changes) {
+    const last = out.at(-1);
+    if (last?.kind === c.kind) last.text += c.text;
+    else out.push({ ...c });
+  }
+  return out;
+}
+
+/** How many places differ: a removal next to an addition is one place. */
+export function changeCount(changes: Change[]): number {
+  return changes.filter((c, i) => c.kind !== "keep" && changes[i - 1]?.kind !== "del" && changes[i - 1]?.kind !== "ins").length;
+}

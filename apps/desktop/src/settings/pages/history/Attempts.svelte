@@ -1,13 +1,16 @@
 <script lang="ts">
   /**
    * The results a dictation had, one line each: the one in use first and shown whole, the others folded to
-   * one line until pressed. Beyond a few, the rest wait behind a button.
+   * one line until pressed; an open one shows what differs from the one in use. Beyond a few, the rest wait
+   * behind a button.
    */
   import { tip } from "../../../lib/tip";
   import type { Attempt } from "../../../lib/api";
   import { t } from "../../../lib/i18n";
+  import { changeCount, diff } from "../../../lib/textDiff";
   import Icon from "../../../lib/ui/Icon.svelte";
   import Tag from "../../../lib/ui/Tag.svelte";
+  import TextDiff from "../../../lib/ui/TextDiff.svelte";
 
   let { items, fresh = null, when, profileName, engines, timing, failure, oncopy, onuse, ondelete }: {
     /** Newest first; the original result is the oldest. */
@@ -30,6 +33,8 @@
   // The result opened by a press; the one in use is always open.
   let expanded = $state<number | null>(null);
   let all = $state(false);
+  // Shows the open results as plain text instead of marking what differs.
+  let plain = $state(false);
   // The result whose delete button was pressed once; a second press within a few seconds deletes it.
   let confirming = $state<number | null>(null);
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -37,6 +42,7 @@
   const ordered = $derived([...items.filter((a) => a.chosen), ...items.filter((a) => !a.chosen)]);
   const shown = $derived(all || ordered.length <= SHOWN ? ordered : ordered.slice(0, SHOWN));
   const isOpen = (a: Attempt) => a.chosen || expanded === a.id;
+  const inUse = $derived(items.find((a) => a.chosen && a.error === null)?.final_text ?? null);
 
   // A new result opens by itself, so it is read before it is chosen.
   $effect(() => { if (fresh !== null) expanded = fresh; });
@@ -56,6 +62,7 @@
 <div class="list">
   {#each shown as a (a.id)}
     {@const open = isOpen(a)}
+    {@const differs = open && !a.chosen && a.error === null && inUse !== null ? changeCount(diff(inUse, a.final_text)) : null}
     <div class="attempt" class:open class:chosen={a.chosen} class:fresh={fresh === a.id}>
       <button type="button" class="main" aria-expanded={open} aria-label={t("history.attempt_show")} disabled={a.chosen} onclick={() => (expanded = expanded === a.id ? null : a.id)}>
         <span class="dot"></span>
@@ -68,12 +75,15 @@
             {#if a.chosen}<Tag tone="accent">{t("history.attempt_chosen")}</Tag>{/if}
             {#if fresh === a.id}<Tag tone="accent">{t("history.attempt_fresh")}</Tag>{/if}
             {#if a.origin}<Tag>{t("history.attempt_origin")}</Tag>{/if}
+            {#if differs === 0}<Tag>{t("history.attempt_same")}</Tag>{:else if differs !== null}<Tag tone="accent">{t("history.attempt_differs", { n: String(differs) })}</Tag>{/if}
             {#if a.corrected_text !== null}<Tag tone="accent">{t("history.corrected")}</Tag>{/if}
             {#if a.error !== null}<Tag tone="live">{t("history.attempt_failed")}</Tag>{/if}
             {#if a.degraded}<Tag tone="warn">{t("history.not_rewritten")}</Tag>{/if}
           </span>
           {#if a.error !== null}
             <span class="text problem">{failure(a)}</span>
+          {:else if differs && !plain}
+            <span class="text"><TextDiff from={inUse} to={a.final_text} /></span>
           {:else}
             <span class="text">{a.final_text}</span>
           {/if}
@@ -88,6 +98,7 @@
       {/if}
       {#if open && !a.chosen && a.error === null}
         <div class="acts">
+          {#if differs}<button type="button" class="btn sm" onclick={() => (plain = !plain)}>{t(plain ? "history.attempt_mark" : "history.attempt_plain")}</button>{/if}
           <button type="button" class="btn sm" onclick={() => oncopy(a.final_text)}>{t("history.attempt_copy")}</button>
           <button type="button" class="btn sm primary" onclick={() => onuse(a)}>{t("history.use_result")}</button>
         </div>
@@ -105,6 +116,9 @@
   .attempt:first-child { border-top: 0; }
   .attempt.open:not(.chosen) { margin: 0 -16px; padding-left: 16px; padding-right: 16px; border-radius: 10px; background: var(--sunken); }
   .attempt.open:not(.chosen) + .attempt { border-top-color: transparent; }
+  /* The last row reaches the card's edge, over the block's bottom padding. */
+  .attempt.open:not(.chosen):last-child { margin-bottom: -14px; border-radius: 10px 10px 13px 13px; }
+  .attempt.open:not(.chosen) :global(.tag.neutral) { background: var(--surface); }
   .main { flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: 10px; padding: 0; border: 0; background: none; color: var(--ink); text-align: left; font: inherit; cursor: default; }
   .main:focus-visible { outline-offset: 2px; border-radius: 6px; }
   .dot { width: 16px; height: 16px; flex: none; margin-top: 3px; border-radius: 50%; border: 1.5px solid var(--line-strong); }
@@ -115,6 +129,7 @@
   .when { color: var(--ink); font-weight: 600; }
   .text { line-height: 1.55; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .open .text { overflow: visible; white-space: pre-line; overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }
+  .text :global(.diff) { line-height: inherit; white-space: pre-line; }
   .problem { color: var(--live); }
   .x { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin-top: -2px; padding: 0; border: 0; border-radius: 8px; background: none; color: var(--ink-3); cursor: default; }
   .x:hover { background: var(--sunken); color: var(--ink); }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diff, units } from "./textDiff";
+import { changeCount, diff, runs, units } from "./textDiff";
 
 const side = (changes: ReturnType<typeof diff>, drop: "del" | "ins") => changes.filter((c) => c.kind !== drop).map((c) => c.text).join("");
 
@@ -27,5 +27,21 @@ describe("text diff", () => {
     const changes = diff("會議改到下週三 地點不變", "會議改到下週三，地點不變。");
     expect(changes.filter((c) => c.kind === "del").map((c) => c.text)).toEqual([" "]);
     expect(changes.filter((c) => c.kind === "ins").map((c) => c.text)).toEqual(["，", "。"]);
+  });
+});
+
+describe("runs and change count", () => {
+  it("merges neighbouring units of a kind", () => {
+    expect(runs(diff("帶投影片。", "帶簡報。"))).toEqual([
+      { kind: "keep", text: "帶" },
+      { kind: "del", text: "投影片" },
+      { kind: "ins", text: "簡報" },
+      { kind: "keep", text: "。" },
+    ]);
+  });
+  it("counts each place that differs once", () => {
+    expect(changeCount(diff("好的", "好的"))).toBe(0);
+    expect(changeCount(diff("帶投影片。", "帶簡報。"))).toBe(1);
+    expect(changeCount(diff("會議改到下週三 地點不變", "會議改到下週三，地點不變。"))).toBe(2);
   });
 });
