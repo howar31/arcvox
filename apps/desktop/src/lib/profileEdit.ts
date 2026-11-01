@@ -1,4 +1,4 @@
-import type { Profile, ProviderConfig, StepSpec } from "./api";
+import type { PresetView, Profile, ProviderConfig, StepSpec } from "./api";
 
 /**
  * Returns a copy of the profile that rewrites with `pick`: an engine id, or `FOLLOW` ("") to
@@ -26,6 +26,28 @@ export function withLlm(profile: Profile, pick: string | null): Profile {
 /** The first `max` names and how many more there are. */
 export function appsSummary(names: string[], max = 3): { shown: string[]; more: number } {
   return { shown: names.slice(0, max), more: Math.max(0, names.length - max) };
+}
+
+/** Whether a profile sets the engine on one of its stages. */
+export function namesEngine(profile: Profile, id: string): boolean {
+  return profile.asr_provider === id || profile.llm_provider === id || profile.steps.some((s) => s.step === "translate" && s.provider === id);
+}
+
+/** A profile with the engine off its stages: they go to `to`, null following the default; a translation goes back to the rewrite engine. */
+export function withoutEngine(profile: Profile, id: string, to: { asr: string | null; llm: string | null }): Profile {
+  return {
+    ...profile,
+    asr_provider: profile.asr_provider === id ? to.asr : profile.asr_provider,
+    llm_provider: profile.llm_provider === id ? to.llm : profile.llm_provider,
+    steps: profile.steps.map((s) => (s.step === "translate" && s.provider === id ? { ...s, provider: null } : s)),
+  };
+}
+
+/** What the profile's template names for its stages, leaving out the given engine. */
+export function templateEngines(profile: Profile, id: string, presets: PresetView[]): { asr: string | null; llm: string | null } {
+  const preset = presets.find((p) => p.id === profile.preset);
+  const other = (engine: string | null | undefined) => (engine && engine !== id ? engine : null);
+  return { asr: other(preset?.suggested_asr), llm: other(preset?.suggested_llm) };
 }
 
 export interface EngineMeta {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Profile, ProviderConfig, StepSpec } from "./api";
-import { appsSummary, engineMeta, freshName, slugId, withEngines, withLlm } from "./profileEdit";
+import { appsSummary, engineMeta, freshName, namesEngine, slugId, templateEngines, withEngines, withLlm, withoutEngine } from "./profileEdit";
 
 const profile = (steps: StepSpec[], llm: string | null = "llm-a"): Profile => ({
   id: "p", name: "P", is_default: true, matcher: { app_ids: [], url_patterns: [] }, asr_provider: null, llm_provider: llm,
@@ -116,6 +116,28 @@ describe("slugId", () => {
   it("never returns the reserved id new", () => {
     expect(slugId("New", [])).toBe("new-2");
     expect(slugId("  new!", ["new-2"])).toBe("new-3");
+  });
+});
+
+describe("taking an engine off a profile", () => {
+  const translate: StepSpec = { step: "translate", target: "English", provider: "x" };
+  const p = { ...profile([...full, translate]), asr_provider: "x", llm_provider: "keep", preset: "casual" };
+  const presets = [{ id: "casual", app_ids: [], suggested_asr: "breeze", suggested_llm: "x", revision: 1 }];
+
+  it("finds it on any stage", () => {
+    expect(namesEngine(p, "x")).toBe(true);
+    expect(namesEngine({ ...p, asr_provider: null, steps: full }, "x")).toBe(false);
+    expect(namesEngine({ ...p, asr_provider: null, steps: [translate] }, "x")).toBe(true);
+  });
+  it("moves only the stages on it", () => {
+    const moved = withoutEngine(p, "x", { asr: null, llm: null });
+    expect([moved.asr_provider, moved.llm_provider]).toEqual([null, "keep"]);
+    expect(moved.steps.at(-1)).toEqual({ ...translate, provider: null });
+    expect(withoutEngine(p, "x", { asr: "breeze", llm: null }).asr_provider).toBe("breeze");
+  });
+  it("takes the template's engines, never the one going away", () => {
+    expect(templateEngines(p, "x", presets)).toEqual({ asr: "breeze", llm: null });
+    expect(templateEngines({ ...p, preset: null }, "x", presets)).toEqual({ asr: null, llm: null });
   });
 });
 

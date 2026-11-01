@@ -1,13 +1,12 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from "svelte";
-  import { deleteProvider, deleteSecret, errorMessage, hasSecret, listServices, openServiceKeyPage, openServiceTermsPage, probeProvider, putEngineCheck, scanLocalServices, setSecret, upsertProvider, verifyProvider, type EngineCheck, type LocalService, type ProbeResult, type ProviderConfig, type ServicePreset } from "../../lib/api";
+  import { deleteProvider, deleteSecret, errorMessage, hasSecret, listServices, openServiceKeyPage, openServiceTermsPage, probeProvider, putEngineCheck, scanLocalServices, setSecret, upsertProvider, verifyProvider, type EngineCheck, type LocalService, type ProbeResult, type ProviderConfig, type ServicePreset, profilesPresets, upsertProfile, type PresetView, type Profile } from "../../lib/api";
   import { blankHttp, freshId, type Role } from "../../lib/engines";
   import { t } from "../../lib/i18n";
-  import { usedBy } from "../../lib/labels";
   import { ASR_CAPS, describeFailure, LLM_CAPS } from "../../lib/providerForm";
   import { checkBody, checkKey, cloudFor, EFFORTS, localFor, localRows, modesOf, otherRole, pickId, pickOf, servesOther, suggestedIn, takesEffort, type ServicePick } from "../../lib/serviceForm";
   import { config } from "../../lib/store.svelte";
-  import { freshName } from "../../lib/profileEdit";
+  import { freshName, namesEngine, templateEngines, withoutEngine } from "../../lib/profileEdit";
   import { engineDefaultName } from "../../lib/stages";
   import Choices from "../../lib/ui/Choices.svelte";
   import Fold from "../../lib/ui/Fold.svelte";
@@ -83,6 +82,9 @@
   let armTimer: ReturnType<typeof setTimeout> | undefined;
   let busy = $state(false);
   let confirmDelete = $state(false);
+  let presets = $state<PresetView[]>([]);
+  // Where the stages on a deleted engine go.
+  let moveTo = $state<"default" | "template">("default");
   let keepButton: HTMLButtonElement | undefined = $state();
   let confirmDiscard = $state(false);
   // svelte-ignore state_referenced_locally
@@ -115,7 +117,21 @@
     return false;
   }
 
+  const engineId = $derived(initial?.id ?? "");
+  const naming = $derived((config.value?.profiles ?? []).filter((p) => namesEngine(p, engineId)));
+  const isDefaultEngine = $derived((["asr", "llm"] as Role[]).some((r) => config.value?.default_engines[r] === engineId));
+  const templateDiffers = $derived(naming.some((p) => {
+    const to = templateEngines(p, engineId, presets);
+    return (p.asr_provider === engineId && to.asr) || (p.llm_provider === engineId && to.llm);
+  }));
+  const defaultName = $derived.by(() => {
+    const id = config.value?.default_engines[role];
+    return config.value?.providers.find((p) => p.id === id)?.label ?? id ?? "";
+  });
+
   async function askDelete() {
+    moveTo = "default";
+    presets = await profilesPresets().catch(() => []);
     confirmDelete = true;
     await tick();
     keepButton?.focus();
@@ -326,14 +342,14 @@
 
   async function remove() {
     if (!initial) return;
+    if (isDefaultEngine) return;
     confirmDelete = false;
-    const users = usedBy(config.value, initial.id);
-    if (users.length > 0) {
-      toast.error(t("engines.delete_in_use", { names: users.map((u) => u.name).join(t("home.list_sep")) }));
-      return;
-    }
     busy = true;
     try {
+      for (const p of $state.snapshot(naming) as Profile[]) {
+        const to = moveTo === "template" ? templateEngines(p, initial.id, presets) : { asr: null, llm: null };
+        config.value = await upsertProfile(withoutEngine(p, initial.id, to));
+      }
       await deleteProvider(initial.id);
       if (initial.api_key_ref) await deleteSecret(initial.api_key_ref);
       toast.ok(t("engines.deleted"));
@@ -422,6 +438,23 @@
     <p>{t("engines.discard_body")}</p>
   {:else if confirmDelete}
     <p>{t("engines.delete_body", { name: initial?.label ?? "" })}</p>
+    {#if isDefaultEngine}
+      <p>{t("engines.delete_is_default", { kind: t(`engines.group.${role}`) })}</p>
+    {:else if naming.length}
+      <p>{t("engines.delete_moves", { names: naming.map((p) => p.name).join(t("home.list_sep")) })}</p>
+      {#if templateDiffers}
+        <Choices
+          label={t("engines.delete_title")}
+          bind:value={moveTo}
+          options={[
+            { value: "default" as const, label: t("engines.delete_to_default"), help: t("engines.delete_to_default_help", { kind: t(`engines.group.${role}`), name: defaultName }) },
+            { value: "template" as const, label: t("engines.delete_to_template"), help: t("engines.delete_to_template_help") },
+          ]}
+        />
+      {:else}
+        <p>{t("engines.delete_to_default_help", { kind: t(`engines.group.${role}`), name: defaultName })}</p>
+      {/if}
+    {/if}
   {:else}
     <div class="form">
       <Steps current={step} steps={[{ id: "connect", label: t("engines.step_connect") }, { id: "model", label: t("engines.step_model"), disabled: listed === null }]} onpick={(id) => (step = id as typeof step)} />
@@ -531,7 +564,7 @@
       <button type="button" class="btn danger" onclick={cancel}>{t("common.discard")}</button>
     {:else if confirmDelete}
       <button type="button" class="btn" bind:this={keepButton} onclick={() => (confirmDelete = false)}>{t("common.cancel")}</button>
-      <button type="button" class="btn danger" onclick={remove} disabled={busy}>{t("engines.delete")}</button>
+      <button type="button" class="btn danger" onclick={remove} disabled={busy || isDefaultEngine}>{t("engines.delete")}</button>
     {:else if step === "connect"}
       {#if probe?.state === "bad"}<button type="button" class="btn quiet lead" onclick={skipConnect}>{t("engines.continue_anyway")}</button>{/if}
       <button type="button" class="btn" onclick={cancel}>{t("common.cancel")}</button>
