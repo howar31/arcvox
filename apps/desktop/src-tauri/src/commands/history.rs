@@ -28,6 +28,8 @@ pub struct UtteranceDto {
     pub llm_ms: Option<u64>,
     pub audio_ms: Option<u64>,
     pub audio_bytes: Option<u64>,
+    /// When a recording kept only because the dictation failed goes.
+    pub audio_expires: Option<i64>,
     /// Why the dictation failed; such a row has no text yet.
     pub error: Option<String>,
     /// The kind of failure, when it was kept.
@@ -268,6 +270,7 @@ impl UtteranceDto {
             llm_ms: u.llm_ms,
             audio_ms: u.audio_ms.filter(|_| audio_bytes.is_some()),
             audio_bytes,
+            audio_expires: u.audio_expires,
             error: u.error,
             error_code: u.error_code,
             redone: u.redone,

@@ -302,12 +302,14 @@ impl Engine {
         // Best effort: a prune failure (or panic) must not prevent opening
         // the engine, so its result is discarded rather than propagated.
         let _ = tokio::task::spawn_blocking(move || {
-            h.prune(
+            let pruned = h.prune(
                 general.history_retention_days,
                 general.recording_retention_days,
                 general.stage_retention_days,
                 &recordings,
-            )
+            );
+            let _ = h.purge_temporary_recordings(&recordings, crate::history::now_unix());
+            pruned
         })
         .await;
 
@@ -342,6 +344,27 @@ impl Engine {
     /// lives, so a process that stays up for weeks still expires old entries.
     fn spawn_daily_prune(&self) {
         let weak = Arc::downgrade(&self.inner);
+        let hourly = weak.clone();
+        self.inner.runtime.spawn(async move {
+            let mut tick = tokio::time::interval(TEMPORARY_PURGE_INTERVAL);
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                let Some(inner) = hourly.upgrade() else {
+                    return;
+                };
+                let recordings = inner.recordings_dir();
+                let history = inner.history.clone();
+                drop(inner);
+                let purged = tokio::task::spawn_blocking(move || {
+                    history.purge_temporary_recordings(&recordings, crate::history::now_unix())
+                })
+                .await;
+                if !matches!(purged, Ok(Ok(_))) {
+                    tracing::warn!("temporary recordings could not be removed");
+                }
+            }
+        });
         self.inner.runtime.spawn(async move {
             let mut tick = tokio::time::interval(PRUNE_INTERVAL);
             // The first tick fires at once; `open_with` has just pruned.
@@ -1038,6 +1061,15 @@ impl Engine {
         let outcome = outcome.map_err(|e| fail(&e))?;
         drop(outcome);
         let attempt = stored.ok_or(ReprocessError::NoRow)?;
+        // A recording kept only for this retry has done its work.
+        let history = self.inner.history.clone();
+        let recordings = self.inner.recordings_dir();
+        let dropped =
+            tokio::task::spawn_blocking(move || history.drop_temporary_recording(id, &recordings))
+                .await;
+        if !matches!(dropped, Ok(Ok(()))) {
+            tracing::warn!("a temporary recording could not be removed");
+        }
         Ok(Reprocessed {
             chosen: attempt.chosen,
             attempt,
@@ -1363,6 +1395,18 @@ fn failed_stages(err: &crate::steps::StepError, keep: bool) -> Vec<StageRecord> 
     }]
 }
 
+/// How long a failed dictation's recording stays with recordings off.
+const FAILED_RECORDING_SECS: i64 = 24 * 3600;
+/// How often temporary recordings are looked at: the daily retention pass
+/// would leave them a day too long.
+const TEMPORARY_PURGE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// When a recording made now goes when it is kept only until the dictation
+/// succeeds; None when the retention settings keep it.
+fn temporary_until(general: &crate::config::General) -> Option<i64> {
+    (!general.keeps_recordings()).then(|| crate::history::now_unix() + FAILED_RECORDING_SECS)
+}
+
 /// What the row of a kept recording says until the dictation has a result.
 const INTERRUPTED: &str = "the dictation did not finish";
 
@@ -1394,7 +1438,7 @@ async fn start_journal(
     req: &SessionRequest,
     path: &Path,
 ) -> Option<(HistoryId, crate::journal::Journal)> {
-    if !inner.config.current().general.keeps_recordings() {
+    if !inner.config.current().general.keeps_failed_recordings() {
         return None;
     }
     let row = crate::history::FailedUtterance {
@@ -1408,6 +1452,7 @@ async fn start_journal(
         raw_text: String::new(),
         final_text: String::new(),
         stages: Vec::new(),
+        audio_expires: temporary_until(&inner.config.current().general),
     };
     inner.in_flight.lock().unwrap().insert(path.to_path_buf());
     let history = inner.history.clone();
@@ -1466,7 +1511,7 @@ async fn hold(
     path: &Path,
     flags: &Arc<SessionFlags>,
 ) -> Option<HistoryId> {
-    if !inner.config.current().general.keeps_recordings() {
+    if !inner.config.current().general.keeps_failed_recordings() {
         return None;
     }
     let samples = audio.lock().unwrap().clone();
@@ -1488,6 +1533,7 @@ async fn hold(
         raw_text: String::new(),
         final_text: String::new(),
         stages: Vec::new(),
+        audio_expires: temporary_until(&inner.config.current().general),
     };
     inner.in_flight.lock().unwrap().insert(path.to_path_buf());
     let history = inner.history.clone();
@@ -1599,9 +1645,14 @@ async fn keep_failed(
         app_name: req.app.app_name.clone(),
         audio_path: config
             .general
-            .keeps_recordings()
+            .keeps_failed_recordings()
             .then(|| path.to_path_buf()),
         audio_ms: clip_ms(clip),
+        audio_expires: config
+            .general
+            .keeps_failed_recordings()
+            .then(|| temporary_until(&config.general))
+            .flatten(),
         code: err.code,
         error: failure_text(err),
         raw_text: String::new(),
@@ -1666,6 +1717,15 @@ async fn store_cancelled(
         if trimmed {
             replace_held(inner, id, path, clip).await;
         }
+        // A recording kept only until the dictation succeeds ends with it.
+        let history = inner.history.clone();
+        let recordings = inner.recordings_dir();
+        let dropped =
+            tokio::task::spawn_blocking(move || history.drop_temporary_recording(id, &recordings))
+                .await;
+        if !matches!(dropped, Ok(Ok(()))) {
+            tracing::warn!(path = %path.display(), "a temporary recording could not be removed");
+        }
         let history = inner.history.clone();
         let (raw, fin) = (texts.0.to_string(), texts.1.to_string());
         let audio_ms = clip_ms(clip);
@@ -1689,6 +1749,7 @@ async fn store_cancelled(
         raw_text: texts.0.into(),
         final_text: texts.1.into(),
         stages: Vec::new(),
+        audio_expires: None,
     };
     if !insert_with_recording(inner, row, clip, written).await {
         tracing::warn!(path = %path.display(), "the cancelled dictation could not be kept");
@@ -1920,7 +1981,10 @@ async fn run_session(
 
     // A recording kept before the processing is already in place; `cancel`
     // removes it with its row. Otherwise it is written now.
-    let audio_path = if held.is_some() {
+    let temporary = held.is_some() && !config.general.keeps_recordings();
+    let audio_path = if temporary {
+        None
+    } else if held.is_some() {
         Some(wav_path.clone())
     } else if config.general.keeps_recordings() {
         let bytes = encode_wav_pcm16(&clip);
@@ -2077,6 +2141,17 @@ async fn run_session(
         }
         tracing::info!(session = %session_id, "cancelled before the result was stored");
         return;
+    }
+
+    // The recording was kept only until the result was safe.
+    if temporary && history_id.is_some() {
+        let p = wav_path.clone();
+        if !matches!(
+            tokio::task::spawn_blocking(move || std::fs::remove_file(p)).await,
+            Ok(Ok(()))
+        ) {
+            tracing::warn!(path = %wav_path.display(), "a temporary recording could not be removed");
+        }
     }
 
     if let Some(id) = history_id {
@@ -2871,8 +2946,12 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn a_failed_dictation_leaves_a_row_without_a_recording_when_recordings_are_not_kept() {
+    async fn a_failed_dictation_leaves_a_row_without_a_recording_when_none_is_kept() {
         let r = rig(false).await;
+        r.engine
+            .config()
+            .update(|c| c.general.keep_failed_recordings = false)
+            .unwrap();
         Mock::given(method("POST"))
             .and(path("/v1/audio/transcriptions"))
             .respond_with(ResponseTemplate::new(400))
@@ -2893,6 +2972,97 @@ pub(crate) mod tests {
             Err(ReprocessError::NoRecording)
         ));
         assert_eq!(r.engine.history().stats(0, 0).unwrap().totals.count, 0);
+    }
+
+    #[tokio::test]
+    async fn a_failed_dictation_keeps_its_recording_for_a_while_when_recordings_are_off() {
+        let r = rig(false).await;
+        let down = Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("bad audio"))
+            .mount_as_scoped(&r.asr)
+            .await;
+        let s = r.engine.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        s.finish();
+        drain(&s).await;
+        let rows = r.engine.history().list_recent(10).unwrap();
+        let path = rows[0].audio_path.clone().unwrap();
+        assert!(path.is_file());
+        let left = rows[0].audio_expires.unwrap() - crate::history::now_unix();
+        assert!((86_000..=86_400).contains(&left), "{left}");
+
+        drop(down);
+        mock_ok(&r, "原文", "整理後").await;
+        r.engine.reprocess(rows[0].id, None).await.unwrap();
+        let row = r.engine.history().get(rows[0].id).unwrap().unwrap();
+        assert!(row.audio_path.is_none(), "{row:?}");
+        assert!(row.audio_expires.is_none());
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn with_recordings_off_a_recording_is_written_while_it_is_made_and_goes_on_success() {
+        let r = rig(false).await;
+        mock_ok(&r, "原文", "整理後").await;
+        let s = r.engine.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        s.store();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let rows = r.engine.history().list_recent(10).unwrap();
+        let path = rows[0].audio_path.clone().unwrap();
+        assert!(path.is_file(), "the recording is on disk while it is made");
+        assert!(rows[0].audio_expires.is_some());
+
+        s.finish();
+        drain(&s).await;
+        let rows = r.engine.history().list_recent(10).unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].error, None);
+        assert_eq!(rows[0].audio_path, None);
+        assert!(
+            !path.exists(),
+            "a dictation that worked leaves no recording"
+        );
+    }
+
+    #[tokio::test]
+    async fn with_recordings_off_a_kept_cancel_leaves_no_recording() {
+        let r = rig(false).await;
+        let s = r.engine.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        s.store();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let path = r.engine.history().list_recent(10).unwrap()[0]
+            .audio_path
+            .clone()
+            .unwrap();
+        s.cancel_keep(None);
+        let rows = rows_after_cancel(&r, 1).await;
+        assert_eq!(rows[0].error_code.as_deref(), Some("cancelled"));
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(!path.exists());
+        let row = r.engine.history().get(rows[0].id).unwrap().unwrap();
+        assert_eq!(row.audio_path, None);
+    }
+
+    #[tokio::test]
+    async fn a_failed_retry_leaves_the_kept_recording_until_it_expires() {
+        let r = rig(false).await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("bad audio"))
+            .mount(&r.asr)
+            .await;
+        let s = r.engine.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        s.finish();
+        drain(&s).await;
+        let rows = r.engine.history().list_recent(10).unwrap();
+        assert!(r.engine.reprocess(rows[0].id, None).await.is_err());
+        let row = r.engine.history().get(rows[0].id).unwrap().unwrap();
+        assert!(row.audio_path.as_ref().is_some_and(|p| p.is_file()));
+        assert!(row.audio_expires.is_some());
     }
 
     /// The rows of the history once `n` are there, within a few seconds:
@@ -3697,8 +3867,12 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn nothing_is_written_when_recordings_are_not_kept() {
+    async fn nothing_is_written_when_no_recording_is_kept() {
         let r = rig(false).await;
+        r.engine
+            .config()
+            .update(|c| c.general.keep_failed_recordings = false)
+            .unwrap();
         let s = r.engine.start_session(SessionRequest::default());
         s.push_audio(&one_second());
         s.store();

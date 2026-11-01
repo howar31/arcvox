@@ -201,6 +201,7 @@
     historyDays: ofGeneral("history_retention_days", unit("common.days")),
     stageDays: ofGeneral("stage_retention_days", unit("common.days")),
     keepRecordings: ofGeneral("keep_recordings", onOff),
+    keepFailedRecordings: ofGeneral("keep_failed_recordings", onOff),
     recordingDays: ofGeneral("recording_retention_days", unit("common.days")),
     typing: ofGeneral("typing_chars_per_min", unit("common.chars")),
     ctxApp: ofClient("context.app_name", onOff),
@@ -345,6 +346,7 @@
   function setMethod(bundle: string, method: string) {
     draft!.insertion.per_app[bundle] = method as InsertMethod;
   }
+  const keepOpts = $derived([{ value: "no", label: t("storage.keep_no") }, { value: "yes", label: t("storage.keep_yes") }]);
 </script>
 
 {#if section !== "processing"}<PageHead title={t("nav." + section)} />{/if}
@@ -562,11 +564,18 @@
         <Switch bind:checked={draft.learning.read_back} label={t("general.read_back")} />
       </Row>
     </Group>
+    {#if general && general.keep_history && !general.keep_recordings}<Fold>
+      <Group title={t("storage.recordings")}>
+        <Row label={t("storage.failed_recordings")} reset={resets.keepFailedRecordings}>
+          {#snippet help()}{#if general?.keep_failed_recordings}{t("storage.failed_recordings_on")}{:else}<span class="lost"><Icon name="warning" size={14} />{t("storage.failed_recordings_off")}</span>{/if}<span class="elsewhere">{t("storage.failed_recordings_more_before")}<PageLink page="storage" label={t("nav.storage")} />{t("storage.failed_recordings_more_after")}</span>{/snippet}
+          <Segmented options={keepOpts} bind:value={() => (general!.keep_failed_recordings ? "yes" : "no"), (v) => (general!.keep_failed_recordings = v === "yes")} label={t("storage.failed_recordings")} />
+        </Row>
+      </Group>
+    </Fold>{/if}
   {/if}
 {:else if section === "storage"}
   <StorageUsage />
   {#if general}
-    {@const keepOpts = [{ value: "no", label: t("storage.keep_no") }, { value: "yes", label: t("storage.keep_yes") }]}
     <Group title={t("storage.keep")} help={t("storage.keep_note")} onreset={together([resets.keepHistory, resets.historyDays, resets.keepRecordings, resets.recordingDays, resets.keepStages, resets.stageDays, resets.keepStats])}>
       <Row label={t("storage.rows")} help={t(general.keep_history ? "storage.rows_on" : "storage.rows_off")} reset={anyOf([resets.keepHistory, resets.historyDays])}>
         <Segmented options={keepOpts} bind:value={() => (general!.keep_history ? "yes" : "no"), (v) => (general!.keep_history = v === "yes")} label={t("storage.rows")} />
@@ -578,7 +587,8 @@
             <Segmented options={keepOpts} bind:value={() => (general!.keep_stages ? "yes" : "no"), (v) => (general!.keep_stages = v === "yes")} label={t("storage.stages")} />
             {#if general.keep_stages}<NumberField bind:value={general.stage_retention_days} min={0} unit={t("common.days")} label={t("general.stage_retention")} />{/if}
           </Row>
-          <Row label={t("storage.recordings")} help={t(general.keep_recordings ? "storage.recordings_on" : "storage.recordings_off")} reset={anyOf([resets.keepRecordings, resets.recordingDays])}>
+          <Row label={t("storage.recordings")} reset={anyOf([resets.keepRecordings, resets.recordingDays])}>
+            {#snippet help()}{#if general?.keep_recordings}{t("storage.recordings_on")}{:else}{t("storage.recordings_off_before")}<PageLink page="data" label={t("nav.data")} />{t("storage.recordings_off_after")}{/if}{/snippet}
             <Segmented options={keepOpts} bind:value={() => (general!.keep_recordings ? "yes" : "no"), (v) => (general!.keep_recordings = v === "yes")} label={t("storage.recordings")} />
             {#if general.keep_recordings}<NumberField bind:value={general.recording_retention_days} min={0} unit={t("common.days")} label={t("general.recording_retention")} />{/if}
           </Row>
@@ -629,6 +639,9 @@
 <SaveBar {dirty} {saving} message={problem} onsave={save} onrevert={reset} />
 
 <style>
+  .elsewhere { display: block; }
+  .lost { display: inline-flex; align-items: flex-start; gap: 8px; color: var(--warn); }
+  .lost :global(svg) { flex: none; margin-top: 3px; }
   .value { color: var(--ink-2); }
   .range { display: flex; align-items: center; gap: 12px; flex: none; }
   .scenes { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }

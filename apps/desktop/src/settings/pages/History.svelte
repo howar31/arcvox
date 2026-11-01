@@ -218,7 +218,7 @@
     if (!g) return undefined;
     const days = (n: number, zero: string) => (n > 0 ? t("history.retention_days", { n: String(n) }) : t(zero));
     const vars = { days: days(g.history_retention_days, "history.retention_forever"), stages: days(g.stage_retention_days, "history.retention_same"), rec: days(g.recording_retention_days, "history.retention_forever") };
-    return g.keep_recordings ? t("history.retention", vars) : t("history.retention_no_rec", vars);
+    return g.keep_recordings ? t("history.retention", vars) : t(g.keep_failed_recordings ? "history.retention_failed_rec" : "history.retention_no_rec", vars);
   });
 
   /** The profile's name; for a profile that no longer exists, its id and a deleted marker. */
@@ -466,6 +466,7 @@
                 {@const failedRow = u.error !== null}
                 <div class="label">{t("history.recording")}</div>
                 {#key plays}<Player bind:this={player} id={u.id} {autoplay} onposition={(ms) => (playing = ms)} />{/key}
+                {#if u.audio_expires}<p class="temporary">{t("history.recording_temporary", { when: formatDateTime(u.audio_expires) })}</p>{/if}
                 <div class="label">{t(failedRow ? "history.retry" : "history.reprocess")}</div>
                 {#if busy[u.id]}
                   <div class="busy" role="status"><span class="spin" aria-hidden="true"></span>{t("history.processing", { engines: redoEngines(u) })}</div>
@@ -577,6 +578,7 @@
      the window over the drag band, the rows pass beneath it blurred, and a hairline closes its lower edge. */
   .edge { height: 1px; margin-top: 13px; }
   .said { font-size: var(--text-control); }
+  .temporary { margin: 6px 0 0; color: var(--ink-2); font-size: var(--text-sm); }
   .usage-scroll { overflow-x: auto; }
   .usage { width: 100%; margin-top: 8px; border-collapse: collapse; font-size: var(--text-sm); }
   .usage th, .usage td { padding: 5px 0 5px 14px; text-align: right; font-weight: 400; white-space: nowrap; }

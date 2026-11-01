@@ -862,7 +862,7 @@ impl Controller {
                     let kept = self
                         .engine
                         .as_ref()
-                        .is_some_and(|e| e.config().current().general.keep_recordings);
+                        .is_some_and(|e| e.config().current().general.keeps_failed_recordings());
                     UiMessage::failure(msg, detail, code, kept)
                 };
                 if let State::Processing { failure: f, .. } = &mut self.state {
@@ -2706,7 +2706,10 @@ mod tests {
         );
         assert!(m.sticky, "{messages:?}");
         assert_eq!(m.code, Some(ErrorCode::ProviderError), "{messages:?}");
-        assert!(!m.retry, "recordings are not kept in this rig");
+        assert!(
+            m.retry,
+            "a failed dictation keeps its recording for a retry"
+        );
         assert!(r.platform.calls().is_empty(), "{:?}", r.platform.calls());
     }
 

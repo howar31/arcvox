@@ -82,7 +82,7 @@ export const dictionaryHintUsage = (engineId: string | null = null) => invoke<Hi
 /** Up to `limit` dictations holding the term, as excerpts with the term between 【 and 】. */
 export const dictionaryExamples = (term: string, limit = 2) => invoke<string[]>("dictionary_examples", { term, limit });
 export interface General {
-  keep_history: boolean; history_retention_days: number; keep_stages: boolean; stage_retention_days: number; keep_recordings: boolean; recording_retention_days: number; keep_stats: boolean; context_limit_bytes: number;
+  keep_history: boolean; history_retention_days: number; keep_stages: boolean; stage_retention_days: number; keep_recordings: boolean; recording_retention_days: number; keep_failed_recordings: boolean; keep_stats: boolean; context_limit_bytes: number;
   asr_timeout_secs: number; llm_timeout_secs: number; llm_temperature: number; llm_max_tokens: number | null;
   llm_idle_unload_secs: number; llm_preload_on_record: boolean; retry_count: number; typing_chars_per_min: number;
   /** The folder recordings are kept in; null for the default one. Changed with `setRecordingsDir` only. */
@@ -110,6 +110,8 @@ export interface Utterance {
   degraded: boolean; has_audio: boolean; asr_ms: number; llm_ms: number | null;
   /** Length and size of the recording, when one is kept. */
   audio_ms: number | null; audio_bytes: number | null;
+  /** When a recording kept only because the dictation failed goes. */
+  audio_expires?: number | null;
   /** Why the dictation failed; such a row has no text yet. */
   error: string | null;
   /** The kind of failure, when it was kept. */

@@ -195,6 +195,9 @@ pub struct Utterance {
     pub error_code: Option<String>,
     /// How many times the recording was processed again.
     pub redone: u32,
+    /// When a recording kept only because the dictation failed goes (unix
+    /// seconds); None for a recording kept by the retention settings.
+    pub audio_expires: Option<i64>,
     /// How the final text was corrected, `CorrectionSource::name`; None
     /// while it is the result's own text, or for corrections from before
     /// the source was kept.
@@ -295,6 +298,8 @@ pub struct FailedUtterance {
     pub app_name: Option<String>,
     pub audio_path: Option<PathBuf>,
     pub audio_ms: Option<u64>,
+    /// See `Utterance::audio_expires`.
+    pub audio_expires: Option<i64>,
     pub code: ErrorCode,
     pub error: String,
     pub raw_text: String,
@@ -527,6 +532,28 @@ fn name_of(path: &Path) -> Option<String> {
     path.file_name().map(|n| n.to_string_lossy().to_string())
 }
 
+/// Removes a temporary recording and, once the file is gone, the row's
+/// reference to it. True when it went.
+fn remove_temporary(
+    conn: &Connection,
+    id: i64,
+    name: &str,
+    dir: &Path,
+) -> Result<bool, HistoryError> {
+    let path = resolve(name, dir);
+    if path.exists() {
+        let _ = std::fs::remove_file(&path);
+    }
+    if path.exists() {
+        return Ok(false);
+    }
+    conn.execute(
+        "UPDATE utterances SET audio_path = NULL, audio_expires = NULL, updated = ?2 WHERE id = ?1",
+        params![id, now_ms()],
+    )?;
+    Ok(true)
+}
+
 /// Where a stored name points under `dir`. A stored value that is still a
 /// path (written before names were kept) is reduced to its name first.
 fn resolve(name: &str, dir: &Path) -> PathBuf {
@@ -553,6 +580,7 @@ CREATE TABLE IF NOT EXISTS utterances (
     heard_text TEXT,
     correction_source TEXT,
     translated INTEGER NOT NULL DEFAULT 0,
+    audio_expires INTEGER
 );
 CREATE INDEX IF NOT EXISTS utterances_ts ON utterances(ts);
 CREATE TABLE IF NOT EXISTS attempts (
@@ -717,6 +745,10 @@ pub(crate) fn upgrade(
         (
             "translated",
             "ALTER TABLE utterances ADD COLUMN translated INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "audio_expires",
+            "ALTER TABLE utterances ADD COLUMN audio_expires INTEGER",
         ),
     ] {
         if !has_column(conn, "utterances", name)? {
@@ -1106,8 +1138,8 @@ impl HistoryStore {
     pub fn insert_failed(&self, u: FailedUtterance) -> Result<HistoryId, HistoryError> {
         let conn = self.conn();
         conn.execute(
-            "INSERT INTO utterances (ts, profile_id, app_name, raw_text, refined_text, final_text, audio_path, audio_ms, error, error_code, device_id, updated)
-             VALUES (?1, ?2, ?3, ?10, ?11, ?11, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO utterances (ts, profile_id, app_name, raw_text, refined_text, final_text, audio_path, audio_ms, error, error_code, device_id, updated, audio_expires)
+             VALUES (?1, ?2, ?3, ?10, ?11, ?11, ?4, ?5, ?6, ?7, ?8, ?9, ?12)",
             params![
                 u.ts,
                 u.profile_id.0,
@@ -1120,11 +1152,57 @@ impl HistoryStore {
                 now_ms(),
                 u.raw_text,
                 u.final_text,
+                u.audio_expires,
             ],
         )?;
         let id = own_last_row(&conn)?;
         insert_stages(&conn, id, None, &u.stages)?;
         Ok(HistoryId(id))
+    }
+
+    /// Removes the temporary recordings that have expired, at `now`. A file
+    /// that cannot be removed keeps its reference and is tried again.
+    pub fn purge_temporary_recordings(
+        &self,
+        recordings_dir: &Path,
+        now: i64,
+    ) -> Result<usize, HistoryError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, audio_path FROM utterances
+             WHERE audio_path IS NOT NULL AND audio_expires IS NOT NULL AND audio_expires <= ?1",
+        )?;
+        let due: Vec<(i64, String)> = stmt
+            .query_map(params![now], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        drop(stmt);
+        let mut removed = 0;
+        for (id, name) in due {
+            removed += usize::from(remove_temporary(&conn, id, &name, recordings_dir)?);
+        }
+        Ok(removed)
+    }
+
+    /// Removes the row's recording when it is a temporary one: a retry
+    /// succeeded, so it has done its work.
+    pub fn drop_temporary_recording(
+        &self,
+        id: HistoryId,
+        recordings_dir: &Path,
+    ) -> Result<(), HistoryError> {
+        let conn = self.conn();
+        let name: Option<String> = conn
+            .query_row(
+                "SELECT audio_path FROM utterances WHERE id = ?1 AND audio_expires IS NOT NULL",
+                params![id.0],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten();
+        if let Some(name) = name {
+            remove_temporary(&conn, id.0, &name, recordings_dir)?;
+        }
+        Ok(())
     }
 
     /// Adds stages to a row's own run: what a row that was held for a
@@ -2700,7 +2778,7 @@ const SELECT: &str = "SELECT id, ts, profile_id, app_name, raw_text, refined_tex
     (SELECT COUNT(*) FROM attempts a WHERE a.utterance_id = utterances.id AND a.origin = 0), heard_text,
     (SELECT final_text FROM attempts a WHERE a.utterance_id = utterances.id AND a.origin = 1 AND a.chosen = 0 AND a.corrected_text IS NOT NULL),
     (SELECT corrected_text FROM attempts a WHERE a.utterance_id = utterances.id AND a.origin = 1 AND a.chosen = 0 AND a.corrected_text IS NOT NULL),
-    correction_source, translated
+    correction_source, translated, audio_expires
     FROM utterances";
 
 const SELECT_ATTEMPT: &str = "SELECT id, utterance_id, ts, profile_id, asr_label, llm_label, raw_text, final_text, degraded, asr_ms, llm_ms,
@@ -2859,6 +2937,7 @@ fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Utterance> {
         },
         correction_source: r.get(18)?,
         translated: r.get::<_, i64>(19)? != 0,
+        audio_expires: r.get(20)?,
     })
 }
 
@@ -2933,6 +3012,7 @@ mod tests {
             raw_text: String::new(),
             final_text: String::new(),
             stages: Vec::new(),
+            audio_expires: None,
         }
     }
 
@@ -3202,6 +3282,96 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_row_and_a_failed_rerun_keep_their_stages() {
+        let s = HistoryStore::open_in_memory().unwrap();
+        let failure = StageRecord {
+            position: 1,
+            kind: StageKind::Asr,
+            text: None,
+            ms: None,
+            detail: serde_json::json!({ "error": "provider_error", "status": 429 }),
+        };
+        let mut row = failed(100, ErrorCode::ProviderError);
+        row.stages = vec![failure.clone()];
+        let id = s.insert_failed(row).unwrap();
+        assert_eq!(s.stages(id).unwrap(), vec![failure.clone()]);
+
+        let held = s
+            .insert_failed(failed(110, ErrorCode::Interrupted))
+            .unwrap();
+        s.add_stages(held, std::slice::from_ref(&failure)).unwrap();
+        assert_eq!(s.stages(held).unwrap(), vec![failure.clone()]);
+
+        let again = s
+            .record_attempt(
+                id,
+                &Outcome::Failed {
+                    profile_id: ProfileId("default".into()),
+                    code: ErrorCode::ProviderError,
+                    text: "again".into(),
+                    stages: vec![StageRecord {
+                        detail: serde_json::json!({ "status": 503 }),
+                        ..failure.clone()
+                    }],
+                },
+                false,
+            )
+            .unwrap()
+            .unwrap();
+        assert!(!again.chosen);
+        let listed = s.attempts(id).unwrap();
+        let of = |a: AttemptId| listed.iter().find(|x| x.id == a).unwrap();
+        assert_eq!(of(again.id).failure.as_ref().unwrap()["status"], 503);
+        let origin = listed.iter().find(|x| x.origin).unwrap();
+        assert_eq!(origin.failure.as_ref().unwrap()["status"], 429);
+        // The row's own failure stays what the row shows.
+        assert_eq!(s.stages(id).unwrap(), vec![failure]);
+        let kept: i64 = s
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM stages WHERE attempt_id = ?1",
+                params![again.id.0],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept, 1);
+    }
+
+    #[test]
+    fn a_temporary_recording_goes_when_it_expires() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = HistoryStore::open_in_memory().unwrap();
+        let file = |name: &str| {
+            let p = tmp.path().join(name);
+            std::fs::write(&p, b"RIFF").unwrap();
+            p
+        };
+        let with = |path: PathBuf, expires: Option<i64>| FailedUtterance {
+            audio_path: Some(path),
+            audio_expires: expires,
+            ..failed(100, ErrorCode::ProviderError)
+        };
+        let (old, fresh, kept) = (file("old.wav"), file("fresh.wav"), file("kept.wav"));
+        let gone = s.insert_failed(with(old.clone(), Some(500))).unwrap();
+        let waits = s.insert_failed(with(fresh.clone(), Some(900))).unwrap();
+        let stays = s.insert_failed(with(kept.clone(), None)).unwrap();
+
+        assert_eq!(s.purge_temporary_recordings(tmp.path(), 600).unwrap(), 1);
+        assert!(!old.exists());
+        assert!(fresh.exists() && kept.exists());
+        let row = s.get(gone).unwrap().unwrap();
+        assert!(row.audio_path.is_none() && row.audio_expires.is_none());
+        assert!(row.error.is_some(), "the row stays");
+        assert_eq!(s.get(waits).unwrap().unwrap().audio_expires, Some(900));
+
+        s.drop_temporary_recording(stays, tmp.path()).unwrap();
+        assert!(kept.exists(), "a recording kept for good stays");
+        s.drop_temporary_recording(waits, tmp.path()).unwrap();
+        assert!(!fresh.exists());
+        assert!(s.get(waits).unwrap().unwrap().audio_path.is_none());
+    }
+
+    #[test]
     fn upgrade_adds_the_stages_table() {
         let s = HistoryStore::open_in_memory().unwrap();
         let id = s.insert(new(100, None)).unwrap();
@@ -3400,6 +3570,7 @@ mod tests {
             raw_text: String::new(),
             final_text: String::new(),
             stages: Vec::new(),
+            audio_expires: None,
         })
         .unwrap();
         let got = s
@@ -3780,6 +3951,7 @@ mod tests {
                 raw_text: String::new(),
                 final_text: String::new(),
                 stages: Vec::new(),
+                audio_expires: None,
             })
             .unwrap();
         let row = s.get(id).unwrap().unwrap();
@@ -3937,6 +4109,7 @@ mod tests {
                 raw_text: String::new(),
                 final_text: String::new(),
                 stages: Vec::new(),
+                audio_expires: None,
             })
             .unwrap();
         let again = s
@@ -4194,6 +4367,7 @@ INSERT INTO stats_meta (key, value) VALUES ('backfilled', '1');
                 raw_text: String::new(),
                 final_text: String::new(),
                 stages: Vec::new(),
+                audio_expires: None,
             })
             .unwrap();
         let (device, origin, updated) = meta(&s, failed);
@@ -4217,6 +4391,7 @@ INSERT INTO stats_meta (key, value) VALUES ('backfilled', '1');
                 raw_text: String::new(),
                 final_text: String::new(),
                 stages: Vec::new(),
+                audio_expires: None,
             })
             .unwrap();
         let reset = |id: HistoryId| {
@@ -4475,6 +4650,7 @@ INSERT INTO stats_meta (key, value) VALUES ('backfilled', '1');
             raw_text: String::new(),
             final_text: String::new(),
             stages: Vec::new(),
+            audio_expires: None,
         };
         let failed = s
             .insert_failed(failed_of(500, ErrorCode::ProviderTimeout))
@@ -4645,6 +4821,7 @@ INSERT INTO stats_meta (key, value) VALUES ('backfilled', '1');
             raw_text: String::new(),
             final_text: String::new(),
             stages: Vec::new(),
+            audio_expires: None,
         }
     }
 

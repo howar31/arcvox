@@ -612,6 +612,7 @@ mod tests {
             correction_source: None,
             origin_correction: None,
             translated: false,
+            audio_expires: None,
         }
     }
 

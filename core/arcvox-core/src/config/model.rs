@@ -155,6 +155,9 @@ pub struct General {
     pub stage_retention_days: u32,
     pub keep_recordings: bool,
     pub recording_retention_days: u32,
+    /// With recordings off, a failed dictation's recording stays until a
+    /// retry succeeds or for a day, so what was said can still be recovered.
+    pub keep_failed_recordings: bool,
     /// Whether dictations are counted into the hourly statistics.
     pub keep_stats: bool,
     pub context_limit_bytes: usize,
@@ -188,6 +191,11 @@ impl General {
         self.keep_history && self.keep_recordings
     }
 
+    /// Whether a failed dictation leaves its recording.
+    pub fn keeps_failed_recordings(&self) -> bool {
+        self.keep_history && (self.keep_recordings || self.keep_failed_recordings)
+    }
+
     /// What a dictation's row insert writes.
     pub fn keep(&self) -> crate::history::Keep {
         crate::history::Keep {
@@ -207,6 +215,7 @@ impl Default for General {
             stage_retention_days: 90,
             keep_recordings: false,
             recording_retention_days: 30,
+            keep_failed_recordings: true,
             keep_stats: true,
             context_limit_bytes: 4096,
             asr_timeout_secs: 30,

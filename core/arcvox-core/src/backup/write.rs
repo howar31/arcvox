@@ -506,6 +506,7 @@ pub(crate) mod tests {
             raw_text: String::new(),
             final_text: String::new(),
             stages: Vec::new(),
+            audio_expires: None,
         })
         .unwrap();
         assert_eq!(write(&s, tmp.path(), text_only(), Path::new("")).rows, 0);
