@@ -392,6 +392,8 @@
   "engines.light.off": "Not usable yet; no profile depends on it",
   "engines.light.fault": "Cannot run: it is a default engine, so profiles following the default cannot dictate; see this row's tag or message",
   "engines.light.attention": "Needs attention; profiles naming it use the default engine meanwhile, so dictation goes on",
+  "engines.light.test_fault": "The last test failed; profiles that use it may fail to dictate. See this row's message",
+  "engines.light.test_attention": "The last test failed; no profile uses it. See this row's message",
   "engines.download_failed": "Download failed",
   "engines.tip.not_downloaded": "A profile uses this model, but its file is not downloaded yet; that profile cannot dictate until it is.",
   "engines.tip.file_missing": "The file this engine loads is no longer in the models folder.",

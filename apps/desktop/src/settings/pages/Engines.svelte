@@ -270,6 +270,17 @@
     return { tone: "off", title: t("engines.light.off") };
   }
   const failed = (id: string): boolean => rowProbes[id]?.state === "bad";
+  /** A network engine whose last test failed is not swapped for the default: a profile that uses it fails to dictate. */
+  function externalLight(p: ProviderConfig): Light {
+    if (!failed(p.id) && !checkFailed(p)) return light(p.id, true, false);
+    const depended = isDefaultEngine(p.id) || namedBy(config.value, p.id).length > 0;
+    return depended ? { tone: "live", title: t("engines.light.test_fault") } : { tone: "warn", title: t("engines.light.test_attention") };
+  }
+  /** The engine's last real request, made with its current settings, was refused. */
+  const checkFailed = (p: ProviderConfig): boolean => {
+    const c = checks[p.id];
+    return !realBusy[p.id] && !!c && !c.ok && checkCurrent(c, p, role);
+  };
   /** Who runs with the engine: the default pair's engine says so first. */
   function usersLine(id: string): string {
     const users = usedBy(config.value, id, usable);
@@ -547,7 +558,7 @@
   {#each shownExternals as p (p.id)}
     <Row>
       {#snippet leading()}
-        {@const lamp = light(p.id, true, failed(p.id))}
+        {@const lamp = externalLight(p)}
         <Ring tone={lamp.tone} title={lamp.title} />
       {/snippet}
       <!-- The text and the actions share the row; when it is narrow, the actions go under the text. -->

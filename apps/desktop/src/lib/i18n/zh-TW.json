@@ -392,6 +392,8 @@
   "engines.light.off": "還不能用，也沒有情境在用",
   "engines.light.fault": "無法使用：這是預設引擎，跟隨預設的情境聽寫會失敗；看這一列的標籤或訊息",
   "engines.light.attention": "需要處理；指定它的情境暫用預設引擎，聽寫照常進行",
+  "engines.light.test_fault": "最近一次測試未通過，用它的情境聽寫可能會失敗；看這一列的訊息",
+  "engines.light.test_attention": "最近一次測試未通過，目前沒有情境在用；看這一列的訊息",
   "engines.download_failed": "下載失敗",
   "engines.tip.not_downloaded": "有情境在用這個模型，但檔案還沒下載，下載前那些情境無法聽寫。",
   "engines.tip.file_missing": "這個引擎載入的檔案已不在模型資料夾裡。",
