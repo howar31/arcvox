@@ -719,6 +719,7 @@ impl Engine {
             base_url: cfg.base_url.as_ref().map(|u| u.to_string()),
             model: cfg.model.clone(),
             reasoning_effort: cfg.reasoning_effort.clone(),
+            transcribe_mode: cfg.transcribe_mode.clone(),
         }
     }
 

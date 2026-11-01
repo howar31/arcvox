@@ -287,6 +287,10 @@ pub struct ProviderConfig {
     /// not sent, the model's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    /// Http, a speech model with modes (`ModelRoute::modes`): the mode sent
+    /// with each request. None: the service's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcribe_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -782,6 +786,7 @@ impl ProviderConfig {
             runtime: Some(runtime),
             service: None,
             reasoning_effort: None,
+            transcribe_mode: None,
         }
     }
 
@@ -826,6 +831,7 @@ impl ProviderConfig {
             runtime: None,
             service: None,
             reasoning_effort: None,
+            transcribe_mode: None,
         }
     }
 
@@ -852,6 +858,7 @@ impl ProviderConfig {
             runtime: None,
             service: None,
             reasoning_effort: None,
+            transcribe_mode: None,
         }
     }
 }

@@ -75,12 +75,12 @@ export function slugId(name: string, taken: string[]): string {
   return `${stem}-${n}`;
 }
 
-/** A profile name not taken yet: the text itself, else the text with 2, 3, ... after it. */
-export function freshName(text: string, taken: string[]): string {
+/** A default name not taken yet, whatever its letter case: the text itself, else the text with 2, 3, ... after `sep`. */
+export function freshName(text: string, taken: string[], sep = " "): string {
   const base = text.trim();
-  const used = new Set(taken.map((n) => n.trim()));
-  if (!used.has(base)) return base;
+  const used = new Set(taken.map((n) => n.trim().toLowerCase()));
+  if (!used.has(base.toLowerCase())) return base;
   let n = 2;
-  while (used.has(`${base} ${n}`)) n++;
-  return `${base} ${n}`;
+  while (used.has(`${base}${sep}${n}`.toLowerCase())) n++;
+  return `${base}${sep}${n}`;
 }

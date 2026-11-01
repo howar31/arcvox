@@ -133,7 +133,7 @@
       const entry = manifest?.models.find((e) => e.id === m.id) ?? null;
       seen.add(m.id);
       rows.push({
-        id: m.id, label: modelLabel(manifest, m), engine: engineOf(m.id), model: m, state: "installed", received: 0, total: 0, error: "",
+        id: m.id, label: engineOf(m.id)?.label ?? modelLabel(manifest, m), engine: engineOf(m.id), model: m, state: "installed", received: 0, total: 0, error: "",
         desc: entry ? modelDescription(entry) : m.capabilities.transcribe && m.capabilities.chat ? t("engines.both_roles") : "",
         meta: entry ? entryMeta(entry) : [formatBytes(m.size_bytes), factsLine(m)].filter(Boolean).join(t("engines.fact_sep")),
       });

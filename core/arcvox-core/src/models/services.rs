@@ -38,6 +38,10 @@ pub struct ModelRoute {
     pub models: Vec<String>,
     pub wire: Wire,
     pub base_url: Url,
+    /// The modes the form offers for these models, the default first; empty
+    /// when they have none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -232,6 +236,7 @@ mod tests {
             runtime: None,
             service: service.map(str::to_string),
             reasoning_effort: None,
+            transcribe_mode: None,
         }
     }
 

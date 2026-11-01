@@ -125,5 +125,6 @@ describe("freshName", () => {
     expect(freshName("休閒", ["休閒"])).toBe("休閒 2");
     expect(freshName("休閒", ["休閒", "休閒 2"])).toBe("休閒 3");
     expect(freshName(" 正式 ", ["正式"])).toBe("正式 2");
+    expect(freshName("Gemini_x", ["gemini_X"], "_")).toBe("Gemini_x_2");
   });
 });

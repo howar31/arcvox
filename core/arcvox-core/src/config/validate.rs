@@ -402,6 +402,7 @@ mod tests {
             runtime: None,
             service: None,
             reasoning_effort: None,
+            transcribe_mode: None,
         };
         let _: &Profile = c.default_profile();
     }

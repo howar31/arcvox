@@ -27,11 +27,21 @@ export function servesOther(pick: ServicePick, services: ServicePreset[], role: 
   return wireOf(services.find((s) => s.id === pick.id), otherRole(role)) !== null;
 }
 
+/** The way a speech model of the service goes when it has one of its own. */
+const modelRoute = (s: ServicePreset | undefined, model: string) => s?.asr_routes?.find((r) => r.models.includes(model));
+
+/** The modes the speech model offers, the default first; empty when it has none. */
+export function modesOf(pick: ServicePick, services: ServicePreset[], model: string): string[] {
+  if (pick.kind === "custom" || !pick.id) return [];
+  return modelRoute(services.find((s) => s.id === pick.id), model)?.modes ?? [];
+}
+
 /** Whether the role's requests are chat requests, which take a reasoning effort. */
-export function takesEffort(pick: ServicePick, services: ServicePreset[], role: Role): boolean {
+export function takesEffort(pick: ServicePick, services: ServicePreset[], role: Role, model = ""): boolean {
   if (role === "llm") return true;
   if (pick.kind === "custom" || !pick.id) return false;
-  return wireOf(services.find((s) => s.id === pick.id), role) === "chat_audio";
+  const s = services.find((x) => x.id === pick.id);
+  return wireOf(s, role) === "chat_audio" && !modelRoute(s, model);
 }
 
 /** The pick an existing engine was made with. */
@@ -50,8 +60,8 @@ export function suggestedIn(listed: string[], suggestion: string | null | undefi
 }
 
 /** What a real request depends on: a change to any of these makes an earlier check stale. */
-export const checkKey = (p: Pick<ProviderConfig, "service" | "base_url" | "model" | "reasoning_effort">, role: Role): string =>
-  JSON.stringify([role, p.service ?? null, p.service ? null : (p.base_url ?? null), p.model ?? null, p.reasoning_effort ?? null]);
+export const checkKey = (p: Pick<ProviderConfig, "service" | "base_url" | "model" | "reasoning_effort" | "transcribe_mode">, role: Role): string =>
+  JSON.stringify([role, p.service ?? null, p.service ? null : (p.base_url ?? null), p.model ?? null, p.reasoning_effort ?? null, p.transcribe_mode ?? null]);
 
 /** Whether a stored check was made with the engine as it is set now. */
 export const checkCurrent = (c: EngineCheck | undefined, p: ProviderConfig, role: Role): boolean =>

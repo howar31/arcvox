@@ -17,9 +17,11 @@ export interface ProviderConfig {
   service?: string | null;
   /** Sent as `reasoning_effort` with chat requests; absent means not sent. */
   reasoning_effort?: string | null;
+  /** A speech model's mode; absent means the service's default. */
+  transcribe_mode?: string | null;
 }
 export type Wire = "transcriptions" | "chat_audio" | "chat" | "interactions";
-export interface ModelRoute { models: string[]; wire: Wire; base_url: string }
+export interface ModelRoute { models: string[]; wire: Wire; base_url: string; modes?: string[] }
 export interface ServicePreset {
   id: string; label: string; kind: "cloud" | "local";
   base_url?: string | null; port?: number | null; path?: string | null;

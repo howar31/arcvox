@@ -278,6 +278,7 @@ impl ProviderRegistry {
                         general.retry_count,
                         cfg.capabilities.language_hint,
                         cfg.capabilities.hotwords,
+                        cfg.transcribe_mode.clone(),
                     )),
                     Wire::ChatAudio => Arc::new(ChatAsrProvider::new(
                         self.client.clone(),

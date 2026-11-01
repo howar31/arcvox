@@ -76,6 +76,7 @@ impl Pipeline {
                         tracing::info!(
                             engine = %cfg.id,
                             wire = ?route.asr,
+                            mode = cfg.transcribe_mode.as_deref().unwrap_or("default"),
                             "speech goes to a network engine"
                         );
                     }

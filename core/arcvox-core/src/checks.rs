@@ -41,6 +41,8 @@ pub struct EngineCheck {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcribe_mode: Option<String>,
 }
 
 /// The checks by engine id, in `engine-checks.json` beside the config.
@@ -175,6 +177,7 @@ mod tests {
             base_url: None,
             model: Some("m".into()),
             reasoning_effort: None,
+            transcribe_mode: None,
         }
     }
 

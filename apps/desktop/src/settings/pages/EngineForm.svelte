@@ -5,8 +5,11 @@
   import { t } from "../../lib/i18n";
   import { usedBy } from "../../lib/labels";
   import { ASR_CAPS, describeFailure, LLM_CAPS } from "../../lib/providerForm";
-  import { checkKey, cloudFor, EFFORTS, localFor, localRows, otherRole, pickId, pickOf, servesOther, suggestedIn, takesEffort, type ServicePick } from "../../lib/serviceForm";
+  import { checkKey, cloudFor, EFFORTS, localFor, localRows, modesOf, otherRole, pickId, pickOf, servesOther, suggestedIn, takesEffort, type ServicePick } from "../../lib/serviceForm";
   import { config } from "../../lib/store.svelte";
+  import { freshName } from "../../lib/profileEdit";
+  import { engineDefaultName } from "../../lib/stages";
+  import Choices from "../../lib/ui/Choices.svelte";
   import Fold from "../../lib/ui/Fold.svelte";
   import Icon from "../../lib/ui/Icon.svelte";
   import Modal from "../../lib/ui/Modal.svelte";
@@ -54,8 +57,8 @@
   let probe = $state<{ state: "wait" | "ok" | "bad"; text: string } | null>(null);
   let listed = $state<string[] | null>(null);
 
-  type Sel = { model: string; typed: boolean; typedModel: string; label: string; effort: string | null };
-  const blankSel = (): Sel => ({ model: "", typed: false, typedModel: "", label: "", effort: null });
+  type Sel = { model: string; typed: boolean; typedModel: string; label: string; effort: string | null; mode: string | null };
+  const blankSel = (): Sel => ({ model: "", typed: false, typedModel: "", label: "", effort: null, mode: null });
   // The last choice of the model list: the name is typed. No listed model id has this form.
   const OTHER_MODEL = "\u0000other";
   // svelte-ignore state_referenced_locally
@@ -69,6 +72,7 @@
     sel[role].typedModel = initial.model ?? "";
     sel[role].label = initial.label;
     sel[role].effort = initial.reasoning_effort ?? null;
+    sel[role].mode = initial.transcribe_mode ?? null;
   }
   let alsoOn = $state(false);
   // Real requests that passed, by what they depended on; one is not sent again.
@@ -218,14 +222,27 @@
   }
 
   const chosen = (r: Role): string => (hasList && !sel[r].typed ? sel[r].model : sel[r].typedModel.trim());
-  const defaultLabel = (r: Role): string => [preset ? serviceName : "", chosen(r)].filter(Boolean).join(" ") || host || t("engines.external");
+  // The first mode is the service's default, which is not sent.
+  const modeFor = (r: Role): string | null => (r === "asr" && modesOf(pick, services, chosen(r)).slice(1).includes(sel[r].mode ?? "") ? sel[r].mode : null);
+  const effortFor = (r: Role): string | null => (takesEffort(pick, services, r, chosen(r)) ? sel[r].effort : null);
+  /** The engine's name when none is typed: engines of one model differ by what they set. */
+  const defaultLabel = (r: Role): string => engineDefaultName(serviceName, chosen(r), { transcribe_mode: modeFor(r), reasoning_effort: effortFor(r) });
+  // A stored name that is the default one was never typed, so it goes on following the settings.
+  let labelChecked = false;
+  $effect(() => {
+    if (labelChecked || !initial || !services.length) return;
+    labelChecked = true;
+    const typed = sel[role].label, auto = defaultLabel(role);
+    if (typed === auto || (typed.startsWith(`${auto}_`) && /^\d+$/.test(typed.slice(auto.length + 1)))) sel[role].label = "";
+  });
 
   /** The engine the form would store for the role. */
   function engineFor(r: Role): ProviderConfig {
     const p = structuredClone($state.snapshot(editing)) as ProviderConfig;
     if (isNew) p.capabilities = { ...(r === "asr" ? ASR_CAPS : LLM_CAPS) };
     p.model = chosen(r) || null;
-    p.reasoning_effort = takesEffort(pick, services, r) ? sel[r].effort : null;
+    p.reasoning_effort = effortFor(r);
+    p.transcribe_mode = modeFor(r);
     p.label = sel[r].label.trim() || defaultLabel(r);
     if (isLocal) p.api_key_ref = null;
     return p;
@@ -275,6 +292,11 @@
     try {
       for (const r of roles) {
         const p = engineFor(r);
+        // A name left to the form differs from the others of its kind; a typed one stays as typed.
+        if (!sel[r].label.trim()) {
+          const kin = (config.value?.providers ?? []).filter((x) => x.id !== initial?.id && (r === "asr" ? x.capabilities.transcribe : x.capabilities.chat));
+          p.label = freshName(p.label, kin.map((x) => x.label), "_");
+        }
         if (!p.id) {
           p.id = freshId(p.label, ids);
           ids.push(p.id);
@@ -342,6 +364,7 @@
 {#snippet modelGroup(r: Role, heading: boolean)}
   {@const s = sel[r]}
   {@const hint = suggestedIn(listed ?? [], preset?.suggested?.[r])}
+  {@const modes = r === "asr" ? modesOf(pick, services, chosen(r)) : []}
   {#if heading}<p class="group-t">{t(`engines.group.${r}`)}</p>{/if}
   <div class="fields">
     <span class="lab">{t("engines.model")}{#if hasList}<span class="req">{t("common.required")}</span>{/if}</span>
@@ -362,7 +385,15 @@
     <div>
       <input id="f-label-{r}-{uid}" type="text" bind:value={s.label} placeholder={defaultLabel(r)} />
     </div>
-    {#if takesEffort(pick, services, r)}
+    {#if modes.length}
+      <span class="lab">{t("engines.transcribe_mode")}</span>
+      <Choices
+        label={t("engines.transcribe_mode")}
+        bind:value={() => s.mode ?? modes[0], (v) => { s.mode = v; disarm(); }}
+        options={modes.map((m) => ({ value: m, label: t(`engines.transcribe_mode.${m}`), help: t(`engines.transcribe_mode.${m}_help`), info: m === modes[0] ? undefined : t(`engines.transcribe_mode.${m}_info`, { name: serviceName }) }))}
+      />
+    {/if}
+    {#if takesEffort(pick, services, r, chosen(r))}
       <span class="lab">{t("engines.effort")}</span>
       <div>
         <Select

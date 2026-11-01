@@ -41,6 +41,7 @@ pub fn sync_engines(
             None => config.providers.push(made),
         }
     }
+    let mut names = HashSet::new();
     for m in installed {
         let id = ProviderId(m.id.clone());
         // A hand-made engine that happens to carry the model's id is left
@@ -48,7 +49,7 @@ pub fn sync_engines(
         if fixed.contains(&id) {
             continue;
         }
-        let label = model_label(m, manifest);
+        let label = numbered(model_label(m, manifest), &mut names);
         match config.providers.iter_mut().find(|p| p.id == id) {
             Some(row) => {
                 row.label = label;
@@ -127,6 +128,18 @@ fn model_label(m: &InstalledModel, manifest: &Manifest) -> String {
         .get(&m.id)
         .map(|e| e.label.clone())
         .unwrap_or_else(|| m.id.clone())
+}
+
+/// The label with `_2`, `_3`, ... after it when another model has it: files
+/// in different folders can share a name.
+fn numbered(label: String, names: &mut HashSet<String>) -> String {
+    let mut name = label.clone();
+    let mut n = 2;
+    while !names.insert(name.to_lowercase()) {
+        name = format!("{label}_{n}");
+        n += 1;
+    }
+    name
 }
 
 fn engine_for(m: &InstalledModel, label: String) -> ProviderConfig {
@@ -272,6 +285,15 @@ mod tests {
             apple_dictation: true,
             apple_foundation_models: true,
         }
+    }
+
+    #[test]
+    fn models_of_one_name_get_a_number() {
+        let mut names = HashSet::new();
+        assert_eq!(numbered("a.gguf".into(), &mut names), "a.gguf");
+        assert_eq!(numbered("A.gguf".into(), &mut names), "A.gguf_2");
+        assert_eq!(numbered("a.gguf".into(), &mut names), "a.gguf_3");
+        assert_eq!(numbered("b.gguf".into(), &mut names), "b.gguf");
     }
 
     #[test]

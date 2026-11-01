@@ -28,6 +28,7 @@ pub struct InteractionsAsrProvider {
     retries: u32,
     send_language: bool,
     send_terms: bool,
+    mode: Option<String>,
 }
 
 impl InteractionsAsrProvider {
@@ -43,6 +44,7 @@ impl InteractionsAsrProvider {
         retries: u32,
         send_language: bool,
         send_terms: bool,
+        mode: Option<String>,
     ) -> Self {
         let model: String = model.into();
         Self {
@@ -60,6 +62,7 @@ impl InteractionsAsrProvider {
             retries,
             send_language,
             send_terms,
+            mode,
         }
     }
 
@@ -73,6 +76,9 @@ impl InteractionsAsrProvider {
         }
         if self.send_terms && !hint.terms.is_empty() {
             config.insert("custom_vocabulary".into(), serde_json::json!(hint.terms));
+        }
+        if let Some(mode) = &self.mode {
+            config.insert("mode".into(), serde_json::json!(mode));
         }
         let mut body = serde_json::json!({
             "model": self.model,
@@ -210,6 +216,7 @@ mod tests {
             1,
             lang,
             terms,
+            None,
         )
     }
 
@@ -279,6 +286,24 @@ mod tests {
         let body: serde_json::Value =
             serde_json::from_slice(&server.received_requests().await.unwrap()[0].body).unwrap();
         assert!(body.get("generation_config").is_none(), "{body}");
+    }
+
+    #[tokio::test]
+    async fn sends_the_engines_mode() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(answer("x")))
+            .mount(&server)
+            .await;
+        let mut p = provider(&server, false, false);
+        p.mode = Some("smart".into());
+        p.transcribe(&clip(1), &AsrHint::default()).await.unwrap();
+        let body: serde_json::Value =
+            serde_json::from_slice(&server.received_requests().await.unwrap()[0].body).unwrap();
+        assert_eq!(
+            body["generation_config"]["transcription_config"]["mode"],
+            "smart"
+        );
     }
 
     #[tokio::test]

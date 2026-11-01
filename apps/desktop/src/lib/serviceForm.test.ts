@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import type { EngineCheck, LocalService, ProviderConfig, ServicePreset } from "./api";
 import { blankHttp } from "./engines";
-import { checkCurrent, checkKey, cloudFor, localFor, localRows, pickOf, servesOther, suggestedIn, takesEffort } from "./serviceForm";
+import { checkCurrent, checkKey, cloudFor, localFor, localRows, modesOf, pickOf, servesOther, suggestedIn, takesEffort } from "./serviceForm";
 
 const svc = (id: string, kind: "cloud" | "local", asr: ServicePreset["asr"], llm: ServicePreset["llm"]): ServicePreset => ({
   id, label: id, kind, base_url: kind === "cloud" ? `https://${id}.test/v1` : null, port: kind === "local" ? 1 : null,
@@ -27,6 +27,12 @@ test("a reasoning effort goes with chat requests only", () => {
   expect(takesEffort({ kind: "cloud", id: "openai" }, SERVICES, "asr")).toBe(false);
   expect(takesEffort({ kind: "custom" }, SERVICES, "asr")).toBe(false);
   expect(takesEffort({ kind: "custom" }, SERVICES, "llm")).toBe(true);
+  const routed = SERVICES.map((s) => (s.id === "gemini" ? { ...s, asr_routes: [{ models: ["t"], wire: "interactions" as const, base_url: "https://g.test/", modes: ["verbatim", "smart"] }] } : s));
+  expect(takesEffort({ kind: "cloud", id: "gemini" }, routed, "asr", "t")).toBe(false);
+  expect(takesEffort({ kind: "cloud", id: "gemini" }, routed, "asr", "flash")).toBe(true);
+  expect(modesOf({ kind: "cloud", id: "gemini" }, routed, "t")).toEqual(["verbatim", "smart"]);
+  expect(modesOf({ kind: "cloud", id: "gemini" }, routed, "flash")).toEqual([]);
+  expect(modesOf({ kind: "custom" }, routed, "t")).toEqual([]);
 });
 
 test("an engine opens on the pick it was made with", () => {

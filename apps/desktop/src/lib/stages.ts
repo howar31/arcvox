@@ -59,11 +59,33 @@ export function outputLine(profile: Profile, method: InsertMethod = "paste"): St
 }
 
 /** One sentence about what an engine is. */
+/** What a network engine sets beyond its model, in words; "" at the service's defaults. */
+export function engineVariant(p: Pick<ProviderConfig, "transcribe_mode" | "reasoning_effort">): string {
+  return [
+    p.transcribe_mode ? t("engines.variant_mode", { mode: t(`engines.transcribe_mode.${p.transcribe_mode}`) }) : "",
+    p.reasoning_effort ? t("engines.variant_effort", { value: t(`engines.effort.${p.reasoning_effort}`) }) : "",
+  ].filter(Boolean).join(t("home.list_sep"));
+}
+
+const EFFORT_TAGS: Record<string, string> = { minimal: "min", medium: "med" };
+
+/**
+ * The default name of a network engine: service, model and what it sets beyond the service's defaults, joined
+ * by `_`. It is stored, so it stays in fixed keywords whatever the interface language.
+ */
+export function engineDefaultName(service: string, model: string, p: Pick<ProviderConfig, "transcribe_mode" | "reasoning_effort">): string {
+  const effort = p.reasoning_effort && `e-${EFFORT_TAGS[p.reasoning_effort] ?? p.reasoning_effort}`;
+  const parts = [service.trim().replace(/\s+/g, "-"), model.replace(/^models\//, ""), p.transcribe_mode, effort].filter(Boolean);
+  return parts.join("_") || "external";
+}
+
 export function engineDescription(p: ProviderConfig, manifest: ManifestView | null, models: InstalledModel[] = []): string {
   if (p.kind === "native") return t(p.native_id === NATIVE_FM ? "engines.desc.apple_foundation_models" : "engines.desc.apple_dictation");
   if (p.kind === "http") {
     const host = engineMeta(p, new Set()).detail ?? "";
-    return p.model ? t("engines.desc.http", { host, model: p.model }) : host;
+    if (!p.model) return host;
+    const variant = engineVariant(p);
+    return t(variant ? "engines.desc.http_variant" : "engines.desc.http", { host, model: p.model, variant });
   }
   if (p.model_id) {
     const entry = manifest?.models.find((m) => m.id === p.model_id);
