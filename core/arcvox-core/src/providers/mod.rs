@@ -23,6 +23,10 @@ pub struct ProviderError {
     pub hint: Option<String>,
     /// What the service answered, unshortened, when `message` shows only part of it.
     pub detail: Option<String>,
+    /// The HTTP status the service answered with.
+    pub status: Option<u16>,
+    /// The service's own words: the message of its error answer, or the start of the answer.
+    pub answer: Option<String>,
 }
 
 impl ProviderError {
@@ -32,6 +36,8 @@ impl ProviderError {
             message: message.into(),
             hint: None,
             detail: None,
+            status: None,
+            answer: None,
         }
     }
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {

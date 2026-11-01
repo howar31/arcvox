@@ -100,7 +100,16 @@ fn error_message(body: &str) -> Option<String> {
 const DETAIL_CHARS: usize = 4000;
 
 pub fn classify_status(label: &str, status: StatusCode, body: &str) -> ProviderError {
-    let err = classify_message(label, status, body);
+    let snippet: String = error_message(body)
+        .unwrap_or_else(|| body.trim().to_string())
+        .chars()
+        .take(200)
+        .collect();
+    let mut err = classify_message(label, status, body, &snippet);
+    err.status = Some(status.as_u16());
+    if !snippet.is_empty() {
+        err.answer = Some(snippet);
+    }
     let detail: String = body.trim().chars().take(DETAIL_CHARS).collect();
     if detail.is_empty() {
         err
@@ -109,12 +118,7 @@ pub fn classify_status(label: &str, status: StatusCode, body: &str) -> ProviderE
     }
 }
 
-fn classify_message(label: &str, status: StatusCode, body: &str) -> ProviderError {
-    let snippet: String = error_message(body)
-        .unwrap_or_else(|| body.to_string())
-        .chars()
-        .take(200)
-        .collect();
+fn classify_message(label: &str, status: StatusCode, body: &str, snippet: &str) -> ProviderError {
     match status.as_u16() {
         401 | 403 => ProviderError::new(
             ErrorCode::ProviderUnauthorized,
@@ -180,6 +184,11 @@ mod tests {
             "Gemini: HTTP 400 Bad Request models/x is not found for API version v1main"
         );
         assert_eq!(e.detail.as_deref(), Some(body));
+        assert_eq!(e.status, Some(400));
+        assert_eq!(
+            e.answer.as_deref(),
+            Some("models/x is not found for API version v1main")
+        );
         let e = classify_status(
             "X",
             StatusCode::BAD_REQUEST,

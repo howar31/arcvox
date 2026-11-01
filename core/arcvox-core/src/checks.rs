@@ -27,6 +27,9 @@ pub struct EngineCheck {
     /// The service's answer as it came, when `message` shows only part of it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// The HTTP status of a refusal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
     pub role: ModelRole,
     /// What the engine was set to when it was checked; a change to any of
     /// these makes the check stale.
@@ -166,6 +169,7 @@ mod tests {
             elapsed_ms: 2,
             message: None,
             detail: None,
+            status: None,
             role: ModelRole::Asr,
             service: Some("gemini".into()),
             base_url: None,

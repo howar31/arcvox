@@ -381,7 +381,11 @@
       {@const c = shown[r]!}
       <span></span>
       <div class="result" role="status">
-        <ServiceAnswer tone={c.ok ? "ok" : "bad"} text={c.ok ? t("engines.check_ok_in", { time: time(c) }) : t("engines.check_failed", { msg: c.message ?? "" })} detail={c.ok ? null : c.detail} />
+        {#if c.ok}
+          <ServiceAnswer tone="ok" text={t("engines.check_ok_in", { time: time(c) })} />
+        {:else}
+          <ServiceAnswer tone="bad" text={c.status ? t("engines.check_failed_status", { status: String(c.status) }) : t("engines.check_failed")} body={c.message} detail={c.detail} />
+        {/if}
       </div>
     {/if}
   </div>

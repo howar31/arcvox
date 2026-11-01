@@ -680,9 +680,20 @@ impl Engine {
             },
         };
         let elapsed_ms = started.elapsed().as_millis() as u64;
-        let (message, detail) = match outcome {
-            Ok(()) => (None, None),
-            Err(e) => (Some(e.message), e.detail),
+        // The check is shown under its engine, so the message carries the
+        // service's own words, or the error without the engine's name.
+        let (message, detail, status) = match outcome {
+            Ok(()) => (None, None, None),
+            Err(e) => {
+                let prefix = format!("{}: ", cfg.label);
+                let text = e.answer.clone().unwrap_or_else(|| {
+                    e.message
+                        .strip_prefix(&prefix)
+                        .unwrap_or(&e.message)
+                        .to_string()
+                });
+                (Some(text), e.detail, e.status)
+            }
         };
         tracing::info!(
             engine = %cfg.id,
@@ -690,6 +701,7 @@ impl Engine {
             model = cfg.model.as_deref().unwrap_or(""),
             ?role,
             ok = message.is_none(),
+            status,
             elapsed_ms,
             message = message.as_deref().unwrap_or(""),
             detail = detail.as_deref().unwrap_or(""),
@@ -701,6 +713,7 @@ impl Engine {
             elapsed_ms,
             message,
             detail,
+            status,
             role,
             service: cfg.service.clone(),
             base_url: cfg.base_url.as_ref().map(|u| u.to_string()),

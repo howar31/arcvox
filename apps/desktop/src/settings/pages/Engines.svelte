@@ -313,15 +313,16 @@
     realBusy = { ...realBusy, [p.id]: false };
   }
   /** The engine's last real request, as one line. */
-  function checkLine(p: ProviderConfig): { text: string; tone: "ok" | "bad" | ""; detail: string | null } {
-    if (realBusy[p.id]) return { text: t("engines.check_running"), tone: "", detail: null };
+  function checkLine(p: ProviderConfig): { text: string; tone: "ok" | "bad" | ""; body: string | null; detail: string | null } {
+    const plain = (text: string) => ({ text, tone: "" as const, body: null, detail: null });
+    if (realBusy[p.id]) return plain(t("engines.check_running"));
     const c = checks[p.id];
-    if (!c) return { text: t("engines.check_none"), tone: "", detail: null };
-    if (!checkCurrent(c, p, role)) return { text: t("engines.check_stale"), tone: "", detail: null };
+    if (!c) return plain(t("engines.check_none"));
+    if (!checkCurrent(c, p, role)) return plain(t("engines.check_stale"));
     const when = `${formatShortDate(c.at)} ${formatTime(c.at)}`;
-    return c.ok
-      ? { text: t("engines.check_ok_at", { when }), tone: "ok", detail: null }
-      : { text: t("engines.check_failed_at", { when, msg: c.message ?? "" }), tone: "bad", detail: c.detail ?? null };
+    if (c.ok) return { text: t("engines.check_ok_at", { when }), tone: "ok", body: null, detail: null };
+    const text = c.status ? t("engines.check_failed_at_status", { when, status: String(c.status) }) : t("engines.check_failed_at", { when });
+    return { text, tone: "bad", body: c.message ?? null, detail: c.detail ?? null };
   }
   function openForm(p: ProviderConfig | null) {
     formInitial = p;
@@ -560,7 +561,7 @@
           </div>
           <small>{engineDescription(p, manifest)}</small>
           <small>{usersLine(p.id)}</small>
-          <small class="check"><ServiceAnswer tone={checkLine(p).tone} text={checkLine(p).text} detail={checkLine(p).detail} /></small>
+          <small class="check"><ServiceAnswer tone={checkLine(p).tone} text={checkLine(p).text} body={checkLine(p).body} detail={checkLine(p).detail} /></small>
           {@render probeLine(p.id)}
         </div>
         <span class="acts">
