@@ -9,5 +9,6 @@
 <div class="fold" transition:slide={{ duration: 220, easing: cubicOut }} {onoutroend}>{@render children()}</div>
 
 <style>
-  .fold { overflow: hidden; }
+  /* Clipping stays with the slide itself: at rest a focus ring reaches past the edge. */
+  .fold { display: flow-root; }
 </style>

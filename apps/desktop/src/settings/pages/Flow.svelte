@@ -1,9 +1,8 @@
 <script lang="ts">
-  import { tip } from "../../lib/tip";
   import { onMount, untrack } from "svelte";
   import {
-    errorMessage, formatBytes, historyLast, listMicrophones, modelsDownload, modelsInstalled, modelsManifestNow, onHistoryChanged, onModelDownloadProgress, openFolder, profilesAddPreset,
-    profilesPresets, profilesTemplateStyle, setDefaultProfile, upsertProfile, type InstalledModel, type LastRun, type ManifestView, type PresetView, type Profile,
+    errorMessage, formatBytes, historyLast, listMicrophones, modelsDownload, modelsInstalled, modelsManifestNow, onHistoryChanged, onModelDownloadProgress, openFolder,
+    profilesPresets, profilesTemplateStyle, upsertProfile, type InstalledModel, type LastRun, type ManifestView, type PresetView, type Profile,
   } from "../../lib/api";
   import { appName, ensureAppNames } from "../../lib/apps.svelte";
   import { appliesDictionary, PUNCTUATION_CONFIGS, RULE_KEYS, rulesAt, SCRIPT_CONFIGS, SCRIPT_GROUPS, scriptAt, scriptLabel, selectedProfile, translateAt, enableTranslate, withDictionary, withRule, withRules, withScript, withScriptPunctuationBoth, withTranslate, type RuleKey, type TranslateStep } from "../../lib/flowEdit";
@@ -12,26 +11,25 @@
   import { guard } from "../../lib/guard.svelte";
   import { t } from "../../lib/i18n";
   import { isImeKey } from "../../lib/ime";
-  import { appsSummary, freshName, withLlm } from "../../lib/profileEdit";
+  import { appsSummary, withLlm } from "../../lib/profileEdit";
   import { anyFallback, FOLLOW, isFallback, resolveEngines, usableWith } from "../../lib/resolve";
   import { encoderMissing, runnable } from "../../lib/engines";
   import { go } from "../../lib/route";
   import { engineLine, micLine, outputLine, type StageLine } from "../../lib/stages";
   import { client, config } from "../../lib/store.svelte";
-  import Chip from "../../lib/ui/Chip.svelte";
   import Fold from "../../lib/ui/Fold.svelte";
   import Group from "../../lib/ui/Group.svelte";
   import Icon from "../../lib/ui/Icon.svelte";
-  import Modal from "../../lib/ui/Modal.svelte";
   import PageHead from "../../lib/ui/PageHead.svelte";
   import InfoTip from "../../lib/ui/InfoTip.svelte";
   import PageLink from "../../lib/ui/PageLink.svelte";
   import Row from "../../lib/ui/Row.svelte";
   import SaveBar from "../../lib/ui/SaveBar.svelte";
+  import Select from "../../lib/ui/Select.svelte";
   import Switch from "../../lib/ui/Switch.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
-  import AddPerApp from "./AddPerApp.svelte";
-  import AppIcon from "../../lib/ui/AppIcon.svelte";
+  import AddProfile from "./flow/AddProfile.svelte";
+  import AppliesTo from "./flow/AppliesTo.svelte";
   import EnginePicker from "./flow/EnginePicker.svelte";
   import LastPanel from "./flow/LastPanel.svelte";
   import ManageProfiles from "./flow/ManageProfiles.svelte";
@@ -254,7 +252,7 @@
     const rules = !on || (!on.dictionary && ruleCount === 0) ? t("flow.rules_none") : on.dictionary ? t("flow.rules_meta", { n: String(ruleCount) }) : t("flow.rules_meta_nodict", { n: String(ruleCount) });
     const translate = translateAt(draft);
     const cell = (id: CellId, setting: string, warn = false, unknown = false): Cell =>
-      ({ id, name: stageName(id), setting, line: runLines[id], time: runTimes[id], warn, unknown, problem: problemOf(id) });
+      ({ id, name: stageName(id), setting, line: runLines[id], time: runTimes[id], warn, unknown, problem: problemOf(id), engine: id === "asr" || id === "llm" || id === "translate" });
     const settings: Record<CellId, () => Cell> = {
       capture: () => cell("capture", lines!.mic.name, lines!.mic.missing),
       asr: () => cell("asr", lines!.asr.name, lines!.asr.missing, !lines!.asr.known),
@@ -372,11 +370,11 @@
       : { name: id, help: t("flow.engine_missing") };
   }
 
-  function pickMic(select: HTMLSelectElement) {
+  function pickMic(microphone: string) {
     if (!client.value) return;
-    client.save({ ...$state.snapshot(client.value), microphone: select.value })
+    client.save({ ...$state.snapshot(client.value), microphone })
       .then(() => toast.ok(t("common.saved")))
-      .catch((e) => { select.value = client.value?.microphone ?? "builtin"; toast.error(errorMessage(e)); });
+      .catch((e) => toast.error(errorMessage(e)));
   }
 
   const snapshot = () => $state.snapshot(draft) as Profile;
@@ -422,44 +420,9 @@
     newUrl = ""; newRaw = ""; newRefined = "";
   }
 
-  // The add dialog: the template, the new profile's name and whether it becomes the default.
-  let addPreset = $state("");
-  let addName = $state("");
-  // Set once the name is typed; until then the name follows the chosen template.
-  let addRenamed = $state(false);
-  let addDefault = $state(false);
-  const takenNames = () => (config.value?.profiles ?? []).map((p) => p.name);
   function openAdd() {
     revert();
-    addPreset = presets[0]?.id ?? "";
-    addName = addPreset ? freshName(t(`profiles.preset.${addPreset}`), takenNames()) : "";
-    addRenamed = false;
-    addDefault = false;
     adding = true;
-  }
-  function choosePreset(id: string) {
-    addPreset = id;
-    if (!addRenamed) addName = freshName(t(`profiles.preset.${id}`), takenNames());
-  }
-
-  /** Adds a copy of the chosen template under the given name, makes it the default when asked, and shows it. */
-  async function create() {
-    if (!config.value || !addPreset || !addName.trim()) return;
-    busy = true;
-    const before = new Set(config.value.profiles.map((p) => p.id));
-    try {
-      let next = await profilesAddPreset(addPreset, addName.trim());
-      const created = next.profiles.find((p) => !before.has(p.id));
-      if (created && addDefault) next = await setDefaultProfile(created.id);
-      config.value = next;
-      adding = false;
-      toast.ok(t("common.saved"));
-      if (created) go("flow", created.id);
-    } catch (e) {
-      toast.error(errorMessage(e));
-    } finally {
-      busy = false;
-    }
   }
 </script>
 
@@ -469,7 +432,7 @@
 {#snippet fallbackNote(role: "asr" | "llm" | "translate")}
   {@const fb = onDefault(role)}
   {#if fb}
-    <div class="fallback">
+    <div class="fallback under">
       <p><b>{t(`flow.reason.${fb.reason}`, { wanted: fb.wanted })}</b> {t("flow.fallback_then", { using: fb.using })}</p>
       <div class="acts">
         {#if fb.reason === "download" && fb.modelId}
@@ -510,44 +473,49 @@
     />
   </div>
 
-  {#if source.is_default}
-    <Group title={t("profiles.applies")}>
-      <Row label={t("profiles.everywhere")} help={t("flow.default_statement")} />
-    </Group>
-  {:else}
-    <Group title={t("profiles.applies")}>
-      <Row label={t("profiles.apps_label")}>
-        <div class="chips end-chips">
-          {#each draft.matcher.app_ids as id, i (i)}
-            <Chip onremove={() => draft!.matcher.app_ids.splice(i, 1)}><AppIcon bundleId={id} size={18} /><span use:tip={id}>{appName(id)}</span></Chip>
-          {:else}
-            <span class="sub">{t("profiles.no_apps")}</span>
-          {/each}
-        </div>
-      </Row>
-      <AddPerApp onadd={addApp} exclude={draft.matcher.app_ids} />
-    </Group>
-    <Group>
-      <Row label={t("profiles.urls")} help={t("profiles.urls_help")}>
-        <input type="text" class="add-input" bind:value={newUrl} placeholder={t("profiles.url_placeholder")} aria-label={t("profiles.urls")} onkeydown={(e) => { if (e.key === "Enter" && !isImeKey(e)) addUrl(); }} />
-        <button type="button" class="btn" disabled={!newUrl.trim()} onclick={addUrl}><Icon name="plus" size={14} />{t("common.add")}</button>
-      </Row>
-      {#if draft.matcher.url_patterns.length}<Fold>
-        <Row>
-          <div class="chips">
-            {#each draft.matcher.url_patterns as u, i (i)}<Chip onremove={() => draft!.matcher.url_patterns.splice(i, 1)}>{u}</Chip>{/each}
-          </div>
-        </Row>
-      </Fold>{/if}
-    </Group>
-  {/if}
-
+  <!-- The selected stage's engine, under its summary in the route's card. -->
+  {#snippet engineChoice()}
+    {#if stage === "asr"}
+      <EnginePicker
+        compact engines={asrChoices} selected={draft!.asr_provider ?? FOLLOW} label={t("flow.asr_engines")} {manifest} {installed} models={models ?? []} follow={followChoice("asr")} suggested={suggested.asr}
+        defaultId={config.value?.default_engines.asr} onmanage={() => guard.request(() => go("engines", "asr"))}
+        stale={stale(draft!.asr_provider, asrChoices)} onpick={(id) => { draft!.asr_provider = id === FOLLOW ? null : id; }}
+      />
+      {@render fallbackNote("asr")}
+      {#if lines!.asr.missing}
+        <p class="missing"><span>{t("flow.model_missing")}</span><button type="button" class="btn" onclick={() => guard.request(() => go("engines", "asr"))}>{t("flow.to_download")}</button></p>
+      {/if}
+    {:else if stage === "llm"}
+      <EnginePicker
+        compact engines={llmChoices} selected={draft!.llm_provider ?? FOLLOW} label={t("flow.llm_engines")} {manifest} {installed} models={models ?? []}
+        follow={followChoice("llm")} suggested={suggested.llm}
+        defaultId={config.value?.default_engines.llm} onmanage={() => guard.request(() => go("engines", "llm"))}
+        stale={stale(draft!.llm_provider, llmChoices)} onpick={(id) => (draft = withLlm(snapshot(), id))}
+      />
+      {@render fallbackNote("llm")}
+      {#if lines!.llm.missing}
+        <p class="missing"><span>{t("flow.model_missing")}</span><button type="button" class="btn" onclick={() => guard.request(() => go("engines", "llm"))}>{t("flow.to_download")}</button></p>
+      {/if}
+    {:else if stage === "translate" && translateAt(draft!)}
+      {@const step = translateAt(draft!)!}
+      <EnginePicker
+        compact engines={llmChoices} selected={step.provider ?? FOLLOW} label={t("flow.translate_engines")} {manifest} {installed} models={models ?? []}
+        follow={{ name: t("flow.follow_rewrite"), help: t("flow.follow_rewrite_help", { name: lines!.llm.name === t("home.no_rewrite") ? defaultName("llm") : lines!.llm.name }) }} suggested={null}
+        defaultId={config.value?.default_engines.llm} onmanage={() => guard.request(() => go("engines", "llm"))}
+        stale={stale(step.provider ?? null, llmChoices)} onpick={(id) => setTranslate({ provider: id === FOLLOW ? null : id })}
+      />
+      {@render fallbackNote("translate")}
+      {#if lines!.translate.missing}
+        <p class="missing"><span>{t("flow.model_missing")}</span><button type="button" class="btn" onclick={() => guard.request(() => go("engines", "llm"))}>{t("flow.to_download")}</button></p>
+      {/if}
+    {/if}
+  {/snippet}
   {#snippet lastText()}{#if last && stage !== "enable"}<LastPanel id={stage} stages={last.stages} />{/if}{/snippet}
   <div class="gt">
     <span>{t("flow.stages")}</span>
     {#if last}<span class="r">{runHeadline(last.row, last.stages, new Date())}</span>{:else if last === null}<span class="r">{t("flow.last_none")}</span>{/if}
   </div>
-  <StageRoute {cells} selected={stage} onpick={(id) => (stage = id)} label={t("flow.stages")} entry={addable.length ? t("flow.enable_module") : ""} meta={titleMeta} detail={last && stage !== "enable" && hasText(stage, last.stages) ? lastText : undefined} bind:stuckHeight={routeHeight} />
+  <StageRoute {cells} selected={stage} onpick={(id) => (stage = id)} label={t("flow.stages")} entry={addable.length ? t("flow.enable_module") : ""} meta={titleMeta} detail={last && stage !== "enable" && hasText(stage, last.stages) ? lastText : undefined} engine={stage === "asr" || stage === "llm" || stage === "translate" ? engineChoice : undefined} bind:stuckHeight={routeHeight} />
   <!-- At least the window's height under the stuck route: a stage with few settings picked while the route is
        stuck leaves room to stay scrolled where it is, instead of the page pulling the route back down. -->
   <div class="right" style:min-height="calc(100vh - {routeHeight}px - var(--page-bottom))">
@@ -567,49 +535,43 @@
         {@const mic = client.value?.microphone ?? "builtin"}
         <Group title={t("home.stage.capture")}>
           <Row label={t("general.input_device")} help={t("flow.mic_shared")}>
-            <select class="field" value={mic} aria-label={t("general.input_device")} onchange={(e) => pickMic(e.currentTarget)}>
-              <option value="builtin">{t("general.mic_builtin")}</option>
-              <option value="default">{t("general.mic_default")}</option>
-              {#each mics as m (m)}<option value={m}>{m}</option>{/each}
-              {#if lines.mic.missing}<option value={mic} disabled>{mic}</option>{/if}
-            </select>
+            <Select
+              variable label={t("general.input_device")} value={mic} onchange={pickMic}
+              options={[
+                { value: "builtin", label: t("general.mic_builtin") },
+                { value: "default", label: t("general.mic_default") },
+                ...mics.map((m) => ({ value: m, label: m })),
+                ...(lines.mic.missing ? [{ value: mic, label: mic, disabled: true }] : []),
+              ]}
+            />
           </Row>
           <Row label={t("flow.trim_meta")} help={t("flow.trim_help")} />
         </Group>
       {:else if stage === "asr"}
-        <div class="bar"><h2>{t("flow.asr_engines")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("engines", "asr"))}>{t("flow.manage")}</button></div>
-        <!-- The reason for the stage's problem mark, above the engines to choose from. -->
-        {@render fallbackNote("asr")}
-        <EnginePicker
-          engines={asrChoices} selected={draft.asr_provider ?? FOLLOW} label={t("flow.asr_engines")} {manifest} {installed} models={models ?? []} follow={followChoice("asr")} suggested={suggested.asr}
-          defaultId={config.value?.default_engines.asr} onmanage={() => guard.request(() => go("engines", "asr"))}
-          stale={stale(draft.asr_provider, asrChoices)} onpick={(id) => { draft!.asr_provider = id === FOLLOW ? null : id; }}
-        />
-        {#if lines.asr.missing}
-          <p class="missing"><span>{t("flow.model_missing")}</span><button type="button" class="btn" onclick={() => guard.request(() => go("engines", "asr"))}>{t("flow.to_download")}</button></p>
-        {/if}
         <Group title={t("flow.asr_settings")}>
           <Row label={t("profiles.language_hint")} help={t("profiles.language_help")}>
-            <select class="field" bind:value={() => draft!.language_hint ?? "", (v) => (draft!.language_hint = v || null)} aria-label={t("profiles.language_hint")}>
-              {#each LANGS as l (l)}<option value={l}>{t(LANG_KEYS[l])}</option>{/each}
-              {#if draft.language_hint && !LANGS.includes(draft.language_hint)}<option value={draft.language_hint}>{draft.language_hint}</option>{/if}
-              <option value="">{t("profiles.lang.auto")}</option>
-            </select>
+            <Select
+              label={t("profiles.language_hint")} value={draft.language_hint ?? ""} onchange={(v) => (draft!.language_hint = v || null)}
+              options={[
+                ...LANGS.map((l) => ({ value: l, label: t(LANG_KEYS[l]) })),
+                ...(draft.language_hint && !LANGS.includes(draft.language_hint) ? [{ value: draft.language_hint, label: draft.language_hint }] : []),
+                { value: "", label: t("profiles.lang.auto") },
+              ]}
+            />
           </Row>
           {@const script = scriptAt(draft, 1)}
           <Row label={t("flow.script")} help={t("flow.script_help")} info={t("flow.script_info")}>
             <!-- Sixteen fixed conversions: a list, grouped by the script they produce. A configuration set
                  outside this page is listed by its name and kept until another choice is made. The choice
                  covers the conversion after the rewrite too. -->
-            <select class="field wide" value={script?.config ?? ""} aria-label={t("flow.script")} onchange={(e) => (draft = withScript(snapshot(), e.currentTarget.value || null))}>
-              <option value="">{t("flow.script_none")}</option>
-              {#each SCRIPT_GROUPS as g (g.id)}
-                <optgroup label={t(`flow.script_group.${g.id}`)}>
-                  {#each g.configs as c (c)}<option value={c}>{scriptLabel(c)}</option>{/each}
-                </optgroup>
-              {/each}
-              {#if script && !SCRIPT_CONFIGS.includes(script.config)}<option value={script.config}>{script.config}</option>{/if}
-            </select>
+            <Select
+              width="300px" label={t("flow.script")} value={script?.config ?? ""} onchange={(v) => (draft = withScript(snapshot(), v || null))}
+              groups={[
+                { choices: [{ value: "", label: t("flow.script_none") }] },
+                ...SCRIPT_GROUPS.map((g) => ({ label: t(`flow.script_group.${g.id}`), choices: g.configs.map((c) => ({ value: c, label: scriptLabel(c) })) })),
+                ...(script && !SCRIPT_CONFIGS.includes(script.config) ? [{ choices: [{ value: script.config, label: script.config }] }] : []),
+              ]}
+            />
           </Row>
           {#if script && PUNCTUATION_CONFIGS.includes(script.config)}<Fold>
             <Row label={t("flow.script_punct")} help={t("flow.script_punct_help")}>
@@ -625,18 +587,6 @@
           </Row>
         </Group>
       {:else if stage === "llm"}
-        <div class="bar"><h2>{t("flow.llm_engines")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("engines", "llm"))}>{t("flow.manage")}</button></div>
-        <!-- The reason for the stage's problem mark, above the engines to choose from. -->
-        {@render fallbackNote("llm")}
-        <EnginePicker
-          engines={llmChoices} selected={draft.llm_provider ?? FOLLOW} label={t("flow.llm_engines")} {manifest} {installed} models={models ?? []}
-          follow={followChoice("llm")} suggested={suggested.llm}
-          defaultId={config.value?.default_engines.llm} onmanage={() => guard.request(() => go("engines", "llm"))}
-          stale={stale(draft.llm_provider, llmChoices)} onpick={(id) => (draft = withLlm(snapshot(), id))}
-        />
-        {#if lines.llm.missing}
-          <p class="missing"><span>{t("flow.model_missing")}</span><button type="button" class="btn" onclick={() => guard.request(() => go("engines", "llm"))}>{t("flow.to_download")}</button></p>
-        {/if}
         <div class="bar"><h2>{t("profiles.prompt_addition")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("prompt", "llm"))}>{t("flow.see_prompt")}</button></div>
           <!-- The reason for the stage's problem mark when the template's style moved on: the profile keeps its own text until the user decides. -->
           {#if movedTemplate}
@@ -709,10 +659,10 @@
         {@const step = translateAt(draft)!}
         <Group title={t("flow.translate_group")} info={t("flow.translate_info")}>
           <Row label={t("flow.translate_target")} help={t("flow.translate_target_help")}>
-            <select class="field" value={customTarget ? "custom" : step.target} aria-label={t("flow.translate_target")} onchange={(e) => setTranslate({ target: e.currentTarget.value === "custom" ? "" : e.currentTarget.value })}>
-              {#each TARGET_KEYS as key (key)}<option value={key}>{t(`flow.target.${key}`)}</option>{/each}
-              <option value="custom">{t("flow.translate_custom_option")}</option>
-            </select>
+            <Select
+              label={t("flow.translate_target")} value={customTarget ? "custom" : step.target} onchange={(v) => setTranslate({ target: v === "custom" ? "" : v })}
+              options={[...TARGET_KEYS.map((key) => ({ value: key, label: t(`flow.target.${key}`) })), { value: "custom", label: t("flow.translate_custom_option") }]}
+            />
           </Row>
           {#if customTarget}<Fold>
             <Row label={t("flow.translate_custom")} help={t("flow.translate_custom_help")}>
@@ -723,17 +673,6 @@
         <div class="bar"><h2>{t("flow.translate_addition")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("prompt", "translate"))}>{t("flow.see_prompt")}</button></div>
         <textarea rows="4" value={step.addition ?? ""} aria-label={t("flow.translate_addition")} oninput={(e) => setTranslate({ addition: e.currentTarget.value })}></textarea>
         <p class="help">{t("flow.translate_addition_help")}<InfoTip info={t("profiles.prompt_info")} /></p>
-        <div class="bar"><h2>{t("flow.translate_engines")}</h2><button type="button" class="btn quiet" onclick={() => guard.request(() => go("engines", "llm"))}>{t("flow.manage")}</button></div>
-        {@render fallbackNote("translate")}
-        <EnginePicker
-          engines={llmChoices} selected={step.provider ?? FOLLOW} label={t("flow.translate_engines")} {manifest} {installed} models={models ?? []}
-          follow={{ name: t("flow.follow_rewrite"), help: t("flow.follow_rewrite_help", { name: lines.llm.name === t("home.no_rewrite") ? defaultName("llm") : lines.llm.name }) }} suggested={null}
-          defaultId={config.value?.default_engines.llm} onmanage={() => guard.request(() => go("engines", "llm"))}
-          stale={stale(step.provider ?? null, llmChoices)} onpick={(id) => setTranslate({ provider: id === FOLLOW ? null : id })}
-        />
-        {#if lines.translate.missing}
-          <p class="missing"><span>{t("flow.model_missing")}</span><button type="button" class="btn" onclick={() => guard.request(() => go("engines", "llm"))}>{t("flow.to_download")}</button></p>
-        {/if}
         <Group>
           {@render removeRow(t("flow.disable_translate_help"))}
         </Group>
@@ -750,6 +689,18 @@
           <Row label={t("flow.record_recordings")} onclick={() => guard.request(() => go("general"))} />
         </Group>
       {/if}
+      {#if source.is_default}
+        <Group title={t("profiles.applies")}>
+          <Row label={t("profiles.everywhere")} help={t("flow.default_statement")} />
+        </Group>
+      {:else}
+        <Group title={t("profiles.applies")}>
+          <AppliesTo
+            apps={draft.matcher.app_ids} urls={draft.matcher.url_patterns} bind:url={newUrl} onaddapp={addApp} onaddurl={addUrl}
+            onremoveapp={(i) => draft!.matcher.app_ids.splice(i, 1)} onremoveurl={(i) => draft!.matcher.url_patterns.splice(i, 1)}
+          />
+        </Group>
+      {/if}
   </div>
 
   <SaveBar {dirty} {saving} message={problem} onsave={save} onrevert={revert} />
@@ -757,32 +708,7 @@
 
 <ManageProfiles bind:open={managing} {profiles} {applies} {presets} />
 
-<Modal bind:open={adding} title={t("flow.add")}>
-  <div class:busy inert={busy} aria-busy={busy}>
-    <div class="templates" role="radiogroup" aria-label={t("flow.add_template")}>
-      {#each presets as p (p.id)}
-        <label class="template" class:on={addPreset === p.id}>
-          <input type="radio" name="preset" value={p.id} checked={addPreset === p.id} onchange={() => choosePreset(p.id)} />
-          <span><b>{t(`profiles.preset.${p.id}`)}</b><small>{t(`profiles.preset.${p.id}.desc`)}</small></span>
-        </label>
-      {/each}
-    </div>
-    <div class="choices">
-      <Row label={t("flow.add_name")}>
-        <input class="field" type="text" bind:value={addName} oninput={() => (addRenamed = true)} aria-label={t("flow.add_name")} />
-      </Row>
-      <Row label={t("flow.add_default")} help={t(addDefault ? "flow.add_default_on" : "flow.add_default_off")} info={addDefault ? t("flow.add_default_on_info") : undefined}>
-        <Switch bind:checked={addDefault} label={t("flow.add_default")} />
-      </Row>
-    </div>
-  </div>
-  {#snippet actions()}
-    {#if busy}<span class="adding" role="status">{t("profiles.adding")}</span>{/if}
-    <button type="button" class="btn" disabled={busy} onclick={() => (adding = false)}>{t("common.cancel")}</button>
-    <button type="button" class="btn primary" disabled={busy || !addPreset || !addName.trim()} onclick={create}>{t("flow.add_create")}</button>
-  {/snippet}
-</Modal>
-
+<AddProfile bind:open={adding} {presets} {manifest} {installed} models={models ?? []} />
 
 <style>
   .pick { display: flex; align-items: center; gap: 10px; }
@@ -801,6 +727,7 @@
   .stage-link { border: 0; background: none; padding: 0; font: inherit; color: var(--accent); cursor: default; }
   .stage-link:hover { color: var(--ink); }
   .missing { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 4px 0; color: var(--warn); font-size: var(--text-sm); }
+  .fallback.under { margin: 10px 0 2px; }
   .fallback { margin: 0 0 12px; padding: 12px 14px; border-radius: var(--radius); background: color-mix(in srgb, var(--warn) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); font-size: var(--text-sm); }
   .fallback p { margin: 0; color: var(--ink); }
   .fallback b { color: var(--warn); font-weight: 600; }
@@ -808,7 +735,6 @@
   .bar h2 { margin: 0; font: 600 var(--text-sm)/1 var(--font); color: var(--ink-2); }
   .bar .btn { margin: -10px -8px -10px 0; }
   .field { width: 240px; flex: none; }
-  .field.wide { width: 300px; }
   textarea { display: block; }
   .pair-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
   .arrow { flex: none; color: var(--ink-3); }
@@ -817,17 +743,4 @@
   .end .icon-btn { margin-right: -8px; }
   .icon-btn { width: var(--control); padding: 0; color: var(--ink-2); }
   .icon-btn:hover { color: var(--ink); }
-  .chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; }
-  .end-chips { flex: 0 1 auto; justify-content: flex-end; max-width: 70%; }
-  .busy { opacity: .55; }
-  .templates { display: flex; flex-direction: column; gap: 8px; }
-  .template { display: flex; align-items: flex-start; gap: 12px; padding: 11px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--ink); cursor: default; }
-  .template.on { border-color: var(--accent); background: var(--accent-soft); }
-  .template input { appearance: none; flex: none; width: 16px; height: 16px; margin: 4px 0 0; border: 1.5px solid var(--ink-3); border-radius: 50%; }
-  .template input:checked { border: 5px solid var(--accent); }
-  .template input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .template b { display: block; font-weight: 600; }
-  .template small { display: block; color: var(--ink-2); font-size: var(--text-sm); }
-  .adding { margin-right: auto; align-self: center; color: var(--ink-2); font-size: var(--text-sm); }
-  .choices { margin-top: 8px; border: 1px solid var(--line); border-radius: var(--radius-group); background: var(--surface); color: var(--ink); }
 </style>

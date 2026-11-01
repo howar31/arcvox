@@ -11,6 +11,8 @@
   import Icon from "../../lib/ui/Icon.svelte";
   import Modal from "../../lib/ui/Modal.svelte";
   import ServiceAnswer from "../../lib/ui/ServiceAnswer.svelte";
+  import Select from "../../lib/ui/Select.svelte";
+  import Steps from "../../lib/ui/Steps.svelte";
   import Switch from "../../lib/ui/Switch.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
 
@@ -52,8 +54,10 @@
   let probe = $state<{ state: "wait" | "ok" | "bad"; text: string } | null>(null);
   let listed = $state<string[] | null>(null);
 
-  type Sel = { model: string; typed: boolean; typedModel: string; label: string; effort: string | null; query: string };
-  const blankSel = (): Sel => ({ model: "", typed: false, typedModel: "", label: "", effort: null, query: "" });
+  type Sel = { model: string; typed: boolean; typedModel: string; label: string; effort: string | null };
+  const blankSel = (): Sel => ({ model: "", typed: false, typedModel: "", label: "", effort: null });
+  // The last choice of the model list: the name is typed. No listed model id has this form.
+  const OTHER_MODEL = "\u0000other";
   // svelte-ignore state_referenced_locally
   let sel = $state<Record<Role, Sel>>({
     asr: blankSel(),
@@ -97,7 +101,11 @@
   });
 
   function beforeclose(): boolean {
-    if (confirmDiscard || confirmDelete || busy || !dirty) return !busy;
+    if (busy) return false;
+    // Esc on a question answers no; the form stays as it was.
+    if (confirmDiscard || confirmDelete) { confirmDiscard = confirmDelete = false; return false; }
+    if (armed) { disarm(); return false; }
+    if (!dirty) return true;
     confirmDiscard = true;
     tick().then(() => keepButton?.focus());
     return false;
@@ -333,32 +341,18 @@
 
 {#snippet modelGroup(r: Role, heading: boolean)}
   {@const s = sel[r]}
-  {@const list = (listed ?? []).filter((m) => !s.query.trim() || m.toLowerCase().includes(s.query.trim().toLowerCase()))}
   {@const hint = suggestedIn(listed ?? [], preset?.suggested?.[r])}
   {#if heading}<p class="group-t">{t(`engines.group.${r}`)}</p>{/if}
   <div class="fields">
     <span class="lab">{t("engines.model")}{#if hasList}<span class="req">{t("common.required")}</span>{/if}</span>
     <div>
       {#if hasList && listed}
-        {#if listed.length > 8}
-          <input type="search" class="search" bind:value={s.query} placeholder={t("engines.search_models")} aria-label={t("engines.search_models")} />
-        {/if}
-        <div class="models" role="radiogroup" aria-label={t("engines.model")}>
-          {#each list as m (m)}
-            <label class="model" class:on={!s.typed && s.model === m}>
-              <input type="radio" name="model-{r}-{uid}" value={m} checked={!s.typed && s.model === m} onchange={() => { s.typed = false; s.model = m; disarm(); }} />
-              <span class="mname">{m}</span>
-              {#if m === hint}<small class="hint">{t("engines.suggested")}</small>{/if}
-            </label>
-          {:else}
-            <p class="none">{t("engines.no_model_match")}</p>
-          {/each}
-        </div>
-        <label class="model other" class:on={s.typed}>
-          <input type="radio" name="model-{r}-{uid}" value="" checked={s.typed} onchange={() => { s.typed = true; disarm(); }} />
-          <span class="mname">{t("engines.model_other")}</span>
-          {#if s.typed}<input type="text" class="typed" bind:value={s.typedModel} aria-label={t("engines.model")} />{/if}
-        </label>
+        <Select
+          variable width="100%" label={t("engines.model")} value={s.typed ? OTHER_MODEL : s.model}
+          onchange={(v) => { s.typed = v === OTHER_MODEL; if (!s.typed) s.model = v; disarm(); }}
+          options={[...(listed ?? []).map((m) => ({ value: m, label: m === hint ? `${m}（${t("engines.suggested")}）` : m })), { value: OTHER_MODEL, label: t("engines.model_other") }]}
+        />
+        {#if s.typed}<Fold><input type="text" class="typed" bind:value={s.typedModel} aria-label={t("engines.model")} oninput={disarm} /></Fold>{/if}
       {:else}
         <input type="text" bind:value={s.typedModel} aria-label={t("engines.model")} oninput={disarm} />
         <small>{t("engines.model_type_help")}</small>
@@ -369,11 +363,12 @@
       <input id="f-label-{r}-{uid}" type="text" bind:value={s.label} placeholder={defaultLabel(r)} />
     </div>
     {#if takesEffort(pick, services, r)}
-      <label for="f-effort-{r}-{uid}">{t("engines.effort")}</label>
+      <span class="lab">{t("engines.effort")}</span>
       <div>
-        <select id="f-effort-{r}-{uid}" value={s.effort ?? ""} onchange={(e) => { s.effort = (e.currentTarget as HTMLSelectElement).value || null; disarm(); }}>
-          {#each EFFORTS as v (v ?? "default")}<option value={v ?? ""}>{t(`engines.effort.${v ?? "default"}`)}</option>{/each}
-        </select>
+        <Select
+          width="100%" label={t("engines.effort")} value={s.effort ?? ""} onchange={(v) => { s.effort = v || null; disarm(); }}
+          options={EFFORTS.map((v) => ({ value: v ?? "", label: t(`engines.effort.${v ?? "default"}`) }))}
+        />
         <small>{t("engines.effort_help")}</small>
       </div>
     {/if}
@@ -398,10 +393,7 @@
     <p>{t("engines.delete_body", { name: initial?.label ?? "" })}</p>
   {:else}
     <div class="form">
-      <ol class="steps" aria-label={t("engines.steps")}>
-        <li><button type="button" class:on={step === "connect"} onclick={() => (step = "connect")}><i>1</i>{t("engines.step_connect")}</button></li>
-        <li><button type="button" class:on={step === "model"} disabled={listed === null} onclick={() => (step = "model")}><i>2</i>{t("engines.step_model")}</button></li>
-      </ol>
+      <Steps current={step} steps={[{ id: "connect", label: t("engines.step_connect") }, { id: "model", label: t("engines.step_model"), disabled: listed === null }]} onpick={(id) => (step = id as typeof step)} />
       {#if step === "connect"}
         {@const clouds = cloudFor(services, role)}
         {#if clouds.length > 0}
@@ -521,14 +513,6 @@
 
 <style>
   .form { display: flex; flex-direction: column; gap: 14px; margin-top: 4px; color: var(--ink); }
-  .steps { display: flex; align-items: center; gap: 14px; margin: 0; padding: 0; list-style: none; font-size: var(--text-sm); color: var(--ink-3); }
-  .steps li { display: inline-flex; align-items: center; }
-  .steps button { display: inline-flex; align-items: center; gap: 7px; padding: 2px 6px 2px 2px; border: 0; border-radius: 13px; background: none; color: var(--ink-3); font: inherit; font-size: var(--text-sm); cursor: default; }
-  .steps button:not([disabled]):hover { background: var(--sunken); color: var(--ink); }
-  .steps button.on { color: var(--ink); font-weight: 600; }
-  .steps li + li::before { content: "›"; margin: 0 8px; color: var(--ink-3); }
-  .steps i { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--sunken); font-style: normal; font-size: var(--text-xs); font-weight: 600; color: var(--ink-2); }
-  .steps button.on i { background: var(--accent); color: var(--accent-ink); }
   .group-t { margin: 0; font-size: var(--text-xs); font-weight: 600; color: var(--ink-3); }
   .svcs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
   .svcs.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -540,7 +524,7 @@
   .divider { height: 1px; background: var(--line); }
   .fields { display: grid; grid-template-columns: minmax(96px, max-content) minmax(0, 1fr); gap: 14px; align-items: start; }
   .fields > label, .fields > .lab { color: var(--ink-2); padding-top: 7px; white-space: nowrap; }
-  .fields input[type="url"], .fields input[type="password"], .fields input[type="text"], .fields .search, .fields select { width: 100%; }
+  .fields input[type="url"], .fields input[type="password"], .fields input[type="text"] { width: 100%; }
   .fields small { display: block; margin: 5px 2px 0; color: var(--ink-2); font-size: var(--text-xs); line-height: 1.45; }
   .fact { padding-top: 7px; }
   .fact code { font-size: var(--text-xs); color: var(--ink-2); background: var(--sunken); padding: 2px 6px; border-radius: 6px; }
@@ -552,11 +536,9 @@
   .status .ok { color: var(--ok); font-weight: 600; }
   .status .bad { color: var(--live); font-weight: 600; }
   .status .small { margin-left: auto; height: 28px; padding: 0 8px; font-size: var(--text-sm); }
-  .search { margin-bottom: 6px; }
   .models { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; max-height: 220px; overflow-y: auto; }
   .model { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-top: 1px solid var(--line); font-size: var(--text-control); cursor: default; }
   .model:first-child { border-top: 0; }
-  .model.other { margin-top: 6px; border: 1px solid var(--line); border-radius: 12px; }
   .model:hover { background: var(--sunken); }
   .model.on { background: var(--accent-soft); }
   .model.off { color: var(--ink-3); }
@@ -564,7 +546,7 @@
   .model input[type="radio"] { margin: 0; }
   .mname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .hint { margin-left: auto; flex: none; color: var(--ink-3); font-size: var(--text-xs); }
-  .model .typed { flex: 1; min-width: 0; height: 30px; }
+  .typed { margin-top: 6px; }
   .none { margin: 0; padding: 12px; color: var(--ink-2); font-size: var(--text-sm); }
   .also { display: flex; gap: 12px; align-items: flex-start; padding-top: 14px; border-top: 1px solid var(--line); }
   .also b { display: block; font-size: var(--text-control); font-weight: 600; }

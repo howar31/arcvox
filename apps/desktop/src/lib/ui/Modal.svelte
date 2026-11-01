@@ -49,17 +49,28 @@
     onclose?.();
   }
 
+  const tabbable = () => [...(box?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])].filter((el) => el.tabIndex >= 0);
+
   function onkeydown(e: KeyboardEvent) {
     // Escape during composition cancels the input method, not the dialog.
     if (e.key === "Escape" && !isImeKey(e)) { e.preventDefault(); dismiss(); return; }
-    if (e.key !== "Tab" || !box) return;
-    const items = [...box.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.tabIndex >= 0);
+    if (e.key !== "Tab") return;
+    const items = tabbable();
     if (!items.length) return;
     const first = items[0], last = items[items.length - 1];
     if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
     else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   }
+
+  /** The focused element went away with a step or a question: the keys stay with the dialog. */
+  function onstray(e: KeyboardEvent) {
+    if (!open || e.target !== document.body) return;
+    if (e.key === "Tab") { e.preventDefault(); tabbable()[0]?.focus(); }
+    else onkeydown(e);
+  }
 </script>
+
+<svelte:document onkeydown={onstray} />
 
 {#if open}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->

@@ -5,6 +5,7 @@
   import type { Snippet } from "svelte";
   import { onDestroy, tick } from "svelte";
   import { t } from "../i18n";
+  import { isImeKey } from "../ime";
   import { closed, HIDE_MS, opened, placeCard, showDelay } from "../tip";
   import Icon from "./Icon.svelte";
 
@@ -74,7 +75,9 @@
   }
 
   function onKey(e: KeyboardEvent) {
-    if (open && e.key === "Escape") close();
+    if (!open || e.key !== "Escape" || isImeKey(e)) return;
+    close();
+    e.stopPropagation();
   }
 
   // The card was moved under the body, out of the component's own nodes, so the component's removal
@@ -85,7 +88,7 @@
   });
 </script>
 
-<svelte:document onpointerdown={onDocumentDown} onkeydown={onKey} onscrollcapture={() => { if (open && !pinned) close(); }} />
+<svelte:document onpointerdown={onDocumentDown} onkeydowncapture={onKey} onscrollcapture={() => { if (open && !pinned) close(); }} />
 <svelte:window onresize={() => { if (open) place(); }} />
 
 <button

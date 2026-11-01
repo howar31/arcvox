@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { tick } from "svelte";
   import type { InstalledModel, ManifestView, ProviderConfig } from "../../../lib/api";
   import { t } from "../../../lib/i18n";
-  import { placeMenu, type Placement } from "../../../lib/popover";
+  import { wantsSearch } from "../../../lib/dropdown";
   import { engineDescription, engineGroups, engineKind, type Installed } from "../../../lib/stages";
-  import Icon from "../../../lib/ui/Icon.svelte";
+  import Dropdown from "../../../lib/ui/Dropdown.svelte";
+  import MenuOption from "../../../lib/ui/MenuOption.svelte";
   import Tag from "../../../lib/ui/Tag.svelte";
 
   /**
@@ -12,7 +12,7 @@
    * under it about the chosen one. `follow`, when given, adds a first choice that follows the default
    * engine (selected as ""); `none` adds a last choice that selects no engine (selected as null).
    */
-  let { engines, selected, onpick, label, manifest, installed, models = [], follow, none, stale, suggested, defaultId, onmanage }: {
+  let { engines, selected, onpick, label, manifest, installed, models = [], follow, none, stale, suggested, defaultId, onmanage, compact = false }: {
     engines: ProviderConfig[];
     selected: string | null;
     onpick: (id: string | null) => void;
@@ -32,19 +32,11 @@
     defaultId?: string | null;
     /** Opens the Engines page at this role. */
     onmanage?: () => void;
+    /** The smaller button, for a row of a group. */
+    compact?: boolean;
   } = $props();
 
-  // The list gets a search field from this many engines on.
-  const SEARCH_FROM = 9;
-
-  let open = $state(false);
   let query = $state("");
-  let root: HTMLDivElement | undefined = $state();
-  let button: HTMLButtonElement | undefined = $state();
-  let list: HTMLDivElement | undefined = $state();
-  // Where the open list sits in the window; null while its natural height is being measured.
-  let place = $state<Placement | null>(null);
-  let measuring = $state(false);
 
   const chosen = $derived(stale ? null : selected === "" || selected === null ? null : engines.find((p) => p.id === selected) ?? null);
   const chosenKind = $derived(chosen ? engineKind(chosen, installed) : null);
@@ -65,151 +57,69 @@
     return withKind && p.kind !== "http" ? kind.meta + " · " + what : what;
   }
   const groupName = (kind: ProviderConfig["kind"]) => t(kind === "embedded" ? "engines.local_models" : kind === "native" ? "engines.builtin" : "engines.external");
-  const options = () => [...(list?.querySelectorAll<HTMLButtonElement>("[role=option]") ?? [])];
-
-  async function show() {
-    query = "";
-    open = true;
-    // The list is measured at its final width before it is placed.
-    const anchor = button!.getBoundingClientRect();
-    const view = { width: window.innerWidth, height: window.innerHeight };
-    place = { ...placeMenu(anchor, 0, view), top: null, bottom: null };
-    measuring = true;
-    await tick();
-    if (list) place = placeMenu(anchor, list.offsetHeight, view);
-    measuring = false;
-    const field = list?.querySelector("input");
-    if (field) field.focus();
-    else (options().find((o) => o.getAttribute("aria-selected") === "true") ?? options()[0])?.focus();
-    list?.querySelector("[aria-selected=true]")?.scrollIntoView({ block: "nearest" });
-  }
-  function hide(refocus = true) {
-    if (!open) return;
-    open = false;
-    if (refocus) button?.focus();
-  }
-  /** The list is fixed in the window: a scroll elsewhere would leave it behind, so it closes. */
-  function onscroll(e: Event) {
-    if (list && e.target instanceof Node && list.contains(e.target)) return;
-    hide(false);
-  }
-  function pick(id: string | null) {
-    hide();
-    if (stale || id !== selected) onpick(id);
-  }
-  function onkeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") { hide(); e.stopPropagation(); return; }
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-    e.preventDefault();
-    const all = options();
-    if (all.length === 0) return;
-    const at = all.indexOf(document.activeElement as HTMLButtonElement);
-    const next = e.key === "ArrowDown" ? (at + 1) % all.length : at <= 0 ? all.length - 1 : at - 1;
-    all[next].focus();
-  }
-
-  $effect(() => {
-    if (!open) return;
-    const outside = (e: Event) => { if (root && !root.contains(e.target as Node)) hide(false); };
-    const blur = () => hide(false);
-    document.addEventListener("pointerdown", outside, true);
-    document.addEventListener("scroll", onscroll, true);
-    window.addEventListener("blur", blur);
-    window.addEventListener("resize", blur);
-    return () => {
-      document.removeEventListener("pointerdown", outside, true);
-      document.removeEventListener("scroll", onscroll, true);
-      window.removeEventListener("blur", blur);
-      window.removeEventListener("resize", blur);
-    };
-  });
 </script>
 
-<div class="picker" bind:this={root}>
-  <button type="button" class="current" bind:this={button} aria-haspopup="listbox" aria-expanded={open} aria-label={label + " " + name} onclick={() => (open ? hide() : show())}>
-    <span class="label">{name}</span>
-    {#if stale}<Tag tone="live">{t("home.not_found")}</Tag>
-    {:else if chosen && chosenKind?.reason}<Tag tone="warn">{t(chosenKind.reason === "encoder" ? "flow.engine_reason_encoder" : "flow.engine_reason_download")}</Tag>
-    {:else if chosen && chosen.id === suggested}<Tag tone="accent" title={t("flow.suggested_tip")}>{t("flow.suggested")}</Tag>{/if}
-    <span class="count">{t("flow.engine_count", { count: String(engines.length) })}</span>
-    <Icon name="chevron-down" size={14} />
-  </button>
-  <p class="help" class:warn={stale || chosenKind?.missing}>{help}</p>
-  {#if open}
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div
-      class="menu" bind:this={list} {onkeydown}
-      style:top={place?.top != null ? `${place.top}px` : null} style:bottom={place?.bottom != null ? `${place.bottom}px` : null}
-      style:left={place ? `${place.left}px` : null} style:width={place ? `${place.width}px` : null} style:max-height={place?.maxHeight != null ? `${place.maxHeight}px` : null}
-      style:visibility={measuring ? "hidden" : null}
-    >
-      {#if engines.length >= SEARCH_FROM}
-        <input type="search" bind:value={query} placeholder={t("engines.search")} aria-label={t("engines.search")} />
+<div class="picker" class:compact>
+  <Dropdown {label} large={!compact} bind:query search={wantsSearch(engines.length, true)} placeholder={t("engines.search")}>
+    {#snippet button()}
+      <span class="label">{name}</span>
+      {#if stale}<Tag tone="live">{t("home.not_found")}</Tag>
+      {:else}
+        {#if chosen && chosen.id === suggested}<Tag tone="accent" title={t("flow.suggested_tip")}>{t("flow.suggested")}</Tag>{/if}
+        {#if chosen && chosenKind?.reason}<Tag tone="warn">{t(chosenKind.reason === "encoder" ? "flow.engine_reason_encoder" : "flow.engine_reason_download")}</Tag>{/if}
       {/if}
-      <div class="options" role="listbox" aria-label={label}>
-        {#if follow && !query}
-          {@render option("", follow.name, follow.help, selected === "" && !stale)}
-        {/if}
-        {#each shown as g (g.kind)}
-          <div class="head">{groupName(g.kind)}</div>
-          {#each g.engines as p (p.id)}
-            {@const kind = engineKind(p, installed)}
-            {@render option(p.id, p.label, describe(p, kind, false), selected === p.id && !stale, p, kind.reason)}
-          {/each}
-        {:else}
-          {#if query}<p class="none">{t("engines.no_match")}</p>{/if}
+      <span class="count">{t("flow.engine_count", { count: String(engines.length) })}</span>
+    {/snippet}
+    {#snippet list(close)}
+      {#if follow && !query}
+        {@render option(close, "", follow.name, follow.help, selected === "" && !stale)}
+      {/if}
+      {#each shown as g (g.kind)}
+        <div class="head">{groupName(g.kind)}</div>
+        {#each g.engines as p (p.id)}
+          {@const kind = engineKind(p, installed)}
+          {@render option(close, p.id, p.label, describe(p, kind, false), selected === p.id && !stale, p, kind.reason)}
         {/each}
-        {#if none && !query}
-          <div class="rule"></div>
-          {@render option(null, none.name, none.help, selected === null && !stale)}
-        {/if}
-      </div>
-      <div class="foot">
-        <span>{t("flow.engine_count", { count: String(engines.length) })}</span>
-        {#if onmanage}<button type="button" class="btn quiet" onclick={() => { hide(); onmanage?.(); }}>{t("flow.manage")}</button>{/if}
-      </div>
-    </div>
-  {/if}
+      {:else}
+        {#if query}<p class="none">{t("engines.no_match")}</p>{/if}
+      {/each}
+      {#if none && !query}
+        <div class="rule"></div>
+        {@render option(close, null, none.name, none.help, selected === null && !stale)}
+      {/if}
+    {/snippet}
+    {#snippet foot(close)}
+      <span>{t("flow.engine_count", { count: String(engines.length) })}</span>
+      {#if onmanage}<button type="button" class="btn quiet" onclick={() => { close(); onmanage?.(); }}>{t("flow.manage")}</button>{/if}
+    {/snippet}
+  </Dropdown>
+  <p class="help" class:warn={stale || chosenKind?.missing}>{help}</p>
 </div>
 
-{#snippet option(id: string | null, text: string, small: string, on: boolean, p?: ProviderConfig, reason?: "download" | "encoder")}
-  <button type="button" class="option" class:on class:dim={reason} role="option" aria-selected={on} onclick={() => pick(id)}>
-    <span class="tick">{#if on}<Icon name="check" size={14} />{/if}</span>
-    <span class="text">
-      <span class="line">
-        <span class="label">{text}</span>
-        {#if p && p.id === suggested}<Tag tone="accent" title={t("flow.suggested_tip")}>{t("flow.suggested")}</Tag>{/if}
-        {#if p && p.id === defaultId}<Tag tone="ok">{t("engines.default_tag")}</Tag>{/if}
-        {#if p?.model_path}<Tag title={t("engines.tip.imported")}>{t("engines.tag.imported")}</Tag>{/if}
-        {#if reason}<Tag tone="warn">{t(reason === "encoder" ? "flow.engine_reason_encoder" : "flow.engine_reason_download")}</Tag>{/if}
-      </span>
-      <span class="where">{small}</span>
+{#snippet option(close: () => void, id: string | null, text: string, small: string, on: boolean, p?: ProviderConfig, reason?: "download" | "encoder")}
+  <MenuOption selected={on} onclick={() => { close(); if (stale || id !== selected) onpick(id); }}>
+    <span class="line" class:dim={reason}>
+      <span class="label">{text}</span>
+      {#if p && p.id === suggested}<Tag tone="accent" title={t("flow.suggested_tip")}>{t("flow.suggested")}</Tag>{/if}
+      {#if p && p.id === defaultId}<Tag tone="ok">{t("engines.default_tag")}</Tag>{/if}
+      {#if p?.model_path}<Tag title={t("engines.tip.imported")}>{t("engines.tag.imported")}</Tag>{/if}
+      {#if reason}<Tag tone="warn">{t(reason === "encoder" ? "flow.engine_reason_encoder" : "flow.engine_reason_download")}</Tag>{/if}
     </span>
-  </button>
+    <span class="where">{small}</span>
+  </MenuOption>
 {/snippet}
 
 <style>
-  .picker { position: relative; }
-  .current { display: flex; align-items: center; gap: 10px; width: 100%; height: 44px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font-size: var(--text); font-weight: 600; cursor: default; }
-  .current:hover, .current[aria-expanded="true"] { background: var(--sunken); }
+  .picker { min-width: 0; }
   .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .count { margin-left: auto; flex: none; color: var(--ink-3); font-size: var(--text-sm); font-weight: 400; white-space: nowrap; }
-  .current :global(svg) { flex: none; color: var(--ink-3); }
   .help { margin: 8px 4px 0; color: var(--ink-2); font-size: var(--text-sm); overflow-wrap: anywhere; }
   .help.warn { color: var(--warn); }
-  .menu { position: fixed; z-index: 20; display: flex; flex-direction: column; padding: 6px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); }
-  .menu input { flex: none; width: 100%; margin-bottom: 4px; }
-  .options { overflow-y: auto; overscroll-behavior: contain; min-height: 0; }
+  .compact .help { margin-top: 6px; font-size: var(--text-xs); }
   .head { padding: 10px 12px 4px; color: var(--ink-3); font-size: var(--text-xs); font-weight: 600; }
   .rule { height: 1px; margin: 6px 8px; background: var(--line); }
-  .option { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 7px 12px 7px 8px; border: 0; border-radius: 9px; background: none; color: var(--ink); text-align: left; font-size: var(--text-control); cursor: default; }
-  .option:hover, .option:focus-visible { background: var(--sunken); }
-  .option.on { background: var(--accent-soft); }
-  .option.dim .label { color: var(--ink-3); }
-  .tick { flex: none; width: 16px; height: 22px; display: grid; place-items: center; color: var(--accent); }
-  .text { min-width: 0; flex: 1; }
   .line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .line.dim .label { color: var(--ink-3); }
   .where { display: block; color: var(--ink-2); font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .none { margin: 0; padding: 12px; color: var(--ink-2); font-size: var(--text-sm); }
-  .foot { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px -6px -6px; padding: 4px 6px 4px 14px; border-top: 1px solid var(--line); background: var(--sunken); border-radius: 0 0 14px 14px; color: var(--ink-2); font-size: var(--text-sm); }
 </style>

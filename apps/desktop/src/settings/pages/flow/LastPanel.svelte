@@ -35,7 +35,7 @@
 </div>
 
 <style>
-  .body { margin: 0 16px; padding: 12px 6px 14px; }
+  .body { padding: 12px 14px; }
   .meta { margin: 8px 0 0; color: var(--ink-3); font-size: var(--text-xs); line-height: 1.5; }
   .failed { margin: 0; color: var(--warn); font-size: var(--text-sm); }
   /* A translation is shown whole, the text before it above in the quieter colour: a character diff across languages says nothing. */

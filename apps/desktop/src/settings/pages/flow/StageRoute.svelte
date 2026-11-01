@@ -20,22 +20,27 @@
     problem?: string;
     /** A module not enabled yet, shown where it would go until its enabling is confirmed. */
     ghost?: boolean;
+    /** The stage runs on an engine. */
+    engine?: boolean;
   }
 </script>
 
 <script lang="ts">
   /** The stages as stops on one line, from sound to text, with the selected stage summed up under it.
    * A last stop stands for the modules the profile has not enabled; it is gone when every module is enabled.
-   * The summary's last-run line opens the stage's text from the last run in the same card, under the route.
+   * Under the summary, in the same card, come the stage's engine and its last run, whose line opens the stage's text.
+   * Neighbouring modules share a band, so the stages that can be turned off read apart from the base ones.
    * Scrolled past, the route stays at the top of the page; the summary is cut off there so the stops take little room. */
   import { onMount, tick, type Snippet } from "svelte";
   import { cubicOut } from "svelte/easing";
   import Bang from "../../../lib/ui/Bang.svelte";
   import Fold from "../../../lib/ui/Fold.svelte";
   import Icon from "../../../lib/ui/Icon.svelte";
+  import { MODULE_IDS } from "../../../lib/flowLast";
   import { t } from "../../../lib/i18n";
+  import { tip } from "../../../lib/tip";
 
-  let { cells, selected, onpick, label, entry = "", meta = "", detail, stuckHeight = $bindable(0) }: {
+  let { cells, selected, onpick, label, entry = "", meta = "", detail, engine, stuckHeight = $bindable(0) }: {
     cells: Cell[]; selected: Pick; onpick: (id: Pick) => void; label: string;
     /** The name of the stop for the modules not enabled; "" when every module is enabled and the stop is not shown. */
     entry?: string;
@@ -43,6 +48,8 @@
     meta?: string;
     /** The selected stage's text from the last run; absent when the stage has none to show. */
     detail?: Snippet;
+    /** The selected stage's engine, under the summary; absent for a stage without one. */
+    engine?: Snippet;
     /** The height the route takes at the top of the page while stuck. */
     stuckHeight?: number;
   } = $props();
@@ -64,7 +71,17 @@
   let closing = $state(false);
   let wasOpen = false;
   $effect.pre(() => { if (wasOpen && !open) closing = true; wasOpen = open; });
-  const joined = $derived(open || closing);
+  const ran = $derived(!!current && !!(current.line || current.time));
+  const joined = $derived(open || closing || engine !== undefined || ran);
+
+  const isModule = (i: number) => i >= 0 && i < cells.length && MODULE_IDS.includes(cells[i].id);
+  /** Where a stop sits in its run of neighbouring modules; null for a base stage. */
+  function run(i: number): { first: boolean; last: boolean; length: number } | null {
+    if (!isModule(i)) return null;
+    let length = 1;
+    while (isModule(i + length)) length++;
+    return { first: !isModule(i - 1), last: !isModule(i + 1), length };
+  }
 
   // While stops open or close, every name keeps the width it has once they have settled, so no name wraps
   // differently on the way and the route's height stays put. Stops share the row equally, 2 of padding a side.
@@ -132,12 +149,14 @@
   <div class="route" class:joined>
     <div class="stops" role="tablist" aria-label={label}>
       {#each cells as c, i (c.id)}
+        {@const band = run(i)}
         <button
           type="button" class="stop" class:on={selected === c.id} class:ghost={c.ghost} class:start={i === 0} class:end={!entry && i === cells.length - 1}
           role="tab" aria-selected={selected === c.id} aria-disabled={c.ghost} tabindex={c.ghost ? -1 : null} onclick={() => { if (!c.ghost) pick(c.id); }}
           in:grow out:grow onintroend={settle} onoutroend={settle}
         >
-          <span class="dot">{i + 1}{#if c.problem}<span class="bang"><Bang tone="warn" title={c.problem} /></span>{/if}</span>
+          {#if band}<span class="band" class:run-start={band.first} class:run-end={band.last}>{#if band.first}<span class="band-name" style:--run={band.length}>{t("flow.modules")}</span>{/if}</span>{/if}
+          <span class="dot">{i + 1}{#if c.problem}<span class="bang"><Bang tone="warn" title={c.problem} /></span>{/if}{#if c.engine}<span class="motor" use:tip={t("flow.uses_engine")}><span class="halo"><Icon name="engines" size={14} /></span><Icon name="engines" size={14} /></span>{/if}</span>
           <span class="name">{c.name}</span>
         </button>
       {/each}
@@ -150,15 +169,7 @@
     </div>
     <div class="summary" bind:offsetHeight={summaryHeight} aria-hidden={stuck}>
       {#if current}
-        <span class="what"><b>{current.name}</b><span class:warn={current.warn} class:unknown={current.unknown}>{meta || current.setting}</span></span>
-        {#if detail}
-          <button type="button" class="last toggle" aria-expanded={open} onclick={() => (opened = !open)}>
-            <span>{current.line}{#if current.time}<em>{t("flow.panel.sep")}{current.time}</em>{/if}</span>
-            <span class="chev" class:open><Icon name="chevron-down" size={14} /></span>
-          </button>
-        {:else}
-          <span class="last">{current.line}{#if current.time}<em>{t("flow.panel.sep")}{current.time}</em>{/if}</span>
-        {/if}
+        <span class="what"><b>{current.name}</b>{#if !engine}<span class:warn={current.warn} class:unknown={current.unknown}>{meta || current.setting}</span>{/if}</span>
       {:else}
         <span class="what"><b>{entry}</b></span>
       {/if}
@@ -166,7 +177,18 @@
   </div>
 </div>
 <!-- The card's lower edge, outside the sticky box: the stage's text opens here and scrolls away under the stuck route. -->
-{#if joined}<div class="foot">{#if open && detail}<Fold onoutroend={() => (closing = false)}>{@render detail()}</Fold>{/if}</div>{/if}
+{#if joined}<div class="foot">
+  {#if engine}<div class="choice">{@render engine()}</div>{/if}
+  {#if ran && current}
+    {#snippet runLine()}<span class="run-name">{t("flow.last")}</span><span class="run-line">{current.line}{#if current.time}<em>{current.line ? t("flow.panel.sep") : ""}{current.time}</em>{/if}</span>{/snippet}
+    {#if detail}
+      <button type="button" class="run" aria-expanded={open} onclick={() => (opened = !open)}>{@render runLine()}<span class="chev" class:open><Icon name="chevron-down" size={14} /></span></button>
+    {:else}
+      <div class="run">{@render runLine()}</div>
+    {/if}
+  {/if}
+  {#if open && detail}<Fold onoutroend={() => (closing = false)}><div class="text">{@render detail()}</div></Fold>{/if}
+</div>{/if}
 
 <style>
   /* Sits where the sticky box starts, 16 above the route, so it leaves the view the moment the box sticks. */
@@ -178,14 +200,23 @@
   .stick.stuck { background: var(--page); padding-bottom: 10px; margin-bottom: calc(var(--cut) - 10px); box-shadow: 0 6px 14px rgba(0, 0, 0, .06); }
   /* Out of the flow but still laid out, so its height stays measured. */
   .stick.stuck .summary { position: absolute; visibility: hidden; }
-  .route { pointer-events: auto; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-group); padding: 16px 12px 0; }
+  .route { pointer-events: auto; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-group); padding: 30px 12px 0; }
   /* With the text open the card goes on in the foot below (1 up, under the route's transparent lower border), so
-     its lower border is the foot's; the summary draws the line between the two. Stuck the route closes on its own. */
+     its lower border is the foot's. Stuck the route closes on its own. */
   .stick:not(.stuck) .route.joined { border-bottom-color: transparent; border-radius: var(--radius-group) var(--radius-group) 0 0; }
-  .route.joined .summary { box-shadow: 0 1px 0 var(--line); }
-  .foot { margin-top: -1px; background: var(--surface); border: 1px solid var(--line); border-top: 0; border-radius: 0 0 var(--radius-group) var(--radius-group); }
+  .route.joined .summary { padding-bottom: 6px; }
+  .choice { padding: 1px 21px 6px; }
+  /* The last run: its line right above the text it opens. */
+  .run { display: flex; align-items: center; gap: 10px; width: calc(100% - 42px); margin: 0 21px; padding: 6px 1px 12px; border: 0; background: none; color: var(--ink-2); font: inherit; font-size: var(--text-sm); text-align: left; cursor: default; }
+  button.run:hover .run-name { color: var(--ink); }
+  .run-name { flex: none; font-weight: 600; }
+  .run-line { flex: 1; min-width: 0; }
+  .run-line em { font-style: normal; color: var(--ink-3); }
+  .text { margin: 0 21px 14px; border-radius: 10px; background: var(--sunken); }
+  /* 1 of room at the top: the route overlaps the foot by a pixel. */
+  .foot { margin-top: -1px; padding-top: 1px; background: var(--surface); border: 1px solid var(--line); border-top: 0; border-radius: 0 0 var(--radius-group) var(--radius-group); }
   .stops { display: flex; }
-  .stop { position: relative; flex: 1 1 0; display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; padding: 0 2px 12px; border: 0; background: none; color: var(--ink-2); font-size: var(--text-xs); line-height: 1.3; text-align: center; cursor: default; }
+  .stop { position: relative; flex: 1 1 0; display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; padding: 0 2px 14px; border: 0; background: none; color: var(--ink-2); font-size: var(--text-xs); line-height: 1.3; text-align: center; cursor: default; }
   .stop:focus-visible { outline-offset: 2px; border-radius: 8px; }
   /* The line through the stops: each stop draws the halves to its neighbours, so a stop opening or closing carries its part. */
   .stop::before, .stop::after { content: ""; position: absolute; top: 13px; width: 50%; height: 2px; background: var(--line-strong); }
@@ -197,6 +228,7 @@
   .stop.on { color: var(--ink); font-weight: 600; }
   .stop.on .dot { background: var(--accent); color: var(--accent-ink); box-shadow: 0 0 0 4px var(--accent-soft); }
   .stop.add .dot { background: var(--surface); border: 1.5px dashed var(--line-strong); color: var(--ink-3); }
+  .stop.add:hover .dot { background: color-mix(in srgb, var(--accent) 12%, var(--sunken)); }
   .stop.add.on .dot { border-color: var(--accent); color: var(--accent); box-shadow: none; }
   /* Where a module would go: a dashed ring and name in the accent colour, pulsing slowly, with dashed halves of the line. */
   .stop.ghost { color: var(--accent); }
@@ -205,17 +237,26 @@
   @keyframes pending { 0%, 100% { box-shadow: 0 0 0 0 var(--accent-soft); } 50% { box-shadow: 0 0 0 6px var(--accent-soft); } }
   @media (prefers-reduced-motion: reduce) { .stop.ghost .dot { animation: none; } }
   .bang { position: absolute; top: -6px; right: -9px; }
+  /* The band hangs behind the stop, the line and the dot on top of it; a run's name spans the run from its first stop. */
+  .band { position: absolute; inset: -23px 0 4px; background: color-mix(in srgb, var(--accent) 7%, transparent); pointer-events: none; }
+  .band.run-start { border-radius: 12px 0 0 12px; }
+  .band.run-end { border-radius: 0 12px 12px 0; }
+  .band.run-start.run-end { border-radius: 12px; }
+  .band-name { position: absolute; left: 0; top: 4px; width: calc(var(--run) * 100%); color: var(--ink-3); font-size: 11px; font-weight: 400; line-height: 1.2; text-align: center; white-space: nowrap; }
+  /* The icon over a thick copy of itself: the margin follows the drawing's outline, and the dot does not show through. */
+  .motor { position: absolute; right: -8px; bottom: -6px; display: grid; color: var(--ink-2); }
+  .motor > :global(*) { grid-area: 1 / 1; }
+  .motor .halo { display: block; height: 14px; }
+  .motor :global(svg) { overflow: visible; }
+  .motor .halo :global(svg) { fill: var(--sunken); stroke: var(--sunken); stroke-width: 4.6; }
+  .stop.on .motor { color: var(--accent); }
   .name { max-width: 100%; overflow-wrap: anywhere; hyphens: auto; }
-  .summary { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin: 0 4px; padding: 10px 6px 12px; border-top: 1px solid var(--line); font-size: var(--text-sm); }
+  .summary { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin: 0 4px; padding: 10px 6px 12px; font-size: var(--text-sm); }
   .what { display: flex; flex-direction: column; min-width: 0; }
   .what b { font-size: var(--text); }
   .what span { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .what span.warn { color: var(--warn); }
   .what span.unknown { color: var(--live); }
-  .last { flex: none; max-width: 50%; color: var(--ink-2); text-align: right; }
-  .last em { font-style: normal; color: var(--ink-3); }
-  .toggle { display: flex; align-items: center; gap: 10px; margin: -4px -6px; padding: 4px 6px; border: 0; border-radius: 8px; background: none; font: inherit; cursor: default; }
-  .toggle:hover { background: var(--sunken); }
   .chev { flex: none; display: inline-flex; color: var(--ink-3); transition: transform .15s; }
   .chev.open { transform: rotate(180deg); }
 </style>

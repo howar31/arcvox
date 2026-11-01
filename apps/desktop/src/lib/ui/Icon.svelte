@@ -4,7 +4,7 @@
     home: '<path d="M3 13V8M6.5 13V3.5M10 13V9.5M13.5 13V6"/>',
     flow: '<rect x="1.5" y="5.5" width="3.4" height="5" rx="1"/><rect x="6.3" y="5.5" width="3.4" height="5" rx="1"/><rect x="11.1" y="5.5" width="3.4" height="5" rx="1"/>',
     profiles: '<rect x="2.5" y="3" width="11" height="10" rx="2"/><path d="M5.5 6.5h5M5.5 9.5h3"/>',
-    engines: '<rect x="3" y="3" width="10" height="10" rx="2"/><path d="M6 1.5v1.5M10 1.5v1.5M6 13v1.5M10 13v1.5M1.5 6h1.5M1.5 10h1.5M13 6h1.5M13 10h1.5"/>',
+    engines: '<path d="M5 3h5M7.5 3v2"/><path d="M3.5 5h7l2 2.2H15v4.6h-2.5l-2 1.7h-5l-2-2.5H1V7.2h2.5z"/>',
     dictionary: '<path d="M3.5 2.5h7a2 2 0 0 1 2 2v9h-7a2 2 0 0 1-2-2z"/><path d="M6 6h4M6 8.5h2.5"/>',
     prompt: '<path d="M3 4h10M3 8h10M3 12h6"/>',
     history: '<circle cx="8" cy="8" r="5.5"/><path d="M8 5v3l2 1.5"/>',

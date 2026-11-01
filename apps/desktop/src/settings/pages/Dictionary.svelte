@@ -14,6 +14,7 @@
   import Icon from "../../lib/ui/Icon.svelte";
   import InfoTip from "../../lib/ui/InfoTip.svelte";
   import PageHead from "../../lib/ui/PageHead.svelte";
+  import Select from "../../lib/ui/Select.svelte";
   import SaveBar from "../../lib/ui/SaveBar.svelte";
   import Segmented from "../../lib/ui/Segmented.svelte";
   import StickyBar from "../../lib/ui/StickyBar.svelte";
@@ -328,9 +329,7 @@
     <div class="bar">
       <label class="search"><Icon name="search" /><input type="search" bind:value={query} placeholder={searchHint} aria-label={searchHint} onkeydown={searchKey} /></label>
       {#if tab === "terms"}
-        <select class="sort" value={sort} onchange={(e) => setSort(e.currentTarget.value as Sort)} aria-label={t("dictionary.sort")}>
-          {#each SORTS as s (s)}<option value={s}>{t(`dictionary.sort_${s}`)}</option>{/each}
-        </select>
+        <Select width="170px" label={t("dictionary.sort")} value={sort} onchange={(v) => setSort(v as Sort)} options={SORTS.map((s) => ({ value: s, label: t(`dictionary.sort_${s}`) }))} />
         <span class="views" role="group" aria-label={t("dictionary.view_cards")}>
           {#each VIEWS as v (v)}
             <button type="button" class:on={view === v} aria-pressed={view === v} use:tip={t(`dictionary.view_${v}`)} onclick={() => setView(v)}><Icon name={`view-${v}`} size={16} /></button>
@@ -469,7 +468,6 @@
   .bar { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
   .search { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: var(--control); padding: 0 10px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); color: var(--ink-3); }
   .search input { flex: 1; min-width: 0; height: 100%; border: 0; background: none; padding: 0; font-size: var(--text-control); }
-  .sort { height: var(--control); flex: none; }
   .views { display: inline-flex; padding: 3px; gap: 2px; border-radius: var(--radius); background: var(--sunken); flex: none; }
   .views button { display: inline-grid; place-items: center; width: 30px; height: 26px; border: 0; border-radius: 7px; background: none; color: var(--ink-2); cursor: default; }
   .views button.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }

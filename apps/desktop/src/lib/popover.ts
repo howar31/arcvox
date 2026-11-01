@@ -21,13 +21,15 @@ const MARGIN = 8;
  * scrolls inside.
  */
 export function placeMenu(anchor: Anchor, need: number, viewport: { width: number; height: number }, minWidth = 0): Placement {
-  const below = viewport.height - anchor.bottom - GAP - MARGIN;
-  const above = anchor.top - GAP - MARGIN;
+  // A button scrolled out of the window leaves the list at the window's edge.
+  const most = viewport.height - 2 * MARGIN;
+  const below = Math.min(viewport.height - anchor.bottom - GAP - MARGIN, most);
+  const above = Math.min(anchor.top - GAP - MARGIN, most);
   const width = Math.min(Math.max(anchor.width, minWidth), viewport.width - anchor.left - MARGIN);
   if (need <= below || below >= above) {
-    return { top: anchor.bottom + GAP, bottom: null, left: anchor.left, width, maxHeight: need <= below ? null : Math.max(below, 0) };
+    return { top: Math.max(anchor.bottom + GAP, MARGIN), bottom: null, left: anchor.left, width, maxHeight: need <= below ? null : Math.max(below, 0) };
   }
-  return { top: null, bottom: viewport.height - anchor.top + GAP, left: anchor.left, width, maxHeight: need <= above ? null : above };
+  return { top: null, bottom: Math.max(viewport.height - anchor.top + GAP, MARGIN), left: anchor.left, width, maxHeight: need <= above ? null : above };
 }
 
 /**

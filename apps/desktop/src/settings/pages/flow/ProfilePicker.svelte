@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { tick } from "svelte";
   import type { Profile } from "../../../lib/api";
   import { t } from "../../../lib/i18n";
-  import { placeMenu, type Placement } from "../../../lib/popover";
+  import { wantsSearch } from "../../../lib/dropdown";
   import { tip } from "../../../lib/tip";
   import Icon from "../../../lib/ui/Icon.svelte";
   import Bang from "../../../lib/ui/Bang.svelte";
+  import Dropdown from "../../../lib/ui/Dropdown.svelte";
+  import MenuOption from "../../../lib/ui/MenuOption.svelte";
   import Tag from "../../../lib/ui/Tag.svelte";
 
   /** The profile being edited, as a button that opens the list of all profiles. */
@@ -26,17 +27,7 @@
     moved?: Set<string>;
   } = $props();
 
-  // The list gets a search field from this many profiles on.
-  const SEARCH_FROM = 9;
-
-  let open = $state(false);
   let query = $state("");
-  let root: HTMLDivElement | undefined = $state();
-  let button: HTMLButtonElement | undefined = $state();
-  let list: HTMLDivElement | undefined = $state();
-  // Where the open list sits in the window; null while its natural height is being measured.
-  let place = $state<Placement | null>(null);
-  let measuring = $state(false);
 
   const isDefault = $derived(profiles.find((p) => p.id === current)?.is_default ?? false);
   const shown = $derived.by(() => {
@@ -44,130 +35,45 @@
     return q ? profiles.filter((p) => (p.name + " " + applies(p)).toLowerCase().includes(q)) : profiles;
   });
 
-  const options = () => [...(list?.querySelectorAll<HTMLButtonElement>("[role=option]") ?? [])];
-
-  async function show() {
-    query = "";
-    open = true;
-    // The list is measured at its final width before it is placed.
-    const anchor = button!.getBoundingClientRect();
-    const view = { width: window.innerWidth, height: window.innerHeight };
-    place = { ...placeMenu(anchor, 0, view, 420), top: null, bottom: null };
-    measuring = true;
-    await tick();
-    if (list) place = placeMenu(anchor, list.offsetHeight, view, 420);
-    measuring = false;
-    const field = list?.querySelector("input");
-    if (field) field.focus();
-    else (options().find((o) => o.getAttribute("aria-selected") === "true") ?? options()[0])?.focus();
-    list?.querySelector("[aria-selected=true]")?.scrollIntoView({ block: "nearest" });
-  }
-  function hide(refocus = true) {
-    if (!open) return;
-    open = false;
-    if (refocus) button?.focus();
-  }
-  /** The list is fixed in the window: a scroll elsewhere would leave it behind, so it closes. */
-  function onscroll(e: Event) {
-    if (list && e.target instanceof Node && list.contains(e.target)) return;
-    hide(false);
-  }
-  function pick(id: string) {
-    hide();
-    if (id !== current) onpick(id);
-  }
-  function onkeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") { hide(); e.stopPropagation(); return; }
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-    e.preventDefault();
-    const all = options();
-    if (all.length === 0) return;
-    const at = all.indexOf(document.activeElement as HTMLButtonElement);
-    const next = e.key === "ArrowDown" ? (at + 1) % all.length : at <= 0 ? all.length - 1 : at - 1;
-    all[next].focus();
-  }
-
-  $effect(() => {
-    if (!open) return;
-    const outside = (e: Event) => { if (root && !root.contains(e.target as Node)) hide(false); };
-    const blur = () => hide(false);
-    document.addEventListener("pointerdown", outside, true);
-    document.addEventListener("scroll", onscroll, true);
-    window.addEventListener("blur", blur);
-    window.addEventListener("resize", blur);
-    return () => {
-      document.removeEventListener("pointerdown", outside, true);
-      document.removeEventListener("scroll", onscroll, true);
-      window.removeEventListener("blur", blur);
-      window.removeEventListener("resize", blur);
-    };
-  });
 </script>
 
-<div class="picker" bind:this={root}>
-  <button type="button" class="current" bind:this={button} aria-haspopup="listbox" aria-expanded={open} aria-label={t("flow.profiles") + " " + name} onclick={() => (open ? hide() : show())}>
-    <span class="label" use:tip={name}>{name}</span>
-    {#if isDefault}<Tag tone="accent">{t("profiles.default")}</Tag>{/if}
-    <!-- The closed list says, beside its count, when any profile in it runs on the default engine or keeps a style its template has moved past. -->
-    <span class="count">{#if faulty.size > 0 || moved.size > 0}<Bang tone="warn" title={[faulty.size > 0 ? t("flow.profiles_fallback", { count: String(faulty.size) }) : "", moved.size > 0 ? t("flow.profiles_style_moved", { count: String(moved.size) }) : ""].filter(Boolean).join(" ")} />{/if}{t("flow.count", { count: String(profiles.length) })}</span>
-    <Icon name="chevron-down" size={14} />
-  </button>
-  {#if open}
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div
-      class="menu" bind:this={list} {onkeydown}
-      style:top={place?.top != null ? `${place.top}px` : null} style:bottom={place?.bottom != null ? `${place.bottom}px` : null}
-      style:left={place ? `${place.left}px` : null} style:width={place ? `${place.width}px` : null} style:max-height={place?.maxHeight != null ? `${place.maxHeight}px` : null}
-      style:visibility={measuring ? "hidden" : null}
-    >
-      {#if profiles.length >= SEARCH_FROM}
-        <input type="search" bind:value={query} placeholder={t("flow.search")} aria-label={t("flow.search")} />
-      {/if}
-      <div class="options" role="listbox" aria-label={t("flow.profiles")}>
-        {#each shown as p (p.id)}
-          <button type="button" class="option" class:on={p.id === current} role="option" aria-selected={p.id === current} onclick={() => pick(p.id)}>
-            <span class="tick">{#if p.id === current}<Icon name="check" size={14} />{/if}</span>
-            <span class="text">
-              <span class="line"><span class="label">{p.id === current ? name : p.name}</span>{#if p.is_default}<Tag tone="accent">{t("profiles.default")}</Tag>{/if}{#if faulty.has(p.id)}<Bang tone="warn" title={t("flow.profile_fallback")} />{:else if moved.has(p.id)}<Bang tone="warn" title={t("flow.style_moved")} />{/if}</span>
-              <span class="where">{applies(p)}</span>
-            </span>
-          </button>
-        {:else}
-          <p class="none">{t("flow.no_match")}</p>
-        {/each}
-      </div>
-      <div class="foot">
-        <span>{t("flow.count", { count: String(profiles.length) })}</span>
-        <span class="acts">
-          <button type="button" class="btn quiet" onclick={() => { hide(); onadd(); }}><Icon name="plus" size={14} />{t("flow.add")}</button>
-          <button type="button" class="btn quiet" onclick={() => { hide(); onmanage(); }}>{t("flow.manage_profiles")}</button>
-        </span>
-      </div>
-    </div>
-  {/if}
+<div class="picker">
+  <Dropdown label={t("flow.profiles") + " " + name} large minWidth={420} bind:query search={wantsSearch(profiles.length, true)} placeholder={t("flow.search")}>
+    {#snippet button()}
+      <span class="label" use:tip={name}>{name}</span>
+      {#if isDefault}<Tag tone="accent">{t("profiles.default")}</Tag>{/if}
+      <!-- The closed list says, beside its count, when any profile in it runs on the default engine or keeps a style its template has moved past. -->
+      <span class="count">{#if faulty.size > 0 || moved.size > 0}<Bang tone="warn" title={[faulty.size > 0 ? t("flow.profiles_fallback", { count: String(faulty.size) }) : "", moved.size > 0 ? t("flow.profiles_style_moved", { count: String(moved.size) }) : ""].filter(Boolean).join(" ")} />{/if}{t("flow.count", { count: String(profiles.length) })}</span>
+    {/snippet}
+    {#snippet list(close)}
+      {#each shown as p (p.id)}
+        <MenuOption selected={p.id === current} onclick={() => { close(); if (p.id !== current) onpick(p.id); }}>
+          <span class="line"><span class="label">{p.id === current ? name : p.name}</span>{#if p.is_default}<Tag tone="accent">{t("profiles.default")}</Tag>{/if}{#if faulty.has(p.id)}<Bang tone="warn" title={t("flow.profile_fallback")} />{:else if moved.has(p.id)}<Bang tone="warn" title={t("flow.style_moved")} />{/if}</span>
+          <span class="where">{applies(p)}</span>
+        </MenuOption>
+      {:else}
+        <p class="none">{t("flow.no_match")}</p>
+      {/each}
+    {/snippet}
+    {#snippet foot(close)}
+      <span>{t("flow.count", { count: String(profiles.length) })}</span>
+      <span class="acts">
+        <button type="button" class="btn quiet" onclick={() => { close(); onadd(); }}><Icon name="plus" size={14} />{t("flow.add")}</button>
+        <button type="button" class="btn quiet" onclick={() => { close(); onmanage(); }}>{t("flow.manage_profiles")}</button>
+      </span>
+    {/snippet}
+  </Dropdown>
 </div>
 
 <style>
-  .picker { position: relative; flex: 1 1 auto; min-width: 0; }
-  .current { display: flex; align-items: center; gap: 10px; width: 100%; height: 44px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font-size: var(--text); font-weight: 600; cursor: default; }
-  .current:hover, .current[aria-expanded="true"] { background: var(--sunken); }
+  .picker { flex: 1 1 auto; min-width: 0; }
   .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .count { display: inline-flex; align-items: center; gap: 7px; margin-left: auto; flex: none; color: var(--ink-3); font-size: var(--text-sm); font-weight: 400; white-space: nowrap; }
-  .current :global(svg) { flex: none; color: var(--ink-3); }
-  .menu { position: fixed; z-index: 20; display: flex; flex-direction: column; padding: 6px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); }
-  .menu input { flex: none; width: 100%; margin-bottom: 4px; }
-  .options { overflow-y: auto; overscroll-behavior: contain; min-height: 0; }
-  .option { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 8px 12px 8px 8px; border: 0; border-radius: 9px; background: none; color: var(--ink); text-align: left; font-size: var(--text-control); cursor: default; }
-  .option:hover, .option:focus-visible { background: var(--sunken); }
-  .option.on { background: var(--accent-soft); }
-  .tick { flex: none; width: 16px; height: 22px; display: grid; place-items: center; color: var(--accent); }
-  .text { min-width: 0; flex: 1; }
   /* A long name wraps in the list; the tag and the mark stay beside its first line. */
   .line { display: flex; align-items: flex-start; gap: 8px; }
   .line .label { white-space: normal; overflow-wrap: anywhere; padding-top: 1px; }
   .line :global(.bang) { margin-top: 4px; }
   .where { display: block; color: var(--ink-2); font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .none { margin: 0; padding: 12px; color: var(--ink-2); font-size: var(--text-sm); }
-  .foot .acts { display: flex; gap: 2px; }
-  .foot { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px -6px -6px; padding: 4px 6px 4px 14px; border-top: 1px solid var(--line); background: var(--sunken); border-radius: 0 0 14px 14px; color: var(--ink-2); font-size: var(--text-sm); }
+  .acts { display: flex; gap: 2px; }
 </style>

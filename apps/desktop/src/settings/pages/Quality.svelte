@@ -13,6 +13,7 @@
   import Group from "../../lib/ui/Group.svelte";
   import NumberField from "../../lib/ui/NumberField.svelte";
   import PageHead from "../../lib/ui/PageHead.svelte";
+  import Select from "../../lib/ui/Select.svelte";
   import Row from "../../lib/ui/Row.svelte";
   import Segmented from "../../lib/ui/Segmented.svelte";
   import Tag from "../../lib/ui/Tag.svelte";
@@ -223,9 +224,7 @@
         <Segmented options={[{ value: "asr", label: t("quality.stage.asr") }, { value: "llm", label: t("quality.stage.llm") }, { value: "full", label: t("quality.stage.full") }]} bind:value={quality.stage} label={t("quality.stage")} />
       </Row>
       <Row label={t("quality.profile")} help={t("quality.profile_help")} reset={resets.profile}>
-        <select class="field" bind:value={() => profile?.id ?? "", (v) => (quality.profile = v)} aria-label={t("quality.profile")} disabled={running}>
-          {#each profiles as p (p.id)}<option value={p.id}>{p.name}</option>{/each}
-        </select>
+        <Select variable label={t("quality.profile")} disabled={running} value={profile?.id ?? ""} onchange={(v) => (quality.profile = v)} options={profiles.map((p) => ({ value: p.id, label: p.name }))} />
       </Row>
     </Group>
 
@@ -270,7 +269,6 @@
   .subhead { padding: 12px var(--row-x) 0; font-size: var(--text-sm); font-weight: 600; color: var(--ink-2); }
   .check { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; }
   .check span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .field { width: 240px; flex: none; }
   .run { display: flex; align-items: center; gap: 10px; margin-top: 18px; }
   .caution { flex: 1; min-width: 0; }
   .prog { height: 6px; border-radius: 3px; background: var(--sunken); overflow: hidden; margin: 0 var(--row-x) 14px; }

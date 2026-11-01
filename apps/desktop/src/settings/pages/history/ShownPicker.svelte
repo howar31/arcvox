@@ -62,9 +62,9 @@
   .pbtn.set { border-color: var(--accent); color: var(--accent); font-weight: 600; }
   .pbtn :global(svg) { color: var(--ink-3); }
   .pop { position: absolute; top: calc(100% + 8px); right: 0; z-index: 20; display: flex; flex-direction: column; min-width: 184px; padding: 6px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); box-shadow: 0 10px 30px rgba(0,0,0,.14), var(--lift); color: var(--ink); }
-  .pop button { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px 0 6px; border: 0; border-radius: 8px; background: none; color: var(--ink); font-size: var(--text-control); text-align: left; white-space: nowrap; cursor: default; }
+  .pop button { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px 0 6px; border: 0; border-radius: 9px; background: none; color: var(--ink); font-size: var(--text-control); text-align: left; white-space: nowrap; cursor: default; }
   .pop button:hover { background: var(--sunken); }
-  .pop button.on { font-weight: 600; }
+  .pop button.on { background: var(--accent-soft); }
   .mark { width: 18px; flex: none; display: inline-grid; place-items: center; color: var(--accent); }
   hr { border: 0; border-top: 1px solid var(--line); margin: 5px 4px; }
 </style>

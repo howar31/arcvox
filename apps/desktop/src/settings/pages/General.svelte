@@ -15,6 +15,7 @@
   import Fold from "../../lib/ui/Fold.svelte";
   import Group from "../../lib/ui/Group.svelte";
   import Row from "../../lib/ui/Row.svelte";
+  import Select from "../../lib/ui/Select.svelte";
   import Ring from "../../lib/ui/Ring.svelte";
   import Tag from "../../lib/ui/Tag.svelte";
   import Segmented from "../../lib/ui/Segmented.svelte";
@@ -414,13 +415,14 @@
         <Segmented options={sizes} bind:value={draft.widget_size} label={t("general.widget_size")} />
       </Row>
       <Row label={t("general.widget_display")} help={t("general.widget_display_help")} reset={resets.display}>
-        <select class="wide" value={draft.widget_display ?? ""} onchange={(e) => { draft!.widget_display = e.currentTarget.value || null; }} aria-label={t("general.widget_display")}>
-          <option value="">{t("general.widget_display_pointer")}</option>
-          {#each displays as d (d.key)}<option value={d.key}>{d.name}</option>{/each}
-          {#if draft.widget_display && !displays.some((d) => d.key === draft!.widget_display)}
-            <option value={draft.widget_display}>{t("general.widget_display_missing", { name: draft.widget_display })}</option>
-          {/if}
-        </select>
+        <Select
+          variable label={t("general.widget_display")} value={draft.widget_display ?? ""} onchange={(v) => { draft!.widget_display = v || null; }}
+          options={[
+            { value: "", label: t("general.widget_display_pointer") },
+            ...displays.map((d) => ({ value: d.key, label: d.name })),
+            ...(draft.widget_display && !displays.some((d) => d.key === draft!.widget_display) ? [{ value: draft.widget_display, label: t("general.widget_display_missing", { name: draft.widget_display }) }] : []),
+          ]}
+        />
       </Row>
       <Row label={t("general.widget_idle")} reset={resets.idle}>
         <Segmented options={idles} bind:value={draft.widget_idle} label={t("general.widget_idle")} />
@@ -490,12 +492,15 @@
 
     <Group title={t("general.microphone")} onreset={together([resets.mic])}>
       <Row label={t("general.input_device")} reset={resets.mic}>
-        <select class="wide" bind:value={draft.microphone} aria-label={t("general.input_device")}>
-          <option value="builtin">{t("general.mic_builtin")}</option>
-          <option value="default">{t("general.mic_default")}</option>
-          {#each mics as m (m)}<option value={m}>{m}</option>{/each}
-          {#if micAbsent}<option value={draft.microphone} disabled>{draft.microphone}</option>{/if}
-        </select>
+        <Select
+          variable label={t("general.input_device")} value={draft.microphone} onchange={(v) => { draft!.microphone = v; }}
+          options={[
+            { value: "builtin", label: t("general.mic_builtin") },
+            { value: "default", label: t("general.mic_default") },
+            ...mics.map((m) => ({ value: m, label: m })),
+            ...(micAbsent ? [{ value: draft.microphone, label: draft.microphone, disabled: true }] : []),
+          ]}
+        />
       </Row>
     </Group>
 
@@ -646,7 +651,6 @@
   .folder-actions { display: flex; align-items: center; gap: 8px; flex: none; }
   .folder .sub { display: block; margin-top: 6px; color: var(--ink-2); font-size: var(--text-sm); overflow-wrap: anywhere; }
   /* The selects of the value column share one width. */
-  .wide { width: 240px; }
   .bundle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .icon-btn { width: var(--control); padding: 0; margin-right: -8px; color: var(--ink-2); }
   .icon-btn:hover { color: var(--ink); }

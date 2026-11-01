@@ -22,6 +22,12 @@ describe("placeMenu", () => {
     expect(p.bottom).toBe(306);
     expect(p.maxHeight).toBe(500 - 14);
   });
+  it("keeps the list in the window when the button has scrolled out of it", () => {
+    const up = placeMenu({ top: -200, bottom: -156, left: 300, width: 500 }, 300, view);
+    expect(up).toEqual({ top: 8, bottom: null, left: 300, width: 500, maxHeight: null });
+    const down = placeMenu({ top: 1000, bottom: 1044, left: 300, width: 500 }, 300, view);
+    expect(down).toEqual({ top: null, bottom: 8, left: 300, width: 500, maxHeight: null });
+  });
   it("widens a narrow button's list but keeps it inside the window", () => {
     expect(placeMenu({ top: 100, bottom: 144, left: 300, width: 360 }, 100, view, 420).width).toBe(420);
     expect(placeMenu({ top: 100, bottom: 144, left: 700, width: 360 }, 100, view, 420).width).toBe(1000 - 700 - 8);

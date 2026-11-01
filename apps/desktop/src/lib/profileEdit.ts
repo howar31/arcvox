@@ -40,6 +40,11 @@ export interface EngineMeta {
  * Where an engine runs and whether it can run now. `installedPaths`, when given, also checks an imported
  * file by path; without it a set path counts as ready.
  */
+/** A profile with the engines picked for it: "" follows the default, and a null rewrite pick turns the stage off. */
+export function withEngines(profile: Profile, asr: string, llm: string | null): Profile {
+  return { ...withLlm(profile, llm), asr_provider: asr || null };
+}
+
 export function engineMeta(provider: ProviderConfig, installedIds: Set<string>, installedPaths?: Set<string>): EngineMeta {
   if (provider.kind === "native") return { kind: "builtin", ready: true, detail: null };
   if (provider.kind === "http") return { kind: "external", ready: true, detail: hostOf(provider.base_url) };

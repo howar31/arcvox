@@ -1,12 +1,31 @@
 import { describe, expect, it } from "vitest";
 import type { Profile, ProviderConfig, StepSpec } from "./api";
-import { appsSummary, engineMeta, freshName, slugId, withLlm } from "./profileEdit";
+import { appsSummary, engineMeta, freshName, slugId, withEngines, withLlm } from "./profileEdit";
 
 const profile = (steps: StepSpec[], llm: string | null = "llm-a"): Profile => ({
   id: "p", name: "P", is_default: true, matcher: { app_ids: [], url_patterns: [] }, asr_provider: null, llm_provider: llm,
   language_hint: null, prompt_addition: "", few_shot: [], preset: null, preset_revision: 0, asr_dictionary_hint: true, llm_dictionary_terms: true, llm_window_title: true, llm_short_fallback: true, steps,
 });
 const full: StepSpec[] = [{ step: "asr" }, { step: "opencc", config: "s2twp" }, { step: "llm" }, { step: "opencc", config: "s2twp" }, { step: "rules" }];
+
+describe("withEngines", () => {
+  it("names the picked engines", () => {
+    const next = withEngines(profile(full, "llm-a"), "asr-b", "llm-b");
+    expect(next.asr_provider).toBe("asr-b");
+    expect(next.llm_provider).toBe("llm-b");
+    expect(next.steps).toEqual(full);
+  });
+  it("follows the default for an empty pick", () => {
+    const next = withEngines({ ...profile(full, "llm-a"), asr_provider: "asr-a" }, "", "");
+    expect(next.asr_provider).toBeNull();
+    expect(next.llm_provider).toBeNull();
+  });
+  it("turns the rewrite stage off for a null pick, whatever the template had", () => {
+    const next = withEngines(profile(full, "llm-a"), "", null);
+    expect(next.steps.find((s) => s.step === "llm")).toEqual({ step: "llm", off: true });
+    expect(next.llm_provider).toBe("llm-a");
+  });
+});
 
 describe("withLlm", () => {
   it("turns the llm step off and keeps the engine for when it is enabled again", () => {

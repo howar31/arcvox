@@ -1,5 +1,6 @@
 //! Menu-bar icon and menu.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
@@ -294,6 +295,8 @@ pub struct Tray<R: Runtime> {
     /// The update item: `None` in a build that is not updated, else the
     /// version of an update found, when there is one.
     update: Mutex<Option<Option<String>>>,
+    /// Counts the builds asked for, so a build that took long sees a newer one.
+    revision: AtomicU64,
 }
 
 /// The menu of the menu-bar icon; the widget opens the same one. What its
@@ -537,36 +540,53 @@ impl Tray<tauri::Wry> {
             notices: Mutex::new(Vec::new()),
             profiles: Mutex::new(Vec::new()),
             update: Mutex::new(None),
+            revision: AtomicU64::new(0),
         })
     }
 }
 
 impl<R: Runtime> Tray<R> {
-    /// Builds the menu again from the stored language and state.
+    /// Builds the menu again from the stored language and state. Callers are
+    /// on different threads and a build waits for the main thread, so an older
+    /// build can finish last: each build looks again when a newer one began
+    /// meanwhile, and the menu in place always shows the latest state.
     fn rebuild(&self) {
-        let language = *self.language.lock().unwrap();
-        let state = *self.last_state.lock().unwrap();
-        let idle = *self.idle.lock().unwrap();
-        let placing = *self.placing.lock().unwrap();
-        let paused = *self.paused.lock().unwrap();
-        let notices = self.notices();
-        let profiles = self.profiles.lock().unwrap().clone();
-        let update = self.update.lock().unwrap().clone();
-        let Ok((next, status)) = menu(
-            &self.app,
-            language,
-            state,
-            idle,
-            placing,
-            paused,
-            &notices,
-            &profiles,
-            update.as_ref().map(|u| u.as_deref()),
-        ) else {
-            return;
-        };
-        let _ = self.icon.set_menu(Some(next));
-        *self.status.lock().unwrap() = status;
+        self.revision.fetch_add(1, Ordering::SeqCst);
+        loop {
+            let seen = self.revision.load(Ordering::SeqCst);
+            let language = *self.language.lock().unwrap();
+            let state = *self.last_state.lock().unwrap();
+            let idle = *self.idle.lock().unwrap();
+            let placing = *self.placing.lock().unwrap();
+            let paused = *self.paused.lock().unwrap();
+            let notices = self.notices();
+            let profiles = self.profiles.lock().unwrap().clone();
+            let update = self.update.lock().unwrap().clone();
+            let (next, status) = match menu(
+                &self.app,
+                language,
+                state,
+                idle,
+                placing,
+                paused,
+                &notices,
+                &profiles,
+                update.as_ref().map(|u| u.as_deref()),
+            ) {
+                Ok(built) => built,
+                Err(e) => {
+                    tracing::warn!(error = %e, "menu-bar menu not built");
+                    return;
+                }
+            };
+            if let Err(e) = self.icon.set_menu(Some(next)) {
+                tracing::warn!(error = %e, "menu-bar menu not set");
+            }
+            *self.status.lock().unwrap() = status;
+            if self.revision.load(Ordering::SeqCst) == seen {
+                return;
+            }
+        }
     }
 
     pub fn set_state(&self, state: UiState) {

@@ -20,6 +20,7 @@
   import Icon from "../../lib/ui/Icon.svelte";
   import Modal from "../../lib/ui/Modal.svelte";
   import PageHead from "../../lib/ui/PageHead.svelte";
+  import Select from "../../lib/ui/Select.svelte";
   import Fold from "../../lib/ui/Fold.svelte";
   import PageLink from "../../lib/ui/PageLink.svelte";
   import Tag from "../../lib/ui/Tag.svelte";
@@ -460,10 +461,13 @@
                   <div class="busy" role="status"><span class="spin" aria-hidden="true"></span>{t("history.processing", { engines: redoEngines(u) })}</div>
                 {:else}
                   <div class="again">
-                    <select bind:value={() => chosen[u.id] ?? "", (v) => (chosen[u.id] = v)} aria-label={t("history.profile_choice")}>
-                      <option value="">{t("history.own_profile", { name: profileOf(ownProfileId(u)).name })}</option>
-                      {#each (config.value?.profiles ?? []).filter((p) => p.id !== ownProfileId(u)) as p (p.id)}<option value={p.id}>{p.name}</option>{/each}
-                    </select>
+                    <Select
+                      variable width="240px" label={t("history.profile_choice")} value={chosen[u.id] ?? ""} onchange={(v) => (chosen[u.id] = v)}
+                      options={[
+                        { value: "", label: t("history.own_profile", { name: profileOf(ownProfileId(u)).name }) },
+                        ...(config.value?.profiles ?? []).filter((p) => p.id !== ownProfileId(u)).map((p) => ({ value: p.id, label: p.name })),
+                      ]}
+                    />
                     <button type="button" class="btn" class:primary={failedRow} onclick={() => redo(u)}>{t(failedRow ? "history.retry" : "history.reprocess")}</button>
                     <span class="hint">{t(failedRow ? "history.retry_help" : "history.reprocess_help")}</span>
                   </div>
@@ -588,7 +592,6 @@
   .problem { color: var(--live); line-height: 1.55; overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }
   .tech { color: var(--ink-2); font: var(--text-sm)/1.5 var(--font-mono); overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }
   .again { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
-  .again select { flex: 0 1 240px; min-width: 0; }
   .again .btn { flex: none; }
   /* The help sits on its own line, so a long profile name never squeezes it. */
   .again .hint { flex-basis: 100%; }

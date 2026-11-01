@@ -3,7 +3,7 @@
   import { errorMessage, runningApps, type RunningApp } from "../../lib/api";
   import { t } from "../../lib/i18n";
   import { isImeKey } from "../../lib/ime";
-  import Row from "../../lib/ui/Row.svelte";
+  import AddRow from "../../lib/ui/AddRow.svelte";
   import AppIcon from "../../lib/ui/AppIcon.svelte";
   import Icon from "../../lib/ui/Icon.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
@@ -13,7 +13,7 @@
    * id typed into the search that matches nothing can be added as typed. `exclude` holds the bundle
    * ids already in the page's list; they are left out.
    */
-  let { onadd, exclude = [] }: { onadd: (id: string) => void; exclude?: string[] } = $props();
+  let { onadd, exclude = [], bare = false }: { onadd: (id: string) => void; exclude?: string[]; /** Without the row around it. */ bare?: boolean } = $props();
   let apps = $state<RunningApp[]>([]);
   onMount(async () => {
     try { apps = await runningApps(); } catch (e) { toast.error(errorMessage(e)); }
@@ -89,7 +89,7 @@
   });
 </script>
 
-<Row>
+{#snippet control()}
   <div class="apps" bind:this={root}>
     <button type="button" class="btn" bind:this={button} aria-haspopup="listbox" aria-expanded={open} onclick={() => (open ? hide() : show())}>
       <Icon name="plus" size={14} />{t("general.add_app")}
@@ -120,7 +120,9 @@
       </div>
     {/if}
   </div>
-</Row>
+{/snippet}
+
+{#if bare}{@render control()}{:else}<AddRow>{@render control()}</AddRow>{/if}
 
 <style>
   .apps { position: relative; }

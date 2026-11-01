@@ -7,6 +7,7 @@
   import { t } from "../../lib/i18n";
   import { providerLabel } from "../../lib/labels";
   import { config } from "../../lib/store.svelte";
+  import Select from "../../lib/ui/Select.svelte";
   import Group from "../../lib/ui/Group.svelte";
   import Icon from "../../lib/ui/Icon.svelte";
   import Meter from "../../lib/ui/Meter.svelte";
@@ -172,11 +173,10 @@
   </Row>
   {#if candidates.length > 0}
     <Row label={t("speed.from_history")}>
-      <select class="pick" bind:value={pickedCandidate} disabled={recording || running} aria-label={t("speed.from_history")}>
-        {#each candidates as c (c.id)}
-          <option value={c.id}>{truncate(c.raw_text)} ({when(c.ts)})</option>
-        {/each}
-      </select>
+      <Select
+        variable width="calc(100% - 256px)" label={t("speed.from_history")} disabled={recording || running} value={String(pickedCandidate ?? "")} onchange={(v) => (pickedCandidate = candidates.find((c) => String(c.id) === v)?.id ?? null)}
+        options={candidates.map((c) => ({ value: String(c.id), label: `${truncate(c.raw_text)} (${when(c.ts)})` }))}
+      />
       <button type="button" class="btn" onclick={useCandidate} disabled={pickedCandidate === null || recording || running}>{t("speed.use_recording")}</button>
     </Row>
   {/if}
@@ -242,7 +242,6 @@
   .read { display: flex; flex-direction: column; gap: 8px; padding: 14px var(--row-x); border-bottom: 1px solid var(--line); }
   blockquote { margin: 0; padding: 12px 16px; border-left: 3px solid var(--accent); border-radius: var(--radius); background: var(--accent-soft); font-size: var(--text-lg); line-height: 1.6; }
   .elapsed { min-width: 72px; text-align: right; }
-  .pick { width: 200px; flex: none; }
   .sublist + .sublist { border-top: 1px solid var(--line); }
   .subhead { padding: 12px var(--row-x) 0; font-size: var(--text-sm); font-weight: 600; color: var(--ink-2); }
   .check { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; }

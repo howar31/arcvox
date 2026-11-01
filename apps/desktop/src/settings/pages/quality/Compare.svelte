@@ -4,6 +4,7 @@
   import { t } from "../../../lib/i18n";
   import { quality } from "../../../lib/quality.svelte";
   import { rate } from "../../../lib/qualityView";
+  import Select from "../../../lib/ui/Select.svelte";
   import Group from "../../../lib/ui/Group.svelte";
   import PageHead from "../../../lib/ui/PageHead.svelte";
   import Tag from "../../../lib/ui/Tag.svelte";
@@ -46,15 +47,15 @@
 
 <Group>
   <div class="head">
-    <select class="field" bind:value={() => quality.compare.before ?? "", (v) => (quality.compare = { before: v || null, after: null })} aria-label={t("quality.compare.before")}>
-      <option value="">{t("quality.compare.pick")}</option>
-      {#each heads as h (h.file)}<option value={h.file}>{h.name}（{t(`quality.stage.${h.stage}`)}）</option>{/each}
-    </select>
+    <Select
+      variable width="260px" label={t("quality.compare.before")} value={quality.compare.before ?? ""} onchange={(v) => (quality.compare = { before: v || null, after: null })}
+      options={[{ value: "", label: t("quality.compare.pick") }, ...heads.map((h) => ({ value: h.file, label: `${h.name}（${t(`quality.stage.${h.stage}`)}）` }))]}
+    />
     <span class="vs">{t("quality.compare.vs")}</span>
-    <select class="field" bind:value={() => quality.compare.after ?? "", (v) => (quality.compare = { ...quality.compare, after: v || null })} aria-label={t("quality.compare.after")} disabled={!before}>
-      <option value="">{t("quality.compare.pick")}</option>
-      {#each afterChoices as h (h.file)}<option value={h.file}>{h.name}</option>{/each}
-    </select>
+    <Select
+      variable width="260px" label={t("quality.compare.after")} disabled={!before} value={quality.compare.after ?? ""} onchange={(v) => (quality.compare = { ...quality.compare, after: v || null })}
+      options={[{ value: "", label: t("quality.compare.pick") }, ...afterChoices.map((h) => ({ value: h.file, label: h.name }))]}
+    />
     <span class="sp"></span>
     {#if result}<Tag>{t("quality.compare.matched", { n: String(matched) })}</Tag>{/if}
   </div>
@@ -112,7 +113,6 @@
 
 <style>
   .head { display: flex; align-items: center; gap: 10px; padding: 12px var(--row-x); flex-wrap: wrap; }
-  .head .field { width: 260px; }
   .head .vs { color: var(--ink-3); font-size: var(--text-xs); }
   .head .sp { flex: 1; }
   .tiles { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--line); }

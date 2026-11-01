@@ -19,6 +19,7 @@
   import { go } from "../../lib/route";
   import { config } from "../../lib/store.svelte";
   import { rememberFilter, rememberFold, storedFilter, storedFold, type ModelFilter } from "../../lib/engineListMemory";
+  import AddRow from "../../lib/ui/AddRow.svelte";
   import Empty from "../../lib/ui/Empty.svelte";
   import Fold from "../../lib/ui/Fold.svelte";
   import Group from "../../lib/ui/Group.svelte";
@@ -551,10 +552,6 @@
 
 <!-- The only engines made by hand. -->
 <Group title={t("engines.external")}>
-  {#snippet actions()}
-    <!-- With no service yet, the empty state carries the only add button. -->
-    {#if shownExternals.length > 0 || q}<button type="button" class="btn" onclick={() => openForm(null)}><Icon name="plus" size={14} />{t("engines.add")}</button>{/if}
-  {/snippet}
   {#each shownExternals as p (p.id)}
     <Row>
       {#snippet leading()}
@@ -589,6 +586,8 @@
       {#snippet action()}<button type="button" class="btn" onclick={() => openForm(null)}><Icon name="plus" size={14} />{t("engines.add")}</button>{/snippet}
     </Empty>{/if}
   {/each}
+  <!-- With no service yet, the empty state carries the add button. -->
+  {#if shownExternals.length > 0 || q}<AddRow><button type="button" class="btn" onclick={() => openForm(null)}><Icon name="plus" size={14} />{t("engines.add")}</button></AddRow>{/if}
 </Group>
 
 <!-- How the engines are run: timeouts, retries, unloading; saved with its own bar. -->
@@ -650,7 +649,7 @@
   .bar i { display: block; height: 100%; background: var(--accent); transition: width .2s; }
   .pct { width: 38px; text-align: right; flex: none; }
   /* Where a file goes by hand, at the foot of the list it then appears in. */
-  .rowfoot { padding: 10px var(--row-x, 20px) 12px; border-top: 1px solid var(--line); background: var(--sunken); color: var(--ink-2); font-size: var(--text-sm); }
+  .rowfoot { padding: 10px var(--row-x, 20px) 12px; border-top: 1px solid var(--line); border-radius: 0 0 calc(var(--radius-group) - 1px) calc(var(--radius-group) - 1px); background: var(--sunken); color: var(--ink-2); font-size: var(--text-sm); }
   .rowfoot p { margin: 0; overflow-wrap: anywhere; }
   .rowfoot .links { margin-top: 2px; }
   .rowfoot :global(.info-btn) { margin-left: 2px; }
