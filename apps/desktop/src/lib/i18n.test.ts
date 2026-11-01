@@ -26,3 +26,11 @@ test("has tells whether a key is translated", () => {
   }
   setLanguage("en");
 });
+
+test("a text breaks into as many lines in both languages", () => {
+  const lines = (lang: "zh-TW" | "en") => {
+    setLanguage(lang);
+    return Object.fromEntries(keysOf(lang).map((k) => [k, t(k).split("\n").length]));
+  };
+  expect(lines("zh-TW")).toEqual(lines("en"));
+});

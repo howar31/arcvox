@@ -106,7 +106,7 @@ input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="
 .sub { color: var(--ink-2); font-size: var(--text-sm); }
 /* The one tooltip card (lib/tip.ts, InfoTip): a surface card under what the pointer rests on. Colours come
    from the tokens, so it follows light and dark with the rest of the window. */
-.tipcard { position: fixed; z-index: 70; display: block; max-width: 320px; padding: 9px 13px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); color: var(--ink); font: 400 var(--text-sm)/1.5 var(--font); text-align: left; white-space: normal; overflow-wrap: anywhere; pointer-events: auto; }
+.tipcard { position: fixed; z-index: 70; display: block; max-width: 320px; padding: 9px 13px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); color: var(--ink); font: 400 var(--text-sm)/1.5 var(--font); text-align: left; white-space: pre-line; overflow-wrap: anywhere; pointer-events: auto; }
 .tipcard.short { max-width: none; padding: 6px 11px; white-space: nowrap; pointer-events: none; }
 /* A link and the closing quote after it stay on one line: a button is an atomic inline, so the line-break rules would otherwise let 」 start a line. */
 .nobr { white-space: nowrap; }
