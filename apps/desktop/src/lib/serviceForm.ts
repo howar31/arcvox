@@ -1,5 +1,6 @@
 import type { EngineCheck, LocalService, ProviderConfig, ServicePreset, Wire } from "./api";
 import type { Role } from "./engines";
+import { t } from "./i18n";
 
 /** What the form's first step picked: a catalogue service, a local one found running, or an address typed by hand. */
 export type ServicePick = { kind: "cloud"; id: string } | { kind: "local"; id: string | null } | { kind: "custom" };
@@ -65,7 +66,10 @@ export const checkKey = (p: Pick<ProviderConfig, "service" | "base_url" | "model
 
 /** Whether a stored check was made with the engine as it is set now. */
 export const checkCurrent = (c: EngineCheck | undefined, p: ProviderConfig, role: Role): boolean =>
-  !!c && checkKey({ service: c.service ?? null, base_url: c.base_url ?? null, model: c.model ?? null, reasoning_effort: c.reasoning_effort ?? null }, c.role) === checkKey(p, role);
+  !!c && checkKey({ service: c.service ?? null, base_url: c.base_url ?? null, model: c.model ?? null, reasoning_effort: c.reasoning_effort ?? null, transcribe_mode: c.transcribe_mode ?? null }, c.role) === checkKey(p, role);
+
+/** What a failed check shows as the service's words. */
+export const checkBody = (c: EngineCheck): string | null | undefined => (c.code === "empty_reply" ? t("failure.empty_reply") : c.message);
 
 /** Reasoning effort values offered, in order; null is "the service's default" (not sent). */
 export const EFFORTS: (string | null)[] = [null, "none", "minimal", "low", "medium", "high"];

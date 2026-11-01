@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import type { EngineCheck, LocalService, ProviderConfig, ServicePreset } from "./api";
 import { blankHttp } from "./engines";
-import { checkCurrent, checkKey, cloudFor, localFor, localRows, modesOf, pickOf, servesOther, suggestedIn, takesEffort } from "./serviceForm";
+import { checkBody, checkCurrent, checkKey, cloudFor, localFor, localRows, modesOf, pickOf, servesOther, suggestedIn, takesEffort } from "./serviceForm";
 
 const svc = (id: string, kind: "cloud" | "local", asr: ServicePreset["asr"], llm: ServicePreset["llm"]): ServicePreset => ({
   id, label: id, kind, base_url: kind === "cloud" ? `https://${id}.test/v1` : null, port: kind === "local" ? 1 : null,
@@ -70,4 +70,10 @@ test("local rows list the tab's services, running ones first", () => {
     { id: "speaches", label: "Speaches", base_url: "http://127.0.0.1:8000/v1", running: true, models: [] },
   ];
   expect(localRows(found, SERVICES, "asr").map((f) => f.id)).toEqual(["speaches", "ollama"]);
+});
+
+test("an empty reply reads the same whatever the service said", () => {
+  const base = { ok: false, at: 1, elapsed_ms: 2, role: "asr" as const };
+  expect(checkBody({ ...base, code: "empty_reply", message: "Gemini: x" })).not.toBe("Gemini: x");
+  expect(checkBody({ ...base, code: "provider_error", message: "Gemini: x" })).toBe("Gemini: x");
 });

@@ -32,7 +32,8 @@ export interface ServicePreset {
 export interface LocalService { id: string; label: string; base_url: string; running: boolean; models: string[] }
 export interface EngineCheck {
   ok: boolean; at: number; elapsed_ms: number; message?: string | null; detail?: string | null; status?: number | null; role: "asr" | "llm";
-  service?: string | null; base_url?: string | null; model?: string | null; reasoning_effort?: string | null;
+  service?: string | null; base_url?: string | null; model?: string | null; reasoning_effort?: string | null; transcribe_mode?: string | null;
+  code?: string | null; probe?: number; outdated?: boolean;
 }
 export type StepSpec =
   | { step: "asr" }

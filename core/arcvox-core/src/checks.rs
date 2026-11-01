@@ -43,6 +43,45 @@ pub struct EngineCheck {
     pub reasoning_effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcribe_mode: Option<String>,
+    /// The failure's code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    /// Which version of the request the check was made with.
+    #[serde(default = "first_probe")]
+    pub probe: u32,
+    /// The request has changed since; worked out when the checks are read.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub outdated: bool,
+}
+
+const fn first_probe() -> u32 {
+    1
+}
+
+/// The version of the real request of a role, raised when what it asks of an
+/// engine changes, so that earlier results read as outdated.
+pub const fn probe_version(role: ModelRole) -> u32 {
+    match role {
+        ModelRole::Asr => 2,
+        ModelRole::Llm => 1,
+    }
+}
+
+/// About two seconds of spoken English, a public-domain recording, 16 kHz
+/// mono: what a speech engine is asked to transcribe when it is checked.
+static SPEECH_PROBE: &[u8] = include_bytes!("../assets/speech-probe.wav");
+const WAV_HEADER_BYTES: usize = 44;
+
+pub fn speech_probe() -> crate::types::AudioClip {
+    crate::types::AudioClip {
+        samples: SPEECH_PROBE[WAV_HEADER_BYTES..]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| f32::from(i16::from_le_bytes(*b)) / 32768.0)
+            .collect(),
+        sample_rate: 16_000,
+    }
 }
 
 /// The checks by engine id, in `engine-checks.json` beside the config.
@@ -178,7 +217,26 @@ mod tests {
             model: Some("m".into()),
             reasoning_effort: None,
             transcribe_mode: None,
+            code: None,
+            probe: probe_version(ModelRole::Asr),
+            outdated: false,
         }
+    }
+
+    #[test]
+    fn the_speech_probe_holds_speech() {
+        let clip = speech_probe();
+        assert!((clip.duration_secs() - 2.0).abs() < 0.01);
+        let peak = clip.samples.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+        assert!(peak > 0.3, "{peak}");
+    }
+
+    #[test]
+    fn a_check_stored_before_probes_had_versions_is_the_first_one() {
+        let c: EngineCheck =
+            serde_json::from_str(r#"{"ok":true,"at":1,"elapsed_ms":2,"role":"asr"}"#).unwrap();
+        assert_eq!(c.probe, 1);
+        assert!(c.probe < probe_version(ModelRole::Asr));
     }
 
     #[test]

@@ -14,7 +14,7 @@
   import { usableWith } from "../../lib/resolve";
   import { engineDescription } from "../../lib/stages";
   import { formatShortDate, formatTime } from "../../lib/format";
-  import { checkCurrent } from "../../lib/serviceForm";
+  import { checkBody, checkCurrent } from "../../lib/serviceForm";
   import { guard } from "../../lib/guard.svelte";
   import { go } from "../../lib/route";
   import { config } from "../../lib/store.svelte";
@@ -331,10 +331,11 @@
     const c = checks[p.id];
     if (!c) return plain(t("engines.check_none"));
     if (!checkCurrent(c, p, role)) return plain(t("engines.check_stale"));
+    if (c.outdated) return plain(t("engines.check_outdated"));
     const when = `${formatShortDate(c.at)} ${formatTime(c.at)}`;
     if (c.ok) return { text: t("engines.check_ok_at", { when }), tone: "ok", body: null, detail: null };
     const text = c.status ? t("engines.check_failed_at_status", { when, status: String(c.status) }) : t("engines.check_failed_at", { when });
-    return { text, tone: "bad", body: c.message ?? null, detail: c.detail ?? null };
+    return { text, tone: "bad", body: checkBody(c) ?? null, detail: c.detail ?? null };
   }
   function openForm(p: ProviderConfig | null) {
     formInitial = p;

@@ -99,6 +99,20 @@ fn error_message(body: &str) -> Option<String> {
 /// The longest service answer kept beside an error.
 const DETAIL_CHARS: usize = 4000;
 
+/// A service answered without any text; its answer is kept beside the error.
+pub fn empty_reply(label: &str, body: &str) -> ProviderError {
+    let err = ProviderError::new(
+        ErrorCode::EmptyReply,
+        format!("{label}: the service answered without any text"),
+    );
+    let detail: String = body.trim().chars().take(DETAIL_CHARS).collect();
+    if detail.is_empty() {
+        err
+    } else {
+        err.with_detail(detail)
+    }
+}
+
 pub fn classify_status(label: &str, status: StatusCode, body: &str) -> ProviderError {
     let snippet: String = error_message(body)
         .unwrap_or_else(|| body.trim().to_string())

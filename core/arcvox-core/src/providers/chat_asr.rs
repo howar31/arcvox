@@ -13,7 +13,7 @@ use url::Url;
 
 use crate::audio::encode_wav_pcm16;
 use crate::providers::http_asr::request_timeout;
-use crate::providers::http_common::{endpoint, send_with_retry};
+use crate::providers::http_common::{empty_reply, endpoint, send_with_retry};
 use crate::providers::{AsrHint, AsrProvider, ProviderError};
 use crate::types::{AudioClip, ErrorCode, Transcript};
 
@@ -155,7 +155,7 @@ impl AsrProvider for ChatAsrProvider {
             req
         })
         .await?;
-        let parsed: ChatResponse = resp.json().await.map_err(|e| {
+        let raw = resp.text().await.map_err(|e| {
             if e.is_timeout() {
                 return ProviderError::new(
                     ErrorCode::ProviderTimeout,
@@ -167,21 +167,30 @@ impl AsrProvider for ChatAsrProvider {
                 format!("{}: bad transcription response: {e}", self.label),
             )
         })?;
+        let parsed: ChatResponse = serde_json::from_str(&raw).map_err(|e| {
+            ProviderError::new(
+                ErrorCode::ProviderError,
+                format!("{}: bad transcription response: {e}", self.label),
+            )
+        })?;
         let choice = parsed.choices.into_iter().next().ok_or_else(|| {
             ProviderError::new(
                 ErrorCode::ProviderError,
                 format!("{}: no choices in response", self.label),
             )
         })?;
+        let text = choice
+            .message
+            .content
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        // The recording held speech by the time it got here.
+        if text.is_empty() {
+            return Err(empty_reply(&self.label, &raw));
+        }
         Ok(Transcript {
-            // No text is no speech, which the session handles like an empty
-            // transcript from any other engine.
-            text: choice
-                .message
-                .content
-                .unwrap_or_default()
-                .trim()
-                .to_string(),
+            text,
             language: None,
             segments: Vec::new(),
         })
@@ -288,17 +297,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_content_is_an_empty_transcript() {
+    async fn no_content_is_an_empty_reply() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(200).set_body_json(ok_body(None)))
             .mount(&server)
             .await;
-        let out = provider(&server, true, true)
+        let err = provider(&server, true, true)
             .transcribe(&clip(1), &AsrHint::default())
             .await
-            .unwrap();
-        assert_eq!(out.text, "");
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::EmptyReply);
+        assert!(err.detail.is_some());
     }
 
     #[tokio::test]

@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use url::Url;
 
-use crate::providers::http_common::{endpoint, send_with_retry};
+use crate::providers::http_common::{empty_reply, endpoint, send_with_retry};
 use crate::providers::{LlmOptions, LlmProvider, ProviderError};
 use crate::types::{ChatMessage, ErrorCode};
 
@@ -93,13 +93,19 @@ impl LlmProvider for HttpLlmProvider {
             req
         })
         .await?;
-        let parsed: ChatResponse = resp.json().await.map_err(|e| {
+        let raw = resp.text().await.map_err(|e| {
             if e.is_timeout() {
                 return ProviderError::new(
                     ErrorCode::ProviderTimeout,
                     format!("{}: request timed out", self.label),
                 );
             }
+            ProviderError::new(
+                ErrorCode::ProviderError,
+                format!("{}: bad chat response: {e}", self.label),
+            )
+        })?;
+        let parsed: ChatResponse = serde_json::from_str(&raw).map_err(|e| {
             ProviderError::new(
                 ErrorCode::ProviderError,
                 format!("{}: bad chat response: {e}", self.label),
@@ -114,12 +120,10 @@ impl LlmProvider for HttpLlmProvider {
         let finish_reason = choice.finish_reason.clone();
         // A choice without text: a refusal or a tool call the service gives
         // instead of a message.
-        let content = choice.message.content.ok_or_else(|| {
-            ProviderError::new(
-                ErrorCode::ProviderError,
-                format!("{}: the response's message has no content", self.label),
-            )
-        })?;
+        let content = choice
+            .message
+            .content
+            .ok_or_else(|| empty_reply(&self.label, &raw))?;
         if finish_reason.as_deref() == Some("length") {
             return Err(ProviderError::new(
                 ErrorCode::ProviderError,
@@ -211,7 +215,8 @@ mod tests {
             .complete(vec![ChatMessage::user("U")], &opts())
             .await
             .unwrap_err();
-        assert!(err.message.contains("no content"), "{}", err.message);
+        assert_eq!(err.code, ErrorCode::EmptyReply);
+        assert!(err.detail.is_some());
         assert!(!err.message.contains("no choices"), "{}", err.message);
     }
 

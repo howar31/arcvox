@@ -45,6 +45,8 @@ pub enum ErrorCode {
     InvalidConfig,
     NoAudio,
     NoSpeech,
+    /// A network service took the request and answered without any text.
+    EmptyReply,
     Cancelled,
     Internal,
     ModelMissing,
@@ -69,6 +71,7 @@ impl ErrorCode {
             ErrorCode::InvalidConfig => "invalid_config",
             ErrorCode::NoAudio => "no_audio",
             ErrorCode::NoSpeech => "no_speech",
+            ErrorCode::EmptyReply => "empty_reply",
             ErrorCode::Cancelled => "cancelled",
             ErrorCode::Internal => "internal",
             ErrorCode::ModelMissing => "model_missing",
@@ -206,6 +209,7 @@ mod tests {
             ErrorCode::ProviderUnreachable,
             ErrorCode::ProviderTimeout,
             ErrorCode::NoSpeech,
+            ErrorCode::EmptyReply,
             ErrorCode::ModelMissing,
             ErrorCode::InferenceFailed,
         ] {

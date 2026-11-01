@@ -13,7 +13,7 @@ use url::Url;
 use crate::audio::encode_wav_pcm16;
 use crate::providers::chat_asr::MAX_REQUEST_BYTES;
 use crate::providers::http_asr::request_timeout;
-use crate::providers::http_common::{endpoint, send_with_retry};
+use crate::providers::http_common::{empty_reply, endpoint, send_with_retry};
 use crate::providers::{AsrHint, AsrProvider, ProviderError};
 use crate::types::{AudioClip, ErrorCode, Transcript};
 
@@ -161,7 +161,7 @@ impl AsrProvider for InteractionsAsrProvider {
             req
         })
         .await?;
-        let parsed: Interaction = resp.json().await.map_err(|e| {
+        let raw = resp.text().await.map_err(|e| {
             if e.is_timeout() {
                 return ProviderError::new(
                     ErrorCode::ProviderTimeout,
@@ -173,16 +173,25 @@ impl AsrProvider for InteractionsAsrProvider {
                 format!("{}: bad transcription response: {e}", self.label),
             )
         })?;
+        let parsed: Interaction = serde_json::from_str(&raw).map_err(|e| {
+            ProviderError::new(
+                ErrorCode::ProviderError,
+                format!("{}: bad transcription response: {e}", self.label),
+            )
+        })?;
         if let Some(status) = parsed.status.as_deref().filter(|s| *s != "completed") {
             return Err(ProviderError::new(
                 ErrorCode::ProviderError,
                 format!("{}: the interaction ended as {status}", self.label),
             ));
         }
+        let text = parsed.text();
+        // The recording held speech by the time it got here.
+        if text.is_empty() {
+            return Err(empty_reply(&self.label, &raw));
+        }
         Ok(Transcript {
-            // No text is no speech, which the session handles like an empty
-            // transcript from any other engine.
-            text: parsed.text(),
+            text,
             language: None,
             segments: Vec::new(),
         })
@@ -307,7 +316,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_model_output_is_an_empty_transcript() {
+    async fn no_model_output_is_an_empty_reply() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .respond_with(
@@ -315,11 +324,12 @@ mod tests {
             )
             .mount(&server)
             .await;
-        let out = provider(&server, true, true)
+        let err = provider(&server, true, true)
             .transcribe(&clip(1), &AsrHint::default())
             .await
-            .unwrap();
-        assert_eq!(out.text, "");
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::EmptyReply);
+        assert!(err.detail.is_some());
     }
 
     #[tokio::test]

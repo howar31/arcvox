@@ -666,10 +666,9 @@ impl Engine {
         .await
     }
 
-    /// Sends one real request to a network engine: a second of silence for
-    /// speech recognition, a short message for rewriting. It passes when the
-    /// service answers in the shape of a transcript or a reply; what it says
-    /// is not judged.
+    /// Sends one real request to a network engine: a short piece of speech
+    /// for speech recognition, a short message for rewriting. It passes when
+    /// the service answers with text; what the text says is not judged.
     pub async fn verify_provider(
         &self,
         cfg: &ProviderConfig,
@@ -681,13 +680,16 @@ impl Engine {
         let outcome: Result<(), crate::providers::ProviderError> = match role {
             ModelRole::Asr => match self.inner.registry.asr_uncached(cfg, &general) {
                 Ok(p) => {
-                    let silence = crate::types::AudioClip {
-                        samples: vec![0.0; 16_000],
-                        sample_rate: 16_000,
-                    };
-                    p.transcribe(&silence, &crate::providers::AsrHint::default())
+                    let speech = crate::checks::speech_probe();
+                    match p
+                        .transcribe(&speech, &crate::providers::AsrHint::default())
                         .await
-                        .map(|_| ())
+                    {
+                        Ok(t) if t.text.trim().is_empty() => {
+                            Err(crate::providers::http_common::empty_reply(&cfg.label, ""))
+                        }
+                        other => other.map(|_| ()),
+                    }
                 }
                 Err(e) => Err(e),
             },
@@ -709,6 +711,7 @@ impl Engine {
             },
         };
         let elapsed_ms = started.elapsed().as_millis() as u64;
+        let code = outcome.as_ref().err().map(|e| e.code.name().to_string());
         // The check is shown under its engine, so the message carries the
         // service's own words, or the error without the engine's name.
         let (message, detail, status) = match outcome {
@@ -749,6 +752,9 @@ impl Engine {
             model: cfg.model.clone(),
             reasoning_effort: cfg.reasoning_effort.clone(),
             transcribe_mode: cfg.transcribe_mode.clone(),
+            code,
+            probe: crate::checks::probe_version(role),
+            outdated: false,
         }
     }
 
@@ -760,7 +766,11 @@ impl Engine {
             .inner
             .checks
             .retain(|id| config.providers.iter().any(|p| p.id.0 == id));
-        self.inner.checks.all()
+        let mut checks = self.inner.checks.all();
+        for check in checks.values_mut() {
+            check.outdated = check.probe < crate::checks::probe_version(check.role);
+        }
+        checks
     }
 
     pub fn put_engine_check(
@@ -2088,11 +2098,40 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn a_real_request_checks_an_engine_and_the_result_is_kept() {
+    async fn a_speech_engine_that_answers_without_text_fails_its_check() {
         let r = rig(false).await;
         Mock::given(method("POST"))
             .and(path("/v1/audio/transcriptions"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"text":""})))
+            .mount(&r.asr)
+            .await;
+        let cfg = r.engine.config().current().providers[0].clone();
+        let check = r
+            .engine
+            .verify_provider(&cfg, crate::models::ModelRole::Asr)
+            .await;
+        assert!(!check.ok);
+        assert_eq!(check.code.as_deref(), Some("empty_reply"));
+    }
+
+    #[tokio::test]
+    async fn a_check_from_an_earlier_request_reads_as_outdated() {
+        let r = rig(false).await;
+        let cfg = r.engine.config().current().providers[0].clone();
+        let check: crate::checks::EngineCheck =
+            serde_json::from_str(r#"{"ok":true,"at":1,"elapsed_ms":2,"role":"asr"}"#).unwrap();
+        r.engine.put_engine_check(&cfg.id.0, check).unwrap();
+        assert!(r.engine.engine_checks()[&cfg.id.0].outdated);
+    }
+
+    #[tokio::test]
+    async fn a_real_request_checks_an_engine_and_the_result_is_kept() {
+        let r = rig(false).await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"text":"and so"})),
+            )
             .mount(&r.asr)
             .await;
         Mock::given(method("POST"))

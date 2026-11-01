@@ -5,7 +5,7 @@
   import { t } from "../../lib/i18n";
   import { usedBy } from "../../lib/labels";
   import { ASR_CAPS, describeFailure, LLM_CAPS } from "../../lib/providerForm";
-  import { checkKey, cloudFor, EFFORTS, localFor, localRows, modesOf, otherRole, pickId, pickOf, servesOther, suggestedIn, takesEffort, type ServicePick } from "../../lib/serviceForm";
+  import { checkBody, checkKey, cloudFor, EFFORTS, localFor, localRows, modesOf, otherRole, pickId, pickOf, servesOther, suggestedIn, takesEffort, type ServicePick } from "../../lib/serviceForm";
   import { config } from "../../lib/store.svelte";
   import { freshName } from "../../lib/profileEdit";
   import { engineDefaultName } from "../../lib/stages";
@@ -410,7 +410,7 @@
         {#if c.ok}
           <ServiceAnswer tone="ok" text={t("engines.check_ok_in", { time: time(c) })} />
         {:else}
-          <ServiceAnswer tone="bad" text={c.status ? t("engines.check_failed_status", { status: String(c.status) }) : t("engines.check_failed")} body={c.message} detail={c.detail} />
+          <ServiceAnswer tone="bad" text={c.status ? t("engines.check_failed_status", { status: String(c.status) }) : t("engines.check_failed")} body={checkBody(c)} detail={c.detail} />
         {/if}
       </div>
     {/if}
