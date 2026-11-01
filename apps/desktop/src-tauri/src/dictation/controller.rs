@@ -1401,9 +1401,10 @@ mod tests {
             mono: vec![100.0; 16_000],
         })
         .unwrap();
-        r.modifier.send(fn_up()).unwrap();
         // The speech detector fails on the frames: the user is told, and
-        // the widget is not left on "listening".
+        // the widget is not left on "listening". The release waits for it:
+        // the two arrive by separate threads, and frames that come after
+        // the release are never looked at.
         wait_for(
             || {
                 r.ui.messages
@@ -1415,6 +1416,7 @@ mod tests {
             "failure message",
         )
         .await;
+        r.modifier.send(fn_up()).unwrap();
         wait_state(&r, UiState::Idle, "idle").await;
         assert!(r.platform.calls().is_empty());
 
@@ -1468,7 +1470,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_recording_survives_a_failure_after_the_shortcut_is_released() {
+    async fn a_recording_survives_a_failure_while_the_shortcut_is_held() {
         let r = rig_with(fast_settings(), Vec::new(), |c| {
             c.general.keep_recordings = true;
         })
@@ -1481,10 +1483,21 @@ mod tests {
             mono: vec![100.0; 16_000],
         })
         .unwrap();
-        r.modifier.send(fn_up()).unwrap();
         // The speech detector fails on the frames. The engine gets the
         // whole recording anyway: the history lists it as not finished,
         // with its recording.
+        wait_for(
+            || {
+                r.ui.messages
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|m| m.code == Some(ErrorCode::Internal))
+            },
+            "failure message",
+        )
+        .await;
+        r.modifier.send(fn_up()).unwrap();
         let history = r.engine.history();
         wait_for(
             || {
