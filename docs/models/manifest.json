@@ -181,7 +181,8 @@
           "models": ["models/gemini-3.5-transcribe", "gemini-3.5-transcribe"],
           "wire": "interactions",
           "base_url": "https://generativelanguage.googleapis.com/v1beta/",
-          "modes": ["verbatim", "smart"]
+          "modes": ["verbatim", "smart"],
+          "word_times": true
         }
       ],
       "llm": "chat"

@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import type { EngineCheck, LocalService, ProviderConfig, ServicePreset } from "./api";
 import { blankHttp } from "./engines";
-import { checkBody, checkCurrent, checkKey, cloudFor, localFor, localRows, modesOf, pickOf, servesOther, suggestedIn, takesEffort } from "./serviceForm";
+import { asksWordTimes, checkBody, checkCurrent, checkKey, cloudFor, offersWordTimes, localFor, localRows, modesOf, pickOf, servesOther, suggestedIn, takesEffort } from "./serviceForm";
 
 const svc = (id: string, kind: "cloud" | "local", asr: ServicePreset["asr"], llm: ServicePreset["llm"]): ServicePreset => ({
   id, label: id, kind, base_url: kind === "cloud" ? `https://${id}.test/v1` : null, port: kind === "local" ? 1 : null,
@@ -61,6 +61,7 @@ test("a check is current only for the service, model and effort it was made with
   expect(checkCurrent(undefined, p, "asr")).toBe(false);
   const custom = { ...p, service: null, base_url: "http://h.test/v1" };
   expect(checkKey(custom, "asr")).not.toBe(checkKey({ ...custom, base_url: "http://other.test/v1" }, "asr"));
+  expect(checkKey(custom, "asr")).not.toBe(checkKey({ ...custom, word_times: true }, "asr"));
 });
 
 test("local rows list the tab's services, running ones first", () => {
@@ -76,4 +77,13 @@ test("an empty reply reads the same whatever the service said", () => {
   const base = { ok: false, at: 1, elapsed_ms: 2, role: "asr" as const };
   expect(checkBody({ ...base, code: "empty_reply", message: "Gemini: x" })).not.toBe("Gemini: x");
   expect(checkBody({ ...base, code: "provider_error", message: "Gemini: x" })).toBe("Gemini: x");
+});
+
+test("word times come with the route of the model and the default mode", () => {
+  const routed = [{ ...svc("gemini", "cloud", "chat_audio", "chat"), asr_routes: [{ models: ["t"], wire: "interactions" as const, base_url: "https://x.test/", word_times: true }] }];
+  expect(offersWordTimes({ kind: "cloud", id: "gemini" }, routed, "t")).toBe(true);
+  expect(offersWordTimes({ kind: "cloud", id: "gemini" }, routed, "flash")).toBe(false);
+  expect(offersWordTimes({ kind: "custom" }, routed, "t")).toBe(false);
+  expect(asksWordTimes({ word_times: true, transcribe_mode: null })).toBe(true);
+  expect(asksWordTimes({ word_times: true, transcribe_mode: "smart" })).toBe(false);
 });

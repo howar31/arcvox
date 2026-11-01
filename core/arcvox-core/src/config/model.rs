@@ -291,6 +291,11 @@ pub struct ProviderConfig {
     /// with each request. None: the service's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcribe_mode: Option<String>,
+    /// Http, a speech model that offers it (`ModelRoute::word_times`): each
+    /// request asks when every word was said, in the default mode only. The
+    /// service then takes no vocabulary.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub word_times: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -750,6 +755,11 @@ impl Capabilities {
 }
 
 impl ProviderConfig {
+    /// The engine asks for word times: they exist in the default mode only.
+    pub fn asks_word_times(&self) -> bool {
+        self.word_times && self.transcribe_mode.is_none()
+    }
+
     /// An embedded engine that loads the catalogue model `model_id`.
     /// The engine of the factory default pair for the role, as it is before
     /// the catalogue names it.
@@ -787,6 +797,7 @@ impl ProviderConfig {
             service: None,
             reasoning_effort: None,
             transcribe_mode: None,
+            word_times: false,
         }
     }
 
@@ -832,6 +843,7 @@ impl ProviderConfig {
             service: None,
             reasoning_effort: None,
             transcribe_mode: None,
+            word_times: false,
         }
     }
 
@@ -859,6 +871,7 @@ impl ProviderConfig {
             service: None,
             reasoning_effort: None,
             transcribe_mode: None,
+            word_times: false,
         }
     }
 }

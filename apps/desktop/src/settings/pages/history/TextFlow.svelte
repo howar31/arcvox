@@ -6,14 +6,20 @@
   import { textFlow } from "../../../lib/textFlow";
   import ServiceAnswer from "../../../lib/ui/ServiceAnswer.svelte";
   import TextDiff from "../../../lib/ui/TextDiff.svelte";
+  import { wordPieces, wordsOf, type Word } from "../../../lib/wordTimes";
 
-  let { u, stages, oncorrect }: {
+  let { u, stages, oncorrect, onword, playing = null }: {
     u: Utterance;
     stages: Stage[] | null;
+    /** A word was pressed; without it the words are plain text. */
+    onword?: (word: Word) => void;
+    /** Where the recording is while it plays. */
+    playing?: number | null;
     /** Keeps `text` as the row's final text; false when it could not be kept. Without it the flow is read-only. */
     oncorrect?: (text: string) => Promise<boolean>;
   } = $props();
   const flow = $derived(textFlow(u, stages));
+  const words = $derived(onword ? wordsOf(stages) : []);
   const hasCorrection = $derived(flow.steps.some((s) => s.kind === "user"));
   // A row with a result can take a correction: a failed or cancelled one has no text to correct.
   const canCorrect = $derived(!!oncorrect && u.error === null && u.refined_text.trim() !== "");
@@ -59,6 +65,10 @@
   }
 </script>
 
+{#snippet pressable(text: string, shown: string)}
+  {#each wordPieces(text, words, shown) as p, n (n)}{#if p.word}{@const w = p.word}<button type="button" tabindex="-1" class="word" class:now={playing !== null && playing >= w.start_ms && playing < w.end_ms} onclick={() => onword?.(w)}>{p.text}</button>{:else}{p.text}{/if}{/each}
+{/snippet}
+
 {#if flow.steps.length}
   <div class="label">{t("history.text_flow")}</div>
   <ol class="flow">
@@ -76,8 +86,9 @@
               </span>
             {/if}
           </div>
-          {#if s.kind === "first"}<div class="text first">{s.text}</div>
-          {:else if s.kind === "failed"}<div class="text failed">{s.text}</div>
+          {#if s.kind === "first"}<div class="text first">{#if words.length}{@render pressable(s.text, s.text)}{:else}{s.text}{/if}</div>
+          {:else if s.kind === "stage" && i === 0 && words.length}<div class="text">{@render pressable(s.from, s.text)}</div>
+          {:else if s.kind === "failed"}<div class="text failed">{#if s.body || s.detail}<ServiceAnswer text={s.text} body={s.body} detail={s.detail} />{:else}{s.text}{/if}</div>
           {:else if s.kind === "user" && editing}
             <div class="ed">
               <textarea rows="2" bind:value={draft} use:grow={draft} aria-label={t("history.flow_correction")}></textarea>
@@ -136,6 +147,9 @@
   .mark .head { padding-top: 1px; }
   .text { margin-top: 1px; line-height: 1.75; overflow-wrap: anywhere; white-space: pre-wrap; }
   .text.first { color: var(--ink-2); }
+  .word { padding: 0; border: 0; border-radius: 3px; background: none; color: inherit; font: inherit; line-height: inherit; cursor: pointer; -webkit-user-select: text; user-select: text; }
+  .word:hover { background: var(--accent-soft); color: var(--ink); }
+  .word.now { background: var(--accent); color: var(--accent-ink); }
   .text.failed { color: var(--warn); font-size: var(--text-sm); }
   .unchanged { padding: 0 0 6px 32px; color: var(--ink-3); font-size: var(--text-xs); }
   .head .acts { display: inline-flex; gap: 4px; margin-left: auto; }

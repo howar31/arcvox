@@ -4,7 +4,7 @@
   import { blankHttp, freshId, type Role } from "../../lib/engines";
   import { t } from "../../lib/i18n";
   import { ASR_CAPS, describeFailure, LLM_CAPS } from "../../lib/providerForm";
-  import { checkBody, checkKey, cloudFor, EFFORTS, localFor, localRows, modesOf, otherRole, pickId, pickOf, servesOther, suggestedIn, takesEffort, type ServicePick } from "../../lib/serviceForm";
+  import { checkBody, checkKey, cloudFor, EFFORTS, localFor, localRows, modesOf, offersWordTimes, otherRole, pickId, pickOf, servesOther, suggestedIn, takesEffort, type ServicePick } from "../../lib/serviceForm";
   import { config } from "../../lib/store.svelte";
   import { freshName, namesEngine, templateEngines, withoutEngine } from "../../lib/profileEdit";
   import { engineDefaultName } from "../../lib/stages";
@@ -56,8 +56,8 @@
   let probe = $state<{ state: "wait" | "ok" | "bad"; text: string } | null>(null);
   let listed = $state<string[] | null>(null);
 
-  type Sel = { model: string; typed: boolean; typedModel: string; label: string; effort: string | null; mode: string | null };
-  const blankSel = (): Sel => ({ model: "", typed: false, typedModel: "", label: "", effort: null, mode: null });
+  type Sel = { model: string; typed: boolean; typedModel: string; label: string; effort: string | null; mode: string | null; words: boolean };
+  const blankSel = (): Sel => ({ model: "", typed: false, typedModel: "", label: "", effort: null, mode: null, words: false });
   // The last choice of the model list: the name is typed. No listed model id has this form.
   const OTHER_MODEL = "\u0000other";
   // svelte-ignore state_referenced_locally
@@ -72,6 +72,7 @@
     sel[role].label = initial.label;
     sel[role].effort = initial.reasoning_effort ?? null;
     sel[role].mode = initial.transcribe_mode ?? null;
+    sel[role].words = !!initial.word_times;
   }
   let alsoOn = $state(false);
   // Real requests that passed, by what they depended on; one is not sent again.
@@ -240,9 +241,12 @@
   const chosen = (r: Role): string => (hasList && !sel[r].typed ? sel[r].model : sel[r].typedModel.trim());
   // The first mode is the service's default, which is not sent.
   const modeFor = (r: Role): string | null => (r === "asr" && modesOf(pick, services, chosen(r)).slice(1).includes(sel[r].mode ?? "") ? sel[r].mode : null);
+  // Word times exist in the service's default mode.
+  const wordsOffered = (r: Role): boolean => r === "asr" && !modeFor(r) && offersWordTimes(pick, services, chosen(r));
+  const wordsFor = (r: Role): boolean => wordsOffered(r) && sel[r].words;
   const effortFor = (r: Role): string | null => (takesEffort(pick, services, r, chosen(r)) ? sel[r].effort : null);
   /** The engine's name when none is typed: engines of one model differ by what they set. */
-  const defaultLabel = (r: Role): string => engineDefaultName(serviceName, chosen(r), { transcribe_mode: modeFor(r), reasoning_effort: effortFor(r) });
+  const defaultLabel = (r: Role): string => engineDefaultName(serviceName, chosen(r), { transcribe_mode: modeFor(r), reasoning_effort: effortFor(r), word_times: wordsFor(r) });
   // A stored name that is the default one was never typed, so it goes on following the settings.
   let labelChecked = false;
   $effect(() => {
@@ -259,6 +263,7 @@
     p.model = chosen(r) || null;
     p.reasoning_effort = effortFor(r);
     p.transcribe_mode = modeFor(r);
+    p.word_times = wordsFor(r);
     p.label = sel[r].label.trim() || defaultLabel(r);
     if (isLocal) p.api_key_ref = null;
     return p;
@@ -403,11 +408,23 @@
     </div>
     {#if modes.length}
       <span class="lab">{t("engines.transcribe_mode")}</span>
-      <Choices
-        label={t("engines.transcribe_mode")}
-        bind:value={() => s.mode ?? modes[0], (v) => { s.mode = v; disarm(); }}
-        options={modes.map((m) => ({ value: m, label: t(`engines.transcribe_mode.${m}`), help: t(`engines.transcribe_mode.${m}_help`), info: m === modes[0] ? undefined : t(`engines.transcribe_mode.${m}_info`, { name: serviceName }) }))}
-      />
+      <div>
+        <Choices
+          label={t("engines.transcribe_mode")}
+          bind:value={() => s.mode ?? modes[0], (v) => { s.mode = v; disarm(); }}
+          options={modes.map((m) => ({ value: m, label: t(`engines.transcribe_mode.${m}`), help: t(`engines.transcribe_mode.${m}_help`), info: m === modes[0] ? undefined : t(`engines.transcribe_mode.${m}_info`, { name: serviceName }) }))}
+        />
+        {#if wordsOffered(r)}<Fold>
+          <div class="words">
+            <div class="words-row">
+              <span>{t("engines.word_times")}</span>
+              <Switch bind:checked={s.words} label={t("engines.word_times")} onchange={disarm} />
+            </div>
+            <small>{t(s.words ? "engines.word_times_on" : "engines.word_times_off")}</small>
+            {#if s.words}<Fold><p class="warn"><Icon name="warning" size={14} /><span>{t("engines.word_times_warning")}</span></p></Fold>{/if}
+          </div>
+        </Fold>{/if}
+      </div>
     {/if}
     {#if takesEffort(pick, services, r, chosen(r))}
       <span class="lab">{t("engines.effort")}</span>
@@ -619,6 +636,10 @@
   .also b { display: block; font-size: var(--text-control); font-weight: 600; }
   .also small { color: var(--ink-2); font-size: var(--text-xs); }
   .result { margin: -6px 0 0; font-size: var(--text-sm); line-height: 1.45; overflow-wrap: anywhere; }
+  .words { margin-top: 12px; }
+  .words-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .warn { display: flex; gap: 9px; align-items: flex-start; margin: 8px 0 0; color: var(--warn); font-size: var(--text-sm); line-height: 1.55; }
+  .warn :global(svg) { flex: none; margin-top: 3px; }
   .cost { display: flex; gap: 9px; align-items: flex-start; margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--sunken); color: var(--ink-2); font-size: var(--text-sm); line-height: 1.5; }
   .cost :global(svg) { flex: none; margin-top: 3px; }
   .btn.ask { background: var(--live); border-color: var(--live); color: #fff; }

@@ -153,6 +153,7 @@ impl ProviderRegistry {
             ProviderKind::Native => TermLimit::Count(LIST_TERMS),
             ProviderKind::Embedded => TermLimit::Bytes(PROMPT_TERM_BYTES),
             ProviderKind::Http => match self.route(cfg).map(|r| r.asr) {
+                Some(Wire::Interactions) if cfg.asks_word_times() => TermLimit::Count(0),
                 Some(Wire::Interactions | Wire::ChatAudio) => TermLimit::Count(LIST_TERMS),
                 _ => TermLimit::Bytes(PROMPT_TERM_BYTES),
             },
@@ -297,6 +298,7 @@ impl ProviderRegistry {
                         cfg.capabilities.language_hint,
                         cfg.capabilities.hotwords,
                         cfg.transcribe_mode.clone(),
+                        cfg.word_times,
                     )),
                     Wire::ChatAudio => Arc::new(ChatAsrProvider::new(
                         self.client.clone(),
@@ -441,6 +443,25 @@ pub(crate) mod tests {
             "asr": asr, "llm": "chat"
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn an_engine_that_asks_for_word_times_takes_no_terms() {
+        let r = ProviderRegistry::new(
+            reqwest::Client::new(),
+            Arc::new(MemorySecretStore::default()),
+        );
+        r.set_services(Arc::new(Services(Mutex::new(vec![preset(
+            "https://svc.test/",
+            "interactions",
+        )]))));
+        let mut cfg = Config::http_test_config().providers[0].clone();
+        cfg.service = Some("svc".into());
+        assert_eq!(r.term_limit(&cfg), TermLimit::Count(LIST_TERMS));
+        cfg.word_times = true;
+        assert_eq!(r.term_limit(&cfg), TermLimit::Count(0));
+        cfg.transcribe_mode = Some("smart".into());
+        assert_eq!(r.term_limit(&cfg), TermLimit::Count(LIST_TERMS));
     }
 
     #[tokio::test]

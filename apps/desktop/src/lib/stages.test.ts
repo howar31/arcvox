@@ -33,6 +33,10 @@ describe("engineGroups", () => {
 });
 
 describe("engineDefaultName", () => {
+  it("names word times in the default mode only", () => {
+    expect(engineDefaultName("Gemini", "models/gemini-3.5-transcribe", { transcribe_mode: null, reasoning_effort: null, word_times: true })).toBe("Gemini_gemini-3.5-transcribe_words");
+    expect(engineDefaultName("Gemini", "models/gemini-3.5-transcribe", { transcribe_mode: "smart", reasoning_effort: null, word_times: true })).toBe("Gemini_gemini-3.5-transcribe_smart");
+  });
   const plain = { transcribe_mode: null, reasoning_effort: null };
   it("joins the service, the model and what the engine sets", () => {
     expect(engineDefaultName("Gemini", "models/gemini-3.5-flash-lite", plain)).toBe("Gemini_gemini-3.5-flash-lite");

@@ -752,6 +752,7 @@ impl Engine {
             model: cfg.model.clone(),
             reasoning_effort: cfg.reasoning_effort.clone(),
             transcribe_mode: cfg.transcribe_mode.clone(),
+            word_times: cfg.word_times,
             code,
             probe: crate::checks::probe_version(role),
             outdated: false,

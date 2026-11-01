@@ -37,6 +37,15 @@ export function modesOf(pick: ServicePick, services: ServicePreset[], model: str
   return modelRoute(services.find((s) => s.id === pick.id), model)?.modes ?? [];
 }
 
+/** Whether the speech model can say when each word was said. */
+export function offersWordTimes(pick: ServicePick, services: ServicePreset[], model: string): boolean {
+  if (pick.kind === "custom" || !pick.id) return false;
+  return !!modelRoute(services.find((s) => s.id === pick.id), model)?.word_times;
+}
+
+/** Whether an engine asks for word times: they exist in the service's default mode only. */
+export const asksWordTimes = (p: Pick<ProviderConfig, "word_times" | "transcribe_mode">): boolean => !!p.word_times && !p.transcribe_mode;
+
 /** Whether the role's requests are chat requests, which take a reasoning effort. */
 export function takesEffort(pick: ServicePick, services: ServicePreset[], role: Role, model = ""): boolean {
   if (role === "llm") return true;
@@ -61,12 +70,12 @@ export function suggestedIn(listed: string[], suggestion: string | null | undefi
 }
 
 /** What a real request depends on: a change to any of these makes an earlier check stale. */
-export const checkKey = (p: Pick<ProviderConfig, "service" | "base_url" | "model" | "reasoning_effort" | "transcribe_mode">, role: Role): string =>
-  JSON.stringify([role, p.service ?? null, p.service ? null : (p.base_url ?? null), p.model ?? null, p.reasoning_effort ?? null, p.transcribe_mode ?? null]);
+export const checkKey = (p: Pick<ProviderConfig, "service" | "base_url" | "model" | "reasoning_effort" | "transcribe_mode" | "word_times">, role: Role): string =>
+  JSON.stringify([role, p.service ?? null, p.service ? null : (p.base_url ?? null), p.model ?? null, p.reasoning_effort ?? null, p.transcribe_mode ?? null, !!p.word_times]);
 
 /** Whether a stored check was made with the engine as it is set now. */
 export const checkCurrent = (c: EngineCheck | undefined, p: ProviderConfig, role: Role): boolean =>
-  !!c && checkKey({ service: c.service ?? null, base_url: c.base_url ?? null, model: c.model ?? null, reasoning_effort: c.reasoning_effort ?? null, transcribe_mode: c.transcribe_mode ?? null }, c.role) === checkKey(p, role);
+  !!c && checkKey({ service: c.service ?? null, base_url: c.base_url ?? null, model: c.model ?? null, reasoning_effort: c.reasoning_effort ?? null, transcribe_mode: c.transcribe_mode ?? null, word_times: c.word_times }, c.role) === checkKey(p, role);
 
 /** What a failed check shows as the service's words. */
 export const checkBody = (c: EngineCheck): string | null | undefined => (c.code === "empty_reply" ? t("failure.empty_reply") : c.message);

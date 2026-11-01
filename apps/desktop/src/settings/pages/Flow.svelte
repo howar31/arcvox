@@ -13,6 +13,7 @@
   import { isImeKey } from "../../lib/ime";
   import { appsSummary, withLlm } from "../../lib/profileEdit";
   import { anyFallback, FOLLOW, isFallback, resolveEngines, usableWith } from "../../lib/resolve";
+  import { asksWordTimes } from "../../lib/serviceForm";
   import { encoderMissing, runnable } from "../../lib/engines";
   import { go } from "../../lib/route";
   import { engineLine, micLine, outputLine, type StageLine } from "../../lib/stages";
@@ -118,6 +119,7 @@
   });
   // The engines the draft runs with now: its own when they can run, else the default pair.
   const resolved = $derived(draft ? resolveEngines(config.value, draft, usableWith(installed.ids, installed.paths)) : null);
+  const asrEngine = $derived(config.value?.providers.find((p) => p.id === resolved?.asr.id));
   // The stored profiles that run on the default engine because an engine they name cannot run.
   const faulty = $derived.by(() => {
     const usable = usableWith(installed.ids, installed.paths);
@@ -582,6 +584,11 @@
             {#snippet help()}{t("flow.asr_hint_help_before").slice(0, -1)}<span class="nobr">{t("flow.asr_hint_help_before").slice(-1)}<button type="button" class="stage-link" onclick={() => (stage = "rules")}>{t("flow.stage.rules")}</button>{t("flow.asr_hint_help_after")}</span>{/snippet}
             <Switch bind:checked={draft.asr_dictionary_hint} label={t("flow.asr_hint")} />
           </Row>
+          {#if draft.asr_dictionary_hint && asrEngine && asksWordTimes(asrEngine)}<Fold>
+            <Row>
+              {#snippet help()}<span class="hint-off"><Icon name="warning" size={14} />{t("flow.asr_hint_word_times", { name: asrEngine?.label ?? "" })}</span>{/snippet}
+            </Row>
+          </Fold>{/if}
           <Row label={t("flow.opencc_engine")}>
             {#snippet help()}{t("flow.opencc_engine_before")}<PageLink page="about" label={t("nav.about")} />{t("flow.opencc_engine_after")}{/snippet}
           </Row>
@@ -711,6 +718,8 @@
 <AddProfile bind:open={adding} {presets} {manifest} {installed} models={models ?? []} />
 
 <style>
+  .hint-off { display: inline-flex; align-items: flex-start; gap: 8px; color: var(--warn); }
+  .hint-off :global(svg) { flex: none; margin-top: 3px; }
   .pick { display: flex; align-items: center; gap: 10px; }
 
   .gt { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 22px 4px 12px; font: 600 var(--text-sm)/1 var(--font); color: var(--ink-2); }

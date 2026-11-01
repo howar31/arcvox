@@ -81,6 +81,9 @@
   let fresh = $state<Record<number, number>>({});
   // Which blocks of an expanded row are open, for every row; remembered across visits.
   let opened = $state<Record<DetailBlock, boolean>>({ attempts: storedOpen("attempts"), usage: storedOpen("usage") });
+  // The open row's player, and where it is while it plays.
+  let player = $state<Player>();
+  let playing = $state<number | null>(null);
   function setOpen(block: DetailBlock, open: boolean) {
     opened[block] = open;
     rememberOpen(block, open);
@@ -457,12 +460,12 @@
                   {/if}
                 {/if}
               {:else}
-                <TextFlow {u} stages={stages[u.id] ?? null} oncorrect={(text) => correct(u, text)} />
+                <TextFlow {u} stages={stages[u.id] ?? null} oncorrect={(text) => correct(u, text)} {playing} onword={u.has_audio ? (w) => player?.playFrom(w.start_ms) : undefined} />
               {/if}
               {#if u.has_audio}
                 {@const failedRow = u.error !== null}
                 <div class="label">{t("history.recording")}</div>
-                {#key plays}<Player id={u.id} {autoplay} />{/key}
+                {#key plays}<Player bind:this={player} id={u.id} {autoplay} onposition={(ms) => (playing = ms)} />{/key}
                 <div class="label">{t(failedRow ? "history.retry" : "history.reprocess")}</div>
                 {#if busy[u.id]}
                   <div class="busy" role="status"><span class="spin" aria-hidden="true"></span>{t("history.processing", { engines: redoEngines(u) })}</div>

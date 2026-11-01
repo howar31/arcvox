@@ -42,6 +42,9 @@ pub struct ModelRoute {
     /// when they have none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub modes: Vec<String>,
+    /// The form offers word times for these models.
+    #[serde(default)]
+    pub word_times: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -240,6 +243,7 @@ mod tests {
             service: service.map(str::to_string),
             reasoning_effort: None,
             transcribe_mode: None,
+            word_times: false,
         }
     }
 

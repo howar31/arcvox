@@ -12,8 +12,8 @@
   import { toast } from "../../../lib/ui/toast.svelte";
   import { parseWav, peaks, type WavInfo } from "../../../lib/wav";
 
-  /** Plays the recording of the history row `id`. */
-  let { id, autoplay = false }: { id: number; autoplay?: boolean } = $props();
+  /** Plays the recording of the history row `id`; `onposition` follows it, with null while it does not play. */
+  let { id, autoplay = false, onposition }: { id: number; autoplay?: boolean; onposition?: (ms: number | null) => void } = $props();
 
   /** Width of one bar and the space after it; a wider player shows more bars, not wider ones. */
   const BAR = 3;
@@ -67,6 +67,23 @@
     // A refused start leaves the control on "play".
     audio.play().catch(() => { active = false; });
   }
+
+  /** Plays from `ms`. */
+  export function playFrom(ms: number) {
+    if (!audio) return;
+    audio.currentTime = ms / 1000;
+    positionMs = ms;
+    if (audio.paused) toggle();
+  }
+
+  $effect(() => {
+    if (!active) { onposition?.(null); return; }
+    let frame = requestAnimationFrame(function follow() {
+      if (audio) onposition?.(audio.currentTime * 1000);
+      frame = requestAnimationFrame(follow);
+    });
+    return () => cancelAnimationFrame(frame);
+  });
 
   function seek(e: MouseEvent) {
     if (!audio || lengthMs <= 0) return;

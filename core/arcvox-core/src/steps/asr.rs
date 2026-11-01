@@ -85,13 +85,16 @@ impl Step for AsrStep {
                 recoverable: false,
                 ..StepError::from(e)
             })?;
-        let detail = serde_json::json!({
+        let mut detail = serde_json::json!({
             "language": t.language,
             "chars": t.text.chars().count(),
             // What the engine knows beyond the text, kept for later
             // analysis; nothing downstream reads it yet.
             "segments": segment_records(&t.segments),
         });
+        if !t.words.is_empty() {
+            detail["words"] = serde_json::json!(t.words);
+        }
         Ok(StepOutput {
             detail: super::with_usage(detail, t.usage.clone()),
             text: t.text,
@@ -215,6 +218,33 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out.detail["segments"][0]["end_ms"], 800);
+    }
+
+    #[tokio::test]
+    async fn the_word_times_go_into_the_stage_record() {
+        let fake = Arc::new(FakeAsr {
+            result: Ok(crate::types::Transcript {
+                text: "你".into(),
+                words: vec![crate::types::TranscriptWord {
+                    text: "你".into(),
+                    start_ms: 300,
+                    end_ms: 400,
+                }],
+                ..Default::default()
+            }),
+            hints: std::sync::Mutex::new(Vec::new()),
+        });
+        let out = AsrStep::new(fake, crate::dictionary::TermLimit::Count(100))
+            .run(
+                StepInput {
+                    text: String::new(),
+                    audio: Some(audio()),
+                },
+                &test_context(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.detail["words"][0]["start_ms"], 300);
     }
 
     #[tokio::test]

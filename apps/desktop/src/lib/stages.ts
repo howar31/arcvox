@@ -60,9 +60,10 @@ export function outputLine(profile: Profile, method: InsertMethod = "paste"): St
 
 /** One sentence about what an engine is. */
 /** What a network engine sets beyond its model, in words; "" at the service's defaults. */
-export function engineVariant(p: Pick<ProviderConfig, "transcribe_mode" | "reasoning_effort">): string {
+export function engineVariant(p: Pick<ProviderConfig, "transcribe_mode" | "reasoning_effort" | "word_times">): string {
   return [
     p.transcribe_mode ? t("engines.variant_mode", { mode: t(`engines.transcribe_mode.${p.transcribe_mode}`) }) : "",
+    p.word_times && !p.transcribe_mode ? t("engines.word_times") : "",
     p.reasoning_effort ? t("engines.variant_effort", { value: t(`engines.effort.${p.reasoning_effort}`) }) : "",
   ].filter(Boolean).join(t("home.list_sep"));
 }
@@ -73,9 +74,9 @@ const EFFORT_TAGS: Record<string, string> = { minimal: "min", medium: "med" };
  * The default name of a network engine: service, model and what it sets beyond the service's defaults, joined
  * by `_`. It is stored, so it stays in fixed keywords whatever the interface language.
  */
-export function engineDefaultName(service: string, model: string, p: Pick<ProviderConfig, "transcribe_mode" | "reasoning_effort">): string {
+export function engineDefaultName(service: string, model: string, p: Pick<ProviderConfig, "transcribe_mode" | "reasoning_effort" | "word_times">): string {
   const effort = p.reasoning_effort && `e-${EFFORT_TAGS[p.reasoning_effort] ?? p.reasoning_effort}`;
-  const parts = [service.trim().replace(/\s+/g, "-"), model.replace(/^models\//, ""), p.transcribe_mode, effort].filter(Boolean);
+  const parts = [service.trim().replace(/\s+/g, "-"), model.replace(/^models\//, ""), p.transcribe_mode, p.word_times && !p.transcribe_mode ? "words" : "", effort].filter(Boolean);
   return parts.join("_") || "external";
 }
 

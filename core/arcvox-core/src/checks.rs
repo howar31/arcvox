@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::ProviderConfig;
 use crate::models::{ModelRole, ServiceKind, ServicePreset};
 use crate::paths::DataDir;
 use crate::providers::http_common::endpoint;
@@ -43,6 +44,8 @@ pub struct EngineCheck {
     pub reasoning_effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcribe_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub word_times: bool,
     /// The failure's code.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
@@ -52,6 +55,22 @@ pub struct EngineCheck {
     /// The request has changed since; worked out when the checks are read.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub outdated: bool,
+}
+
+impl EngineCheck {
+    /// The check failed, with the request of today and the engine as it is
+    /// set now.
+    pub fn fails(&self, cfg: &ProviderConfig) -> bool {
+        !self.ok
+            && self.probe >= probe_version(self.role)
+            && self.service == cfg.service
+            && (cfg.service.is_some()
+                || self.base_url == cfg.base_url.as_ref().map(|u| u.to_string()))
+            && self.model == cfg.model
+            && self.reasoning_effort == cfg.reasoning_effort
+            && self.transcribe_mode == cfg.transcribe_mode
+            && self.word_times == cfg.word_times
+    }
 }
 
 const fn first_probe() -> u32 {
@@ -217,6 +236,7 @@ mod tests {
             model: Some("m".into()),
             reasoning_effort: None,
             transcribe_mode: None,
+            word_times: false,
             code: None,
             probe: probe_version(ModelRole::Asr),
             outdated: false,

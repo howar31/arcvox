@@ -19,9 +19,11 @@ export interface ProviderConfig {
   reasoning_effort?: string | null;
   /** A speech model's mode; absent means the service's default. */
   transcribe_mode?: string | null;
+  /** The speech engine asks when each word was said; the service then takes no dictionary terms. */
+  word_times?: boolean;
 }
 export type Wire = "transcriptions" | "chat_audio" | "chat" | "interactions";
-export interface ModelRoute { models: string[]; wire: Wire; base_url: string; modes?: string[] }
+export interface ModelRoute { models: string[]; wire: Wire; base_url: string; modes?: string[]; word_times?: boolean }
 export interface ServicePreset {
   id: string; label: string; kind: "cloud" | "local";
   base_url?: string | null; port?: number | null; path?: string | null;
@@ -32,7 +34,7 @@ export interface ServicePreset {
 export interface LocalService { id: string; label: string; base_url: string; running: boolean; models: string[] }
 export interface EngineCheck {
   ok: boolean; at: number; elapsed_ms: number; message?: string | null; detail?: string | null; status?: number | null; role: "asr" | "llm";
-  service?: string | null; base_url?: string | null; model?: string | null; reasoning_effort?: string | null; transcribe_mode?: string | null;
+  service?: string | null; base_url?: string | null; model?: string | null; reasoning_effort?: string | null; transcribe_mode?: string | null; word_times?: boolean;
   code?: string | null; probe?: number; outdated?: boolean;
 }
 export type StepSpec =

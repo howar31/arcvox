@@ -126,6 +126,17 @@ pub struct Transcript {
     /// What the service reports of its use, as it came.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<serde_json::Value>,
+    /// When each word was said, when the engine reports it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub words: Vec<TranscriptWord>,
+}
+
+/// One word of a transcript and where it is in the recording.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranscriptWord {
+    pub text: String,
+    pub start_ms: u32,
+    pub end_ms: u32,
 }
 
 /// One segment of a transcript as the speech engine decoded it.

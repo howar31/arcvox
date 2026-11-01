@@ -403,6 +403,7 @@ mod tests {
             service: None,
             reasoning_effort: None,
             transcribe_mode: None,
+            word_times: false,
         };
         let _: &Profile = c.default_profile();
     }
