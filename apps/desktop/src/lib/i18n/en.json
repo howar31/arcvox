@@ -594,6 +594,7 @@
   "engines.speed": "Compare how long each engine takes:",
   "engines.default_user": "{name} (default)",
   "engines.desc.custom": "Imported file {file}",
+  "engines.desc.folder": "Folder {folder}",
   "engines.no_role": "No role",
   "engines.file_missing": "File missing",
   "engines.encoder_missing": "No audio encoder",

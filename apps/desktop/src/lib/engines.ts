@@ -59,5 +59,7 @@ export function factsLine(m: InstalledModel): string {
 export function ownModelDescription(m: InstalledModel): string {
   const facts = factsLine(m);
   const both = m.capabilities.transcribe && m.capabilities.chat ? t("engines.both_roles") : "";
-  return [facts, both].filter(Boolean).join(t("engines.fact_sep"));
+  // Files in different folders can share a name.
+  const folder = m.id.split("/").slice(1, -1).join("/");
+  return [facts, both, folder && t("engines.desc.folder", { folder })].filter(Boolean).join(t("engines.fact_sep"));
 }

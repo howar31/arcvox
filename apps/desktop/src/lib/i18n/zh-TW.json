@@ -594,6 +594,7 @@
   "engines.speed": "比較各引擎所需的時間：",
   "engines.default_user": "{name}（預設）",
   "engines.desc.custom": "匯入的模型檔 {file}",
+  "engines.desc.folder": "資料夾 {folder}",
   "engines.no_role": "未指定用途",
   "engines.file_missing": "找不到檔案",
   "engines.encoder_missing": "缺少音訊編碼器",

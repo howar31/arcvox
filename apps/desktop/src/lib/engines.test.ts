@@ -96,5 +96,7 @@ describe("a model file's own facts", () => {
     setLanguage("en");
     expect(ownModelDescription(own({ shape: "omni 3B", quantization: "Q4_K_M", license: null }, true, true))).toBe("omni 3B, Q4_K_M, Usable for speech recognition and text rewriting");
     expect(ownModelDescription(own({ shape: null, quantization: null, license: null }))).toBe("");
+    const nested = { ...own({ shape: "omni 3B", quantization: null, license: null }), id: "custom/a/b/omni.gguf" };
+    expect(ownModelDescription(nested)).toBe("omni 3B, Folder a/b");
   });
 });
