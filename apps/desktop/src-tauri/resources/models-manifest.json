@@ -175,8 +175,7 @@
       "key_required": true,
       "key_url": "https://aistudio.google.com/apikey",
       "asr": "chat_audio",
-      "llm": "chat",
-      "suggested": { "asr": "gemini-2.5-flash", "llm": "gemini-2.5-flash-lite" }
+      "llm": "chat"
     },
     {
       "id": "openai",
@@ -186,8 +185,7 @@
       "key_required": true,
       "key_url": "https://platform.openai.com/api-keys",
       "asr": "transcriptions",
-      "llm": "chat",
-      "suggested": { "asr": "gpt-transcribe" }
+      "llm": "chat"
     },
     {
       "id": "groq",
@@ -197,8 +195,7 @@
       "key_required": true,
       "key_url": "https://console.groq.com/keys",
       "asr": "transcriptions",
-      "llm": "chat",
-      "suggested": { "asr": "whisper-large-v3-turbo" }
+      "llm": "chat"
     },
     {
       "id": "ollama",
