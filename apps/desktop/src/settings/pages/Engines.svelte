@@ -30,6 +30,7 @@
   import Ring from "../../lib/ui/Ring.svelte";
   import Row from "../../lib/ui/Row.svelte";
   import Segmented from "../../lib/ui/Segmented.svelte";
+  import ServiceAnswer from "../../lib/ui/ServiceAnswer.svelte";
   import StickyBar from "../../lib/ui/StickyBar.svelte";
   import Tag from "../../lib/ui/Tag.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
@@ -312,15 +313,15 @@
     realBusy = { ...realBusy, [p.id]: false };
   }
   /** The engine's last real request, as one line. */
-  function checkLine(p: ProviderConfig): { text: string; tone: "ok" | "bad" | "" } {
-    if (realBusy[p.id]) return { text: t("engines.check_running"), tone: "" };
+  function checkLine(p: ProviderConfig): { text: string; tone: "ok" | "bad" | ""; detail: string | null } {
+    if (realBusy[p.id]) return { text: t("engines.check_running"), tone: "", detail: null };
     const c = checks[p.id];
-    if (!c) return { text: t("engines.check_none"), tone: "" };
-    if (!checkCurrent(c, p, role)) return { text: t("engines.check_stale"), tone: "" };
+    if (!c) return { text: t("engines.check_none"), tone: "", detail: null };
+    if (!checkCurrent(c, p, role)) return { text: t("engines.check_stale"), tone: "", detail: null };
     const when = `${formatShortDate(c.at)} ${formatTime(c.at)}`;
     return c.ok
-      ? { text: t("engines.check_ok_at", { when }), tone: "ok" }
-      : { text: t("engines.check_failed_at", { when, msg: c.message ?? "" }), tone: "bad" };
+      ? { text: t("engines.check_ok_at", { when }), tone: "ok", detail: null }
+      : { text: t("engines.check_failed_at", { when, msg: c.message ?? "" }), tone: "bad", detail: c.detail ?? null };
   }
   function openForm(p: ProviderConfig | null) {
     formInitial = p;
@@ -559,7 +560,7 @@
           </div>
           <small>{engineDescription(p, manifest)}</small>
           <small>{usersLine(p.id)}</small>
-          <small class="check {checkLine(p).tone}">{checkLine(p).text}</small>
+          <small class="check"><ServiceAnswer tone={checkLine(p).tone} text={checkLine(p).text} detail={checkLine(p).detail} /></small>
           {@render probeLine(p.id)}
         </div>
         <span class="acts">
@@ -628,11 +629,9 @@
   .info small { display: block; color: var(--ink-2); font-size: var(--text-sm); overflow-wrap: anywhere; }
   .info small.line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .probe.ok { color: var(--ok); }
-  .check.ok { color: var(--ok); }
   .ext { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; column-gap: 16px; row-gap: 6px; }
   .ext .info { flex: 1 1 260px; }
   .acts { display: flex; align-items: center; gap: 16px; margin-left: auto; }
-  .check.bad { color: var(--live); }
   .btn.quiet.ask { color: var(--live); font-weight: 600; }
   .probe.bad { color: var(--live); }
   .bar { width: 96px; height: 4px; border-radius: 2px; background: var(--sunken); overflow: hidden; flex: none; }

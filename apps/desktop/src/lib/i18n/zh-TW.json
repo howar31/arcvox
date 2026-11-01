@@ -435,6 +435,8 @@
   "engines.check_stale": "設定已變更，尚未實際測試",
   "engines.check_ok_at": "實際測試通過，{when}",
   "engines.check_failed_at": "實際測試未通過，{when}：{msg}",
+  "engines.raw_show": "原始回應",
+  "engines.raw_hide": "收起原始回應",
   "engines.service_missing": "找不到服務",
   "engines.tip.service_missing": "模型目錄裡沒有這個服務，使用儲存的網址。",
   "engines.service_cloud": "雲端服務",

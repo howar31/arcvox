@@ -679,11 +679,28 @@ impl Engine {
                 Err(e) => Err(e),
             },
         };
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        let (message, detail) = match outcome {
+            Ok(()) => (None, None),
+            Err(e) => (Some(e.message), e.detail),
+        };
+        tracing::info!(
+            engine = %cfg.id,
+            service = cfg.service.as_deref().unwrap_or("custom"),
+            model = cfg.model.as_deref().unwrap_or(""),
+            ?role,
+            ok = message.is_none(),
+            elapsed_ms,
+            message = message.as_deref().unwrap_or(""),
+            detail = detail.as_deref().unwrap_or(""),
+            "engine checked with a real request"
+        );
         crate::checks::EngineCheck {
-            ok: outcome.is_ok(),
+            ok: message.is_none(),
             at: crate::history::now_unix(),
-            elapsed_ms: started.elapsed().as_millis() as u64,
-            message: outcome.err().map(|e| e.message),
+            elapsed_ms,
+            message,
+            detail,
             role,
             service: cfg.service.clone(),
             base_url: cfg.base_url.as_ref().map(|u| u.to_string()),

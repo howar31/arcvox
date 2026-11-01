@@ -21,6 +21,8 @@ pub struct ProviderError {
     pub code: ErrorCode,
     pub message: String,
     pub hint: Option<String>,
+    /// What the service answered, unshortened, when `message` shows only part of it.
+    pub detail: Option<String>,
 }
 
 impl ProviderError {
@@ -29,10 +31,15 @@ impl ProviderError {
             code,
             message: message.into(),
             hint: None,
+            detail: None,
         }
     }
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
         self.hint = Some(hint.into());
+        self
+    }
+    pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
         self
     }
 }

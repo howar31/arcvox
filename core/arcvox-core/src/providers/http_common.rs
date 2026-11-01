@@ -84,8 +84,37 @@ fn after_retries(mut err: ProviderError, retried: u32) -> ProviderError {
     err
 }
 
+/// The message of an error body in the OpenAI-compatible shape,
+/// `{"error":{"message":…}}`, also when wrapped in a list as some services do.
+fn error_message(body: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let v = match v {
+        serde_json::Value::Array(mut items) if !items.is_empty() => items.swap_remove(0),
+        other => other,
+    };
+    let m = v.get("error")?.get("message")?.as_str()?.trim();
+    (!m.is_empty()).then(|| m.to_string())
+}
+
+/// The longest service answer kept beside an error.
+const DETAIL_CHARS: usize = 4000;
+
 pub fn classify_status(label: &str, status: StatusCode, body: &str) -> ProviderError {
-    let snippet: String = body.chars().take(200).collect();
+    let err = classify_message(label, status, body);
+    let detail: String = body.trim().chars().take(DETAIL_CHARS).collect();
+    if detail.is_empty() {
+        err
+    } else {
+        err.with_detail(detail)
+    }
+}
+
+fn classify_message(label: &str, status: StatusCode, body: &str) -> ProviderError {
+    let snippet: String = error_message(body)
+        .unwrap_or_else(|| body.to_string())
+        .chars()
+        .take(200)
+        .collect();
     match status.as_u16() {
         401 | 403 => ProviderError::new(
             ErrorCode::ProviderUnauthorized,
@@ -140,6 +169,28 @@ mod tests {
             "audio/transcriptions",
         );
         assert_eq!(url.as_str(), "http://localhost:8000/audio/transcriptions");
+    }
+
+    #[test]
+    fn an_error_body_in_the_common_shape_shows_its_message_and_keeps_the_answer() {
+        let body = r#"[{"error":{"code":400,"message":"models/x is not found for API version v1main","status":"INVALID_ARGUMENT"}}]"#;
+        let e = classify_status("Gemini", StatusCode::BAD_REQUEST, body);
+        assert_eq!(
+            e.message,
+            "Gemini: HTTP 400 Bad Request models/x is not found for API version v1main"
+        );
+        assert_eq!(e.detail.as_deref(), Some(body));
+        let e = classify_status(
+            "X",
+            StatusCode::BAD_REQUEST,
+            r#"{"error":{"message":"no chat"}}"#,
+        );
+        assert!(e.message.ends_with("no chat"), "{}", e.message);
+        let e = classify_status("X", StatusCode::BAD_GATEWAY, "upstream down");
+        assert!(e.message.ends_with("upstream down"), "{}", e.message);
+        assert!(classify_status("X", StatusCode::BAD_GATEWAY, "")
+            .detail
+            .is_none());
     }
 
     #[test]

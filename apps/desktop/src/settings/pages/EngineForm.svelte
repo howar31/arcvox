@@ -10,6 +10,7 @@
   import Fold from "../../lib/ui/Fold.svelte";
   import Icon from "../../lib/ui/Icon.svelte";
   import Modal from "../../lib/ui/Modal.svelte";
+  import ServiceAnswer from "../../lib/ui/ServiceAnswer.svelte";
   import Switch from "../../lib/ui/Switch.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
 
@@ -372,9 +373,9 @@
     {#if shown[r]}
       {@const c = shown[r]!}
       <span></span>
-      <p class="result" class:ok={c.ok} class:bad={!c.ok} role="status">
-        {c.ok ? t("engines.check_ok_in", { time: time(c) }) : t("engines.check_failed", { msg: c.message ?? "" })}
-      </p>
+      <div class="result" role="status">
+        <ServiceAnswer tone={c.ok ? "ok" : "bad"} text={c.ok ? t("engines.check_ok_in", { time: time(c) }) : t("engines.check_failed", { msg: c.message ?? "" })} detail={c.ok ? null : c.detail} />
+      </div>
     {/if}
   </div>
 {/snippet}
@@ -558,8 +559,6 @@
   .also b { display: block; font-size: var(--text-control); font-weight: 600; }
   .also small { color: var(--ink-2); font-size: var(--text-xs); }
   .result { margin: -6px 0 0; font-size: var(--text-sm); line-height: 1.45; overflow-wrap: anywhere; }
-  .result.ok { color: var(--ok); }
-  .result.bad { color: var(--live); }
   .cost { display: flex; gap: 9px; align-items: flex-start; margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--sunken); color: var(--ink-2); font-size: var(--text-sm); line-height: 1.5; }
   .cost :global(svg) { flex: none; margin-top: 3px; }
   .btn.ask { background: var(--live); border-color: var(--live); color: #fff; }
