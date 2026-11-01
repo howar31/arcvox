@@ -25,6 +25,7 @@
   "tray.default_asr_not_ready": "The default speech engine cannot run",
   "tray.default_llm_not_ready": "The default rewriting engine cannot run",
   "tray.model_file_missing": "Model file not found: {name}",
+  "tray.engine_test_failed": "Last test failed: {name}",
   "tray.fix_flow": "Profiles",
   "tray.profiles": "Default profile",
   "tray.profiles_manage": "Manage profiles",

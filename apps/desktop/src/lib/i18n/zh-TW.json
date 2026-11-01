@@ -25,6 +25,7 @@
   "tray.default_asr_not_ready": "預設的語音辨識引擎無法使用",
   "tray.default_llm_not_ready": "預設的文字改寫引擎無法使用",
   "tray.model_file_missing": "找不到模型檔案：{name}",
+  "tray.engine_test_failed": "最近一次測試失敗：{name}",
   "tray.fix_flow": "情境",
   "tray.profiles": "預設情境",
   "tray.profiles_manage": "管理情境",

@@ -107,6 +107,9 @@ pub enum Notice {
     /// An engine, by name, whose own model file is gone, and the Engines
     /// tab it is listed on (`asr` or `llm`).
     ModelFileMissing(String, &'static str),
+    /// A network engine dictation depends on, by name, whose last test
+    /// failed, and the Engines tab it is listed on.
+    EngineTestFailed(String, &'static str),
     BackupFolderMissing,
     BackupFolderNotWritable,
 }
@@ -122,6 +125,7 @@ impl Notice {
             Notice::DefaultAsrNotReady => "default_asr_not_ready",
             Notice::DefaultLlmNotReady => "default_llm_not_ready",
             Notice::ModelFileMissing(..) => "model_file_missing",
+            Notice::EngineTestFailed(..) => "engine_test_failed",
             Notice::BackupFolderMissing => "backup_folder_missing",
             Notice::BackupFolderNotWritable => "backup_folder_not_writable",
         }
@@ -137,6 +141,7 @@ impl Notice {
             Notice::DefaultAsrNotReady => (Msg::TrayDefaultAsrNotReady, None),
             Notice::DefaultLlmNotReady => (Msg::TrayDefaultLlmNotReady, None),
             Notice::ModelFileMissing(n, _) => (Msg::TrayModelFileMissing, Some(n)),
+            Notice::EngineTestFailed(n, _) => (Msg::TrayEngineTestFailed, Some(n)),
             Notice::BackupFolderMissing => (Msg::TrayBackupFolderMissing, None),
             Notice::BackupFolderNotWritable => (Msg::TrayBackupFolderNotWritable, None),
         };
@@ -157,7 +162,8 @@ impl Notice {
             }
             Notice::DefaultAsrNotReady
             | Notice::DefaultLlmNotReady
-            | Notice::ModelFileMissing(..) => (ID_FIX_ENGINES, Msg::TrayFixEngine),
+            | Notice::ModelFileMissing(..)
+            | Notice::EngineTestFailed(..) => (ID_FIX_ENGINES, Msg::TrayFixEngine),
             Notice::BackupFolderMissing | Notice::BackupFolderNotWritable => {
                 (ID_FIX_BACKUP, Msg::TrayFixBackup)
             }
@@ -174,15 +180,16 @@ impl Notice {
         }
     }
 
-    /// A missing permission or a default engine that cannot run stops
-    /// dictation; a profile on the default engine, a model file gone from an
+    /// A missing permission, a default engine that cannot run or a failed
+    /// test of an engine in use stops dictation; a profile on the default engine, a model file gone from an
     /// engine nobody falls back on, and the backup folder do not.
     pub fn level(&self) -> Level {
         match self {
             Notice::MicrophoneDenied
             | Notice::MicrophoneRestricted
             | Notice::DefaultAsrNotReady
-            | Notice::DefaultLlmNotReady => Level::Fails,
+            | Notice::DefaultLlmNotReady
+            | Notice::EngineTestFailed(..) => Level::Fails,
             Notice::ProfileOnDefault(..)
             | Notice::ProfileStyleMoved(..)
             | Notice::ModelFileMissing(..)
@@ -200,7 +207,9 @@ impl Notice {
             }
             Notice::DefaultAsrNotReady => "engines/asr".into(),
             Notice::DefaultLlmNotReady => "engines/llm".into(),
-            Notice::ModelFileMissing(_, role) => format!("engines/{role}"),
+            Notice::ModelFileMissing(_, role) | Notice::EngineTestFailed(_, role) => {
+                format!("engines/{role}")
+            }
             _ => self.page().into(),
         }
     }
@@ -992,6 +1001,11 @@ mod tests {
                 "flow",
             ),
             (Notice::DefaultAsrNotReady, ID_FIX_ENGINES, "engines"),
+            (
+                Notice::EngineTestFailed("x".into(), "llm"),
+                ID_FIX_ENGINES,
+                "engines",
+            ),
             (Notice::DefaultLlmNotReady, ID_FIX_ENGINES, "engines"),
             (
                 Notice::ModelFileMissing("Own".into(), "llm"),

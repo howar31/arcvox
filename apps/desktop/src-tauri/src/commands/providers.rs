@@ -178,7 +178,9 @@ pub fn engine_check_put(
 ) -> CmdResult<()> {
     engine(&state)?
         .put_engine_check(&id.0, check)
-        .map_err(|e| CmdError::new("engine_check_write", e.to_string()))
+        .map_err(|e| CmdError::new("engine_check_write", e.to_string()))?;
+    state.refresh_problems();
+    Ok(())
 }
 
 #[cfg(test)]

@@ -1,7 +1,11 @@
 //! What is wrong with the profiles and the engines as they are set up: the
 //! menu-bar menu and the settings window report the same list.
 
-use arcvox_core::config::{Config, EngineRole, ProviderConfig};
+use std::collections::BTreeMap;
+
+use arcvox_core::checks::EngineCheck;
+use arcvox_core::config::{Config, EngineRole, ProviderConfig, ProviderKind};
+use arcvox_core::models::ModelRole;
 use arcvox_core::Engine;
 
 use crate::ui::tray::Notice;
@@ -54,6 +58,32 @@ pub fn notices(config: &Config, usable: impl Fn(&ProviderConfig) -> bool) -> Vec
     out
 }
 
+/// One notice for every network engine whose last test failed and that
+/// dictation depends on: a default engine or one a profile names. Such an
+/// engine is not swapped for the default.
+pub fn check_notices(config: &Config, checks: &BTreeMap<String, EngineCheck>) -> Vec<Notice> {
+    let depended = |p: &ProviderConfig| {
+        p.id == config.default_engines.asr
+            || p.id == config.default_engines.llm
+            || config.profiles.iter().any(|f| {
+                f.asr_provider.as_ref() == Some(&p.id) || f.llm_provider.as_ref() == Some(&p.id)
+            })
+    };
+    config
+        .providers
+        .iter()
+        .filter(|p| p.kind == ProviderKind::Http && depended(p))
+        .filter_map(|p| {
+            let check = checks.get(&p.id.0).filter(|c| c.fails(p))?;
+            let tab = match check.role {
+                ModelRole::Asr => "asr",
+                ModelRole::Llm => "llm",
+            };
+            Some(Notice::EngineTestFailed(p.label.clone(), tab))
+        })
+        .collect()
+}
+
 /// Whether the default profile can dictate now: every engine it resolves to
 /// can run.
 pub fn default_profile_ready(config: &Config, usable: impl Fn(&ProviderConfig) -> bool) -> bool {
@@ -68,7 +98,12 @@ pub fn default_profile_ready(config: &Config, usable: impl Fn(&ProviderConfig) -
 /// with them.
 pub fn refresh(engine: Option<&Engine>, ui: &TauriUi) {
     let found = match engine {
-        Some(e) => notices(&e.config().current(), |cfg| e.can_run(cfg)),
+        Some(e) => {
+            let config = e.config().current();
+            let mut found = notices(&config, |cfg| e.can_run(cfg));
+            found.extend(check_notices(&config, &e.engine_checks()));
+            found
+        }
         None => Vec::new(),
     };
     ui.set_engine_problems(found);
@@ -171,5 +206,76 @@ mod tests {
         assert!(!default_profile_ready(&c, have(&[])));
         // A default that can run takes over.
         assert!(default_profile_ready(&config(), have(&[])));
+    }
+
+    fn failed_check(cfg: &ProviderConfig) -> EngineCheck {
+        EngineCheck {
+            ok: false,
+            at: 1,
+            elapsed_ms: 1,
+            message: None,
+            detail: None,
+            status: Some(429),
+            role: ModelRole::Asr,
+            service: cfg.service.clone(),
+            base_url: cfg.base_url.as_ref().map(|u| u.to_string()),
+            model: cfg.model.clone(),
+            reasoning_effort: cfg.reasoning_effort.clone(),
+            transcribe_mode: cfg.transcribe_mode.clone(),
+            word_times: cfg.word_times,
+            code: None,
+            probe: arcvox_core::checks::probe_version(ModelRole::Asr),
+            outdated: false,
+        }
+    }
+
+    fn checks(check: EngineCheck) -> BTreeMap<String, EngineCheck> {
+        BTreeMap::from([("remote".to_string(), check)])
+    }
+
+    #[test]
+    fn a_failed_test_of_an_engine_in_use_is_a_notice() {
+        let mut c = config();
+        c.default_engines.asr = ProviderId("remote".into());
+        let cfg = c.provider(&ProviderId("remote".into())).unwrap().clone();
+        let found = check_notices(&c, &checks(failed_check(&cfg)));
+        assert_eq!(
+            found,
+            vec![Notice::EngineTestFailed("Remote".into(), "asr")]
+        );
+    }
+
+    #[test]
+    fn a_failed_test_of_an_engine_a_profile_names_is_a_notice() {
+        let mut c = config();
+        c.default_engines.asr = ProviderId("local".into());
+        c.profiles[0].asr_provider = Some(ProviderId("remote".into()));
+        let cfg = c.provider(&ProviderId("remote".into())).unwrap().clone();
+        assert_eq!(check_notices(&c, &checks(failed_check(&cfg))).len(), 1);
+    }
+
+    #[test]
+    fn a_failed_test_nobody_depends_on_or_of_other_settings_is_no_notice() {
+        let mut c = config();
+        c.default_engines.asr = ProviderId("local".into());
+        c.default_engines.llm = ProviderId("local".into());
+        for p in &mut c.profiles {
+            p.asr_provider = None;
+            p.llm_provider = None;
+        }
+        let cfg = c.provider(&ProviderId("remote".into())).unwrap().clone();
+        assert!(check_notices(&c, &checks(failed_check(&cfg))).is_empty());
+
+        c.default_engines.asr = ProviderId("remote".into());
+        let other = EngineCheck {
+            model: Some("another".into()),
+            ..failed_check(&cfg)
+        };
+        assert!(check_notices(&c, &checks(other)).is_empty());
+        let passed = EngineCheck {
+            ok: true,
+            ..failed_check(&cfg)
+        };
+        assert!(check_notices(&c, &checks(passed)).is_empty());
     }
 }
