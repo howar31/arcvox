@@ -43,6 +43,7 @@ async fn whisper_tiny_transcribes_fixture() {
             &AsrHint {
                 language: Some("zh-TW".into()),
                 prompt: None,
+                ..Default::default()
             },
         )
         .await
