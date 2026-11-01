@@ -71,6 +71,9 @@ pub struct ServicePreset {
     /// Where a key for the service is made.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_url: Option<String>,
+    /// The service's terms for what it does with the data sent to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terms_url: Option<String>,
     /// How speech goes to the service; none when it does no speech recognition.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asr: Option<Wire>,

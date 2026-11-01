@@ -25,7 +25,7 @@ export interface ModelRoute { models: string[]; wire: Wire; base_url: string; mo
 export interface ServicePreset {
   id: string; label: string; kind: "cloud" | "local";
   base_url?: string | null; port?: number | null; path?: string | null;
-  key_required: boolean; key_url?: string | null;
+  key_required: boolean; key_url?: string | null; terms_url?: string | null;
   asr?: Wire | null; llm?: Wire | null; asr_routes?: ModelRoute[];
   suggested: { asr?: string | null; llm?: string | null };
 }
@@ -193,6 +193,7 @@ export const verifyProvider = (provider: ProviderConfig, role: "asr" | "llm") =>
 export const listServices = () => invoke<ServicePreset[]>("services_list");
 export const scanLocalServices = () => invoke<LocalService[]>("services_scan_local");
 export const openServiceKeyPage = (id: string) => invoke<void>("services_open_key_page", { id });
+export const openServiceTermsPage = (id: string) => invoke<void>("services_open_terms_page", { id });
 export const engineChecks = () => invoke<Record<string, EngineCheck>>("engine_checks");
 export const putEngineCheck = (id: string, check: EngineCheck) => invoke<null>("engine_check_put", { id, check });
 export const upsertProfile = (profile: Profile) => invoke<Config>("profiles_upsert", { profile });

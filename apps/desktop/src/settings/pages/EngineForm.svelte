@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from "svelte";
-  import { deleteProvider, deleteSecret, errorMessage, hasSecret, listServices, openServiceKeyPage, probeProvider, putEngineCheck, scanLocalServices, setSecret, upsertProvider, verifyProvider, type EngineCheck, type LocalService, type ProbeResult, type ProviderConfig, type ServicePreset } from "../../lib/api";
+  import { deleteProvider, deleteSecret, errorMessage, hasSecret, listServices, openServiceKeyPage, openServiceTermsPage, probeProvider, putEngineCheck, scanLocalServices, setSecret, upsertProvider, verifyProvider, type EngineCheck, type LocalService, type ProbeResult, type ProviderConfig, type ServicePreset } from "../../lib/api";
   import { blankHttp, freshId, type Role } from "../../lib/engines";
   import { t } from "../../lib/i18n";
   import { usedBy } from "../../lib/labels";
@@ -493,6 +493,9 @@
             {/if}
           </Fold>
         {/key}
+        {#if pick.kind === "cloud" && preset}
+          <p class="cost"><Icon name="info" size={14} /><span>{t("engines.data_note", { name: preset.label })}{#if preset.terms_url} <button type="button" class="link" onclick={() => openServiceTermsPage(preset.id)}>{t("engines.data_terms")}</button>{/if}</span></p>
+        {/if}
         {#if probe && probe.state !== "ok"}<p class="probe {probe.state}" role="status">{#if probe.state === "bad"}<b>{t("engines.not_connected")}</b>{/if}{probe.text}</p>{/if}
       {:else}
         <p class="status" role="status">
