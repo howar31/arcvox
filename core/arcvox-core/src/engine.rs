@@ -14,6 +14,7 @@ use crate::config::{
     StoreError,
 };
 use crate::device::Device;
+use crate::dictionary::{asr_terms, rank_for_hints, TermLimit};
 use crate::history::{
     Delivery, DeviceRef, DeviceRow, HistoryError, HistoryStore, MoveReport, NewUtterance,
     StageKind, StageRecord,
@@ -41,6 +42,13 @@ pub const MIN_UTTERANCE_SECS: f32 = 0.2;
 pub const MAX_UTTERANCE_SECS: u32 = 30 * 60;
 const MAX_UTTERANCE_SAMPLES: usize = MAX_UTTERANCE_SECS as usize * SAMPLE_RATE as usize;
 const EVENT_BUFFER: usize = 256;
+/// The dictionary's hinted items and how many of them go with a dictation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct HintUsage {
+    pub sent: usize,
+    pub total: usize,
+}
+
 /// Finished sessions whose history row is still remembered for
 /// `record_final`. Dictations happen one at a time, so once this many have
 /// gone without a final text, every one of them is stale.
@@ -374,6 +382,27 @@ impl Engine {
 
     pub fn config(&self) -> &ConfigStore {
         &self.inner.config
+    }
+
+    /// How many of the dictionary's hinted items the default profile's speech
+    /// engine is given with a dictation.
+    pub fn dictionary_hint_usage(&self) -> HintUsage {
+        let config = self.inner.config.current();
+        let total = asr_terms(&config.dictionary, TermLimit::Count(usize::MAX)).len();
+        let profile = config.default_profile();
+        let engines = self.inner.resolve_engines(&config, profile);
+        let sent = match config.provider(&engines.asr.id) {
+            Some(cfg) if profile.asr_dictionary_hint => {
+                let hits = self.inner.term_hits();
+                asr_terms(
+                    rank_for_hints(&config.dictionary, &hits, crate::history::now_unix()),
+                    self.inner.registry.term_limit(cfg),
+                )
+                .len()
+            }
+            _ => 0,
+        };
+        HintUsage { sent, total }
     }
 
     pub(crate) fn secrets(&self) -> &Arc<dyn SecretStore> {
@@ -896,6 +925,7 @@ impl Engine {
             recognised: Default::default(),
             asr_sample: None,
             general: config.general.clone(),
+            term_hits: self.inner.term_hits(),
         };
         // Nobody listens to the step events of a rerun.
         let (tx, mut rx) = mpsc::channel(EVENT_BUFFER);
@@ -1180,6 +1210,10 @@ impl Inner {
 
     /// `Config::resolve_engines` with this engine's factories saying which
     /// engines can run.
+    fn term_hits(&self) -> Arc<Vec<crate::history::TermHits>> {
+        Arc::new(self.history.dictionary_hits().unwrap_or_default())
+    }
+
     fn resolve_engines(
         &self,
         config: &crate::config::Config,
@@ -1748,6 +1782,7 @@ async fn run_session(
         general: config.general.clone(),
         recognised: Default::default(),
         asr_sample: None,
+        term_hits: inner.term_hits(),
     };
 
     let engines = inner.resolve_engines(&config, &profile);

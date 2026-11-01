@@ -82,6 +82,9 @@ pub struct PipelineContext {
     /// transcript before this one, so the engine writes in its style
     /// (script, punctuation, spacing); placed before the dictionary terms.
     pub asr_sample: Option<String>,
+    /// How often each dictionary term was replaced, for choosing the hints
+    /// when not all of them fit.
+    pub term_hits: Arc<Vec<crate::history::TermHits>>,
 }
 
 #[async_trait]
@@ -102,5 +105,6 @@ pub(crate) fn test_context() -> PipelineContext {
         general: General::default(),
         recognised: Default::default(),
         asr_sample: None,
+        term_hits: Default::default(),
     }
 }

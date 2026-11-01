@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick, untrack } from "svelte";
-  import { dictionaryExamples, dictionaryHits, dictionaryIndex, dictionarySuggestions, errorMessage, setDictionary, type DictionaryEntry, type Dismissed, type Suggestion, type TermHits, type TermIndex } from "../../lib/api";
+  import { dictionaryExamples, dictionaryHintUsage, dictionaryHits, dictionaryIndex, dictionarySuggestions, errorMessage, setDictionary, type DictionaryEntry, type Dismissed, type Suggestion, type TermHits, type TermIndex } from "../../lib/api";
   import { dropBlank, isSnippet, trimEntries } from "../../lib/dictionary";
   import { arrange, matches, rememberSort, rememberView, SORTS, storedSort, storedView, VIEWS, type Labels, type Sort, type View } from "../../lib/dictionaryView";
   import { guard } from "../../lib/guard.svelte";
@@ -84,6 +84,7 @@
   });
 
   // How often each term's aliases were replaced, from the records.
+  let hintUsage = $state<{ sent: number; total: number } | null>(null);
   let hits = $state<Map<string, TermHits>>(new Map());
   const hitsOf = (item: Item): TermHits | null => hits.get(item.term.trim()) ?? null;
   const aliasText = (n: number): string => (n === 0 ? t("dictionary.no_aliases") : n === 1 ? t("dictionary.alias_one") : t("dictionary.alias_count", { n: String(n) }));
@@ -140,6 +141,12 @@
   onMount(() => {
     void loadSuggestions();
     dictionaryHits().then((list) => { hits = new Map(list.map((h) => [h.term, h])); }).catch(() => {});
+  });
+
+  // How many terms go with a dictation; it follows the dictionary and the default profile.
+  $effect(() => {
+    void config.value;
+    dictionaryHintUsage().then((u) => { hintUsage = u; }).catch(() => {});
   });
 
   /** The excerpt's pieces: the term is between 【 and 】. */
@@ -345,6 +352,9 @@
   </StickyBar>
 
   {#if tab === "terms"}
+    {#if hintUsage?.total}
+      <p class="usage">{t("dictionary.hint_usage", { n: String(hintUsage.sent), total: String(hintUsage.total) })}<InfoTip info={t("dictionary.hint_usage_info")} /></p>
+    {/if}
     {#if !items.length}
       <Group>
         <Empty text={t("dictionary.empty")}>
@@ -466,6 +476,7 @@
 <style>
   .tabs { margin: 0 0 12px; }
   .bar { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
+  .usage { display: flex; align-items: center; gap: 6px; margin: 0 2px 12px; color: var(--ink-2); font-size: var(--text-sm); }
   .search { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: var(--control); padding: 0 10px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); color: var(--ink-3); }
   .search input { flex: 1; min-width: 0; height: 100%; border: 0; background: none; padding: 0; font-size: var(--text-control); }
   .views { display: inline-flex; padding: 3px; gap: 2px; border-radius: var(--radius); background: var(--sunken); flex: none; }

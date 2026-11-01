@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::dictionary::{asr_terms, TermLimit};
+use crate::dictionary::{asr_terms, rank_for_hints, TermLimit};
 use crate::providers::{AsrHint, AsrProvider, ProviderError};
 use crate::segments::segment_records;
 use crate::steps::{PipelineContext, Step, StepError, StepInput, StepOutput};
@@ -25,11 +25,15 @@ pub fn asr_prompt(sample: Option<&str>, terms: Option<String>) -> Option<String>
 
 pub struct AsrStep {
     provider: Arc<dyn AsrProvider>,
+    term_limit: TermLimit,
 }
 
 impl AsrStep {
-    pub fn new(provider: Arc<dyn AsrProvider>) -> Self {
-        Self { provider }
+    pub fn new(provider: Arc<dyn AsrProvider>, term_limit: TermLimit) -> Self {
+        Self {
+            provider,
+            term_limit,
+        }
     }
 }
 
@@ -56,8 +60,8 @@ impl Step for AsrStep {
         })?;
         let terms = if ctx.profile.asr_dictionary_hint {
             asr_terms(
-                ctx.dictionary.iter(),
-                TermLimit::Bytes(ASR_HINT_BUDGET_BYTES),
+                rank_for_hints(&ctx.dictionary, &ctx.term_hits, crate::history::now_unix()),
+                self.term_limit,
             )
         } else {
             Vec::new()
@@ -162,7 +166,7 @@ mod tests {
             asr_hint: true,
             ..Default::default()
         }]);
-        let out = AsrStep::new(fake.clone())
+        let out = AsrStep::new(fake.clone(), crate::dictionary::TermLimit::Count(100))
             .run(
                 StepInput {
                     text: String::new(),
@@ -194,7 +198,7 @@ mod tests {
             }),
             hints: std::sync::Mutex::new(Vec::new()),
         });
-        let out = AsrStep::new(fake)
+        let out = AsrStep::new(fake, crate::dictionary::TermLimit::Count(100))
             .run(
                 StepInput {
                     text: String::new(),
@@ -218,7 +222,7 @@ mod tests {
             ..Default::default()
         }]);
         ctx.asr_sample = Some("好，第 2 點可以嗎？".into());
-        AsrStep::new(fake.clone())
+        AsrStep::new(fake.clone(), crate::dictionary::TermLimit::Count(100))
             .run(
                 StepInput {
                     text: String::new(),
@@ -235,7 +239,7 @@ mod tests {
         // Without dictionary terms the sample stands alone; without a sample
         // nothing changes.
         ctx.dictionary = Arc::new(vec![]);
-        AsrStep::new(fake.clone())
+        AsrStep::new(fake.clone(), crate::dictionary::TermLimit::Count(100))
             .run(
                 StepInput {
                     text: String::new(),
@@ -264,7 +268,7 @@ mod tests {
         let mut profile = (*ctx.profile).clone();
         profile.asr_dictionary_hint = false;
         ctx.profile = Arc::new(profile);
-        AsrStep::new(fake.clone())
+        AsrStep::new(fake.clone(), crate::dictionary::TermLimit::Count(100))
             .run(
                 StepInput {
                     text: String::new(),
@@ -281,7 +285,7 @@ mod tests {
     #[tokio::test]
     async fn provider_failure_is_fatal() {
         let fake = FakeAsr::failing(ErrorCode::ProviderUnreachable);
-        let err = AsrStep::new(fake)
+        let err = AsrStep::new(fake, crate::dictionary::TermLimit::Count(100))
             .run(
                 StepInput {
                     text: String::new(),

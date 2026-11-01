@@ -472,6 +472,8 @@
   "engines.transcribe_mode.smart_info": "{name} does this during recognition, so the recognised text in History is the tidied result, and the words as spoken are not kept. Arcvox's Text rewriting and Tidy stages run after recognition: Text rewriting rewrites with the rewrite engine in the profile's style, and Tidy applies dictionary aliases and punctuation rules.",
   "engines.data_note": "Recordings and text go to {name}. How they are used depends on that service's terms and your account.",
   "engines.data_terms": "View terms",
+  "dictionary.hint_usage": "Each dictation hints {n} of {total} terms",
+  "dictionary.hint_usage_info": "The limit depends on the default profile's speech engine. When not all fit, terms replaced most often lately go first, then the newest.",
   "engines.desc.http_variant": "{host}, model {model}, {variant}",
   "engines.variant_mode": "{mode} mode",
   "engines.variant_effort": "effort: {value}",

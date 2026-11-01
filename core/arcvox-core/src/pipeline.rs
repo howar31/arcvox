@@ -80,7 +80,7 @@ impl Pipeline {
                             "speech goes to a network engine"
                         );
                     }
-                    Box::new(AsrStep::new(provider))
+                    Box::new(AsrStep::new(provider, registry.term_limit(cfg)))
                 }
                 StepSpec::OpenCc {
                     config,
@@ -366,7 +366,7 @@ mod tests {
     fn pipeline(asr: Arc<FakeAsr>, llm: Arc<FakeLlm>) -> Pipeline {
         Pipeline {
             steps: vec![
-                Box::new(AsrStep::new(asr)),
+                Box::new(AsrStep::new(asr, crate::dictionary::TermLimit::Count(100))),
                 Box::new(OpenCcStep::new("s2twp", false).unwrap()),
                 Box::new(LlmStep::new(llm)),
                 Box::new(OpenCcStep::new("s2twp", false).unwrap()),
@@ -466,7 +466,10 @@ mod tests {
         // A profile whose rewrite is turned off keeps both conversions.
         let p = Pipeline {
             steps: vec![
-                Box::new(AsrStep::new(FakeAsr::ok("软件"))),
+                Box::new(AsrStep::new(
+                    FakeAsr::ok("软件"),
+                    crate::dictionary::TermLimit::Count(100),
+                )),
                 Box::new(OpenCcStep::new("s2tw", false).unwrap()),
                 Box::new(OpenCcStep::new("t2s", false).unwrap()),
                 Box::new(RulesStep {
@@ -499,7 +502,10 @@ mod tests {
         let (tx, _rx) = mpsc::channel(64);
         let p = Pipeline {
             steps: vec![
-                Box::new(AsrStep::new(FakeAsr::ok("软件"))),
+                Box::new(AsrStep::new(
+                    FakeAsr::ok("软件"),
+                    crate::dictionary::TermLimit::Count(100),
+                )),
                 Box::new(LlmStep::new(FakeLlm::ok("软件"))),
                 Box::new(OpenCcStep::new("s2tw", false).unwrap()),
             ],
@@ -727,7 +733,10 @@ mod tests {
         // in the LLM slot.
         let p = Pipeline {
             steps: vec![
-                Box::new(AsrStep::new(FakeAsr::ok("原文"))),
+                Box::new(AsrStep::new(
+                    FakeAsr::ok("原文"),
+                    crate::dictionary::TermLimit::Count(100),
+                )),
                 Box::new(crate::steps::llm::UnavailableStep {
                     name: StepName::Llm,
                     error: StepError::recoverable(ErrorCode::ProviderUnauthorized, "missing key"),

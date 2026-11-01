@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 use std::time::Duration;
 
 use crate::config::{General, ProviderConfig, ProviderKind};
+use crate::dictionary::TermLimit;
 use crate::models::services::{route, Route, ServiceLookup, Wire};
 use crate::providers::chat_asr::ChatAsrProvider;
 use crate::providers::factory::ProviderFactory;
@@ -15,6 +16,11 @@ use crate::providers::interactions_asr::InteractionsAsrProvider;
 use crate::providers::{AsrProvider, LlmProvider, ProviderError};
 use crate::secrets::SecretStore;
 use crate::types::{ErrorCode, ProviderId};
+
+/// Terms in a Whisper-style prompt, whose length the model limits.
+const PROMPT_TERM_BYTES: usize = 600;
+/// Terms for an engine that takes them as a list or in a text instruction.
+const LIST_TERMS: usize = 100;
 
 /// A provider built from a config, with what it was built from: the
 /// config, the timeout and retry count, and the API key it was given.
@@ -141,6 +147,18 @@ impl ProviderRegistry {
 
     /// Where a network engine's requests go; None for other kinds or an
     /// engine without an address.
+    /// How many dictionary terms the engine is given with each dictation.
+    pub fn term_limit(&self, cfg: &ProviderConfig) -> TermLimit {
+        match cfg.kind {
+            ProviderKind::Native => TermLimit::Count(LIST_TERMS),
+            ProviderKind::Embedded => TermLimit::Bytes(PROMPT_TERM_BYTES),
+            ProviderKind::Http => match self.route(cfg).map(|r| r.asr) {
+                Some(Wire::Interactions | Wire::ChatAudio) => TermLimit::Count(LIST_TERMS),
+                _ => TermLimit::Bytes(PROMPT_TERM_BYTES),
+            },
+        }
+    }
+
     pub fn route(&self, cfg: &ProviderConfig) -> Option<Route> {
         if cfg.kind != ProviderKind::Http {
             return None;

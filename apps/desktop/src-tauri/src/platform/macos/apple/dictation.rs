@@ -45,12 +45,11 @@ impl AppleAsrProvider {
 }
 
 /// Hotwords arrive as one per line; the bridge takes them as a JSON array.
-fn contextual_json(prompt: Option<&str>) -> String {
-    let words: Vec<&str> = prompt
-        .unwrap_or_default()
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
+fn contextual_json(terms: &[String]) -> String {
+    let words: Vec<&str> = terms
+        .iter()
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty())
         .collect();
     serde_json::to_string(&words).expect("strings serialize")
 }
@@ -130,7 +129,7 @@ impl AsrProvider for AppleAsrProvider {
         let samples = audio.samples.clone();
         let rate = audio.sample_rate;
         let locale = self.locale_for(hint);
-        let contextual = contextual_json(hint.prompt.as_deref());
+        let contextual = contextual_json(&hint.terms);
         let text = run_abortable(&self.label, self.timeout, move |cancel| {
             run(&locale, &samples, rate, &contextual, &cancel.0)
         })
@@ -178,12 +177,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn prompt_lines_become_a_json_array() {
-        assert_eq!(
-            contextual_json(Some("Arcvox\n\n 語音 \n")),
-            r#"["Arcvox","語音"]"#
-        );
-        assert_eq!(contextual_json(None), "[]");
+    fn terms_become_a_json_array() {
+        let terms = ["Arcvox".to_string(), String::new(), " 語音 ".to_string()];
+        assert_eq!(contextual_json(&terms), r#"["Arcvox","語音"]"#);
+        assert_eq!(contextual_json(&[]), "[]");
     }
 
     #[test]

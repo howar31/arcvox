@@ -147,6 +147,13 @@ pub struct HitsDto {
 }
 
 #[tauri::command]
+pub fn dictionary_hint_usage(
+    state: State<'_, AppState>,
+) -> CmdResult<arcvox_core::engine::HintUsage> {
+    Ok(engine(&state)?.dictionary_hint_usage())
+}
+
+#[tauri::command]
 pub fn dictionary_hits(state: State<'_, AppState>) -> CmdResult<Vec<HitsDto>> {
     Ok(engine(&state)?
         .history()

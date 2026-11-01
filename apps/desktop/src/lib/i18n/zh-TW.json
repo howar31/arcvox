@@ -472,6 +472,8 @@
   "engines.transcribe_mode.smart_info": "這是 {name} 在辨識時做的整理，歷史紀錄的辨識文字就是整理後的結果，看不到原話。Arcvox 的文字改寫和整理階段在辨識之後才執行：文字改寫由改寫引擎依情境的寫法重寫，整理套用字典別名和標點規則。",
   "engines.data_note": "錄音和文字會傳到 {name}，使用方式依該服務的條款與方案而定。",
   "engines.data_terms": "查看條款",
+  "dictionary.hint_usage": "每次聽寫提示 {n} / {total} 個詞彙",
+  "dictionary.hint_usage_info": "數量上限依預設情境的語音引擎而定。放不下時，優先提示近期常被替換的詞彙，其次是新加的詞彙。",
   "engines.desc.http_variant": "{host}，模型 {model}，{variant}",
   "engines.variant_mode": "{mode}模式",
   "engines.variant_effort": "思考程度{value}",

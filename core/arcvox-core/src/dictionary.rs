@@ -1,7 +1,11 @@
 //! One dictionary, three consumers: ASR hotword prompt, LLM term list,
 //! and post-processing alias replacement.
 
+use std::cmp::Reverse;
+use std::collections::HashMap;
+
 use crate::config::DictionaryEntry;
+use crate::history::TermHits;
 
 /// A term spanning several lines is a snippet: its aliases are the spoken
 /// keywords and the whole term is what gets inserted.
@@ -15,6 +19,33 @@ pub enum TermLimit {
     /// Comma-joined, in bytes.
     Bytes(usize),
     Count(usize),
+}
+
+/// A replacement this recent counts towards a term's place among the hints.
+const RECENT_HIT_SECS: i64 = 30 * 86_400;
+
+/// The entries in the order they are hinted when not all of them fit: those
+/// replaced most often lately, then the newest. A term the hint keeps right
+/// stops being replaced and gives up its place, and comes back once it is
+/// heard wrong again.
+pub fn rank_for_hints<'a>(
+    entries: &'a [DictionaryEntry],
+    hits: &[TermHits],
+    now: i64,
+) -> Vec<&'a DictionaryEntry> {
+    let recent: HashMap<&str, u64> = hits
+        .iter()
+        .filter(|h| now - h.last_ts <= RECENT_HIT_SECS)
+        .map(|h| (h.term.as_str(), h.count))
+        .collect();
+    let mut ranked: Vec<&DictionaryEntry> = entries.iter().collect();
+    ranked.sort_by_cached_key(|e| {
+        (
+            Reverse(recent.get(e.term.as_str()).copied().unwrap_or(0)),
+            Reverse(e.added.unwrap_or(0)),
+        )
+    });
+    ranked
 }
 
 /// Hinted items, cut at whole items to fit `limit`. A snippet contributes its
@@ -226,6 +257,48 @@ mod tests {
         );
         assert_eq!(asr_terms(&d, TermLimit::Bytes(7)), vec!["Arcvox"]);
         assert_eq!(asr_terms(&d, TermLimit::Count(1)), vec!["Arcvox"]);
+    }
+
+    #[test]
+    fn hints_rank_recent_replacements_then_the_newest() {
+        let dated = |term: &str, added: Option<i64>| DictionaryEntry {
+            added,
+            ..entry(term, &[], true)
+        };
+        let d = vec![
+            dated("old", Some(10)),
+            dated("stale-hit", Some(20)),
+            dated("hit-once", Some(30)),
+            dated("hit-often", Some(40)),
+            dated("new", Some(50)),
+            dated("undated", None),
+        ];
+        let now = 100 * 86_400;
+        let hit = |term: &str, count, last_ts| TermHits {
+            term: term.into(),
+            count,
+            last_ts,
+        };
+        let hits = vec![
+            hit("stale-hit", 99, 0),
+            hit("hit-once", 1, now - 86_400),
+            hit("hit-often", 5, now),
+        ];
+        let ranked: Vec<&str> = rank_for_hints(&d, &hits, now)
+            .iter()
+            .map(|e| e.term.as_str())
+            .collect();
+        assert_eq!(
+            ranked,
+            vec![
+                "hit-often",
+                "hit-once",
+                "new",
+                "stale-hit",
+                "old",
+                "undated"
+            ]
+        );
     }
 
     #[test]

@@ -249,6 +249,7 @@ pub fn run() {
             crate::commands::dictionary::dictionary_suggestions,
             crate::commands::dictionary::dictionary_index,
             crate::commands::dictionary::dictionary_hits,
+            crate::commands::dictionary::dictionary_hint_usage,
             crate::commands::dictionary::dictionary_examples,
             crate::commands::system::webview_error,
             crate::commands::prompt::prompt_get,
