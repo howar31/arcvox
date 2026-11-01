@@ -414,6 +414,7 @@
           bind:value={() => s.mode ?? modes[0], (v) => { s.mode = v; disarm(); }}
           options={modes.map((m) => ({ value: m, label: t(`engines.transcribe_mode.${m}`), help: t(`engines.transcribe_mode.${m}_help`), info: m === modes[0] ? undefined : t(`engines.transcribe_mode.${m}_info`, { name: serviceName }) }))}
         />
+        {#if modeFor(r) === "smart"}<Fold><small class="mode-note">{t("engines.transcribe_mode.smart_note")}</small></Fold>{/if}
         {#if wordsOffered(r)}<Fold>
           <div class="words">
             <div class="words-row">
@@ -636,6 +637,7 @@
   .also b { display: block; font-size: var(--text-control); font-weight: 600; }
   .also small { color: var(--ink-2); font-size: var(--text-xs); }
   .result { margin: -6px 0 0; font-size: var(--text-sm); line-height: 1.45; overflow-wrap: anywhere; }
+  .mode-note { display: block; margin-top: 8px; }
   .words { margin-top: 12px; }
   .words-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .warn { display: flex; gap: 9px; align-items: flex-start; margin: 8px 0 0; color: var(--warn); font-size: var(--text-sm); line-height: 1.55; }
