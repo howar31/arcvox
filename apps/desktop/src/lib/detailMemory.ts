@@ -2,7 +2,7 @@
 
 const KEY = "arcvox.history.open";
 
-export type DetailBlock = "attempts";
+export type DetailBlock = "attempts" | "usage";
 
 /** Whether a block was left open; closed until the user opens it. */
 export function storedOpen(block: DetailBlock): boolean {

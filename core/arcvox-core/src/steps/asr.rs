@@ -44,6 +44,9 @@ impl From<ProviderError> for StepError {
             message: e.message,
             recoverable: true,
             hint: e.hint,
+            status: e.status,
+            answer: e.answer,
+            raw: e.detail,
         }
     }
 }
@@ -82,14 +85,15 @@ impl Step for AsrStep {
                 recoverable: false,
                 ..StepError::from(e)
             })?;
+        let detail = serde_json::json!({
+            "language": t.language,
+            "chars": t.text.chars().count(),
+            // What the engine knows beyond the text, kept for later
+            // analysis; nothing downstream reads it yet.
+            "segments": segment_records(&t.segments),
+        });
         Ok(StepOutput {
-            detail: serde_json::json!({
-                "language": t.language,
-                "chars": t.text.chars().count(),
-                // What the engine knows beyond the text, kept for later
-                // analysis; nothing downstream reads it yet.
-                "segments": segment_records(&t.segments),
-            }),
+            detail: super::with_usage(detail, t.usage.clone()),
             text: t.text,
             language: t.language,
             ..Default::default()
@@ -116,6 +120,7 @@ pub(crate) mod fakes {
                     text: text.into(),
                     language: Some("zh".into()),
                     segments: Vec::new(),
+                    ..Default::default()
                 }),
                 hints: Mutex::new(Vec::new()),
             })
@@ -195,6 +200,7 @@ mod tests {
                     no_speech: 0.0,
                     tokens: Vec::new(),
                 }],
+                ..Default::default()
             }),
             hints: std::sync::Mutex::new(Vec::new()),
         });
@@ -209,6 +215,65 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out.detail["segments"][0]["end_ms"], 800);
+    }
+
+    #[tokio::test]
+    async fn the_services_usage_goes_into_the_stage_record() {
+        let fake = Arc::new(FakeAsr {
+            result: Ok(crate::types::Transcript {
+                text: "你好".into(),
+                language: None,
+                segments: Vec::new(),
+                usage: Some(serde_json::json!({ "total_tokens": 404 })),
+                ..Default::default()
+            }),
+            hints: std::sync::Mutex::new(Vec::new()),
+        });
+        let out = AsrStep::new(fake, crate::dictionary::TermLimit::Count(100))
+            .run(
+                StepInput {
+                    text: String::new(),
+                    audio: Some(audio()),
+                },
+                &test_context(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.detail["usage"]["total_tokens"], 404);
+    }
+
+    #[tokio::test]
+    async fn an_engine_that_reports_no_usage_leaves_it_out_of_the_stage_record() {
+        let out = AsrStep::new(
+            FakeAsr::ok("你好"),
+            crate::dictionary::TermLimit::Count(100),
+        )
+        .run(
+            StepInput {
+                text: String::new(),
+                audio: Some(audio()),
+            },
+            &test_context(),
+        )
+        .await
+        .unwrap();
+        assert!(out.detail.get("usage").is_none(), "{}", out.detail);
+    }
+
+    #[test]
+    fn a_step_error_keeps_what_the_service_answered() {
+        let mut e = ProviderError::new(ErrorCode::ProviderError, "Gemini: refused");
+        e.status = Some(429);
+        e.answer = Some("slow down".into());
+        e.detail = Some("{\"error\":{}}".into());
+        let err = StepError::from(e);
+        let detail = err.stage_detail();
+        assert_eq!(detail["error"], "provider_error");
+        assert_eq!(detail["message"], "Gemini: refused");
+        assert_eq!(detail["status"], 429);
+        assert_eq!(detail["answer"], "slow down");
+        assert_eq!(detail["raw"], "{\"error\":{}}");
+        assert_eq!(err.shown_hint().as_deref(), Some("HTTP 429: slow down"));
     }
 
     #[tokio::test]

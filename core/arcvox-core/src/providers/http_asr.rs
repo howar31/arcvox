@@ -98,6 +98,8 @@ struct TranscriptionResponse {
     text: String,
     #[serde(default)]
     language: Option<String>,
+    #[serde(default)]
+    usage: Option<serde_json::Value>,
 }
 
 #[async_trait]
@@ -141,6 +143,8 @@ impl AsrProvider for HttpAsrProvider {
             language: parsed.language,
             // Servers answer with the text alone.
             segments: Vec::new(),
+            usage: parsed.usage,
+            ..Default::default()
         })
     }
 }
@@ -183,6 +187,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_services_usage_comes_back_whole() {
+        let server = MockServer::start().await;
+        let usage = json!({"input_tokens":50,"output_tokens":7,"total_tokens":57});
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"text":"你好","usage":usage})),
+            )
+            .mount(&server)
+            .await;
+        let out = provider(&server, false, false)
+            .transcribe(&clip(), &AsrHint::default())
+            .await
+            .unwrap();
+        assert_eq!(out.usage, Some(usage));
+    }
+
+    #[tokio::test]
     async fn sends_multipart_with_file_model_language_prompt() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -208,6 +229,7 @@ mod tests {
                 text: "你好".into(),
                 language: Some("zh".into()),
                 segments: Vec::new(),
+                ..Default::default()
             }
         );
 

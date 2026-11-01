@@ -75,6 +75,8 @@ pub struct AttemptDto {
     pub chosen: bool,
     /// The user's correction of this result's text, when there is one.
     pub corrected_text: Option<String>,
+    /// The record of the stage that failed.
+    pub failure: Option<serde_json::Value>,
 }
 
 impl From<Attempt> for AttemptDto {
@@ -95,6 +97,7 @@ impl From<Attempt> for AttemptDto {
             origin: a.origin,
             chosen: a.chosen,
             corrected_text: a.corrected_text,
+            failure: a.failure,
         }
     }
 }

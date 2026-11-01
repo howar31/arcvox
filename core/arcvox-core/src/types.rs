@@ -116,13 +116,16 @@ impl AudioClip {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Transcript {
     pub text: String,
     pub language: Option<String>,
     /// The segments the engine decoded, when it reports them.
     #[serde(default)]
     pub segments: Vec<TranscriptSegment>,
+    /// What the service reports of its use, as it came.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<serde_json::Value>,
 }
 
 /// One segment of a transcript as the speech engine decoded it.

@@ -50,6 +50,8 @@ impl HttpLlmProvider {
 #[derive(Deserialize)]
 struct ChatResponse {
     choices: Vec<Choice>,
+    #[serde(default)]
+    usage: Option<serde_json::Value>,
 }
 #[derive(Deserialize)]
 struct Choice {
@@ -68,6 +70,16 @@ impl LlmProvider for HttpLlmProvider {
         messages: Vec<ChatMessage>,
         opts: &LlmOptions,
     ) -> Result<String, ProviderError> {
+        self.complete_with_usage(messages, opts)
+            .await
+            .map(|(text, _)| text)
+    }
+
+    async fn complete_with_usage(
+        &self,
+        messages: Vec<ChatMessage>,
+        opts: &LlmOptions,
+    ) -> Result<(String, Option<serde_json::Value>), ProviderError> {
         let mut body = serde_json::json!({
             "model": self.model,
             "messages": messages,
@@ -111,6 +123,7 @@ impl LlmProvider for HttpLlmProvider {
                 format!("{}: bad chat response: {e}", self.label),
             )
         })?;
+        let usage = parsed.usage;
         let choice = parsed.choices.into_iter().next().ok_or_else(|| {
             ProviderError::new(
                 ErrorCode::ProviderError,
@@ -131,7 +144,7 @@ impl LlmProvider for HttpLlmProvider {
             )
             .with_hint("raise llm_max_tokens in settings"));
         }
-        Ok(content)
+        Ok((content, usage))
     }
 }
 
@@ -154,6 +167,34 @@ mod tests {
 
     fn ok_body(text: &str) -> serde_json::Value {
         json!({"choices":[{"message":{"role":"assistant","content":text}}]})
+    }
+
+    #[tokio::test]
+    async fn the_services_usage_comes_back_whole() {
+        let server = MockServer::start().await;
+        let usage = json!({"prompt_tokens":458,"completion_tokens":21,"total_tokens":479});
+        let mut body = ok_body("整理後");
+        body["usage"] = usage.clone();
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let base = Url::parse(&format!("{}/v1", server.uri())).unwrap();
+        let p = HttpLlmProvider::new(
+            reqwest::Client::new(),
+            &base,
+            "gemma3",
+            None,
+            BTreeMap::new(),
+            "Ollama",
+            1,
+            None,
+        );
+        let out = p
+            .complete_with_usage(vec![ChatMessage::user("U")], &opts())
+            .await
+            .unwrap();
+        assert_eq!(out, ("整理後".to_string(), Some(usage)));
     }
 
     #[tokio::test]

@@ -127,6 +127,8 @@ export interface Attempt {
   origin: boolean; chosen: boolean;
   /** The user's correction of this result's text, when there is one. */
   corrected_text: string | null;
+  /** The record of the stage that failed. */
+  failure?: Record<string, unknown> | null;
 }
 /** The nine stages of a dictation, in their fixed order (positions 1 to 9; the script conversion takes 4 and 6). */
 export type StageKind = "capture" | "trim" | "asr" | "opencc" | "llm" | "rules" | "translate" | "insert" | "record";

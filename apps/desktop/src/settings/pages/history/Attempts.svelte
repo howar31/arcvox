@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { serviceWords } from "../../../lib/failure";
+  import ServiceAnswer from "../../../lib/ui/ServiceAnswer.svelte";
   /**
    * The results a dictation had, one line each: the one in use first and shown whole, the others folded to
    * one line until pressed; an open one shows what differs from the one in use. Beyond a few, the rest wait
@@ -96,6 +98,10 @@
           <button type="button" class="x" aria-label={t("history.delete_attempt")} use:tip={t("history.delete_attempt")} onclick={() => askDelete(a)}><Icon name="x" size={12} /></button>
         {/if}
       {/if}
+      {#if a.error !== null}
+        {@const said = serviceWords(a.failure ?? {})}
+        {#if said.body || said.detail}<div class="said"><ServiceAnswer text={said.body ?? ""} detail={said.detail} /></div>{/if}
+      {/if}
       {#if open && !a.chosen && a.error === null}
         <div class="acts">
           {#if differs}<button type="button" class="btn sm" onclick={() => (plain = !plain)}>{t(plain ? "history.attempt_mark" : "history.attempt_plain")}</button>{/if}
@@ -112,6 +118,7 @@
 
 <style>
   .list { display: flex; flex-direction: column; }
+  .said { flex-basis: 100%; min-width: 0; margin-top: 2px; padding-left: 26px; color: var(--ink-2); font-size: var(--text-sm); }
   .attempt { position: relative; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0 8px; padding: 9px 0; border-top: 1px solid var(--line); }
   .attempt:first-child { border-top: 0; }
   .attempt.open:not(.chosen) { margin: 0 -16px; padding-left: 16px; padding-right: 16px; border-radius: 10px; background: var(--sunken); }

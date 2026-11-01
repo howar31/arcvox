@@ -91,6 +91,15 @@ pub trait LlmProvider: Send + Sync {
         opts: &LlmOptions,
     ) -> Result<String, ProviderError>;
 
+    /// The completion, with what the service reports of its use as it came.
+    async fn complete_with_usage(
+        &self,
+        messages: Vec<ChatMessage>,
+        opts: &LlmOptions,
+    ) -> Result<(String, Option<serde_json::Value>), ProviderError> {
+        Ok((self.complete(messages, opts).await?, None))
+    }
+
     async fn load(&self) -> Result<(), ProviderError> {
         Ok(())
     }

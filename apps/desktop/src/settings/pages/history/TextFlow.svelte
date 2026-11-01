@@ -4,6 +4,7 @@
   import type { Stage, Utterance } from "../../../lib/api";
   import { t } from "../../../lib/i18n";
   import { textFlow } from "../../../lib/textFlow";
+  import ServiceAnswer from "../../../lib/ui/ServiceAnswer.svelte";
   import TextDiff from "../../../lib/ui/TextDiff.svelte";
 
   let { u, stages, oncorrect }: {

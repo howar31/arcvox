@@ -308,16 +308,13 @@ impl Pipeline {
                             code: err.code,
                             message: err.message.clone(),
                             recoverable: err.recoverable,
-                            hint: err.hint.clone(),
+                            hint: err.shown_hint(),
                         })
                         .await;
                     if !err.recoverable || name == StepName::Asr {
                         return Err(err);
                     }
-                    let mut detail = serde_json::json!({
-                        "error": err.code.name(),
-                        "message": err.message,
-                    });
+                    let mut detail = err.stage_detail();
                     if kind == StageKind::OpenCc {
                         detail["after_rewrite"] = serde_json::Value::Bool(after_rewrite);
                     }
@@ -536,6 +533,36 @@ mod tests {
         assert_eq!(llm.detail["error"], "provider_timeout");
         assert!(llm.detail["message"].is_string());
         assert_eq!(out.stages.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn a_failed_rewrite_keeps_what_the_service_answered() {
+        let (tx, _rx) = mpsc::channel(64);
+        let mut e = crate::providers::ProviderError::new(ErrorCode::ProviderError, "boom");
+        e.status = Some(503);
+        e.answer = Some("overloaded".into());
+        let p = pipeline(FakeAsr::ok("x"), FakeLlm::failing_with(e));
+        let out = p.run(audio(), &test_context(), &tx).await.unwrap();
+        let llm = out
+            .stages
+            .iter()
+            .find(|s| s.kind == StageKind::Llm)
+            .unwrap();
+        assert_eq!(llm.detail["status"], 503);
+        assert_eq!(llm.detail["answer"], "overloaded");
+    }
+
+    #[tokio::test]
+    async fn a_rewrite_records_the_services_usage() {
+        let (tx, _rx) = mpsc::channel(64);
+        let p = pipeline(FakeAsr::ok("x"), FakeLlm::with_usage("整理後"));
+        let out = p.run(audio(), &test_context(), &tx).await.unwrap();
+        let llm = out
+            .stages
+            .iter()
+            .find(|s| s.kind == StageKind::Llm)
+            .unwrap();
+        assert_eq!(llm.detail["usage"]["total_tokens"], 9);
     }
 
     #[tokio::test]

@@ -32,6 +32,17 @@ pub struct StepOutput {
     pub detail: serde_json::Value,
 }
 
+/// A step's stage record with the service's use added, when it reported any.
+pub(crate) fn with_usage(
+    mut detail: serde_json::Value,
+    usage: Option<serde_json::Value>,
+) -> serde_json::Value {
+    if let Some(usage) = usage {
+        detail["usage"] = usage;
+    }
+    detail
+}
+
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[error("{code:?}: {message}")]
 pub struct StepError {
@@ -40,6 +51,12 @@ pub struct StepError {
     /// `true` means the pipeline may skip this step and continue degraded.
     pub recoverable: bool,
     pub hint: Option<String>,
+    /// The HTTP status the service answered with.
+    pub status: Option<u16>,
+    /// The service's own words.
+    pub answer: Option<String>,
+    /// The service's answer as it came.
+    pub raw: Option<String>,
 }
 
 impl StepError {
@@ -49,14 +66,40 @@ impl StepError {
             message: message.into(),
             recoverable: true,
             hint: None,
+            status: None,
+            answer: None,
+            raw: None,
         }
     }
     pub fn fatal(code: ErrorCode, message: impl Into<String>) -> Self {
         Self {
-            code,
-            message: message.into(),
             recoverable: false,
-            hint: None,
+            ..Self::recoverable(code, message)
+        }
+    }
+    /// The stage record of the step that failed.
+    pub fn stage_detail(&self) -> serde_json::Value {
+        let mut detail = serde_json::json!({
+            "error": self.code.name(),
+            "message": self.message,
+        });
+        if let Some(status) = self.status {
+            detail["status"] = status.into();
+        }
+        if let Some(answer) = &self.answer {
+            detail["answer"] = answer.as_str().into();
+        }
+        if let Some(raw) = &self.raw {
+            detail["raw"] = raw.as_str().into();
+        }
+        detail
+    }
+    /// The line under a failure: the service's own words, else the hint.
+    pub fn shown_hint(&self) -> Option<String> {
+        match (self.status, &self.answer) {
+            (Some(status), Some(answer)) => Some(format!("HTTP {status}: {answer}")),
+            (None, Some(answer)) => Some(answer.clone()),
+            _ => self.hint.clone(),
         }
     }
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {

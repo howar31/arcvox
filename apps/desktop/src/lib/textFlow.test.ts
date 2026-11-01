@@ -83,6 +83,9 @@ describe("textFlow", () => {
   it("carries a failed stage with its reason", () => {
     const failed = [stage(3, "asr", "原文", {}), stage(5, "llm", null, { message: "timed out" }), stage(8, "insert", null, { method: "paste", outcome: "inserted", app_name: "Notes" })];
     const { steps } = textFlow({ ...row("原文", "原文", "原文", "Notes"), degraded: true, llm_ms: null }, failed);
-    expect(steps[1]).toMatchObject({ kind: "failed", text: "timed out" });
+    expect(steps[1]).toMatchObject({ kind: "failed", text: "timed out", body: null, detail: null });
+    const told = [stage(3, "asr", "原文", {}), stage(5, "llm", null, { error: "provider_error", message: "Gemini: refused: slow down", status: 429, answer: "slow down", raw: "{}" })];
+    const said = textFlow({ ...row("原文", "原文", "原文", "Notes"), degraded: true, llm_ms: null }, told).steps[1];
+    expect(said).toMatchObject({ kind: "failed", text: "The engine reported an error.", body: "HTTP 429: slow down", detail: "{}" });
   });
 });

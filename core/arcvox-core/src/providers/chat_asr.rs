@@ -109,6 +109,8 @@ impl ChatAsrProvider {
 #[derive(Deserialize)]
 struct ChatResponse {
     choices: Vec<Choice>,
+    #[serde(default)]
+    usage: Option<serde_json::Value>,
 }
 #[derive(Deserialize)]
 struct Choice {
@@ -173,6 +175,7 @@ impl AsrProvider for ChatAsrProvider {
                 format!("{}: bad transcription response: {e}", self.label),
             )
         })?;
+        let usage = parsed.usage;
         let choice = parsed.choices.into_iter().next().ok_or_else(|| {
             ProviderError::new(
                 ErrorCode::ProviderError,
@@ -191,8 +194,8 @@ impl AsrProvider for ChatAsrProvider {
         }
         Ok(Transcript {
             text,
-            language: None,
-            segments: Vec::new(),
+            usage,
+            ..Default::default()
         })
     }
 }
@@ -230,6 +233,23 @@ mod tests {
 
     fn ok_body(text: Option<&str>) -> serde_json::Value {
         json!({"choices":[{"message":{"role":"assistant","content":text}}]})
+    }
+
+    #[tokio::test]
+    async fn the_services_usage_comes_back_whole() {
+        let server = MockServer::start().await;
+        let usage = json!({"prompt_tokens":120,"completion_tokens":9,"total_tokens":129});
+        let mut body = ok_body(Some("你好"));
+        body["usage"] = usage.clone();
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let out = provider(&server, false, false)
+            .transcribe(&clip(1), &AsrHint::default())
+            .await
+            .unwrap();
+        assert_eq!(out.usage, Some(usage));
     }
 
     #[tokio::test]

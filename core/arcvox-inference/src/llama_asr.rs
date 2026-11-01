@@ -312,6 +312,7 @@ fn transcript(out: &str) -> Transcript {
         text,
         language,
         segments: Vec::new(),
+        ..Default::default()
     }
 }
 

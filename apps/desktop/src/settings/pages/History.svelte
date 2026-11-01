@@ -7,7 +7,9 @@
   } from "../../lib/api";
   import { setFinalText } from "../../lib/api";
   import { storedOpen, rememberOpen, type DetailBlock } from "../../lib/detailMemory";
-  import { failureText } from "../../lib/failure";
+  import { failureText, stageFailure } from "../../lib/failure";
+  import { usageColumns, usageRows, usageSum } from "../../lib/usage";
+  import ServiceAnswer from "../../lib/ui/ServiceAnswer.svelte";
   import { formatDateTime, formatDay, formatTime } from "../../lib/format";
   import { clipLength, corrected, groupByDay, PAGE_SIZE, periodRange, redoneTag, seconds, spentSeconds, totalSeconds, type PeriodSel } from "../../lib/historyView";
   import { resolveEngines } from "../../lib/resolve";
@@ -78,7 +80,7 @@
   let stages = $state<Record<number, Stage[]>>({});
   let fresh = $state<Record<number, number>>({});
   // Which blocks of an expanded row are open, for every row; remembered across visits.
-  let opened = $state<Record<DetailBlock, boolean>>({ attempts: storedOpen("attempts") });
+  let opened = $state<Record<DetailBlock, boolean>>({ attempts: storedOpen("attempts"), usage: storedOpen("usage") });
   function setOpen(block: DetailBlock, open: boolean) {
     opened[block] = open;
     rememberOpen(block, open);
@@ -133,7 +135,7 @@
     const row = rows?.find((u) => u.id === id);
     if (row?.redone) await loadAttempts(id);
     else delete attempts[id];
-    if (row && row.error === null) await loadStages(id);
+    if (row && row.error_code !== "cancelled") await loadStages(id);
     else delete stages[id];
   }
   /** Starts over with one page: the filter changed. */
@@ -311,7 +313,7 @@
       const row = rows?.find((u) => u.id === id);
       if (row?.redone) loadAttempts(id);
       else delete attempts[id];
-      if (row && row.error === null) loadStages(id);
+      if (row && row.error_code !== "cancelled") loadStages(id);
       else delete stages[id];
     }
   }
@@ -444,10 +446,15 @@
               {:else if u.error !== null}
                 <div class="label">{t("history.error_label")}</div>
                 {@const reason = failureText(u.error_code, u.error)}
-                <div class="problem">{reason}</div>
-                {#if reason !== u.error}
-                  <div class="label">{t("history.error_detail")}</div>
-                  <div class="tech">{u.error}</div>
+                {@const said = stageFailure(stages[u.id])}
+                {#if said.body || said.detail}
+                  <div class="said"><ServiceAnswer tone="bad" text={reason} body={said.body} detail={said.detail} /></div>
+                {:else}
+                  <div class="problem">{reason}</div>
+                  {#if reason !== u.error}
+                    <div class="label">{t("history.error_detail")}</div>
+                    <div class="tech">{u.error}</div>
+                  {/if}
                 {/if}
               {:else}
                 <TextFlow {u} stages={stages[u.id] ?? null} oncorrect={(text) => correct(u, text)} />
@@ -472,6 +479,22 @@
                     <span class="hint">{t(failedRow ? "history.retry_help" : "history.reprocess_help")}</span>
                   </div>
                 {/if}
+              {/if}
+              {#if usageRows(stages[u.id]).length}
+                {@const usage = usageRows(stages[u.id])}
+                {@const columns = usageColumns(usage)}
+                <DetailFold title={t("history.usage")} small={t("history.usage_sum", { n: usageSum(usage).toLocaleString() })} open={opened.usage} ontoggle={(v) => setOpen("usage", v)}>
+                  <div class="usage-scroll">
+                    <table class="usage num">
+                      <thead><tr><th>{t("history.usage_stage")}</th>{#each columns as c (c)}<th><span class="term" use:tip={t(`history.usage_${c}_tip`)}>{t(`history.usage_${c}`)}</span></th>{/each}</tr></thead>
+                      <tbody>
+                        {#each usage as row (row.id)}
+                          <tr><td>{row.name}</td>{#each columns as c (c)}<td>{row[c]?.toLocaleString() ?? ""}</td>{/each}</tr>
+                        {/each}
+                      </tbody>
+                    </table>
+                  </div>
+                </DetailFold>
               {/if}
               {#if attempts[u.id]?.length}
                 <DetailFold title={t("history.attempts")} small={t("history.attempts_count", { n: String(attempts[u.id].length) })} right={inUse(u)} open={opened.attempts} ontoggle={(v) => setOpen("attempts", v)}>
@@ -550,6 +573,14 @@
   /* The filters stay in view while the list scrolls. Once stuck they are a toolbar: it reaches the top of
      the window over the drag band, the rows pass beneath it blurred, and a hairline closes its lower edge. */
   .edge { height: 1px; margin-top: 13px; }
+  .said { font-size: var(--text-control); }
+  .usage-scroll { overflow-x: auto; }
+  .usage { width: 100%; margin-top: 8px; border-collapse: collapse; font-size: var(--text-sm); }
+  .usage th, .usage td { padding: 5px 0 5px 14px; text-align: right; font-weight: 400; white-space: nowrap; }
+  .usage th { color: var(--ink-3); font-size: var(--text-xs); }
+  .usage .term { cursor: help; }
+  .usage th:first-child, .usage td:first-child { padding-left: 0; text-align: left; }
+  .usage tbody tr + tr td { border-top: 1px solid var(--line); }
   .tools { position: sticky; top: 28px; z-index: 3; display: flex; align-items: center; gap: 12px; margin: 0 calc(-1 * var(--page-x)); padding: 6px var(--page-x) 10px; }
   .tools.stuck { background: color-mix(in srgb, var(--page) 82%, transparent); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); border-bottom: 1px solid var(--line); }
   .tools.stuck::before { content: ""; position: absolute; left: 0; right: 0; bottom: 100%; height: 28px; background: inherit; -webkit-backdrop-filter: inherit; backdrop-filter: inherit; }

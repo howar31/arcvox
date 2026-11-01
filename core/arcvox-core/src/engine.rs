@@ -991,6 +991,7 @@ impl Engine {
                 profile_id: profile.id.clone(),
                 code: e.code,
                 text: failure_text(e),
+                stages: failed_stages(e, self.inner.config.current().general.keep_stages),
             },
         };
         let history = self.inner.history.clone();
@@ -1325,6 +1326,21 @@ fn failure_text(err: &crate::steps::StepError) -> String {
     }
 }
 
+/// The record of the speech stage a dictation failed at, with what the
+/// service answered, when stage records are kept.
+fn failed_stages(err: &crate::steps::StepError, keep: bool) -> Vec<StageRecord> {
+    if !keep {
+        return Vec::new();
+    }
+    vec![StageRecord {
+        position: 1,
+        kind: StageKind::Asr,
+        text: None,
+        ms: None,
+        detail: err.stage_detail(),
+    }]
+}
+
 /// What the row of a kept recording says until the dictation has a result.
 const INTERRUPTED: &str = "the dictation did not finish";
 
@@ -1369,6 +1385,7 @@ async fn start_journal(
         error: INTERRUPTED.into(),
         raw_text: String::new(),
         final_text: String::new(),
+        stages: Vec::new(),
     };
     inner.in_flight.lock().unwrap().insert(path.to_path_buf());
     let history = inner.history.clone();
@@ -1448,6 +1465,7 @@ async fn hold(
         error: INTERRUPTED.into(),
         raw_text: String::new(),
         final_text: String::new(),
+        stages: Vec::new(),
     };
     inner.in_flight.lock().unwrap().insert(path.to_path_buf());
     let history = inner.history.clone();
@@ -1538,8 +1556,12 @@ async fn keep_failed(
         } else {
             let history = inner.history.clone();
             let (code, text) = (err.code, failure_text(err));
-            let named =
-                tokio::task::spawn_blocking(move || history.set_error(id, code, &text)).await;
+            let stages = failed_stages(err, config.general.keep_stages);
+            let named = tokio::task::spawn_blocking(move || {
+                history.set_error(id, code, &text)?;
+                history.add_stages(id, &stages)
+            })
+            .await;
             if !matches!(named, Ok(Ok(()))) {
                 tracing::warn!(path = %path.display(), "the reason of the failure could not be stored");
             }
@@ -1562,6 +1584,7 @@ async fn keep_failed(
         error: failure_text(err),
         raw_text: String::new(),
         final_text: String::new(),
+        stages: failed_stages(err, config.general.keep_stages),
     };
     if !insert_with_recording(inner, failed, clip, false).await {
         tracing::warn!(path = %path.display(), "the failed dictation could not be kept");
@@ -1643,6 +1666,7 @@ async fn store_cancelled(
         error: crate::history::CANCELLED.into(),
         raw_text: texts.0.into(),
         final_text: texts.1.into(),
+        stages: Vec::new(),
     };
     if !insert_with_recording(inner, row, clip, written).await {
         tracing::warn!(path = %path.display(), "the cancelled dictation could not be kept");
@@ -3578,6 +3602,38 @@ pub(crate) mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].error_code.as_deref(), Some("provider_error"));
         assert!(rows[0].audio_path.as_ref().unwrap().is_file());
+    }
+
+    #[tokio::test]
+    async fn a_failed_dictation_keeps_the_services_answer_with_its_row() {
+        let r = rig(true).await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(
+                ResponseTemplate::new(429).set_body_string(r#"{"error":{"message":"slow down"}}"#),
+            )
+            .mount(&r.asr)
+            .await;
+        let s = r.engine.start_session(SessionRequest::default());
+        s.push_audio(&one_second());
+        s.store();
+        s.finish();
+        let events = drain(&s).await;
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Error { hint: Some(h), .. } if h == "HTTP 429: slow down"
+        )));
+        let rows = r.engine.history().list_recent(10).unwrap();
+        let stages = r.engine.history().stages(rows[0].id).unwrap();
+        assert_eq!(stages.len(), 1);
+        assert_eq!(stages[0].kind, StageKind::Asr);
+        assert_eq!(stages[0].text, None);
+        assert_eq!(stages[0].detail["status"], 429);
+        assert_eq!(stages[0].detail["answer"], "slow down");
+        assert!(stages[0].detail["raw"]
+            .as_str()
+            .unwrap()
+            .contains("slow down"));
     }
 
     #[tokio::test]

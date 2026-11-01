@@ -244,6 +244,7 @@ fn run(
         text,
         language,
         segments,
+        ..Default::default()
     })
 }
 

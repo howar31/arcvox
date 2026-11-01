@@ -145,7 +145,7 @@ impl Step for TranslateStep {
             }),
             timeout: Duration::from_secs(ctx.general.llm_timeout_secs),
         };
-        let text = self.provider.complete(messages, &opts).await?;
+        let (text, usage) = self.provider.complete_with_usage(messages, &opts).await?;
         let text = text.trim().to_string();
         if text.is_empty() {
             return Err(StepError::recoverable(
@@ -154,12 +154,15 @@ impl Step for TranslateStep {
             ));
         }
         Ok(StepOutput {
-            detail: serde_json::json!({
-                "target": self.target,
-                "in_chars": input.text.chars().count(),
-                "out_chars": text.chars().count(),
-                "addition_chars": self.addition.chars().count(),
-            }),
+            detail: super::with_usage(
+                serde_json::json!({
+                    "target": self.target,
+                    "in_chars": input.text.chars().count(),
+                    "out_chars": text.chars().count(),
+                    "addition_chars": self.addition.chars().count(),
+                }),
+                usage,
+            ),
             text,
             language: None,
             ..Default::default()
@@ -224,6 +227,17 @@ mod tests {
         let step = TranslateStep::new(FakeLlm::ok("x"), "ko", "");
         let system = step.messages("a", &test_context())[0].content.clone();
         assert!(system.ends_with("目標：韓文"), "{system}");
+    }
+
+    #[tokio::test]
+    async fn the_services_usage_goes_into_the_stage_record() {
+        let step = TranslateStep::new(FakeLlm::with_usage("A test."), "英文", "");
+        let input = StepInput {
+            text: "測試".into(),
+            audio: None,
+        };
+        let out = step.run(input, &test_context()).await.unwrap();
+        assert_eq!(out.detail["usage"]["total_tokens"], 9);
     }
 
     #[tokio::test]

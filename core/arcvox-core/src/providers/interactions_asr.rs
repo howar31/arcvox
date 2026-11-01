@@ -13,7 +13,7 @@ use url::Url;
 use crate::audio::encode_wav_pcm16;
 use crate::providers::chat_asr::MAX_REQUEST_BYTES;
 use crate::providers::http_asr::request_timeout;
-use crate::providers::http_common::{empty_reply, endpoint, send_with_retry};
+use crate::providers::http_common::{empty_reply, endpoint, kept_answer, send_with_retry};
 use crate::providers::{AsrHint, AsrProvider, ProviderError};
 use crate::types::{AudioClip, ErrorCode, Transcript};
 
@@ -98,6 +98,15 @@ struct Interaction {
     status: Option<String>,
     #[serde(default)]
     steps: Vec<Step>,
+    #[serde(default)]
+    usage: Option<serde_json::Value>,
+    #[serde(default)]
+    errors: Vec<ServiceError>,
+}
+#[derive(Deserialize)]
+struct ServiceError {
+    #[serde(default)]
+    message: Option<String>,
 }
 #[derive(Deserialize)]
 struct Step {
@@ -180,10 +189,13 @@ impl AsrProvider for InteractionsAsrProvider {
             )
         })?;
         if let Some(status) = parsed.status.as_deref().filter(|s| *s != "completed") {
-            return Err(ProviderError::new(
+            let mut err = ProviderError::new(
                 ErrorCode::ProviderError,
                 format!("{}: the interaction ended as {status}", self.label),
-            ));
+            )
+            .with_detail(kept_answer(&raw));
+            err.answer = parsed.errors.iter().find_map(|e| e.message.clone());
+            return Err(err);
         }
         let text = parsed.text();
         // The recording held speech by the time it got here.
@@ -192,8 +204,8 @@ impl AsrProvider for InteractionsAsrProvider {
         }
         Ok(Transcript {
             text,
-            language: None,
-            segments: Vec::new(),
+            usage: parsed.usage,
+            ..Default::default()
         })
     }
 }

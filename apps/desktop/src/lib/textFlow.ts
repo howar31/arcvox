@@ -3,6 +3,7 @@
  * records kept for the row; rows whose stage records are gone show one processing step between the
  * transcript and the text that was put in. */
 import type { Stage, Utterance } from "./api";
+import { failureText, serviceWords } from "./failure";
 import { cellInput, cellLine, cellNumber, cellOutput, changedCells, insertLines, MODULE_IDS, stageAt, stageName, timeLabel } from "./flowLast";
 import { corrected, rawState } from "./historyView";
 import { t } from "./i18n";
@@ -14,7 +15,7 @@ export type FlowStep =
   /** A stage that changed the text; `from` is what it received. */
   | { kind: "stage"; mark: string; name: string; small: string; from: string; text: string }
   /** A stage that failed; `text` is its reason. */
-  | { kind: "failed"; mark: string; name: string; small: string; text: string }
+  | { kind: "failed"; mark: string; name: string; small: string; text: string; body: string | null; detail: string | null }
   /** A stage that ran and left the text as it was: one line, no text. */
   | { kind: "same"; mark: string; name: string; small: string }
   /** Where the text went: into an application, or the clipboard. */
@@ -65,7 +66,9 @@ export function textFlow(u: Utterance, stages: Stage[] | null): { steps: FlowSte
         steps.push({ kind: "same", mark, name, small: [time, small].filter(Boolean).join(" · ") });
       } else if (s.text === null || out === null) {
         const reason = typeof s.detail.message === "string" ? s.detail.message : typeof s.detail.error === "string" ? s.detail.error : "";
-        steps.push({ kind: "failed", mark, name, small, text: reason });
+        const said = serviceWords(s.detail);
+        const code = typeof s.detail.error === "string" ? s.detail.error : null;
+        steps.push({ kind: "failed", mark, name, small, text: said.body ? failureText(code, reason) : reason, ...said });
       } else {
         steps.push({ kind: "stage", mark, name, small, from: cellInput(stages, id) ?? "", text: out });
       }

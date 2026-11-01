@@ -505,6 +505,7 @@ pub(crate) mod tests {
             error: "did not finish".into(),
             raw_text: String::new(),
             final_text: String::new(),
+            stages: Vec::new(),
         })
         .unwrap();
         assert_eq!(write(&s, tmp.path(), text_only(), Path::new("")).rows, 0);

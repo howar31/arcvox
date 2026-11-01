@@ -243,6 +243,8 @@ pub struct Attempt {
     pub corrected_text: Option<String>,
     /// How the correction was made, `CorrectionSource::name`.
     pub correction_source: Option<String>,
+    /// The record of the stage that failed, when `error` is set and it was kept.
+    pub failure: Option<serde_json::Value>,
 }
 
 /// How a correction of the final text was made.
@@ -276,6 +278,7 @@ pub enum Outcome {
         profile_id: ProfileId,
         code: ErrorCode,
         text: String,
+        stages: Vec<StageRecord>,
     },
 }
 
@@ -296,6 +299,8 @@ pub struct FailedUtterance {
     pub error: String,
     pub raw_text: String,
     pub final_text: String,
+    /// What the run left behind: the failed stage with the service's answer.
+    pub stages: Vec<StageRecord>,
 }
 
 /// What processing a row's recording again produced.
@@ -547,7 +552,7 @@ CREATE TABLE IF NOT EXISTS utterances (
     llm_ms INTEGER,
     heard_text TEXT,
     correction_source TEXT,
-    translated INTEGER NOT NULL DEFAULT 0
+    translated INTEGER NOT NULL DEFAULT 0,
 );
 CREATE INDEX IF NOT EXISTS utterances_ts ON utterances(ts);
 CREATE TABLE IF NOT EXISTS attempts (
@@ -1117,7 +1122,15 @@ impl HistoryStore {
                 u.final_text,
             ],
         )?;
-        Ok(HistoryId(own_last_row(&conn)?))
+        let id = own_last_row(&conn)?;
+        insert_stages(&conn, id, None, &u.stages)?;
+        Ok(HistoryId(id))
+    }
+
+    /// Adds stages to a row's own run: what a row that was held for a
+    /// dictation learned when the dictation failed.
+    pub fn add_stages(&self, id: HistoryId, stages: &[StageRecord]) -> Result<(), HistoryError> {
+        Ok(insert_stages(&self.conn(), id.0, None, stages)?)
     }
 
     /// Marks the row that kept a recording as cancelled, with the text its
@@ -1326,6 +1339,7 @@ impl HistoryStore {
                 profile_id,
                 code,
                 text,
+                ..
             } => AttemptLine {
                 ts,
                 profile_id: profile_id.0.clone(),
@@ -1353,6 +1367,9 @@ impl HistoryStore {
         if let Outcome::Done { redo, .. } = outcome {
             insert_stages(&tx, id.0, Some(attempt_id), &redo.stages)?;
             add_hits(&tx, &self.device_id, ts, &redo.dict_hits)?;
+        }
+        if let Outcome::Failed { stages, .. } = outcome {
+            insert_stages(&tx, id.0, Some(attempt_id), stages)?;
         }
         if let (Outcome::Done { redo, .. }, true) = (outcome, choose || was_failed) {
             apply_in(
@@ -1454,7 +1471,21 @@ impl HistoryStore {
             "{SELECT_ATTEMPT} WHERE utterance_id = ?1 ORDER BY ts DESC, id DESC"
         ))?;
         let rows = stmt.query_map(params![id.0], map_attempt)?;
-        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        let mut list = rows.collect::<Result<Vec<_>, _>>()?;
+        for a in list.iter_mut().filter(|a| a.error.is_some()) {
+            // The result the row had first keeps its stages under the row.
+            let owner = (!a.origin).then_some(a.id.0);
+            a.failure = conn
+                .query_row(
+                    "SELECT detail FROM stages WHERE utterance_id = ?1 AND attempt_id IS ?2 AND text IS NULL
+                     ORDER BY id DESC LIMIT 1",
+                    params![id.0, owner],
+                    |r| r.get::<_, String>(0),
+                )
+                .optional()?
+                .and_then(|d| serde_json::from_str(&d).ok());
+        }
+        Ok(list)
     }
 
     /// The text the row ends with. A correction belongs to the result it
@@ -2698,6 +2729,7 @@ fn map_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<Attempt> {
         corrected_text: r.get(18)?,
         correction_source: r.get(19)?,
         translated: r.get::<_, i64>(20)? != 0,
+        failure: None,
     })
 }
 
@@ -2900,6 +2932,7 @@ mod tests {
             error: "the engine said no".into(),
             raw_text: String::new(),
             final_text: String::new(),
+            stages: Vec::new(),
         }
     }
 
@@ -3366,6 +3399,7 @@ mod tests {
             error: "timeout".into(),
             raw_text: String::new(),
             final_text: String::new(),
+            stages: Vec::new(),
         })
         .unwrap();
         let got = s
@@ -3745,6 +3779,7 @@ mod tests {
                 error: "timed out".into(),
                 raw_text: String::new(),
                 final_text: String::new(),
+                stages: Vec::new(),
             })
             .unwrap();
         let row = s.get(id).unwrap().unwrap();
@@ -3901,6 +3936,7 @@ mod tests {
                 error: "down".into(),
                 raw_text: String::new(),
                 final_text: String::new(),
+                stages: Vec::new(),
             })
             .unwrap();
         let again = s
@@ -3910,6 +3946,7 @@ mod tests {
                     profile_id: ProfileId("default".into()),
                     code: ErrorCode::ProviderTimeout,
                     text: "late".into(),
+                    stages: Vec::new(),
                 },
                 false,
             )
@@ -4156,6 +4193,7 @@ INSERT INTO stats_meta (key, value) VALUES ('backfilled', '1');
                 error: "x".into(),
                 raw_text: String::new(),
                 final_text: String::new(),
+                stages: Vec::new(),
             })
             .unwrap();
         let (device, origin, updated) = meta(&s, failed);
@@ -4178,6 +4216,7 @@ INSERT INTO stats_meta (key, value) VALUES ('backfilled', '1');
                 error: "x".into(),
                 raw_text: String::new(),
                 final_text: String::new(),
+                stages: Vec::new(),
             })
             .unwrap();
         let reset = |id: HistoryId| {
@@ -4435,6 +4474,7 @@ INSERT INTO stats_meta (key, value) VALUES ('backfilled', '1');
             error: "x".into(),
             raw_text: String::new(),
             final_text: String::new(),
+            stages: Vec::new(),
         };
         let failed = s
             .insert_failed(failed_of(500, ErrorCode::ProviderTimeout))
@@ -4604,6 +4644,7 @@ INSERT INTO stats_meta (key, value) VALUES ('backfilled', '1');
             error: "the dictation did not finish".into(),
             raw_text: String::new(),
             final_text: String::new(),
+            stages: Vec::new(),
         }
     }
 

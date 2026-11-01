@@ -477,6 +477,7 @@ mod tests {
                 text: "原文".into(),
                 language: None,
                 segments: Vec::new(),
+                ..Default::default()
             })
         }
         async fn unload(&self) {

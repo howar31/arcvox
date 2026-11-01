@@ -123,7 +123,7 @@ impl Step for LlmStep {
             max_tokens: output_tokens(ctx.general.llm_max_tokens, &input.text),
             timeout: Duration::from_secs(ctx.general.llm_timeout_secs),
         };
-        let text = self.provider.complete(messages, &opts).await?;
+        let (text, usage) = self.provider.complete_with_usage(messages, &opts).await?;
         let text = text.trim().to_string();
         if text.is_empty() {
             return Err(StepError::recoverable(
@@ -149,11 +149,14 @@ impl Step for LlmStep {
             ));
         }
         Ok(StepOutput {
-            detail: serde_json::json!({
-                "in_chars": input_chars,
-                "out_chars": output_chars,
-                "prompt": prompt,
-            }),
+            detail: super::with_usage(
+                serde_json::json!({
+                    "in_chars": input_chars,
+                    "out_chars": output_chars,
+                    "prompt": prompt,
+                }),
+                usage,
+            ),
             text,
             language: None,
             ..Default::default()
@@ -206,9 +209,21 @@ pub(crate) mod fakes {
         pub unloads: std::sync::atomic::AtomicUsize,
         /// When set, `complete` sleeps this long before answering.
         pub delay: Option<Duration>,
+        pub usage: Option<serde_json::Value>,
     }
 
     impl FakeLlm {
+        /// Answers `text` and reports nine tokens of use.
+        pub fn with_usage(text: &str) -> Arc<Self> {
+            let mut fake = Arc::into_inner(Self::ok(text)).unwrap();
+            fake.usage = Some(serde_json::json!({ "total_tokens": 9 }));
+            Arc::new(fake)
+        }
+        pub fn failing_with(error: ProviderError) -> Arc<Self> {
+            let mut fake = Arc::into_inner(Self::ok("")).unwrap();
+            fake.result = Err(error);
+            Arc::new(fake)
+        }
         pub fn ok(text: &str) -> Arc<Self> {
             Arc::new(Self {
                 result: Ok(text.into()),
@@ -217,6 +232,7 @@ pub(crate) mod fakes {
                 loads: std::sync::atomic::AtomicUsize::new(0),
                 unloads: std::sync::atomic::AtomicUsize::new(0),
                 delay: None,
+                usage: None,
             })
         }
         pub fn slow(text: &str, delay: Duration) -> Arc<Self> {
@@ -227,6 +243,7 @@ pub(crate) mod fakes {
                 loads: std::sync::atomic::AtomicUsize::new(0),
                 unloads: std::sync::atomic::AtomicUsize::new(0),
                 delay: Some(delay),
+                usage: None,
             })
         }
         pub fn failing(code: ErrorCode) -> Arc<Self> {
@@ -237,6 +254,7 @@ pub(crate) mod fakes {
                 loads: std::sync::atomic::AtomicUsize::new(0),
                 unloads: std::sync::atomic::AtomicUsize::new(0),
                 delay: None,
+                usage: None,
             })
         }
     }
@@ -254,6 +272,13 @@ pub(crate) mod fakes {
                 tokio::time::sleep(d).await;
             }
             self.result.clone()
+        }
+        async fn complete_with_usage(
+            &self,
+            messages: Vec<ChatMessage>,
+            opts: &LlmOptions,
+        ) -> Result<(String, Option<serde_json::Value>), ProviderError> {
+            Ok((self.complete(messages, opts).await?, self.usage.clone()))
         }
         async fn load(&self) -> Result<(), ProviderError> {
             self.loads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
