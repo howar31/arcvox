@@ -175,6 +175,13 @@
       "key_required": true,
       "key_url": "https://aistudio.google.com/apikey",
       "asr": "chat_audio",
+      "asr_routes": [
+        {
+          "models": ["models/gemini-3.5-transcribe", "gemini-3.5-transcribe"],
+          "wire": "interactions",
+          "base_url": "https://generativelanguage.googleapis.com/v1beta/"
+        }
+      ],
       "llm": "chat"
     },
     {

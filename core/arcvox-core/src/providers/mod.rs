@@ -12,6 +12,7 @@ pub mod factory;
 pub mod http_asr;
 pub mod http_common;
 pub mod http_llm;
+pub mod interactions_asr;
 pub mod probe;
 pub mod registry;
 
@@ -56,6 +57,8 @@ pub struct AsrHint {
     pub language: Option<String>,
     /// Hotword prompt (Whisper `prompt` / `initial_prompt`).
     pub prompt: Option<String>,
+    /// The dictionary's hinted items, for engines that take a list of terms.
+    pub terms: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

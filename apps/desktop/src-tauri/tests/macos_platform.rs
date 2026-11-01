@@ -173,6 +173,7 @@ async fn apple_dictation_transcribes_fixture() {
             &AsrHint {
                 language: Some("zh-TW".into()),
                 prompt: Some("Arcvox".into()),
+                ..Default::default()
             },
         )
         .await

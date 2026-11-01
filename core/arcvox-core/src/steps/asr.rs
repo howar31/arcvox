@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::dictionary::asr_hint;
+use crate::dictionary::{asr_terms, TermLimit};
 use crate::providers::{AsrHint, AsrProvider, ProviderError};
 use crate::segments::segment_records;
 use crate::steps::{PipelineContext, Step, StepError, StepInput, StepOutput};
@@ -54,14 +54,21 @@ impl Step for AsrStep {
         let audio = input.audio.ok_or_else(|| {
             StepError::fatal(ErrorCode::Internal, "asr step called without audio")
         })?;
-        let terms = ctx
-            .profile
-            .asr_dictionary_hint
-            .then(|| asr_hint(&ctx.dictionary, ASR_HINT_BUDGET_BYTES))
-            .flatten();
+        let terms = if ctx.profile.asr_dictionary_hint {
+            asr_terms(
+                ctx.dictionary.iter(),
+                TermLimit::Bytes(ASR_HINT_BUDGET_BYTES),
+            )
+        } else {
+            Vec::new()
+        };
         let hint = AsrHint {
             language: ctx.profile.language_hint.clone(),
-            prompt: asr_prompt(ctx.asr_sample.as_deref(), terms),
+            prompt: asr_prompt(
+                ctx.asr_sample.as_deref(),
+                (!terms.is_empty()).then(|| terms.join(", ")),
+            ),
+            terms,
         };
         let t = self
             .provider

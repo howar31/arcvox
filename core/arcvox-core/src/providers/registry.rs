@@ -11,6 +11,7 @@ use crate::providers::chat_asr::ChatAsrProvider;
 use crate::providers::factory::ProviderFactory;
 use crate::providers::http_asr::HttpAsrProvider;
 use crate::providers::http_llm::HttpLlmProvider;
+use crate::providers::interactions_asr::InteractionsAsrProvider;
 use crate::providers::{AsrProvider, LlmProvider, ProviderError};
 use crate::secrets::SecretStore;
 use crate::types::{ErrorCode, ProviderId};
@@ -266,9 +267,21 @@ impl ProviderRegistry {
                 let model = cfg.model.clone().unwrap_or_default();
                 let timeout = Duration::from_secs(general.asr_timeout_secs);
                 match r.asr {
+                    Wire::Interactions => Arc::new(InteractionsAsrProvider::new(
+                        self.client.clone(),
+                        &r.asr_base,
+                        model,
+                        key.clone(),
+                        cfg.extra_headers.clone(),
+                        cfg.label.clone(),
+                        timeout,
+                        general.retry_count,
+                        cfg.capabilities.language_hint,
+                        cfg.capabilities.hotwords,
+                    )),
                     Wire::ChatAudio => Arc::new(ChatAsrProvider::new(
                         self.client.clone(),
-                        &r.base,
+                        &r.asr_base,
                         model,
                         key.clone(),
                         cfg.extra_headers.clone(),
@@ -281,7 +294,7 @@ impl ProviderRegistry {
                     )),
                     Wire::Transcriptions | Wire::Chat => Arc::new(HttpAsrProvider::new(
                         self.client.clone(),
-                        &r.base,
+                        &r.asr_base,
                         model,
                         key.clone(),
                         cfg.extra_headers.clone(),

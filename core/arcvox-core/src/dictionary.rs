@@ -9,11 +9,22 @@ pub fn is_snippet(entry: &DictionaryEntry) -> bool {
     entry.term.trim().contains('\n')
 }
 
-/// Hinted items, comma-joined, cut at whole items to fit `budget_bytes`.
-/// A snippet contributes its non-empty aliases; any other entry its term.
-pub fn asr_hint(entries: &[DictionaryEntry], budget_bytes: usize) -> Option<String> {
+/// How many terms an engine takes with a dictation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TermLimit {
+    /// Comma-joined, in bytes.
+    Bytes(usize),
+    Count(usize),
+}
+
+/// Hinted items, cut at whole items to fit `limit`. A snippet contributes its
+/// non-empty aliases; any other entry its term.
+pub fn asr_terms<'a>(
+    entries: impl IntoIterator<Item = &'a DictionaryEntry>,
+    limit: TermLimit,
+) -> Vec<String> {
     let items = entries
-        .iter()
+        .into_iter()
         .filter(|e| e.asr_hint)
         .flat_map(|e| -> Vec<&str> {
             if is_snippet(e) {
@@ -26,23 +37,27 @@ pub fn asr_hint(entries: &[DictionaryEntry], budget_bytes: usize) -> Option<Stri
                 vec![e.term.as_str()]
             }
         });
-    let mut out = String::new();
+    let mut out = Vec::new();
+    let mut used = 0;
     for item in items {
-        let candidate = if out.is_empty() {
-            item.to_string()
-        } else {
-            format!("{out}, {item}")
+        let size = item.len() + if out.is_empty() { 0 } else { ", ".len() };
+        let fits = match limit {
+            TermLimit::Bytes(bytes) => used + size <= bytes,
+            TermLimit::Count(count) => out.len() < count,
         };
-        if candidate.len() > budget_bytes {
+        if !fits {
             break;
         }
-        out = candidate;
+        used += size;
+        out.push(item.to_string());
     }
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
-    }
+    out
+}
+
+/// The hinted items comma-joined, within `budget_bytes`.
+pub fn asr_hint(entries: &[DictionaryEntry], budget_bytes: usize) -> Option<String> {
+    let terms = asr_terms(entries, TermLimit::Bytes(budget_bytes));
+    (!terms.is_empty()).then(|| terms.join(", "))
 }
 
 pub fn llm_terms(entries: &[DictionaryEntry]) -> Vec<String> {
@@ -200,6 +215,17 @@ mod tests {
         // "Arcvox" is 6 bytes; adding ", 語音輸入法" (2 + 15 bytes) exceeds 20.
         assert_eq!(asr_hint(&d, 20).as_deref(), Some("Arcvox"));
         assert_eq!(asr_hint(&d, 3), None);
+    }
+
+    #[test]
+    fn asr_terms_keeps_each_item_whole() {
+        let d = vec![entry("Arcvox", &[], true), entry("語音 輸入", &[], true)];
+        assert_eq!(
+            asr_terms(&d, TermLimit::Bytes(1000)),
+            vec!["Arcvox", "語音 輸入"]
+        );
+        assert_eq!(asr_terms(&d, TermLimit::Bytes(7)), vec!["Arcvox"]);
+        assert_eq!(asr_terms(&d, TermLimit::Count(1)), vec!["Arcvox"]);
     }
 
     #[test]

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::config::base_prompt::DEFAULT_BASE_PROMPT;
-use crate::dictionary::{asr_hint, llm_terms};
+use crate::dictionary::{asr_hint, asr_terms, llm_terms, TermLimit};
 use crate::engine::Engine;
 use crate::prompt::{assemble, PromptParts};
 use crate::providers::{AsrHint, LlmOptions};
@@ -116,6 +116,7 @@ impl Engine {
         let hint = AsrHint {
             language: profile.language_hint.clone(),
             prompt: asr_hint(&config.dictionary, ASR_HINT_BUDGET_BYTES),
+            terms: asr_terms(&config.dictionary, TermLimit::Bytes(ASR_HINT_BUDGET_BYTES)),
         };
         let t1 = Instant::now();
         let result = p.transcribe(&clip, &hint).await;

@@ -26,6 +26,18 @@ pub enum Wire {
     ChatAudio,
     /// `POST {base}/chat/completions`.
     Chat,
+    /// `POST {base}/interactions`, Gemini's own format. Only by model, through
+    /// `ServicePreset::asr_routes`.
+    Interactions,
+}
+
+/// Speech models of a service that take another way than the service's `asr`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelRoute {
+    /// The model names, as the service lists them and as typed.
+    pub models: Vec<String>,
+    pub wire: Wire,
+    pub base_url: Url,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -58,6 +70,8 @@ pub struct ServicePreset {
     /// How speech goes to the service; none when it does no speech recognition.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asr: Option<Wire>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub asr_routes: Vec<ModelRoute>,
     /// How text goes to the service; none when it does no text rewriting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub llm: Option<Wire>,
@@ -87,7 +101,8 @@ impl ServicePreset {
         let base_ok = self
             .base()
             .is_some_and(|u| matches!(u.scheme(), "http" | "https"));
-        let wires_ok = self.asr != Some(Wire::Chat)
+        let wires_ok = !matches!(self.asr, Some(Wire::Chat | Wire::Interactions))
+            && self.asr_routes.iter().all(|r| r.wire != Wire::Chat)
             && matches!(self.llm, None | Some(Wire::Chat))
             && (self.asr.is_some() || self.llm.is_some());
         id_ok && base_ok && wires_ok
@@ -107,6 +122,8 @@ pub trait ServiceLookup: Send + Sync {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Route {
     pub base: Url,
+    /// Where speech goes; the same as `base` unless the model has a route of its own.
+    pub asr_base: Url,
     pub asr: Wire,
     pub llm: Wire,
     /// The engine names a service the catalogue does not have; its stored
@@ -123,16 +140,27 @@ pub fn route(cfg: &ProviderConfig, lookup: Option<&dyn ServiceLookup>) -> Option
         .and_then(|id| lookup.and_then(|l| l.service(id)));
     if let Some(s) = found {
         if let Some(base) = s.base() {
+            let model = cfg.model.as_deref().unwrap_or_default();
+            let own = s
+                .asr_routes
+                .iter()
+                .find(|r| r.models.iter().any(|m| m == model));
             return Some(Route {
+                asr_base: own.map_or_else(|| base.clone(), |r| r.base_url.clone()),
                 base,
-                asr: s.asr.unwrap_or(Wire::Transcriptions),
+                asr: own
+                    .map(|r| r.wire)
+                    .or(s.asr)
+                    .unwrap_or(Wire::Transcriptions),
                 llm: Wire::Chat,
                 service_missing: false,
             });
         }
     }
+    let base = cfg.base_url.clone()?;
     Some(Route {
-        base: cfg.base_url.clone()?,
+        asr_base: base.clone(),
+        base,
         asr: Wire::Transcriptions,
         llm: Wire::Chat,
         service_missing: cfg.service.is_some(),
@@ -153,6 +181,39 @@ mod tests {
         fn services(&self) -> Vec<ServicePreset> {
             vec![self.0.clone()]
         }
+    }
+
+    #[test]
+    fn a_model_with_a_route_of_its_own_takes_it() {
+        let gemini = preset(
+            r#"{"id":"gemini","label":"Gemini","kind":"cloud",
+                "base_url":"https://g.example/v1beta/openai/","asr":"chat_audio","llm":"chat",
+                "asr_routes":[{"models":["models/t","t"],"wire":"interactions",
+                               "base_url":"https://g.example/v1beta/"}]}"#,
+        );
+        assert!(gemini.valid());
+        let lookup = One(gemini);
+        let mut cfg = http(Some("gemini"), None);
+
+        cfg.model = Some("models/t".into());
+        let own = route(&cfg, Some(&lookup)).unwrap();
+        assert_eq!(own.asr, Wire::Interactions);
+        assert_eq!(own.asr_base.as_str(), "https://g.example/v1beta/");
+        assert_eq!(own.base.as_str(), "https://g.example/v1beta/openai/");
+        assert_eq!(own.llm, Wire::Chat);
+
+        cfg.model = Some("models/flash".into());
+        let plain = route(&cfg, Some(&lookup)).unwrap();
+        assert_eq!(plain.asr, Wire::ChatAudio);
+        assert_eq!(plain.asr_base, plain.base);
+    }
+
+    #[test]
+    fn interactions_is_never_a_whole_service_format() {
+        let p = preset(
+            r#"{"id":"x","label":"X","kind":"cloud","base_url":"https://x.example/","asr":"interactions"}"#,
+        );
+        assert!(!p.valid());
     }
 
     fn http(service: Option<&str>, base: Option<&str>) -> ProviderConfig {

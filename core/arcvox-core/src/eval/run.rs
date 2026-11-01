@@ -12,7 +12,7 @@ use super::{
     Stage,
 };
 use crate::config::{Config, Profile, ProviderConfig};
-use crate::dictionary::asr_hint;
+use crate::dictionary::{asr_hint, asr_terms, TermLimit};
 use crate::engine::Engine;
 use crate::history::Utterance;
 use crate::pipeline::Pipeline;
@@ -185,6 +185,7 @@ pub async fn run(
                     request.asr_sample.as_deref(),
                     asr_hint(&config.dictionary, ASR_HINT_BUDGET_BYTES),
                 ),
+                terms: asr_terms(&config.dictionary, TermLimit::Bytes(ASR_HINT_BUDGET_BYTES)),
             };
             let total = ids.len() * rows.len();
             'engines: for id in &ids {

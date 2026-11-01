@@ -204,7 +204,7 @@ mod tests {
     fn locale_comes_from_the_hint_unless_fixed() {
         let hint = AsrHint {
             language: Some("ja".into()),
-            prompt: None,
+            ..Default::default()
         };
         let from_hint = AppleAsrProvider::from_hint("A".into(), Duration::from_secs(1));
         assert_eq!(from_hint.locale_for(&hint), "ja_JP");

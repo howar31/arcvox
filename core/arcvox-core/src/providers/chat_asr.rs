@@ -18,7 +18,7 @@ use crate::providers::{AsrHint, AsrProvider, ProviderError};
 use crate::types::{AudioClip, ErrorCode, Transcript};
 
 /// Gemini takes at most 20 MB per request with the audio inline.
-const MAX_REQUEST_BYTES: usize = 20 * 1024 * 1024;
+pub(crate) const MAX_REQUEST_BYTES: usize = 20 * 1024 * 1024;
 
 const INSTRUCTION: &str = "Transcribe the speech in this audio exactly as spoken, \
 with punctuation. Reply with the transcript only, without any comment. \
@@ -239,6 +239,7 @@ mod tests {
         let hint = AsrHint {
             language: Some("zh-TW".into()),
             prompt: Some("Arcvox, 語音".into()),
+            ..Default::default()
         };
         let out = provider(&server, true, true)
             .transcribe(&clip(1), &hint)
@@ -271,6 +272,7 @@ mod tests {
         let hint = AsrHint {
             language: Some("zh-TW".into()),
             prompt: Some("P-term".into()),
+            ..Default::default()
         };
         provider(&server, false, false)
             .transcribe(&clip(1), &hint)

@@ -196,6 +196,7 @@ mod tests {
         let hint = AsrHint {
             language: Some("zh-TW".into()),
             prompt: Some("Arcvox, 語音".into()),
+            ..Default::default()
         };
         let out = provider(&server, true, true)
             .transcribe(&clip(), &hint)
@@ -237,6 +238,7 @@ mod tests {
         let hint = AsrHint {
             language: Some("zh-TW".into()),
             prompt: Some("P".into()),
+            ..Default::default()
         };
         provider(&server, false, false)
             .transcribe(&clip(), &hint)

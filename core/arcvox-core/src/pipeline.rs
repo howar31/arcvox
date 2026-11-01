@@ -72,6 +72,13 @@ impl Pipeline {
                         recoverable: false,
                         ..StepError::from(e)
                     })?;
+                    if let Some(route) = registry.route(cfg) {
+                        tracing::info!(
+                            engine = %cfg.id,
+                            wire = ?route.asr,
+                            "speech goes to a network engine"
+                        );
+                    }
                     Box::new(AsrStep::new(provider))
                 }
                 StepSpec::OpenCc {
