@@ -47,6 +47,36 @@ const EVENT_BUFFER: usize = 256;
 pub struct HintUsage {
     pub sent: usize,
     pub total: usize,
+    /// The engine's limit, in terms or in bytes.
+    pub limit_terms: Option<usize>,
+    pub limit_bytes: Option<usize>,
+}
+
+/// How many hinted items fit an engine's limit; no limit: none is asked about.
+fn hint_usage(
+    entries: &[crate::config::DictionaryEntry],
+    hits: &[crate::history::TermHits],
+    limit: Option<TermLimit>,
+) -> HintUsage {
+    let total = asr_terms(entries, TermLimit::Count(usize::MAX)).len();
+    let sent = limit.map_or(0, |limit| {
+        asr_terms(
+            rank_for_hints(entries, hits, crate::history::now_unix()),
+            limit,
+        )
+        .len()
+    });
+    let (limit_terms, limit_bytes) = match limit {
+        Some(TermLimit::Count(n)) => (Some(n), None),
+        Some(TermLimit::Bytes(n)) => (None, Some(n)),
+        None => (None, None),
+    };
+    HintUsage {
+        sent,
+        total,
+        limit_terms,
+        limit_bytes,
+    }
 }
 
 /// Finished sessions whose history row is still remembered for
@@ -386,23 +416,14 @@ impl Engine {
 
     /// How many of the dictionary's hinted items the default profile's speech
     /// engine is given with a dictation.
-    pub fn dictionary_hint_usage(&self) -> HintUsage {
+    /// The dictionary's hinted items and how many of them go with a
+    /// dictation on `engine`.
+    pub fn dictionary_hint_usage(&self, engine: Option<&ProviderId>) -> HintUsage {
         let config = self.inner.config.current();
-        let total = asr_terms(&config.dictionary, TermLimit::Count(usize::MAX)).len();
-        let profile = config.default_profile();
-        let engines = self.inner.resolve_engines(&config, profile);
-        let sent = match config.provider(&engines.asr.id) {
-            Some(cfg) if profile.asr_dictionary_hint => {
-                let hits = self.inner.term_hits();
-                asr_terms(
-                    rank_for_hints(&config.dictionary, &hits, crate::history::now_unix()),
-                    self.inner.registry.term_limit(cfg),
-                )
-                .len()
-            }
-            _ => 0,
-        };
-        HintUsage { sent, total }
+        let limit = engine
+            .and_then(|id| config.provider(id))
+            .map(|cfg| self.inner.registry.term_limit(cfg));
+        hint_usage(&config.dictionary, &self.inner.term_hits(), limit)
     }
 
     pub(crate) fn secrets(&self) -> &Arc<dyn SecretStore> {
@@ -3603,6 +3624,44 @@ pub(crate) mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].error_code.as_deref(), Some("provider_error"));
         assert!(rows[0].audio_path.as_ref().unwrap().is_file());
+    }
+
+    #[test]
+    fn hint_usage_counts_what_fits_the_limit_of_the_engine() {
+        let entries: Vec<crate::config::DictionaryEntry> = ["甲", "乙", "丙"]
+            .iter()
+            .map(|t| crate::config::DictionaryEntry {
+                term: t.to_string(),
+                ..Default::default()
+            })
+            .collect();
+        assert_eq!(
+            hint_usage(&entries, &[], Some(TermLimit::Count(2))),
+            HintUsage {
+                sent: 2,
+                total: 3,
+                limit_terms: Some(2),
+                limit_bytes: None
+            }
+        );
+        assert_eq!(
+            hint_usage(&entries, &[], Some(TermLimit::Bytes(3))),
+            HintUsage {
+                sent: 1,
+                total: 3,
+                limit_terms: None,
+                limit_bytes: Some(3)
+            }
+        );
+        assert_eq!(
+            hint_usage(&entries, &[], None),
+            HintUsage {
+                sent: 0,
+                total: 3,
+                limit_terms: None,
+                limit_bytes: None
+            }
+        );
     }
 
     #[tokio::test]

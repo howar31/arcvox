@@ -4,6 +4,7 @@
   import { tip } from "../../lib/tip";
   import type { DictionaryEntry, TermHits } from "../../lib/api";
   import { addAliases, isSnippet } from "../../lib/dictionary";
+  import InfoTip from "../../lib/ui/InfoTip.svelte";
   import { formatShortDate } from "../../lib/format";
   import { isImeKey } from "../../lib/ime";
   import { t } from "../../lib/i18n";
@@ -100,7 +101,7 @@
     </div>
   </div>
   <div class="line foot">
-    <span class="hint"><Switch bind:checked={item.asr_hint} label={t("dictionary.asr_hint")} /><span class="sub">{t("dictionary.asr_hint")}</span></span>
+    <span class="hint"><Switch bind:checked={item.asr_hint} label={t("dictionary.asr_hint")} /><span class="sub">{t("dictionary.asr_hint")}</span><InfoTip info={t(!item.asr_hint ? "dictionary.asr_hint_off" : isSnippet(item.term) ? "dictionary.asr_hint_snippet" : "dictionary.asr_hint_term")} /></span>
     <span class="origin" use:tip={origin}>{origin}</span>
     {#if sure}
       <button type="button" class="btn danger" onclick={remove}>{t("dictionary.remove_sure")}</button>

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick, untrack } from "svelte";
-  import { dictionaryExamples, dictionaryHintUsage, dictionaryHits, dictionaryIndex, dictionarySuggestions, errorMessage, setDictionary, type DictionaryEntry, type Dismissed, type Suggestion, type TermHits, type TermIndex } from "../../lib/api";
+  import { dictionaryExamples, dictionaryHintUsage, dictionaryHits, dictionaryIndex, dictionarySuggestions, errorMessage, setDictionary, type DictionaryEntry, type HintUsage, type Dismissed, type Suggestion, type TermHits, type TermIndex } from "../../lib/api";
   import { dropBlank, isSnippet, trimEntries } from "../../lib/dictionary";
   import { arrange, matches, rememberSort, rememberView, SORTS, storedSort, storedView, VIEWS, type Labels, type Sort, type View } from "../../lib/dictionaryView";
   import { guard } from "../../lib/guard.svelte";
@@ -84,7 +84,7 @@
   });
 
   // How often each term's aliases were replaced, from the records.
-  let hintUsage = $state<{ sent: number; total: number } | null>(null);
+  let hintUsage = $state<HintUsage | null>(null);
   let hits = $state<Map<string, TermHits>>(new Map());
   const hitsOf = (item: Item): TermHits | null => hits.get(item.term.trim()) ?? null;
   const aliasText = (n: number): string => (n === 0 ? t("dictionary.no_aliases") : n === 1 ? t("dictionary.alias_one") : t("dictionary.alias_count", { n: String(n) }));
@@ -353,7 +353,7 @@
 
   {#if tab === "terms"}
     {#if hintUsage?.total}
-      <p class="usage">{t("dictionary.hint_usage", { n: String(hintUsage.sent), total: String(hintUsage.total) })}<InfoTip info={t("dictionary.hint_usage_info")} /></p>
+      <p class="usage">{t("dictionary.hint_total", { total: String(hintUsage.total) })}<InfoTip info={t("dictionary.hint_total_info")} /></p>
     {/if}
     {#if !items.length}
       <Group>

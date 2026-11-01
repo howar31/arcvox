@@ -76,7 +76,9 @@ export const dictionaryIndex = (terms: string[]) => invoke<TermIndex[]>("diction
 /** How often a term's aliases were replaced, and when last (unix seconds); terms never replaced are absent. */
 export interface TermHits { term: string; count: number; last: number }
 export const dictionaryHits = () => invoke<TermHits[]>("dictionary_hits");
-export const dictionaryHintUsage = () => invoke<{ sent: number; total: number }>("dictionary_hint_usage");
+/** The dictionary's hinted items and how many go with a dictation on the engine, within its limit. */
+export interface HintUsage { sent: number; total: number; limit_terms: number | null; limit_bytes: number | null }
+export const dictionaryHintUsage = (engineId: string | null = null) => invoke<HintUsage>("dictionary_hint_usage", { engineId });
 /** Up to `limit` dictations holding the term, as excerpts with the term between 【 and 】. */
 export const dictionaryExamples = (term: string, limit = 2) => invoke<string[]>("dictionary_examples", { term, limit });
 export interface General {

@@ -149,8 +149,9 @@ pub struct HitsDto {
 #[tauri::command]
 pub fn dictionary_hint_usage(
     state: State<'_, AppState>,
+    engine_id: Option<arcvox_core::types::ProviderId>,
 ) -> CmdResult<arcvox_core::engine::HintUsage> {
-    Ok(engine(&state)?.dictionary_hint_usage())
+    Ok(engine(&state)?.dictionary_hint_usage(engine_id.as_ref()))
 }
 
 #[tauri::command]

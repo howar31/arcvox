@@ -1,4 +1,12 @@
-import type { DictionaryEntry } from "./api";
+import type { DictionaryEntry, HintUsage } from "./api";
+import { t } from "./i18n";
+
+/** How many terms go with a dictation on a profile's engine; "" when the engine takes none. */
+export function hintCountLine(u: HintUsage): string {
+  if (!u.total) return "";
+  if (u.limit_bytes) return t("flow.asr_hint_count_bytes", { n: String(u.sent), limit: String(u.limit_bytes) });
+  return u.limit_terms ? t("flow.asr_hint_count", { n: String(u.sent), limit: String(u.limit_terms) }) : "";
+}
 
 /** Trims each term and alias and drops blank aliases; the engine treats a
  * term with an inner line break as a snippet, so stray edge newlines from the
