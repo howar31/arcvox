@@ -4,14 +4,16 @@
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import {
     errorMessage, formatBytes, modelsCancel, modelsCustomDir, modelsDelete, modelsDirGet, modelsDirSet, modelsDownload, modelsDownloadRecommended, modelsImport,
-    modelsInstalled, modelsManifest, modelsManifestNow, nativeInstallLanguage, nativeStatus, onModelDownloadProgress, onNativeInstallProgress, openFolder,
-    engineChecks, listServices, probeProvider, profilesPresets, putEngineCheck, setDefaultEngine, verifyProvider, type PresetView, type DownloadProgress, type EngineCheck, type ServicePreset, type InstalledModel, type ManifestView, type ModelEntry, type ModelsDir, type NativeStatusView, type ProviderConfig,
+    modelsInstalled, modelsManifest, modelsManifestNow, onModelDownloadProgress, openFolder,
+    engineChecks, listServices, probeProvider, profilesPresets, putEngineCheck, setDefaultEngine, verifyProvider, type PresetView, type DownloadProgress, type EngineCheck, type ServicePreset, type InstalledModel, type ManifestView, type ModelEntry, type ModelsDir, type ProviderConfig,
   } from "../../lib/api";
   import { encoderMissing, enginesOf, entryBytes, factsLine, hasRole, modelServes, recommendedMissing, runnable, type Role } from "../../lib/engines";
   import { t } from "../../lib/i18n";
   import { defaultProfile, modelDescription, modelLabel, namedBy, usedBy } from "../../lib/labels";
   import { describeProbe, NATIVE_DICTATION } from "../../lib/providerForm";
   import { usableWith } from "../../lib/resolve";
+  import { nativeStates as shared } from "../../lib/nativeStates.svelte";
+  import DictationLanguages from "./engines/DictationLanguages.svelte";
   import { engineDescription } from "../../lib/stages";
   import { formatShortDate, formatTime } from "../../lib/format";
   import { removeEngines, type MoveTo } from "../../lib/engineRemoval";
@@ -69,9 +71,8 @@
     rowProbes = next;
   });
   // The platform services' status, keyed by engine id.
-  let nativeStates = $state<Record<string, NativeStatusView>>({});
-  let installing = $state(false);
-  let installFraction = $state(0);
+  /** Each platform engine's status in the default profile's language. */
+  const nativeStates = $derived(Object.fromEntries((config.value?.providers ?? []).filter((p) => p.kind === "native").flatMap((p) => { const s = shared.of(p, defaultHint); return s ? [[p.id, s]] : []; })));
   let formOpen = $state(false);
   let formInitial = $state<ProviderConfig | null>(null);
   // The last real request of each network engine, and the catalogue's services.
@@ -202,35 +203,16 @@
     loadFolder();
     listServices().then((s) => (services = s)).catch(() => {});
     let unlistenModels: (() => void) | undefined;
-    let unlistenNative: (() => void) | undefined;
     let disposed = false;
     onModelDownloadProgress((p) => {
       progress = { ...progress, [p.id]: p };
       if (p.done && !p.error) refreshInstalled();
     }).then((u) => { if (disposed) u(); else unlistenModels = u; });
-    onNativeInstallProgress((f) => (installFraction = f)).then((u) => { if (disposed) u(); else unlistenNative = u; });
-    return () => { disposed = true; unlistenModels?.(); unlistenNative?.(); };
+    return () => { disposed = true; unlistenModels?.(); };
   });
 
-  // The platform services report their status as the page opens, for both tabs' marks.
-  $effect(() => {
-    for (const p of (config.value?.providers ?? []).filter((x) => x.kind === "native")) {
-      if (!p.native_id || nativeStates[p.id]) continue;
-      nativeStatus(p.native_id, defaultHint)
-        .then((s) => { nativeStates = { ...nativeStates, [p.id]: s }; })
-        .catch((e) => { nativeStates = { ...nativeStates, [p.id]: { status: "failed", reason: errorMessage(e) } }; });
-    }
-  });
-  const STATUSES = ["ready", "needs_download", "locale_unsupported", "os_too_old", "not_eligible", "intelligence_off", "model_not_ready", "failed"];
-  async function installLanguage(p: ProviderConfig) {
-    installing = true;
-    installFraction = 0;
-    try { await nativeInstallLanguage(defaultHint); }
-    catch (e) { const m = errorMessage(e); toast.error(STATUSES.includes(m) ? t("engines.native." + m) : m); }
-    installing = false;
-    const { [p.id]: _, ...rest } = nativeStates;
-    nativeStates = rest;
-  }
+  // The platform services report their status as the page opens and when the window comes back, for both tabs' marks.
+  $effect(() => { shared.ensure(config.value?.providers ?? [], [defaultHint, ...(config.value?.profiles ?? []).map((f) => f.language_hint)]); });
 
   /**
    * The ring before an engine says one thing: in use by a profile and working (accent), ready and
@@ -565,14 +547,10 @@
           <small>{usersLine(p.id)}</small>
           {@render probeLine(p.id)}
         </div>
-        {#if p.native_id === NATIVE_DICTATION && s?.status === "needs_download"}
-          <button type="button" class="btn" onclick={() => installLanguage(p)} disabled={installing}>
-            {installing ? t("engines.installing", { percent: `${Math.round(installFraction * 100)}%` }) : t("engines.install_language")}
-          </button>
-        {/if}
         {@render defaultButton(p)}
         <button type="button" class="btn quiet" onclick={() => test(p)} disabled={rowProbes[p.id]?.state === "wait"}>{t("engines.test")}</button>
       </Row>
+      {#if p.native_id === NATIVE_DICTATION}<DictationLanguages engine={p} config={config.value} />{/if}
     {/each}
   </Group>
 {/if}

@@ -33,4 +33,10 @@ pub trait ProviderFactory: Send + Sync {
     fn ready(&self, _cfg: &ProviderConfig) -> bool {
         true
     }
+
+    /// Whether the engine can run for a profile in `language` (its hint):
+    /// for an engine that has a model per language, that language's.
+    fn ready_for(&self, cfg: &ProviderConfig, _language: Option<&str>) -> bool {
+        self.ready(cfg)
+    }
 }

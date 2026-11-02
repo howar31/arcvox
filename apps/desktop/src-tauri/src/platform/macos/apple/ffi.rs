@@ -45,6 +45,11 @@ unsafe extern "C" {
     pub fn kw_apple_live_finish(handle: *mut c_void, out: *mut *mut c_char) -> i32;
     /// Stops the dictation; releases the handle.
     pub fn kw_apple_live_close(handle: *mut c_void);
+    /// `hints_json` is a JSON array of language hints; `out` receives a JSON
+    /// object owned by the bridge, released with `kw_apple_free`.
+    pub fn kw_apple_dictation_languages(hints_json: *const c_char, out: *mut *mut c_char) -> i32;
+    pub fn kw_apple_dictation_reserve(locale: *const c_char) -> i32;
+    pub fn kw_apple_dictation_release(locale: *const c_char) -> i32;
     pub fn kw_apple_fm_status() -> i32;
     /// `max_tokens` <= 0 leaves the length to the model; `out` receives a
     /// string owned by the bridge, released with `kw_apple_free`.

@@ -41,7 +41,7 @@ impl AppleAsrProvider {
     fn locale_for(&self, hint: &AsrHint) -> String {
         self.locale
             .clone()
-            .unwrap_or_else(|| locale_for_hint(hint.language.as_deref()).to_string())
+            .unwrap_or_else(|| locale_for_hint(hint.language.as_deref()))
     }
 }
 
@@ -325,8 +325,8 @@ mod tests {
             ..Default::default()
         };
         let from_hint = AppleAsrProvider::from_hint("A".into(), Duration::from_secs(1));
-        assert_eq!(from_hint.locale_for(&hint), "ja_JP");
-        assert_eq!(from_hint.locale_for(&AsrHint::default()), "zh_TW");
+        assert_eq!(from_hint.locale_for(&hint), "ja");
+        assert_eq!(from_hint.locale_for(&AsrHint::default()), "zh-TW");
         let fixed = AppleAsrProvider::new("en_US".into(), "A".into(), Duration::from_secs(1));
         assert_eq!(fixed.locale_for(&hint), "en_US");
     }

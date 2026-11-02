@@ -95,8 +95,12 @@ impl ProviderFactory for AppleFactory {
     }
 
     fn ready(&self, cfg: &ProviderConfig) -> bool {
+        self.ready_for(cfg, None)
+    }
+
+    fn ready_for(&self, cfg: &ProviderConfig, language: Option<&str>) -> bool {
         let status = match cfg.native_id.as_deref() {
-            Some(NATIVE_APPLE_DICTATION) => dictation_status(locale_for_hint(None)),
+            Some(NATIVE_APPLE_DICTATION) => dictation_status(&locale_for_hint(language)),
             Some(NATIVE_APPLE_FM) => fm_status(),
             _ => return false,
         };
@@ -106,7 +110,7 @@ impl ProviderFactory for AppleFactory {
     async fn probe(&self, cfg: &ProviderConfig) -> ProbeResult {
         let status = match cfg.native_id.as_deref() {
             Some(NATIVE_APPLE_DICTATION) => {
-                tokio::task::spawn_blocking(|| dictation_status(locale_for_hint(None))).await
+                tokio::task::spawn_blocking(|| dictation_status(&locale_for_hint(None))).await
             }
             Some(NATIVE_APPLE_FM) => tokio::task::spawn_blocking(fm_status).await,
             other => {

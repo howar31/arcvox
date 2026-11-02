@@ -22,9 +22,12 @@ export interface Resolved { asr: Choice; llm: Choice | null; translate: Choice |
 
 export const hasLlmStep = (profile: Pick<Profile, "steps">): boolean => profile.steps.some((s) => s.step === "llm" && !s.off);
 
-/** Whether an engine can run now, from the installed model files; platform and network engines are taken at their word. */
-export function usableWith(installedIds: Set<string> | null, installedPaths?: Set<string>): (p: ProviderConfig) => boolean {
-  return (p) => installedIds === null || engineMeta(p, installedIds, installedPaths).ready;
+/**
+ * Whether an engine can run now: a local one from the installed model files, a platform one from the system's answer
+ * (`native`, when given), a network one at its word.
+ */
+export function usableWith(installedIds: Set<string> | null, installedPaths?: Set<string>, native?: (p: ProviderConfig) => boolean): (p: ProviderConfig) => boolean {
+  return (p) => (p.kind === "native" ? (native?.(p) ?? true) : installedIds === null || engineMeta(p, installedIds, installedPaths).ready);
 }
 
 export function resolveEngines(config: Config | null, profile: Profile, usable: (p: ProviderConfig) => boolean): Resolved {

@@ -426,6 +426,11 @@ impl Engine {
         self.inner.registry.ready(cfg)
     }
 
+    /// `can_run` for a profile in `language`, its language hint.
+    pub fn can_run_for(&self, cfg: &ProviderConfig, language: Option<&str>) -> bool {
+        self.inner.registry.ready_for(cfg, language)
+    }
+
     /// The engines a profile runs with now: its own when they can run,
     /// else the default pair. See `Config::resolve_engines`.
     pub fn resolve_engines(&self, profile: &Profile) -> ResolvedEngines {
@@ -1328,7 +1333,8 @@ impl Inner {
         config: &crate::config::Config,
         profile: &Profile,
     ) -> ResolvedEngines {
-        config.resolve_engines(profile, |cfg| self.registry.ready(cfg))
+        let language = profile.language_hint.as_deref();
+        config.resolve_engines(profile, |cfg| self.registry.ready_for(cfg, language))
     }
 
     fn schedule_idle_unload(self: &Arc<Self>) {

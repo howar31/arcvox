@@ -461,6 +461,11 @@ export type NativeStatusKind = "ready" | "needs_download" | "locale_unsupported"
 export interface NativeStatusView { status: NativeStatusKind; reason: string | null }
 export const nativeStatus = (nativeId: string, hint: string | null) => invoke<NativeStatusView>("native_status", { nativeId, languageHint: hint });
 export const nativeInstallLanguage = (hint: string | null) => invoke<void>("native_install_language", { languageHint: hint });
+/** The dictation languages of the system; `resolved` maps each hint asked about to the supported language it uses. */
+export interface DictationLanguages { supported: string[]; installed: string[]; reserved: string[]; max: number; resolved: Record<string, string | null> }
+export const nativeDictationLanguages = (hints: string[]) => invoke<DictationLanguages>("native_dictation_languages", { hints });
+export const nativeReleaseLanguage = (locale: string) => invoke<void>("native_release_language", { locale });
+export const nativeReserveLanguage = (locale: string) => invoke<void>("native_reserve_language", { locale });
 /** Which platform services are there now; looks again and makes the engines follow. */
 export interface NativeServices { apple_dictation: boolean; apple_foundation_models: boolean }
 export const nativeRefresh = () => invoke<NativeServices>("native_refresh");

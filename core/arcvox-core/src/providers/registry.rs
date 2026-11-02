@@ -184,6 +184,16 @@ impl ProviderRegistry {
         }
     }
 
+    /// `ready` for a profile in `language`, its language hint.
+    pub fn ready_for(&self, cfg: &ProviderConfig, language: Option<&str>) -> bool {
+        match cfg.kind {
+            ProviderKind::Http => true,
+            kind => self
+                .factory_for(kind)
+                .is_some_and(|f| f.ready_for(cfg, language)),
+        }
+    }
+
     pub fn llm_providers(&self) -> Vec<Arc<dyn LlmProvider>> {
         self.llm
             .lock()

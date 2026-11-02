@@ -56,15 +56,14 @@ impl NativeStatus {
     }
 }
 
-/// Maps a BCP 47 language hint to the dictation locale; unknown hints fall back to `zh_TW`.
-pub fn locale_for_hint(hint: Option<&str>) -> &'static str {
-    let primary = hint
-        .and_then(|h| h.split(['-', '_']).next())
-        .map(str::to_ascii_lowercase);
-    match primary.as_deref() {
-        Some("en") => "en_US",
-        Some("ja") => "ja_JP",
-        _ => "zh_TW",
+/// The dictation language for a profile's language hint, as the system is
+/// asked for it: the hint itself, the system picking its closest supported
+/// language. No hint, or a bare `zh`, is Taiwan Mandarin.
+pub fn locale_for_hint(hint: Option<&str>) -> String {
+    match hint.map(str::trim).filter(|h| !h.is_empty()) {
+        None => "zh-TW".into(),
+        Some(h) if h.eq_ignore_ascii_case("zh") => "zh-TW".into(),
+        Some(h) => h.to_string(),
     }
 }
 
@@ -88,7 +87,7 @@ pub fn fm_status() -> NativeStatus {
 /// Which Apple providers a fresh config starts with. Dictation counts when its
 /// language can be installed later. Blocks.
 pub fn first_run_defaults() -> FirstRunDefaults {
-    let dictation = dictation_status(locale_for_hint(None));
+    let dictation = dictation_status(&locale_for_hint(None));
     FirstRunDefaults {
         apple_dictation: matches!(dictation, NativeStatus::Ready | NativeStatus::NeedsDownload),
         apple_foundation_models: fm_status() == NativeStatus::Ready,
@@ -99,6 +98,58 @@ unsafe extern "C" fn progress_trampoline<F: FnMut(f64)>(fraction: f64, user: *mu
     // SAFETY: `user` is the `Mutex<F>` owned by `dictation_install`, alive for the call.
     let f = unsafe { &*(user as *const Mutex<F>) };
     (f.lock().unwrap_or_else(|p| p.into_inner()))(fraction);
+}
+
+/// The dictation languages of this system, as `kw_apple_dictation_languages` reports them.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct DictationLanguages {
+    pub supported: Vec<String>,
+    pub installed: Vec<String>,
+    /// Kept for this app; the system does not remove them.
+    pub reserved: Vec<String>,
+    /// How many languages this app may keep.
+    pub max: usize,
+    /// Each hint asked about, with the supported language it maps to.
+    pub resolved: std::collections::BTreeMap<String, Option<String>>,
+}
+
+/// The supported, installed and kept dictation languages, and the language
+/// each of `hints` maps to. Blocks.
+pub fn dictation_languages(hints: &[String]) -> Result<DictationLanguages, NativeStatus> {
+    let json = CString::new(serde_json::to_string(hints).expect("strings serialize"))
+        .expect("no interior NUL");
+    let mut out: *mut std::ffi::c_char = std::ptr::null_mut();
+    // SAFETY: `json` outlives the call; a non-null `out` is a string from the
+    // bridge, freed after the copy.
+    let code = unsafe { ffi::kw_apple_dictation_languages(json.as_ptr(), &mut out) };
+    if out.is_null() {
+        return Err(NativeStatus::from_code(if code == 0 { 9 } else { code }));
+    }
+    let text = unsafe { std::ffi::CStr::from_ptr(out) }
+        .to_string_lossy()
+        .into_owned();
+    unsafe { ffi::kw_apple_free(out) };
+    serde_json::from_str(&text).map_err(|_| NativeStatus::Failed(9))
+}
+
+/// Keeps a dictation language for this app without downloading it. Blocks.
+pub fn dictation_reserve(locale: &str) -> Result<(), NativeStatus> {
+    let loc = c_locale(locale);
+    // SAFETY: `loc` outlives the call.
+    match NativeStatus::from_code(unsafe { ffi::kw_apple_dictation_reserve(loc.as_ptr()) }) {
+        NativeStatus::Ready => Ok(()),
+        other => Err(other),
+    }
+}
+
+/// Gives up this app's hold on a dictation language. Blocks.
+pub fn dictation_release(locale: &str) -> Result<(), NativeStatus> {
+    let loc = c_locale(locale);
+    // SAFETY: `loc` outlives the call.
+    match NativeStatus::from_code(unsafe { ffi::kw_apple_dictation_release(loc.as_ptr()) }) {
+        NativeStatus::Ready => Ok(()),
+        other => Err(other),
+    }
 }
 
 /// Downloads Apple's dictation asset for `locale`, reporting progress in `0.0..=1.0`.
@@ -130,12 +181,12 @@ mod tests {
 
     #[test]
     fn locale_for_hint_maps_supported_hints() {
-        assert_eq!(locale_for_hint(Some("zh-TW")), "zh_TW");
-        assert_eq!(locale_for_hint(Some("zh")), "zh_TW");
-        assert_eq!(locale_for_hint(Some("en")), "en_US");
-        assert_eq!(locale_for_hint(Some("ja-JP")), "ja_JP");
-        assert_eq!(locale_for_hint(None), "zh_TW");
-        assert_eq!(locale_for_hint(Some("de")), "zh_TW");
+        assert_eq!(locale_for_hint(Some("zh-TW")), "zh-TW");
+        assert_eq!(locale_for_hint(Some("zh")), "zh-TW");
+        assert_eq!(locale_for_hint(Some("zh-CN")), "zh-CN");
+        assert_eq!(locale_for_hint(Some("ja")), "ja");
+        assert_eq!(locale_for_hint(None), "zh-TW");
+        assert_eq!(locale_for_hint(Some(" ")), "zh-TW");
     }
 
     #[test]

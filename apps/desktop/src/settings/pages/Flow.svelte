@@ -15,6 +15,9 @@
   import { anyFallback, FOLLOW, isFallback, resolveEngines, usableWith } from "../../lib/resolve";
   import { asksWordTimes } from "../../lib/serviceForm";
   import { dictionaryHintUsage, type HintUsage } from "../../lib/api";
+  import { nativeStates } from "../../lib/nativeStates.svelte";
+  import { NATIVE_DICTATION } from "../../lib/providerForm";
+  import { languageName } from "../../lib/languages";
   import { hintCountLine } from "../../lib/dictionary";
   import { encoderMissing, runnable } from "../../lib/engines";
   import { go } from "../../lib/route";
@@ -114,13 +117,17 @@
   const providers = $derived(config.value?.providers ?? []);
   const asrChoices = $derived(providers.filter((p) => p.capabilities.transcribe));
   const llmChoices = $derived(providers.filter((p) => p.capabilities.chat));
+  // The platform engines as the system reports them, for the marks of profiles that name one.
+  $effect(() => { nativeStates.ensure(providers, (config.value?.profiles ?? []).map((p) => p.language_hint).concat(draft?.language_hint ?? null)); });
   const installed = $derived.by(() => {
     const ok = runnable(models ?? []);
     const deaf = (models ?? []).filter(encoderMissing).flatMap((m) => [m.id, m.path]);
     return { ids: models ? new Set(ok.map((m) => m.id)) : null, paths: new Set(ok.map((m) => m.path)), deaf: new Set(deaf) };
   });
   // The engines the draft runs with now: its own when they can run, else the default pair.
-  const resolved = $derived(draft ? resolveEngines(config.value, draft, usableWith(installed.ids, installed.paths)) : null);
+  /** Whether an engine can run for a profile: its files, and a platform engine in the profile's language. */
+  const usableFor = (profile: Profile) => usableWith(installed.ids, installed.paths, (p) => nativeStates.ready(p, profile.language_hint));
+  const resolved = $derived(draft ? resolveEngines(config.value, draft, usableFor(draft)) : null);
   const asrEngine = $derived(config.value?.providers.find((p) => p.id === resolved?.asr.id));
   // How many terms the engine in use takes, while the switch is on and it takes any.
   let hintUsage = $state<HintUsage | null>(null);
@@ -133,8 +140,7 @@
   const hintCount = $derived(draft?.asr_dictionary_hint && hintUsage ? hintCountLine(hintUsage) : "");
   // The stored profiles that run on the default engine because an engine they name cannot run.
   const faulty = $derived.by(() => {
-    const usable = usableWith(installed.ids, installed.paths);
-    return new Set(profiles.filter((p) => anyFallback(resolveEngines(config.value, p, usable))).map((p) => p.id));
+    return new Set(profiles.filter((p) => anyFallback(resolveEngines(config.value, p, usableFor(p)))).map((p) => p.id));
   });
   // The template a profile follows (the factory one when none is recorded), and whether its writing style has moved on since the profile last took it.
   const templateOf = (p: Profile) => presets.find((x) => x.id === (p.preset ?? "casual")) ?? null;
@@ -170,7 +176,7 @@
    * the engine is gone, its model file is gone, a catalogue model is not downloaded, a speech model
    * lacks its audio encoder, or a service cannot run.
    */
-  type Reason = "gone" | "file" | "download" | "encoder" | "service";
+  type Reason = "gone" | "file" | "download" | "encoder" | "service" | "language";
   function onDefault(role: "asr" | "llm" | "translate"): { wanted: string; using: string; reason: Reason; modelId: string | null; folder: string | null } | null {
     const c = role === "asr" ? resolved?.asr : role === "llm" ? resolved?.llm : resolved?.translate;
     if (!c || !isFallback(c)) return null;
@@ -179,7 +185,9 @@
     const modelId = wanted?.kind === "embedded" && wanted.model_id && manifest?.models.some((m) => m.id === wanted.model_id) ? wanted.model_id : null;
     const path = wanted?.kind === "embedded" ? wanted.model_path : null;
     const deaf = !!wanted && (installed.deaf?.has(wanted.id) || (!!path && installed.deaf?.has(path)));
-    const reason: Reason = !wanted ? "gone" : deaf ? "encoder" : modelId ? "download" : path ? "file" : "service";
+    // Apple dictation that can run, only not in this profile's language.
+    const language = wanted?.native_id === NATIVE_DICTATION && draft && ["needs_download", "locale_unsupported"].includes(nativeStates.of(wanted, draft.language_hint)?.status ?? "");
+    const reason: Reason = !wanted ? "gone" : deaf ? "encoder" : modelId ? "download" : path ? "file" : language ? "language" : "service";
     return { wanted: wanted?.label ?? c.source.wanted, using, reason, modelId, folder: path ? path.replace(/[\\/][^\\/]*$/, "") : null };
   }
   // A download started from a stage's note, with its progress.
@@ -351,7 +359,7 @@
     if (!p || p.id === shownProfile || installed.ids === null) return;
     shownProfile = p.id;
     untrack(() => {
-      const r = resolveEngines(config.value, p, usableWith(installed.ids, installed.paths));
+      const r = resolveEngines(config.value, p, usableFor(p));
       if (isFallback(r.asr)) stage = "asr";
       else if (isFallback(r.llm) || styleMoved(p)) stage = "llm";
     });
@@ -446,7 +454,7 @@
   {@const fb = onDefault(role)}
   {#if fb}
     <div class="fallback under">
-      <p><b>{t(`flow.reason.${fb.reason}`, { wanted: fb.wanted })}</b> {t("flow.fallback_then", { using: fb.using })}</p>
+      <p><b>{t(`flow.reason.${fb.reason}`, { wanted: fb.wanted, language: languageName(draft?.language_hint ?? null) })}</b> {t("flow.fallback_then", { using: fb.using })}</p>
       <div class="acts">
         {#if fb.reason === "download" && fb.modelId}
           {#if noteDownload?.id === fb.modelId}
@@ -456,7 +464,7 @@
           {/if}
         {:else if (fb.reason === "file" || fb.reason === "encoder") && fb.folder}
           <button type="button" class="btn" onclick={() => openModelFolder(fb.folder!)}>{t("flow.open_model_folder")}</button>
-        {:else if fb.reason === "service"}
+        {:else if fb.reason === "service" || fb.reason === "language"}
           <button type="button" class="btn" onclick={() => guard.request(() => go("engines", role))}>{t("flow.to_engines")}</button>
         {/if}
         <button type="button" class="btn quiet" onclick={() => { if (role === "asr") draft!.asr_provider = null; else if (role === "llm") draft!.llm_provider = null; else setTranslate({ provider: null }); }}>{t("flow.use_default")}</button>

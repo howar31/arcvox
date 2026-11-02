@@ -233,19 +233,25 @@ pub fn system_permissions(state: State<'_, AppState>) -> Permissions {
     }
 }
 
-/// The settings pages that have a problem to show, read afresh.
-#[tauri::command]
+/// The settings pages that have a problem to show, read afresh. Off the
+/// main thread, where the readiness of a system engine can be asked.
+#[tauri::command(async)]
 pub fn system_problem_pages(state: State<'_, AppState>) -> Vec<crate::ui::tray::PageProblem> {
     state.refresh_problems();
     state.ui.tray().problem_pages()
 }
 
-/// Whether the default profile can dictate now.
-#[tauri::command]
+/// Whether the default profile can dictate now. Off the main thread, where
+/// the readiness of a system engine can be asked.
+#[tauri::command(async)]
 pub fn system_dictation_ready(state: State<'_, AppState>) -> bool {
     let engine = state.engine.lock().unwrap().clone();
     engine.is_some_and(|e| {
-        crate::problems::default_profile_ready(&e.config().current(), |cfg| e.can_run(cfg))
+        let config = e.config().current();
+        let language = config.default_profile().language_hint.clone();
+        crate::problems::default_profile_ready(&config, |cfg| {
+            e.can_run_for(cfg, language.as_deref())
+        })
     })
 }
 

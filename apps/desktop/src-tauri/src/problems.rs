@@ -4,7 +4,9 @@
 use std::collections::BTreeMap;
 
 use arcvox_core::checks::EngineCheck;
-use arcvox_core::config::{Config, EngineRole, ProviderConfig, ProviderKind};
+use arcvox_core::config::{
+    Config, EngineRole, EngineSource, ProviderConfig, ProviderKind, NATIVE_APPLE_DICTATION,
+};
 use arcvox_core::models::ModelRole;
 use arcvox_core::Engine;
 
@@ -15,16 +17,28 @@ use crate::ui::TauriUi;
 /// engine it names, one for every profile with a writing style of its own
 /// whose template's style has moved on since, one for each engine of the
 /// default pair that cannot run, and one for every engine whose own file is
-/// gone. `usable` says whether an engine can run now.
-pub fn notices(config: &Config, usable: impl Fn(&ProviderConfig) -> bool) -> Vec<Notice> {
+/// gone. `usable` says whether an engine can run now for a profile in a
+/// language (its hint; none for the engine as such).
+pub fn notices(
+    config: &Config,
+    usable: impl Fn(&ProviderConfig, Option<&str>) -> bool,
+) -> Vec<Notice> {
     let mut out = Vec::new();
     for profile in &config.profiles {
-        if config.resolve_engines(profile, &usable).any_fallback() {
-            out.push(Notice::ProfileOnDefault(
-                profile.name.clone(),
-                profile.id.0.clone(),
-            ));
+        let language = profile.language_hint.as_deref();
+        let resolved = config.resolve_engines(profile, |c| usable(c, language));
+        if !resolved.any_fallback() {
+            continue;
         }
+        // Apple dictation has a model per language: the profile's may be the one missing.
+        let language_missing = matches!(&resolved.asr.source, EngineSource::Fallback { wanted }
+            if config.provider(wanted).is_some_and(|c| c.native_id.as_deref() == Some(NATIVE_APPLE_DICTATION)));
+        let (name, id) = (profile.name.clone(), profile.id.0.clone());
+        out.push(if language_missing {
+            Notice::ProfileLanguageMissing(name, id)
+        } else {
+            Notice::ProfileOnDefault(name, id)
+        });
     }
     for profile in &config.profiles {
         if profile.moved_template().is_some() {
@@ -38,7 +52,8 @@ pub fn notices(config: &Config, usable: impl Fn(&ProviderConfig) -> bool) -> Vec
         (EngineRole::Asr, &config.default_engines.asr),
         (EngineRole::Llm, &config.default_engines.llm),
     ] {
-        if !config.provider(id).is_some_and(&usable) {
+        let language = config.default_profile().language_hint.as_deref();
+        if !config.provider(id).is_some_and(|c| usable(c, language)) {
             out.push(match role {
                 EngineRole::Asr => Notice::DefaultAsrNotReady,
                 EngineRole::Llm => Notice::DefaultLlmNotReady,
@@ -46,7 +61,7 @@ pub fn notices(config: &Config, usable: impl Fn(&ProviderConfig) -> bool) -> Vec
         }
     }
     for p in &config.providers {
-        if p.model_id.is_none() && p.model_path.is_some() && !usable(p) {
+        if p.model_id.is_none() && p.model_path.is_some() && !usable(p, None) {
             let tab = if p.capabilities.transcribe {
                 "asr"
             } else {
@@ -96,11 +111,19 @@ pub fn default_profile_ready(config: &Config, usable: impl Fn(&ProviderConfig) -
 
 /// Reads the profiles and the engines again and reports what is wrong
 /// with them.
-pub fn refresh(engine: Option<&Engine>, ui: &TauriUi) {
+pub fn refresh(engine: Option<&Engine>, ui: &std::sync::Arc<TauriUi>) {
+    // Whether a system engine can run is asked of the system, which cannot
+    // answer while the main thread waits for it: from there the check moves
+    // to a thread of its own.
+    if std::thread::current().name() == Some("main") {
+        let (engine, ui) = (engine.cloned(), ui.clone());
+        std::thread::spawn(move || refresh(engine.as_ref(), &ui));
+        return;
+    }
     let found = match engine {
         Some(e) => {
             let config = e.config().current();
-            let mut found = notices(&config, |cfg| e.can_run(cfg));
+            let mut found = notices(&config, |cfg, language| e.can_run_for(cfg, language));
             found.extend(check_notices(&config, &e.engine_checks()));
             found
         }
@@ -134,19 +157,49 @@ mod tests {
     }
 
     /// The engines whose files are there, by id.
+    /// The same answer whatever the profile's language.
+    fn any_language(
+        f: impl Fn(&ProviderConfig) -> bool,
+    ) -> impl Fn(&ProviderConfig, Option<&str>) -> bool {
+        move |p, _| f(p)
+    }
+
     fn have<'a>(ids: &'a [&'a str]) -> impl Fn(&ProviderConfig) -> bool + 'a {
         move |p| p.model_id.is_none() && p.model_path.is_none() || ids.contains(&p.id.0.as_str())
     }
 
     #[test]
+    fn a_profile_whose_apple_dictation_language_is_missing_says_so() {
+        let mut c = config();
+        c.providers.push(
+            serde_json::from_value(serde_json::json!({ "id": "apple", "label": "Apple", "kind": "native", "native_id": NATIVE_APPLE_DICTATION, "capabilities": { "transcribe": true } }))
+                .unwrap(),
+        );
+        c.profiles[1].asr_provider = Some(ProviderId("apple".into()));
+        c.profiles[1].language_hint = Some("ja".into());
+        // Japanese is not there; the language of the default profile is.
+        let usable = |p: &ProviderConfig, language: Option<&str>| {
+            p.id.0 != "apple" || language != Some("ja")
+        };
+        let found = notices(&c, usable);
+        assert!(found.contains(&Notice::ProfileLanguageMissing(
+            "Follower".into(),
+            "b".into()
+        )));
+        assert!(!found
+            .iter()
+            .any(|n| matches!(n, Notice::ProfileOnDefault(..))));
+    }
+
+    #[test]
     fn nothing_is_wrong_while_every_file_is_there() {
-        assert!(notices(&config(), have(&["local", "own"])).is_empty());
+        assert!(notices(&config(), any_language(have(&["local", "own"]))).is_empty());
     }
 
     #[test]
     fn a_profile_whose_named_engine_cannot_run_is_on_the_default() {
         assert_eq!(
-            notices(&config(), have(&["own"])),
+            notices(&config(), any_language(have(&["own"]))),
             vec![Notice::ProfileOnDefault("Default".into(), "a".into())]
         );
     }
@@ -156,7 +209,7 @@ mod tests {
         let mut c = config();
         c.providers.retain(|p| p.id.0 != "local");
         assert_eq!(
-            notices(&c, have(&["own"])),
+            notices(&c, any_language(have(&["own"]))),
             vec![Notice::ProfileOnDefault("Default".into(), "a".into())]
         );
     }
@@ -165,7 +218,7 @@ mod tests {
     fn a_default_engine_that_cannot_run_is_named_by_its_role() {
         let mut c = config();
         c.default_engines.asr = ProviderId("local".into());
-        let found = notices(&c, have(&["own"]));
+        let found = notices(&c, any_language(have(&["own"])));
         assert!(found.contains(&Notice::DefaultAsrNotReady), "{found:?}");
         assert!(!found.contains(&Notice::DefaultLlmNotReady));
         // The follower runs on the default too, but that is the pair's
@@ -179,19 +232,19 @@ mod tests {
         c.profiles[1].preset = Some("casual".into());
         c.profiles[1].preset_revision = 0;
         c.profiles[1].prompt_addition = "我的寫法".into();
-        let found = notices(&c, have(&["local", "own"]));
+        let found = notices(&c, any_language(have(&["local", "own"])));
         assert_eq!(
             found,
             vec![Notice::ProfileStyleMoved("Follower".into(), "b".into())]
         );
         c.profiles[1].preset_revision = arcvox_core::profile::preset("casual").unwrap().revision();
-        assert!(notices(&c, have(&["local", "own"])).is_empty());
+        assert!(notices(&c, any_language(have(&["local", "own"]))).is_empty());
     }
 
     #[test]
     fn an_engine_whose_own_file_is_gone_is_named_even_when_no_profile_uses_it() {
         assert_eq!(
-            notices(&config(), have(&["local"])),
+            notices(&config(), any_language(have(&["local"]))),
             vec![Notice::ModelFileMissing("Own file".into(), "asr")]
         );
     }

@@ -104,6 +104,74 @@ public func kw_apple_dictation_install(
     return 3
 }
 
+/// The dictation languages as a JSON object: `supported`, `installed` and
+/// `reserved` (BCP 47 ids), `max` (how many this app may keep reserved) and
+/// `resolved` (each hint in `hintsJson` with the supported language it maps
+/// to, or null). Status codes as for dictation.
+@_cdecl("kw_apple_dictation_languages")
+public func kw_apple_dictation_languages(
+    _ hintsJson: UnsafePointer<CChar>?,
+    _ out: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+) -> Int32 {
+    out.pointee = nil
+    guard #available(macOS 26, *) else { return 3 }
+    let hints = decodeStrings(hintsJson)
+    let json = runBlocking { () async -> String? in
+        let ids = { (ls: [Locale]) in ls.map { $0.identifier(.bcp47) }.sorted() }
+        var resolved: [String: String?] = [:]
+        for h in hints {
+            resolved[h] = await DictationTranscriber.supportedLocale(equivalentTo: Locale(identifier: h))?.identifier(.bcp47)
+        }
+        let body: [String: Any] = [
+            "supported": ids(await DictationTranscriber.supportedLocales),
+            "installed": ids(await DictationTranscriber.installedLocales),
+            "reserved": ids(await AssetInventory.reservedLocales),
+            "max": AssetInventory.maximumReservedLocales,
+            "resolved": resolved.mapValues { $0 as Any? ?? NSNull() },
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+        return String(data: data, encoding: .utf8)
+    } ?? nil
+    guard let json else { return 9 }
+    out.pointee = cString(json)
+    return out.pointee == nil ? 9 : 0
+}
+
+/// Keeps a dictation language for this app without downloading it; it
+/// counts toward `AssetInventory.maximumReservedLocales`.
+@_cdecl("kw_apple_dictation_reserve")
+public func kw_apple_dictation_reserve(_ locale: UnsafePointer<CChar>) -> Int32 {
+    guard #available(macOS 26, *) else { return 3 }
+    let id = String(cString: locale)
+    return runBlocking { () async -> Int32 in
+        guard let loc = await DictationTranscriber.supportedLocale(equivalentTo: Locale(identifier: id)) else {
+            return 2
+        }
+        do {
+            _ = try await AssetInventory.reserve(locale: loc)
+            return 0
+        } catch {
+            return 9
+        }
+    } ?? 9
+}
+
+/// Gives up this app's reservation of a dictation language; the system
+/// removes its files when no other app keeps them.
+@_cdecl("kw_apple_dictation_release")
+public func kw_apple_dictation_release(_ locale: UnsafePointer<CChar>) -> Int32 {
+    guard #available(macOS 26, *) else { return 3 }
+    let id = String(cString: locale)
+    return runBlocking { () async -> Int32 in
+        guard let loc = await DictationTranscriber.supportedLocale(equivalentTo: Locale(identifier: id)) else {
+            return 2
+        }
+        let reserved = await AssetInventory.reservedLocales
+        guard let held = reserved.first(where: { $0.identifier(.bcp47) == loc.identifier(.bcp47) }) else { return 0 }
+        return await AssetInventory.release(reservedLocale: held) ? 0 : 9
+    } ?? 9
+}
+
 private func decodeStrings(_ json: UnsafePointer<CChar>?) -> [String] {
     guard let json else { return [] }
     let data = Data(String(cString: json).utf8)

@@ -96,6 +96,9 @@ pub enum Notice {
     /// A profile, by name and id, that runs on the default engine because
     /// the one it names is gone or cannot run.
     ProfileOnDefault(String, String),
+    /// A profile, by name and id, that names Apple dictation in a language
+    /// the system has not downloaded, and so runs on the default engine.
+    ProfileLanguageMissing(String, String),
     /// A profile, by name and id, with a writing style of its own whose
     /// template's style has moved on since; the user takes the new one or
     /// keeps their own.
@@ -121,6 +124,7 @@ impl Notice {
             Notice::MicrophoneDenied => "microphone_denied",
             Notice::MicrophoneRestricted => "microphone_restricted",
             Notice::ProfileOnDefault(..) => "profile_on_default",
+            Notice::ProfileLanguageMissing(..) => "profile_language_missing",
             Notice::ProfileStyleMoved(..) => "profile_style_moved",
             Notice::DefaultAsrNotReady => "default_asr_not_ready",
             Notice::DefaultLlmNotReady => "default_llm_not_ready",
@@ -137,6 +141,7 @@ impl Notice {
             Notice::MicrophoneDenied => (Msg::TrayMicrophoneDenied, None),
             Notice::MicrophoneRestricted => (Msg::TrayMicrophoneRestricted, None),
             Notice::ProfileOnDefault(n, _) => (Msg::TrayProfileOnDefault, Some(n)),
+            Notice::ProfileLanguageMissing(n, _) => (Msg::TrayProfileLanguageMissing, Some(n)),
             Notice::ProfileStyleMoved(n, _) => (Msg::TrayProfileStyleMoved, Some(n)),
             Notice::DefaultAsrNotReady => (Msg::TrayDefaultAsrNotReady, None),
             Notice::DefaultLlmNotReady => (Msg::TrayDefaultLlmNotReady, None),
@@ -162,6 +167,7 @@ impl Notice {
             }
             Notice::DefaultAsrNotReady
             | Notice::DefaultLlmNotReady
+            | Notice::ProfileLanguageMissing(..)
             | Notice::ModelFileMissing(..)
             | Notice::EngineTestFailed(..) => (ID_FIX_ENGINES, Msg::TrayFixEngine),
             Notice::BackupFolderMissing | Notice::BackupFolderNotWritable => {
@@ -191,6 +197,7 @@ impl Notice {
             | Notice::DefaultLlmNotReady
             | Notice::EngineTestFailed(..) => Level::Fails,
             Notice::ProfileOnDefault(..)
+            | Notice::ProfileLanguageMissing(..)
             | Notice::ProfileStyleMoved(..)
             | Notice::ModelFileMissing(..)
             | Notice::BackupFolderMissing
@@ -205,7 +212,7 @@ impl Notice {
             Notice::ProfileOnDefault(_, id) | Notice::ProfileStyleMoved(_, id) => {
                 format!("flow/{id}")
             }
-            Notice::DefaultAsrNotReady => "engines/asr".into(),
+            Notice::DefaultAsrNotReady | Notice::ProfileLanguageMissing(..) => "engines/asr".into(),
             Notice::DefaultLlmNotReady => "engines/llm".into(),
             Notice::ModelFileMissing(_, role) | Notice::EngineTestFailed(_, role) => {
                 format!("engines/{role}")

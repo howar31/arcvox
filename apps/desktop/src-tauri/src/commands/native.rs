@@ -22,7 +22,8 @@ struct InstallProgress {
 mod imp {
     use super::*;
     use crate::platform::macos::apple::{
-        dictation_install, dictation_status, fm_status, locale_for_hint, NativeStatus,
+        dictation_install, dictation_languages, dictation_release, dictation_reserve,
+        dictation_status, fm_status, locale_for_hint, DictationLanguages, NativeStatus,
     };
     use arcvox_core::config::NATIVE_APPLE_DICTATION;
 
@@ -52,14 +53,14 @@ mod imp {
 
     pub fn status(native_id: &str, hint: Option<&str>) -> NativeStatusView {
         view(if native_id == NATIVE_APPLE_DICTATION {
-            dictation_status(locale_for_hint(hint))
+            dictation_status(&locale_for_hint(hint))
         } else {
             fm_status()
         })
     }
 
     pub fn install(app: &AppHandle, hint: Option<&str>) -> Result<(), NativeStatus> {
-        dictation_install(locale_for_hint(hint), |fraction| {
+        dictation_install(&locale_for_hint(hint), |fraction| {
             let _ = tauri::Emitter::emit_to(
                 app,
                 "settings",
@@ -67,6 +68,18 @@ mod imp {
                 InstallProgress { fraction },
             );
         })
+    }
+
+    pub fn languages(hints: &[String]) -> Result<DictationLanguages, NativeStatus> {
+        dictation_languages(hints)
+    }
+
+    pub fn reserve(locale: &str) -> Result<(), NativeStatus> {
+        dictation_reserve(locale)
+    }
+
+    pub fn release(locale: &str) -> Result<(), NativeStatus> {
+        dictation_release(locale)
     }
 
     #[cfg(test)]
@@ -147,6 +160,7 @@ pub async fn native_status(
 #[tauri::command]
 pub async fn native_install_language(
     app: AppHandle,
+    state: State<'_, AppState>,
     language_hint: Option<String>,
 ) -> CmdResult<()> {
     #[cfg(target_os = "macos")]
@@ -154,11 +168,69 @@ pub async fn native_install_language(
         tokio::task::spawn_blocking(move || imp::install(&app, language_hint.as_deref()))
             .await
             .map_err(CmdError::from)?
+            .map_err(|s| CmdError::plain(imp::status_string(s)))?;
+        // Profiles in this language can run on Apple dictation now.
+        state.refresh_problems();
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, state, language_hint);
+        Err(CmdError::plain("os_too_old"))
+    }
+}
+
+/// The dictation languages of the system: supported, installed, kept for
+/// this app, how many it may keep, and the language each of `hints` maps to.
+#[tauri::command]
+pub async fn native_dictation_languages(hints: Vec<String>) -> CmdResult<serde_json::Value> {
+    #[cfg(target_os = "macos")]
+    {
+        let found = tokio::task::spawn_blocking(move || imp::languages(&hints))
+            .await
+            .map_err(CmdError::from)?
+            .map_err(|s| CmdError::plain(imp::status_string(s)))?;
+        Ok(serde_json::to_value(found).unwrap_or_default())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = hints;
+        Err(CmdError::plain("os_too_old"))
+    }
+}
+
+/// Gives up this app's hold on a dictation language.
+#[tauri::command]
+pub async fn native_release_language(state: State<'_, AppState>, locale: String) -> CmdResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        tokio::task::spawn_blocking(move || imp::release(&locale))
+            .await
+            .map_err(CmdError::from)?
+            .map_err(|s| CmdError::plain(imp::status_string(s)))?;
+        state.refresh_problems();
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (state, locale);
+        Err(CmdError::plain("os_too_old"))
+    }
+}
+
+/// Keeps a dictation language for this app, to be downloaded when asked.
+#[tauri::command]
+pub async fn native_reserve_language(locale: String) -> CmdResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        tokio::task::spawn_blocking(move || imp::reserve(&locale))
+            .await
+            .map_err(CmdError::from)?
             .map_err(|s| CmdError::plain(imp::status_string(s)))
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (app, language_hint);
+        let _ = locale;
         Err(CmdError::plain("os_too_old"))
     }
 }

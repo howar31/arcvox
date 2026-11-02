@@ -64,6 +64,7 @@ pub enum Msg {
     TrayBackupFolderNotWritable,
     TrayFixBackup,
     TrayProfileOnDefault,
+    TrayProfileLanguageMissing,
     TrayProfileStyleMoved,
     TrayDefaultAsrNotReady,
     TrayDefaultLlmNotReady,
@@ -125,6 +126,7 @@ pub const ALL_MSGS: &[Msg] = &[
     Msg::TrayBackupFolderNotWritable,
     Msg::TrayFixBackup,
     Msg::TrayProfileOnDefault,
+    Msg::TrayProfileLanguageMissing,
     Msg::TrayProfileStyleMoved,
     Msg::TrayDefaultAsrNotReady,
     Msg::TrayDefaultLlmNotReady,
@@ -189,6 +191,7 @@ impl Msg {
             Msg::TrayBackupFolderNotWritable => "tray.backup_folder_not_writable",
             Msg::TrayFixBackup => "tray.fix_backup",
             Msg::TrayProfileOnDefault => "tray.profile_on_default",
+            Msg::TrayProfileLanguageMissing => "tray.profile_language_missing",
             Msg::TrayProfileStyleMoved => "tray.profile_style_moved",
             Msg::TrayDefaultAsrNotReady => "tray.default_asr_not_ready",
             Msg::TrayDefaultLlmNotReady => "tray.default_llm_not_ready",
@@ -288,6 +291,12 @@ pub fn text(lang: Language, msg: Msg) -> &'static str {
         }
         (Language::En, Msg::TrayProfileOnDefault) => {
             "Profile \"{name}\": its engine cannot run, the default is used"
+        }
+        (Language::ZhTw, Msg::TrayProfileLanguageMissing) => {
+            "情境「{name}」：Apple 聽寫沒有這個語言，目前使用預設引擎"
+        }
+        (Language::En, Msg::TrayProfileLanguageMissing) => {
+            "Profile \"{name}\": Apple dictation does not have its language, the default is used"
         }
         (Language::ZhTw, Msg::TrayProfileStyleMoved) => "情境「{name}」的範本寫法有新版本",
         (Language::En, Msg::TrayProfileStyleMoved) => {
