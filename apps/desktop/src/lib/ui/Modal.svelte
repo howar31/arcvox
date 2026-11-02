@@ -74,6 +74,8 @@
     open = false;
     onclose?.();
   }
+  /** The press began on the backdrop itself: a drag that starts inside the dialog (selecting text) and ends outside is not a click on it. */
+  let pressedScrim = false;
   /** Cancelling: Esc, the backdrop and the dialog's own cancel button all come here. Esc closes one layer: a question is answered no. */
   function dismiss() {
     if (question) { question.no(); return; }
@@ -175,7 +177,7 @@
 
 {#if open}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <div class="scrim" use:portal onclick={(e) => { if (e.target === e.currentTarget) dismiss(); }} {onkeydown} in:fade|global={{ duration: inTime() }} out:fade|global={{ duration: outTime() }}>
+  <div class="scrim" use:portal onpointerdown={(e) => { pressedScrim = e.target === e.currentTarget; }} onclick={(e) => { if (pressedScrim && e.target === e.currentTarget) dismiss(); pressedScrim = false; }} {onkeydown} in:fade|global={{ duration: inTime() }} out:fade|global={{ duration: outTime() }}>
     <div class="modal" class:lg={size === "lg"} class:grow role="dialog" aria-modal="true" aria-labelledby={titleId} tabindex="-1" bind:this={box} in:scale|global={{ start: 0.96, duration: inTime(), easing: cubicOut }} out:scale|global={{ start: 0.98, duration: outTime() }}>
       <h2 id={titleId}>{asking ? asking.title : title}</h2>
       <div class="body" bind:this={body}>
