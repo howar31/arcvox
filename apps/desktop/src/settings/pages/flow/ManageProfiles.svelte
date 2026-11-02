@@ -7,6 +7,7 @@
   import { isImeKey } from "../../../lib/ime";
   import { config } from "../../../lib/store.svelte";
   import Modal from "../../../lib/ui/Modal.svelte";
+  import PickList from "../../../lib/ui/PickList.svelte";
   import Tag from "../../../lib/ui/Tag.svelte";
   import { toast } from "../../../lib/ui/toast.svelte";
 
@@ -39,11 +40,6 @@
   $effect(() => {
     if (!open) { selected = []; confirming = []; resetting = null; renaming = null; }
   });
-
-  function toggle(p: Profile) {
-    if (p.is_default) return;
-    selected = selected.includes(p.id) ? selected.filter((x) => x !== p.id) : [...selected, p.id];
-  }
 
   async function startRename(p: Profile) {
     renaming = p.id;
@@ -104,19 +100,23 @@
   }
 </script>
 
-<Modal bind:open size="lg" title={resetTarget ? (resetKnown ? t("flow.reset_title", { name: resetTarget.name }) : t("flow.reset_missing_title", { name: resetTarget.name })) : confirming.length ? t("flow.manage_delete_title", { count: String(confirming.length) }) : t("flow.manage_title")} beforeclose={() => { if (resetting) { resetting = null; return false; } if (confirming.length) { confirming = []; return false; } return !busy; }}>
-  {#if resetTarget}
-    <p class="ask">{resetKnown ? t("flow.reset_body", { preset: presetName(resetPreset) }) : t("flow.reset_missing_body")}</p>
-  {:else if confirming.length}
-    <p class="ask">{t("flow.manage_delete_body", { names })}</p>
-  {:else}
-    <div class="list" class:busy inert={busy} aria-busy={busy}>
-      {#each profiles as p (p.id)}
-        {@const on = selected.includes(p.id)}
-        <!-- The name and its line pick the row too; the box stays the control for the keyboard. -->
-        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-        <div class="row" class:on class:pickable={!p.is_default} onclick={(e) => { if (!(e.target as HTMLElement).closest("button, input")) toggle(p); }}>
-          <button type="button" class="cb" class:on role="checkbox" aria-checked={on} aria-label={p.name} disabled={p.is_default} use:tip={p.is_default ? t("flow.manage_default_locked") : undefined} onclick={() => toggle(p)}></button>
+{#snippet resetBody()}<p class="ask">{resetKnown ? t("flow.reset_body", { preset: presetName(resetPreset) }) : t("flow.reset_missing_body")}</p>{/snippet}
+{#snippet resetActions()}
+  <button type="button" class="btn" onclick={() => (resetting = null)}>{t("common.cancel")}</button>
+  <button type="button" class="btn primary" onclick={reset}>{resetKnown ? t("flow.reset") : t("flow.reset_to_casual")}</button>
+{/snippet}
+{#snippet deleteBody()}<p class="ask">{t("flow.manage_delete_body", { names })}</p>{/snippet}
+{#snippet deleteActions()}
+  <button type="button" class="btn" onclick={() => (confirming = [])}>{t("common.cancel")}</button>
+  <button type="button" class="btn danger" onclick={remove}>{t("profiles.delete")}</button>
+{/snippet}
+
+<Modal bind:open size="lg" title={t("flow.manage_title")} beforeclose={() => !busy}
+  question={resetTarget ? { title: resetKnown ? t("flow.reset_title", { name: resetTarget.name }) : t("flow.reset_missing_title", { name: resetTarget.name }), no: () => (resetting = null), body: resetBody, actions: resetActions }
+    : confirming.length ? { title: t("flow.manage_delete_title", { count: String(confirming.length) }), no: () => (confirming = []), body: deleteBody, actions: deleteActions } : null}>
+    <div class="list-gap"><PickList items={profiles} key={(p) => p.id} bind:selected {busy} label={(p) => p.name} locked={(p) => (p.is_default ? t("flow.manage_default_locked") : null)}>
+      {#snippet row(p)}
+        <div class="item">
           <div class="text">
             {#if renaming === p.id}
               <input
@@ -138,38 +138,20 @@
             {/if}
           </div>
         </div>
-      {/each}
-    </div>
-  {/if}
+      {/snippet}
+    </PickList></div>
   {#snippet actions()}
-    {#if resetTarget}
-      <button type="button" class="btn" onclick={() => (resetting = null)}>{t("common.cancel")}</button>
-      <button type="button" class="btn primary" onclick={reset}>{resetKnown ? t("flow.reset") : t("flow.reset_to_casual")}</button>
-    {:else if confirming.length}
-      <button type="button" class="btn" onclick={() => (confirming = [])}>{t("common.cancel")}</button>
-      <button type="button" class="btn danger" onclick={remove}>{t("profiles.delete")}</button>
-    {:else}
       <span class="count">{selected.length ? t("flow.manage_selected", { count: String(selected.length) }) : t("flow.manage_none_selected")}</span>
       <button type="button" class="btn danger" disabled={!selected.length || busy} onclick={() => (confirming = [...selected])}>{t("flow.manage_delete_selected")}</button>
       <button type="button" class="btn primary" disabled={busy} onclick={() => (open = false)}>{t("flow.manage_done")}</button>
-    {/if}
   {/snippet}
 </Modal>
 
 <style>
   .ask { margin: 0; color: var(--ink-2); }
-  .list { margin-top: 8px; border: 1px solid var(--line); border-radius: var(--radius-group); background: var(--surface); color: var(--ink); }
-  .list.busy { opacity: .55; }
-  .row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 12px 16px; border-top: 1px solid var(--line); }
-  .row:first-child { border-top: 0; }
-  .row.on { background: var(--accent-soft); }
-  .row.pickable:hover { background: color-mix(in srgb, var(--sunken) 60%, transparent); }
-  .row.pickable.on:hover { background: var(--accent-soft); }
-  .cb { width: 18px; height: 18px; padding: 0; border: 1.5px solid var(--line-strong); border-radius: 5px; background: var(--surface); position: relative; cursor: default; }
-  .cb.on { background: var(--accent); border-color: var(--accent); }
-  .cb.on::after { content: ""; position: absolute; left: 5px; top: 1px; width: 5px; height: 10px; border-right: 2px solid var(--accent-ink); border-bottom: 2px solid var(--accent-ink); transform: rotate(45deg); }
-  .cb:disabled { opacity: .35; }
-  .text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .list-gap { margin-top: 8px; }
+  .item { display: flex; align-items: center; gap: 14px; min-width: 0; }
+  .text { flex: 1; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
   .line { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .label { font-weight: 600; font-size: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .where { color: var(--ink-2); font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

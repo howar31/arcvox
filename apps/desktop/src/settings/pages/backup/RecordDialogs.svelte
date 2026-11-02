@@ -4,6 +4,7 @@
   import { deviceLine, importLines } from "../../../lib/backupView";
   import { t } from "../../../lib/i18n";
   import { config } from "../../../lib/store.svelte";
+  import Fold from "../../../lib/ui/Fold.svelte";
   import Modal from "../../../lib/ui/Modal.svelte";
   import { toast } from "../../../lib/ui/toast.svelte";
   import Checks, { type CheckItem } from "./Checks.svelte";
@@ -13,6 +14,9 @@
 
   let mode = $state<"export" | "folder" | "import" | "result" | null>(null);
   let cats = $state<Record<string, boolean>>({});
+  // The items as they were when the items dialog opened: a change asks before it is discarded.
+  let itemsAtOpen = $state("");
+  let itemsDialog: { cancel: () => void } | undefined = $state();
   let devices = $state<Record<string, boolean>>({});
   let busy = $state(false);
   let sizes = $state<BackupSizes | null>(null);
@@ -67,6 +71,7 @@
 
   export function openItems(current: BackupCategories, apply: (c: BackupCategories) => void) {
     cats = { ...current };
+    itemsAtOpen = JSON.stringify(cats);
     applyItems = apply;
     loadSizes();
     mode = "folder";
@@ -129,7 +134,7 @@
   {/snippet}
 </Modal>
 
-<Modal open={mode === "folder"} title={t("backup.items_title")} onclose={() => (mode = null)}>
+<Modal bind:this={itemsDialog} open={mode === "folder"} title={t("backup.items_title")} onclose={() => (mode = null)} dirty={mode === "folder" && JSON.stringify(cats) !== itemsAtOpen}>
   <p class="lead">{t("backup.items_lead")}</p>
   <div class="head first">{t("backup.kind.settings")}</div>
   <Checks items={settingsItems} bind:value={cats} />
@@ -137,9 +142,9 @@
   <Checks items={contentItems} bind:value={cats} />
   <div class="head">{t("backup.kind.records")}</div>
   <Checks items={recordItems} bind:value={cats} />
-  {#if cats.recordings}<p class="callout warn">{t("backup.items_warn")}</p>{/if}
+  {#if cats.recordings}<Fold><p class="callout warn">{t("backup.items_warn")}</p></Fold>{/if}
   {#snippet actions()}
-    <button type="button" class="btn" onclick={() => (mode = null)}>{t("common.cancel")}</button>
+    <button type="button" class="btn" onclick={() => itemsDialog?.cancel()}>{t("common.cancel")}</button>
     <button type="button" class="btn primary" onclick={saveItems}>{t("backup.done")}</button>
   {/snippet}
 </Modal>

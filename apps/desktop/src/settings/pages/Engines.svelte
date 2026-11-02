@@ -5,7 +5,7 @@
   import {
     errorMessage, formatBytes, modelsCancel, modelsCustomDir, modelsDelete, modelsDirGet, modelsDirSet, modelsDownload, modelsDownloadRecommended, modelsImport,
     modelsInstalled, modelsManifest, modelsManifestNow, nativeInstallLanguage, nativeStatus, onModelDownloadProgress, onNativeInstallProgress, openFolder,
-    engineChecks, listServices, probeProvider, putEngineCheck, setDefaultEngine, verifyProvider, type DownloadProgress, type EngineCheck, type ServicePreset, type InstalledModel, type ManifestView, type ModelEntry, type ModelsDir, type NativeStatusView, type ProviderConfig,
+    engineChecks, listServices, probeProvider, profilesPresets, putEngineCheck, setDefaultEngine, verifyProvider, type PresetView, type DownloadProgress, type EngineCheck, type ServicePreset, type InstalledModel, type ManifestView, type ModelEntry, type ModelsDir, type NativeStatusView, type ProviderConfig,
   } from "../../lib/api";
   import { encoderMissing, enginesOf, entryBytes, factsLine, hasRole, modelServes, recommendedMissing, runnable, type Role } from "../../lib/engines";
   import { t } from "../../lib/i18n";
@@ -14,6 +14,7 @@
   import { usableWith } from "../../lib/resolve";
   import { engineDescription } from "../../lib/stages";
   import { formatShortDate, formatTime } from "../../lib/format";
+  import { removeEngines, type MoveTo } from "../../lib/engineRemoval";
   import { checkBody, checkCurrent } from "../../lib/serviceForm";
   import { guard } from "../../lib/guard.svelte";
   import { go } from "../../lib/route";
@@ -27,6 +28,7 @@
   import InfoTip from "../../lib/ui/InfoTip.svelte";
   import PageLink from "../../lib/ui/PageLink.svelte";
   import Modal from "../../lib/ui/Modal.svelte";
+  import MoreMenu, { type MoreItem } from "../../lib/ui/MoreMenu.svelte";
   import PageHead from "../../lib/ui/PageHead.svelte";
   import Ring from "../../lib/ui/Ring.svelte";
   import Row from "../../lib/ui/Row.svelte";
@@ -36,6 +38,8 @@
   import Tag from "../../lib/ui/Tag.svelte";
   import { toast } from "../../lib/ui/toast.svelte";
   import EngineForm from "./EngineForm.svelte";
+  import ManageEngines from "./engines/ManageEngines.svelte";
+  import RemovalNote from "./engines/RemovalNote.svelte";
   import General from "./General.svelte";
 
   let { arg }: { arg: string | null } = $props();
@@ -73,9 +77,6 @@
   // The last real request of each network engine, and the catalogue's services.
   let checks = $state<Record<string, EngineCheck>>({});
   let services = $state<ServicePreset[]>([]);
-  // A real request is sent on the second press; the first arms it for 4 seconds.
-  let armedReal = $state<string | null>(null);
-  let armedTimer: ReturnType<typeof setTimeout> | undefined;
   let realBusy = $state<Record<string, boolean>>({});
   const loadChecks = () => engineChecks().then((c) => (checks = c)).catch(() => {});
   // A form that closes may have added engines with their checks.
@@ -306,15 +307,8 @@
   }
   const serviceOf = (p: ProviderConfig): ServicePreset | undefined => services.find((s) => s.id === p.service);
   const isLocal = (p: ProviderConfig): boolean => serviceOf(p)?.kind === "local";
-  async function realTest(p: ProviderConfig) {
-    if (!isLocal(p) && armedReal !== p.id) {
-      clearTimeout(armedTimer);
-      armedReal = p.id;
-      armedTimer = setTimeout(() => (armedReal = null), 4000);
-      return;
-    }
-    clearTimeout(armedTimer);
-    armedReal = null;
+  /** One real request to the engine; the result is stored and shown on its row. */
+  async function realTest(p: ProviderConfig): Promise<EngineCheck> {
     realBusy = { ...realBusy, [p.id]: true };
     const cfg = $state.snapshot(p) as ProviderConfig;
     let c: EngineCheck;
@@ -323,6 +317,38 @@
     await putEngineCheck(p.id, c).catch(() => {});
     checks = { ...checks, [p.id]: c };
     realBusy = { ...realBusy, [p.id]: false };
+    return c;
+  }
+  // The network engine waiting for the delete confirmation, and the list of them all.
+  let removing = $state<ProviderConfig | null>(null);
+  let removeTo = $state<MoveTo>("default");
+  let removePresets = $state<PresetView[]>([]);
+  let removeBusy = $state(false);
+  let managing = $state(false);
+  async function askRemove(p: ProviderConfig) {
+    removeTo = "default";
+    removePresets = await profilesPresets().catch(() => []);
+    removing = p;
+  }
+  async function removeOne() {
+    const p = removing;
+    if (!p) return;
+    removeBusy = true;
+    try {
+      await removeEngines([$state.snapshot(p) as ProviderConfig], removeTo, removePresets);
+      toast.ok(t("engines.deleted"));
+      removing = null;
+    } catch (e) { toast.error(errorMessage(e)); }
+    removeBusy = false;
+  }
+  function moreItems(p: ProviderConfig): MoreItem[] {
+    const items: MoreItem[] = [];
+    if (canBeDefault(p)) items.push({ label: t("engines.make_default"), onclick: () => makeDefault(p) });
+    items.push({ label: t("engines.test_connection"), onclick: () => test(p) });
+    items.push({ label: t("engines.test_real"), tip: t(isLocal(p) ? "engines.test_real_tip_local" : "engines.test_real_tip"), confirm: isLocal(p) ? undefined : t("engines.test_confirm_one"), disabled: realBusy[p.id], onclick: () => realTest(p) });
+    const locked = isDefaultEngine(p.id);
+    items.push({ label: t("engines.delete_more"), danger: true, divider: true, disabled: locked, tip: locked ? t("engines.manage_default_locked") : undefined, onclick: () => askRemove(p) });
+    return items;
   }
   /** The engine's last real request, as one line. */
   function checkLine(p: ProviderConfig): { text: string; tone: "ok" | "bad" | ""; body: string | null; detail: string | null } {
@@ -551,33 +577,42 @@
   </Group>
 {/if}
 
+<!-- A network engine's name, tags and lines: on its row and in the list that manages them all. -->
+{#snippet extInfo(p: ProviderConfig)}
+  <div class="info">
+    <div class="title">
+      <span class="name">{p.label}</span>
+      {@render defaultTag(p)}
+      {#if !hasRole(p)}<Tag tone="warn">{t("engines.no_role")}</Tag>{/if}
+      {#if p.service && services.length > 0 && !serviceOf(p)}<Tag tone="warn" title={t("engines.tip.service_missing")}>{t("engines.service_missing")}</Tag>{/if}
+    </div>
+    <small>{engineDescription(p, manifest)}</small>
+    <small>{usersLine(p.id)}</small>
+    <small class="check"><ServiceAnswer tone={checkLine(p).tone} text={checkLine(p).text} body={checkLine(p).body} detail={checkLine(p).detail} /></small>
+    {@render probeLine(p.id)}
+  </div>
+{/snippet}
+{#snippet extEntry(p: ProviderConfig)}
+  {@const lamp = externalLight(p)}
+  <div class="entry"><Ring tone={lamp.tone} title={lamp.title} />{@render extInfo(p)}</div>
+{/snippet}
+
 <!-- The only engines made by hand. -->
 <Group title={t("engines.external")}>
+  {#snippet actions()}
+    {#if externals.length > 0}<button type="button" class="manage" onclick={() => (managing = true)}>{t("engines.manage")}</button>{/if}
+  {/snippet}
   {#each shownExternals as p (p.id)}
     <Row>
       {#snippet leading()}
         {@const lamp = externalLight(p)}
         <Ring tone={lamp.tone} title={lamp.title} />
       {/snippet}
-      <!-- The text and the actions share the row; when it is narrow, the actions go under the text. -->
       <div class="ext">
-        <div class="info">
-          <div class="title">
-            <span class="name">{p.label}</span>
-            {@render defaultTag(p)}
-            {#if !hasRole(p)}<Tag tone="warn">{t("engines.no_role")}</Tag>{/if}
-            {#if p.service && services.length > 0 && !serviceOf(p)}<Tag tone="warn" title={t("engines.tip.service_missing")}>{t("engines.service_missing")}</Tag>{/if}
-          </div>
-          <small>{engineDescription(p, manifest)}</small>
-          <small>{usersLine(p.id)}</small>
-          <small class="check"><ServiceAnswer tone={checkLine(p).tone} text={checkLine(p).text} body={checkLine(p).body} detail={checkLine(p).detail} /></small>
-          {@render probeLine(p.id)}
-        </div>
+        {@render extInfo(p)}
         <span class="acts">
-          {@render defaultButton(p)}
-          <button type="button" class="btn quiet" onclick={() => test(p)} disabled={rowProbes[p.id]?.state === "wait"}>{t("engines.test_connection")}</button>
-          <button type="button" class="btn quiet" class:ask={armedReal === p.id} use:tip={t(isLocal(p) ? "engines.test_real_tip_local" : "engines.test_real_tip")} onclick={() => realTest(p)} disabled={realBusy[p.id]}>{armedReal === p.id ? t("engines.test_confirm_one") : t("engines.test_real")}</button>
           <button type="button" class="btn quiet" onclick={() => openForm(p)}>{t("common.edit")}</button>
+          <MoreMenu label={t("engines.more")} items={moreItems(p)} />
         </span>
       </div>
     </Row>
@@ -625,6 +660,18 @@
   <EngineForm bind:open={formOpen} initial={formInitial} {role} />
 {/if}
 
+{#if managing}
+  <ManageEngines bind:open={managing} engines={externals} {role} isDefault={isDefaultEngine} entry={extEntry} connect={test} real={realTest} local={isLocal} />
+{/if}
+
+<Modal bind:open={() => removing !== null, (v) => { if (!v && !removeBusy) removing = null; }} title={t("engines.delete_title")}>
+  {#if removing}<RemovalNote engines={[removing]} {role} presets={removePresets} bind:moveTo={removeTo} />{/if}
+  {#snippet actions()}
+    <button type="button" class="btn" onclick={() => (removing = null)} disabled={removeBusy}>{t("common.cancel")}</button>
+    <button type="button" class="btn danger" onclick={removeOne} disabled={removeBusy}>{t("engines.delete")}</button>
+  {/snippet}
+</Modal>
+
 <style>
   .info { flex: 1; min-width: 0; }
   .info.dim .name, .info.dim small { color: var(--ink-3); }
@@ -643,8 +690,10 @@
   .probe.ok { color: var(--ok); }
   .ext { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; column-gap: 16px; row-gap: 6px; }
   .ext .info { flex: 1 1 260px; }
-  .acts { display: flex; align-items: center; gap: 16px; margin-left: auto; }
-  .btn.quiet.ask { color: var(--live); font-weight: 600; }
+  .acts { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+  .entry { display: flex; align-items: center; gap: 16px; min-width: 0; }
+  .manage { border: 0; background: none; padding: 6px 4px; margin: 0 0 -2px; font-size: var(--text-sm); color: var(--accent); cursor: default; }
+  .manage:hover { color: var(--ink); }
   .probe.bad { color: var(--live); }
   .bar { width: 96px; height: 4px; border-radius: 2px; background: var(--sunken); overflow: hidden; flex: none; }
   .bar i { display: block; height: 100%; background: var(--accent); transition: width .2s; }

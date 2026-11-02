@@ -1,18 +1,41 @@
+<script lang="ts" module>
+  import type { Snippet as QSnippet } from "svelte";
+  /** A question the dialog asks before it goes on: it takes the dialog's place until it is answered. */
+  export interface Question {
+    title: string;
+    /** The answer "no": Esc and the backdrop give it, and the dialog's own content comes back. */
+    no: () => void;
+    body: QSnippet;
+    actions: QSnippet;
+  }
+</script>
+
 <script lang="ts">
   import type { Snippet } from "svelte";
   import { tick } from "svelte";
+  import { cubicOut } from "svelte/easing";
+  import { fade, scale } from "svelte/transition";
+  import { t } from "../i18n";
   import { isImeKey } from "../ime";
 
-  let { open = $bindable(false), title, size = "md", children, actions, onclose, beforeclose }: {
+  let { open = $bindable(false), title, size = "md", grow = false, question = null, dirty = false, discardBody, children, actions, onclose, beforeclose }: {
     open?: boolean;
     title: string;
     /** "lg" is a wide dialog for a long form. */
     size?: "md" | "lg";
+    /** For content that grows and shrinks while the dialog is open: the body lays out as a column, so a part of it can take the scrolling once the dialog reaches the window's height. */
+    grow?: boolean;
+    /** Shown instead of the content while set; the content keeps its state underneath. */
+    question?: Question | null;
+    /** The content differs from when the dialog opened: cancelling then asks before the changes are discarded. */
+    dirty?: boolean;
+    /** What the discard question says; a general sentence when unset. */
+    discardBody?: string;
     children: Snippet;
     actions?: Snippet;
     /** Called when the user dismisses the dialog with Esc or the backdrop. */
     onclose?: () => void;
-    /** Asked before Esc or the backdrop closes the dialog; returning false keeps it open. */
+    /** Asked before Esc, the backdrop or `cancel()` closes the dialog; returning false keeps it open. */
     beforeclose?: () => boolean;
   } = $props();
 
@@ -43,10 +66,25 @@
     return { destroy: () => node.remove() };
   }
 
-  function dismiss() {
-    if (beforeclose && !beforeclose()) return;
+  // The question the dialog asks itself before changes are discarded.
+  let discarding = $state(false);
+  $effect(() => { if (!open) discarding = false; });
+  function close() {
+    discarding = false;
     open = false;
     onclose?.();
+  }
+  /** Cancelling: Esc, the backdrop and the dialog's own cancel button all come here. Esc closes one layer: a question is answered no. */
+  function dismiss() {
+    if (question) { question.no(); return; }
+    if (discarding) { discarding = false; return; }
+    if (beforeclose && !beforeclose()) return;
+    if (dirty) { discarding = true; return; }
+    close();
+  }
+  /** The dialog's cancel button: the same as Esc. */
+  export function cancel() {
+    dismiss();
   }
 
   const tabbable = () => [...(box?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])].filter((el) => el.tabIndex >= 0);
@@ -62,6 +100,63 @@
     else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   }
 
+  const asking = $derived<Question | null>(question ?? (discarding ? { title: t("common.discard_title"), no: () => (discarding = false), body: discardText, actions: discardActions } : null));
+
+  // A question takes the focus to its first answer; the content gets it back afterwards.
+  let beforeQuestion: HTMLElement | null = null;
+  let asked = false;
+  $effect(() => {
+    const now = !!asking;
+    if (now === asked) return;
+    asked = now;
+    if (now) {
+      beforeQuestion = document.activeElement as HTMLElement | null;
+      tick().then(() => box?.querySelector<HTMLElement>(".actions button:not([disabled])")?.focus());
+    } else {
+      const back = beforeQuestion;
+      beforeQuestion = null;
+      tick().then(() => { if (back && document.contains(back) && back.offsetParent !== null) back.focus(); else tabbable()[0]?.focus(); });
+    }
+  });
+
+  /*
+   * The dialog's height follows its content: a step, a question or a block that appears changes it at once,
+   * so the body goes from the old height to the new one in a short animation, and the centred dialog moves
+   * with it instead of jumping. Small changes and content that already slides (a fold) are left to move by themselves.
+   */
+  const STILL = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let body: HTMLDivElement | undefined = $state();
+  let lastHeight = 0;
+  // While the body's own animation runs, a growing dialog's content follows it: those sizes are not news.
+  let animating = false;
+  // The watched content: set aside while the body animates, since a growing dialog's content follows the body then.
+  const watched = new Set<HTMLElement>();
+  const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => resized());
+  function sizeWatch(node: HTMLElement) {
+    watched.add(node);
+    if (!animating) ro?.observe(node);
+    return { destroy: () => { watched.delete(node); ro?.unobserve(node); } };
+  }
+  function resized() {
+    if (!body || animating) return;
+    const next = body.getBoundingClientRect().height;
+    const from = lastHeight;
+    lastHeight = next;
+    if (!from || Math.abs(next - from) < 48 || STILL()) return;
+    const sliding = body.getAnimations({ subtree: true }).some((a) => a.effect?.getComputedTiming().endTime !== Infinity);
+    if (sliding) return;
+    animating = true;
+    for (const n of watched) ro?.unobserve(n);
+    const anim = body.animate([{ height: `${from}px` }, { height: `${next}px` }], { duration: 200, easing: "cubic-bezier(.22,.61,.36,1)" });
+    anim.finished.catch(() => {}).finally(() => {
+      animating = false;
+      if (body) lastHeight = body.getBoundingClientRect().height;
+      for (const n of watched) ro?.observe(n);
+    });
+  }
+  const inTime = () => (STILL() ? 0 : 160);
+  const outTime = () => (STILL() ? 0 : 120);
+
   /** The focused element went away with a step or a question: the keys stay with the dialog. */
   function onstray(e: KeyboardEvent) {
     if (!open || e.target !== document.body) return;
@@ -72,13 +167,23 @@
 
 <svelte:document onkeydown={onstray} />
 
+{#snippet discardText()}<p>{discardBody ?? t("common.discard_dialog_body")}</p>{/snippet}
+{#snippet discardActions()}
+  <button type="button" class="btn" onclick={() => (discarding = false)}>{t("common.cancel")}</button>
+  <button type="button" class="btn danger" onclick={close}>{t("common.discard")}</button>
+{/snippet}
+
 {#if open}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <div class="scrim" use:portal onclick={(e) => { if (e.target === e.currentTarget) dismiss(); }} {onkeydown}>
-    <div class="modal" class:lg={size === "lg"} role="dialog" aria-modal="true" aria-labelledby={titleId} tabindex="-1" bind:this={box}>
-      <h2 id={titleId}>{title}</h2>
-      <div class="body">{@render children()}</div>
-      {#if actions}<div class="actions">{@render actions()}</div>{/if}
+  <div class="scrim" use:portal onclick={(e) => { if (e.target === e.currentTarget) dismiss(); }} {onkeydown} in:fade|global={{ duration: inTime() }} out:fade|global={{ duration: outTime() }}>
+    <div class="modal" class:lg={size === "lg"} class:grow role="dialog" aria-modal="true" aria-labelledby={titleId} tabindex="-1" bind:this={box} in:scale|global={{ start: 0.96, duration: inTime(), easing: cubicOut }} out:scale|global={{ start: 0.98, duration: outTime() }}>
+      <h2 id={titleId}>{asking ? asking.title : title}</h2>
+      <div class="body" bind:this={body}>
+        <div class="inner" class:away={!!asking} use:sizeWatch>{@render children()}</div>
+        {#if asking}<div class="inner" use:sizeWatch>{@render asking.body()}</div>{/if}
+      </div>
+      {#if asking}<div class="actions">{@render asking.actions()}</div>
+      {:else if actions}<div class="actions">{@render actions()}</div>{/if}
     </div>
   </div>
 {/if}
@@ -93,6 +198,9 @@
   .body:last-child { padding-bottom: 18px; }
   .actions { flex: none; display: flex; justify-content: flex-end; gap: 10px; padding: 22px 22px 18px; }
   .lg { width: min(780px, 100%); }
+  .modal.grow .body, .modal.grow .inner { display: flex; flex-direction: column; }
+  .modal.grow .inner { flex: 0 1 auto; min-height: 0; }
+  .modal .body > .inner.away { display: none; }
   .lg h2 { padding: 18px 22px 16px; }
   .lg .body { padding: 22px 22px 22px; color: var(--ink); }
   .lg .actions { padding: 14px 22px; }

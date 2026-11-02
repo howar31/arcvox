@@ -10,7 +10,7 @@
    * its place by the button while the page scrolls. `button` is what the closed control shows, `list` the
    * options (`MenuOption`), `foot` an optional last line; the last two get the function that closes the menu.
    */
-  let { label, button, list, foot, search = false, query = $bindable(""), placeholder = "", disabled = false, large = false, minWidth = 0 }: {
+  let { label, button, list, foot, search = false, query = $bindable(""), keepQuery = false, placeholder = "", disabled = false, large = false, minWidth = 0 }: {
     /** Accessible name of the control. */
     label: string;
     button: Snippet;
@@ -19,6 +19,8 @@
     /** Shows a search field over the list; `query` holds what is typed. */
     search?: boolean;
     query?: string;
+    /** The search stays as typed when the menu closes and opens again. */
+    keepQuery?: boolean;
     placeholder?: string;
     disabled?: boolean;
     /** The taller button, for a control that stands alone. */
@@ -42,7 +44,7 @@
 
   async function show() {
     if (disabled) return;
-    query = "";
+    if (!keepQuery) query = "";
     open = true;
     // The menu is measured at its final width before it is placed.
     const anchor = trigger!.getBoundingClientRect();

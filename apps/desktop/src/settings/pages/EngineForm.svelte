@@ -1,14 +1,23 @@
 <script lang="ts">
-  import { onDestroy, onMount, tick } from "svelte";
-  import { deleteProvider, deleteSecret, errorMessage, hasSecret, listServices, openServiceKeyPage, openServiceTermsPage, probeProvider, putEngineCheck, scanLocalServices, setSecret, upsertProvider, verifyProvider, type EngineCheck, type LocalService, type ProbeResult, type ProviderConfig, type ServicePreset, profilesPresets, upsertProfile, type PresetView, type Profile } from "../../lib/api";
+  import { onDestroy, onMount } from "svelte";
+  import { deleteSecret, errorMessage, hasSecret, listServices, openServiceKeyPage, openServiceTermsPage, probeProvider, putEngineCheck, scanLocalServices, setSecret, upsertProvider, verifyProvider, type EngineCheck, type LocalService, type ProbeResult, type ProviderConfig, type ServicePreset, profilesPresets, type PresetView } from "../../lib/api";
   import { blankHttp, freshId, type Role } from "../../lib/engines";
   import { t } from "../../lib/i18n";
   import { ASR_CAPS, describeFailure, LLM_CAPS } from "../../lib/providerForm";
   import { checkBody, checkKey, cloudFor, EFFORTS, localFor, localRows, modesOf, offersWordTimes, otherRole, pickId, pickOf, servesOther, suggestedIn, takesEffort, type ServicePick } from "../../lib/serviceForm";
   import { config } from "../../lib/store.svelte";
-  import { freshName, namesEngine, templateEngines, withoutEngine } from "../../lib/profileEdit";
+  import { freshName } from "../../lib/profileEdit";
+  import { removeEngines, type MoveTo } from "../../lib/engineRemoval";
+  import RemovalNote from "./engines/RemovalNote.svelte";
   import { engineDefaultName } from "../../lib/stages";
+  import { tip } from "../../lib/tip";
+  import { wantsSearch } from "../../lib/dropdown";
   import Choices from "../../lib/ui/Choices.svelte";
+  import Dropdown from "../../lib/ui/Dropdown.svelte";
+  import InfoTip from "../../lib/ui/InfoTip.svelte";
+  import MenuOption from "../../lib/ui/MenuOption.svelte";
+  import Segmented from "../../lib/ui/Segmented.svelte";
+  import Tag from "../../lib/ui/Tag.svelte";
   import Fold from "../../lib/ui/Fold.svelte";
   import Icon from "../../lib/ui/Icon.svelte";
   import Modal from "../../lib/ui/Modal.svelte";
@@ -33,10 +42,9 @@
   // svelte-ignore state_referenced_locally
   const isNew = initial === null;
   // svelte-ignore state_referenced_locally
-  const other = otherRole(role);
-  // svelte-ignore state_referenced_locally
   let editing = $state<ProviderConfig>(initial ? structuredClone($state.snapshot(initial)) : blankHttp(role));
   let services = $state<ServicePreset[]>([]);
+  let loaded = $state(false);
   let pick = $state<ServicePick>({ kind: "custom" });
   // svelte-ignore state_referenced_locally
   let customUrl = $state(initial && !initial.service ? (initial.base_url ?? "") : "");
@@ -60,43 +68,49 @@
   const blankSel = (): Sel => ({ model: "", typed: false, typedModel: "", label: "", effort: null, mode: null, words: false });
   // The last choice of the model list: the name is typed. No listed model id has this form.
   const OTHER_MODEL = "\u0000other";
-  // svelte-ignore state_referenced_locally
-  let sel = $state<Record<Role, Sel>>({
-    asr: blankSel(),
-    llm: blankSel(),
-  });
+  /** One engine the form would store: editing holds the one engine, adding a list of them picked from the models. */
+  type Entry = { key: string; role: Role; sel: Sel; open: boolean };
+  let entries = $state<Entry[]>([]);
   // svelte-ignore state_referenced_locally
   if (initial) {
-    sel[role].model = initial.model ?? "";
-    sel[role].typedModel = initial.model ?? "";
-    sel[role].label = initial.label;
-    sel[role].effort = initial.reasoning_effort ?? null;
-    sel[role].mode = initial.transcribe_mode ?? null;
-    sel[role].words = !!initial.word_times;
+    entries = [{ key: "edit", role, open: true, sel: { ...blankSel(), model: initial.model ?? "", typedModel: initial.model ?? "", label: initial.label, effort: initial.reasoning_effort ?? null, mode: initial.transcribe_mode ?? null, words: !!initial.word_times } }];
   }
-  let alsoOn = $state(false);
+  // svelte-ignore state_referenced_locally
+  let addRole = $state<Role>(role);
+  let modelQuery = $state("");
   // Real requests that passed, by what they depended on; one is not sent again.
   let passed = $state<Record<string, EngineCheck>>({});
-  // The last result shown under each group.
-  let shown = $state<Partial<Record<Role, EngineCheck>>>({});
+  // The last result shown on each entry, by its key.
+  let shown = $state<Record<string, EngineCheck>>({});
+  // A run of real requests going one entry after another.
+  let run = $state<{ total: number; done: number; passed: number; failed: number; at: string | null; queue: string[] } | null>(null);
+  let stopping = false;
   let armed = $state(false);
   let armTimer: ReturnType<typeof setTimeout> | undefined;
   let busy = $state(false);
   let confirmDelete = $state(false);
   let presets = $state<PresetView[]>([]);
   // Where the stages on a deleted engine go.
-  let moveTo = $state<"default" | "template">("default");
-  let keepButton: HTMLButtonElement | undefined = $state();
-  let confirmDiscard = $state(false);
-  // svelte-ignore state_referenced_locally
-  const pristine = JSON.stringify($state.snapshot(editing));
-  const dirty = $derived(apiKey !== "" || JSON.stringify($state.snapshot(editing)) !== pristine || (isNew && step === "model"));
+  let moveTo = $state<MoveTo>("default");
+  /**
+   * What the user can change, as text: the service, its address and key, and each engine with its settings
+   * as they would be stored. Moving between the steps or connecting changes none of it.
+   */
+  function formState(): string {
+    return JSON.stringify({
+      pick, customUrl: customUrl.trim(), key: apiKey.trim(),
+      entries: entries.map((e) => [e.role, chosen(e), e.sel.label.trim() || defaultLabel(e), modeFor(e), wordsFor(e), effortFor(e)]),
+    });
+  }
+  // Taken once the form has set itself up, so its own first settings are not changes.
+  let pristine = $state<string | null>(null);
+  const dirty = $derived(pristine !== null && formState() !== pristine);
 
   const preset = $derived(pickId(pick) === null ? undefined : services.find((s) => s.id === pickId(pick)));
   const isLocal = $derived(pick.kind === "local");
   const keyNeeded = $derived(pick.kind === "cloud" && !!preset?.key_required);
   const hasList = $derived(!!listed && listed.length > 0);
-  const roles = $derived<Role[]>(isNew && alsoOn && servesOther(pick, services, role) ? [role, other] : [role]);
+  const both = $derived(isNew && servesOther(pick, services, role));
   const host = $derived.by(() => {
     try { return new URL(editing.base_url ?? "").host; } catch { return editing.base_url ?? ""; }
   });
@@ -109,33 +123,17 @@
 
   function beforeclose(): boolean {
     if (busy) return false;
-    // Esc on a question answers no; the form stays as it was.
-    if (confirmDiscard || confirmDelete) { confirmDiscard = confirmDelete = false; return false; }
-    if (armed) { disarm(); return false; }
-    if (!dirty) return true;
-    confirmDiscard = true;
-    tick().then(() => keepButton?.focus());
-    return false;
+    disarm();
+    return true;
   }
 
   const engineId = $derived(initial?.id ?? "");
-  const naming = $derived((config.value?.profiles ?? []).filter((p) => namesEngine(p, engineId)));
   const isDefaultEngine = $derived((["asr", "llm"] as Role[]).some((r) => config.value?.default_engines[r] === engineId));
-  const templateDiffers = $derived(naming.some((p) => {
-    const to = templateEngines(p, engineId, presets);
-    return (p.asr_provider === engineId && to.asr) || (p.llm_provider === engineId && to.llm);
-  }));
-  const defaultName = $derived.by(() => {
-    const id = config.value?.default_engines[role];
-    return config.value?.providers.find((p) => p.id === id)?.label ?? id ?? "";
-  });
 
   async function askDelete() {
     moveTo = "default";
     presets = await profilesPresets().catch(() => []);
     confirmDelete = true;
-    await tick();
-    keepButton?.focus();
   }
 
   const uid = Math.random().toString(36).slice(2);
@@ -154,7 +152,10 @@
       pick = first ? { kind: "cloud", id: first.id } : { kind: "custom" };
     }
     applyPick();
+    // The form shows once the service is picked: the first pick then appears without sliding in.
+    loaded = true;
     if (pick.kind === "local") await scan();
+    pristine = formState();
     if (!isNew) connect(false);
   });
 
@@ -220,12 +221,12 @@
     probe = { state: r.ok ? "ok" : "bad", text: r.ok ? t("engines.connected") : describeFailure(r, t) };
     if (!r.ok) return;
     listed = r.models;
-    for (const which of [role, other] as Role[]) {
-      const s = sel[which];
-      const stored = s.model;
-      s.typed = r.models.length === 0 || (stored !== "" && !r.models.includes(stored));
-      if (s.typed) s.typedModel = stored;
-      else if (!stored) s.model = suggestedIn(r.models, preset?.suggested?.[which]) ?? r.models[0];
+    // The engine being edited keeps its model; one the service no longer lists is typed.
+    for (const e of entries.filter((x) => x.key === "edit")) {
+      const stored = e.sel.model;
+      e.sel.typed = r.models.length === 0 || (stored !== "" && !r.models.includes(stored));
+      if (e.sel.typed) e.sel.typedModel = stored;
+      else if (!stored) e.sel.model = suggestedIn(r.models, preset?.suggested?.[e.role]) ?? r.models[0];
     }
     if (advance) step = "model";
   }
@@ -233,47 +234,125 @@
   /** Goes to the model step without a connection: the model is typed. */
   function skipConnect() {
     listed = [];
-    sel[role].typed = true;
-    sel[other].typed = true;
+    for (const e of entries) e.sel.typed = true;
     step = "model";
   }
 
-  const chosen = (r: Role): string => (hasList && !sel[r].typed ? sel[r].model : sel[r].typedModel.trim());
+  const chosen = (e: Entry): string => (hasList && !e.sel.typed ? e.sel.model : e.sel.typedModel.trim());
   // The first mode is the service's default, which is not sent.
-  const modeFor = (r: Role): string | null => (r === "asr" && modesOf(pick, services, chosen(r)).slice(1).includes(sel[r].mode ?? "") ? sel[r].mode : null);
+  const modeFor = (e: Entry): string | null => (e.role === "asr" && modesOf(pick, services, chosen(e)).slice(1).includes(e.sel.mode ?? "") ? e.sel.mode : null);
   // Word times exist in the service's default mode.
-  const wordsOffered = (r: Role): boolean => r === "asr" && !modeFor(r) && offersWordTimes(pick, services, chosen(r));
-  const wordsFor = (r: Role): boolean => wordsOffered(r) && sel[r].words;
-  const effortFor = (r: Role): string | null => (takesEffort(pick, services, r, chosen(r)) ? sel[r].effort : null);
+  const wordsOffered = (e: Entry): boolean => e.role === "asr" && !modeFor(e) && offersWordTimes(pick, services, chosen(e));
+  const wordsFor = (e: Entry): boolean => wordsOffered(e) && e.sel.words;
+  const effortFor = (e: Entry): string | null => (takesEffort(pick, services, e.role, chosen(e)) ? e.sel.effort : null);
   /** The engine's name when none is typed: engines of one model differ by what they set. */
-  const defaultLabel = (r: Role): string => engineDefaultName(serviceName, chosen(r), { transcribe_mode: modeFor(r), reasoning_effort: effortFor(r), word_times: wordsFor(r) });
+  const defaultLabel = (e: Entry): string => engineDefaultName(serviceName, chosen(e), { transcribe_mode: modeFor(e), reasoning_effort: effortFor(e), word_times: wordsFor(e) });
   // A stored name that is the default one was never typed, so it goes on following the settings.
   let labelChecked = false;
   $effect(() => {
-    if (labelChecked || !initial || !services.length) return;
+    if (labelChecked || !initial || !services.length || !entries[0]) return;
     labelChecked = true;
-    const typed = sel[role].label, auto = defaultLabel(role);
-    if (typed === auto || (typed.startsWith(`${auto}_`) && /^\d+$/.test(typed.slice(auto.length + 1)))) sel[role].label = "";
+    const e = entries[0];
+    const typed = e.sel.label, auto = defaultLabel(e);
+    if (typed === auto || (typed.startsWith(`${auto}_`) && /^\d+$/.test(typed.slice(auto.length + 1)))) e.sel.label = "";
   });
 
-  /** The engine the form would store for the role. */
-  function engineFor(r: Role): ProviderConfig {
+  /** The engine the form would store for the entry. */
+  function engineFor(e: Entry): ProviderConfig {
     const p = structuredClone($state.snapshot(editing)) as ProviderConfig;
-    if (isNew) p.capabilities = { ...(r === "asr" ? ASR_CAPS : LLM_CAPS) };
-    p.model = chosen(r) || null;
-    p.reasoning_effort = effortFor(r);
-    p.transcribe_mode = modeFor(r);
-    p.word_times = wordsFor(r);
-    p.label = sel[r].label.trim() || defaultLabel(r);
+    if (isNew) p.capabilities = { ...(e.role === "asr" ? ASR_CAPS : LLM_CAPS) };
+    p.model = chosen(e) || null;
+    p.reasoning_effort = effortFor(e);
+    p.transcribe_mode = modeFor(e);
+    p.word_times = wordsFor(e);
+    p.label = e.sel.label.trim() || defaultLabel(e);
     if (isLocal) p.api_key_ref = null;
     return p;
   }
+  const keyOf = (e: Entry): string => checkKey(engineFor(e), e.role);
+  const passedOn = (e: Entry): boolean => !!passed[keyOf(e)];
 
   // An edit that leaves the service, address, model and effort as they were needs no request.
   // svelte-ignore state_referenced_locally
-  const needsCheck = $derived(isNew || !initial || roles.some((r) => checkKey(engineFor(r), r) !== checkKey(initial!, role)));
-  const untested = $derived(needsCheck ? roles.filter((r) => !passed[checkKey(engineFor(r), r)]) : []);
-  const canSave = $derived(keyKnown && roles.every((r) => !hasList || chosen(r) !== ""));
+  const needsCheck = $derived(isNew || !initial || entries.some((e) => keyOf(e) !== checkKey(initial!, role)));
+  const untested = $derived(needsCheck ? entries.filter((e) => !passedOn(e)) : []);
+  const ready = $derived(entries.filter(passedOn));
+  const failedCount = $derived(entries.filter((e) => !passedOn(e) && shown[e.key] && !shown[e.key].ok).length);
+  const canSave = $derived(keyKnown && entries.length > 0 && entries.every((e) => !hasList || chosen(e) !== ""));
+
+  /** Adds an engine of the model to the list, open for its settings; the others close. */
+  function addEntry(model: string | null) {
+    for (const e of entries) e.open = false;
+    const r: Role = both ? addRole : role;
+    const key = Math.random().toString(36).slice(2);
+    entries.push({ key, role: r, open: true, sel: { ...blankSel(), model: model ?? "", typed: model === null || !hasList } });
+    disarm();
+    // The new entry is brought into view once the others have folded shut.
+    setTimeout(() => {
+      const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+      document.querySelector(`[data-entry="${key}"]`)?.scrollIntoView({ block: "nearest", behavior: still ? "auto" : "smooth" });
+    }, 240);
+  }
+  // Removing every entry is asked once more: the first press turns the link into the question for 4 seconds.
+  let clearArmed = $state(false);
+  let clearTimer: ReturnType<typeof setTimeout> | undefined;
+  function clearAll() {
+    if (!clearArmed) {
+      clearArmed = true;
+      clearTimeout(clearTimer);
+      clearTimer = setTimeout(() => (clearArmed = false), 4000);
+      return;
+    }
+    clearTimeout(clearTimer);
+    clearArmed = false;
+    entries = [];
+    disarm();
+  }
+  function dropEntry(e: Entry) {
+    entries = entries.filter((x) => x.key !== e.key);
+    disarm();
+  }
+  /** The name the entry gets when it is added: a name left to the form takes `_2`, `_3` among the engines of its role and the entries before it. */
+  function shownName(e: Entry): string {
+    const typed = e.sel.label.trim();
+    if (typed) return typed;
+    const kin = (config.value?.providers ?? []).filter((x) => x.id !== initial?.id && (e.role === "asr" ? x.capabilities.transcribe : x.capabilities.chat)).map((x) => x.label);
+    for (const x of entries) {
+      if (x.key === e.key) break;
+      if (x.role === e.role) kin.push(shownName(x));
+    }
+    return freshName(defaultLabel(e), kin, "_");
+  }
+  /** How many entries of this form use the model. */
+  const addedOf = (m: string): number => entries.filter((e) => !e.sel.typed && e.sel.model === m).length;
+  /** What the catalogue knows of a model: its modes and word times, or that it takes an effort. */
+  function modelFacts(m: string): string {
+    const r: Role = both ? addRole : role;
+    const modes = r === "asr" ? modesOf(pick, services, m) : [];
+    if (modes.length) {
+      const list = modes.map((x) => t(`engines.transcribe_mode.${x}`)).join(t("home.list_sep"));
+      return offersWordTimes(pick, services, m) ? t("engines.model_facts_modes_words", { modes: list, first: t(`engines.transcribe_mode.${modes[0]}`) }) : t("engines.model_facts_modes", { modes: list });
+    }
+    return takesEffort(pick, services, r, m) ? t("engines.model_facts_effort") : "";
+  }
+  const shownModels = $derived((listed ?? []).filter((m) => m.toLowerCase().includes(modelQuery.trim().toLowerCase())));
+  /** The entry's settings in one line, under its name. */
+  function summary(e: Entry): string {
+    const parts: string[] = [];
+    const modes = e.role === "asr" ? modesOf(pick, services, chosen(e)) : [];
+    if (modes.length) parts.push(t(`engines.transcribe_mode.${modeFor(e) ?? modes[0]}`));
+    if (wordsFor(e)) parts.push(t("engines.word_times"));
+    if (takesEffort(pick, services, e.role, chosen(e))) parts.push(`${t("engines.effort")}：${t(`engines.effort.${effortFor(e) ?? "default"}`)}`);
+    if (e.sel.typed) parts.unshift(chosen(e) || t("engines.model_none"));
+    return parts.join(t("home.list_sep"));
+  }
+  function statusOf(e: Entry): "run" | "wait" | "ok" | "bad" | null {
+    if (run?.at === e.key) return "run";
+    if (run?.queue.includes(e.key)) return "wait";
+    if (passedOn(e)) return shown[e.key] ? "ok" : null;
+    if (shown[e.key] && !shown[e.key].ok) return "bad";
+    return null;
+  }
 
   function disarm() {
     clearTimeout(armTimer);
@@ -289,33 +368,38 @@
       }
       disarm();
       busy = true;
-      const results = await Promise.all(untested.map(async (r) => {
-        const p = engineFor(r);
+      stopping = false;
+      const list = [...untested];
+      run = { total: list.length, done: 0, passed: 0, failed: 0, at: null, queue: list.map((e) => e.key) };
+      for (const e of list) {
+        if (stopping) break;
+        run = { ...run!, at: e.key, queue: run!.queue.filter((k) => k !== e.key) };
+        const p = engineFor(e);
         let c: EngineCheck;
-        try { c = await verifyProvider(p, r); }
-        catch (e) { c = { ok: false, at: Math.floor(Date.now() / 1000), elapsed_ms: 0, message: errorMessage(e), role: r }; }
-        return [r, p, c] as const;
-      }));
-      for (const [r, p, c] of results) {
-        shown = { ...shown, [r]: c };
-        if (c.ok) passed = { ...passed, [checkKey(p, r)]: c };
+        try { c = await verifyProvider(p, e.role); }
+        catch (err) { c = { ok: false, at: Math.floor(Date.now() / 1000), elapsed_ms: 0, message: errorMessage(err), role: e.role }; }
+        shown = { ...shown, [e.key]: c };
+        if (c.ok) passed = { ...passed, [checkKey(p, e.role)]: c };
+        else e.open = true;
+        run = { ...run!, done: run!.done + 1, passed: run!.passed + (c.ok ? 1 : 0), failed: run!.failed + (c.ok ? 0 : 1) };
       }
+      run = null;
       busy = false;
-      if (results.some(([, , c]) => !c.ok)) return;
+      if (entries.some((e) => !passedOn(e))) return;
     }
-    await save();
+    await save(entries);
   }
 
-  async function save() {
+  async function save(list: Entry[]) {
     busy = true;
     const ids = (config.value?.providers ?? []).map((x) => x.id);
     let saved = 0;
     try {
-      for (const r of roles) {
-        const p = engineFor(r);
+      for (const e of list) {
+        const p = engineFor(e);
         // A name left to the form differs from the others of its kind; a typed one stays as typed.
-        if (!sel[r].label.trim()) {
-          const kin = (config.value?.providers ?? []).filter((x) => x.id !== initial?.id && (r === "asr" ? x.capabilities.transcribe : x.capabilities.chat));
+        if (!e.sel.label.trim()) {
+          const kin = (config.value?.providers ?? []).filter((x) => x.id !== initial?.id && (e.role === "asr" ? x.capabilities.transcribe : x.capabilities.chat));
           p.label = freshName(p.label, kin.map((x) => x.label), "_");
         }
         if (!p.id) {
@@ -329,12 +413,12 @@
           p.api_key_ref = null;
         }
         config.value = await upsertProvider(p);
-        const c = passed[checkKey(p, r)];
+        const c = passed[checkKey(p, e.role)];
         if (c) await putEngineCheck(p.id, c).catch(() => {});
         saved++;
       }
       // Keys stored under an earlier or a pending reference are removed.
-      if (editing.api_key_ref === pendingRef || (initial?.api_key_ref && initial.api_key_ref !== engineFor(role).api_key_ref && apiKey.trim())) {
+      if (editing.api_key_ref === pendingRef || (initial?.api_key_ref && entries[0] && initial.api_key_ref !== engineFor(entries[0]).api_key_ref && apiKey.trim())) {
         await deleteSecret(editing.api_key_ref ?? pendingRef).catch(() => {});
       }
       if (initial?.api_key_ref && isLocal) await deleteSecret(initial.api_key_ref).catch(() => {});
@@ -348,23 +432,20 @@
   async function remove() {
     if (!initial) return;
     if (isDefaultEngine) return;
-    confirmDelete = false;
     busy = true;
     try {
-      for (const p of $state.snapshot(naming) as Profile[]) {
-        const to = moveTo === "template" ? templateEngines(p, initial.id, presets) : { asr: null, llm: null };
-        config.value = await upsertProfile(withoutEngine(p, initial.id, to));
-      }
-      await deleteProvider(initial.id);
-      if (initial.api_key_ref) await deleteSecret(initial.api_key_ref);
+      await removeEngines([$state.snapshot(initial) as ProviderConfig], moveTo, presets);
+      confirmDelete = false;
       toast.ok(t("engines.deleted"));
       open = false;
     } catch (e) { toast.error(errorMessage(e)); }
     busy = false;
   }
 
+  let dialog: { cancel: () => void } | undefined = $state();
+  /** The cancel button: the same as Esc, so changes are asked about first. */
   function cancel() {
-    open = false;
+    dialog?.cancel();
   }
 
   // However the form goes, a key kept for an engine that was not added goes with it.
@@ -375,36 +456,44 @@
   const costText = $derived(isLocal
     ? t("engines.test_cost_local", { n: String(untested.length) })
     : t(isNew ? "engines.test_cost" : "engines.test_cost_save", { n: String(untested.length), name: serviceName }));
-  const primaryText = $derived(untested.length === 0
-    ? t(isNew ? "engines.add_done" : "common.save")
+  const primaryText = $derived(isNew && entries.length === 0 ? t("engines.test_add") : untested.length === 0
+    ? (isNew ? t("engines.add_n", { n: String(entries.length) }) : t("common.save"))
     : armed ? t(untested.length === 1 ? "engines.test_confirm_one" : "engines.test_confirm", { n: String(untested.length) })
-    : t(isNew ? "engines.test_add" : "engines.test_save"));
+    : isNew ? t("engines.test_add_n", { n: String(untested.length) }) : t("engines.test_save"));
+  const percent = $derived(run ? Math.round((run.done / Math.max(run.total, 1)) * 100) : 0);
   const time = (c: EngineCheck) => (c.elapsed_ms / 1000).toFixed(1);
 </script>
 
-{#snippet modelGroup(r: Role, heading: boolean)}
-  {@const s = sel[r]}
-  {@const hint = suggestedIn(listed ?? [], preset?.suggested?.[r])}
-  {@const modes = r === "asr" ? modesOf(pick, services, chosen(r)) : []}
-  {#if heading}<p class="group-t">{t(`engines.group.${r}`)}</p>{/if}
+{#snippet modelFields(e: Entry)}
+  {@const s = e.sel}
+  {@const hint = suggestedIn(listed ?? [], preset?.suggested?.[e.role])}
+  {@const modes = e.role === "asr" ? modesOf(pick, services, chosen(e)) : []}
   <div class="fields">
-    <span class="lab">{t("engines.model")}{#if hasList}<span class="req">{t("common.required")}</span>{/if}</span>
+    <span class="lab">{t("engines.model")}{#if hasList && !isNew}<span class="req">{t("common.required")}</span>{/if}</span>
     <div>
-      {#if hasList && listed}
+      {#if !isNew && hasList && listed}
         <Select
           variable width="100%" label={t("engines.model")} value={s.typed ? OTHER_MODEL : s.model}
           onchange={(v) => { s.typed = v === OTHER_MODEL; if (!s.typed) s.model = v; disarm(); }}
           options={[...(listed ?? []).map((m) => ({ value: m, label: m === hint ? `${m}（${t("engines.suggested")}）` : m })), { value: OTHER_MODEL, label: t("engines.model_other") }]}
         />
         {#if s.typed}<Fold><input type="text" class="typed" bind:value={s.typedModel} aria-label={t("engines.model")} oninput={disarm} /></Fold>{/if}
-      {:else}
+      {:else if s.typed || !hasList}
         <input type="text" bind:value={s.typedModel} aria-label={t("engines.model")} oninput={disarm} />
         <small>{t("engines.model_type_help")}</small>
+      {:else}
+        <p class="fixed">{s.model}</p>
       {/if}
     </div>
-    <label for="f-label-{r}-{uid}">{t("engines.label")}</label>
+    {#if both}
+      <span class="lab">{t("engines.role_field")}</span>
+      <div>
+        <Segmented label={t("engines.role_field")} bind:value={() => e.role, (v) => { e.role = v; disarm(); }} options={(["asr", "llm"] as Role[]).map((r) => ({ value: r, label: t(`engines.role.${r}`) }))} />
+      </div>
+    {/if}
+    <label for="f-label-{e.key}-{uid}">{t("engines.label")}</label>
     <div>
-      <input id="f-label-{r}-{uid}" type="text" bind:value={s.label} placeholder={defaultLabel(r)} />
+      <input id="f-label-{e.key}-{uid}" type="text" bind:value={s.label} placeholder={isNew ? shownName(e) : defaultLabel(e)} />
     </div>
     {#if modes.length}
       <span class="lab">{t("engines.transcribe_mode")}</span>
@@ -414,8 +503,8 @@
           bind:value={() => s.mode ?? modes[0], (v) => { s.mode = v; disarm(); }}
           options={modes.map((m) => ({ value: m, label: t(`engines.transcribe_mode.${m}`), help: t(`engines.transcribe_mode.${m}_help`), info: m === modes[0] ? undefined : t(`engines.transcribe_mode.${m}_info`, { name: serviceName }) }))}
         />
-        {#if modeFor(r) === "smart"}<Fold><small class="mode-note">{t("engines.transcribe_mode.smart_note")}</small></Fold>{/if}
-        {#if wordsOffered(r)}<Fold>
+        {#if modeFor(e) === "smart"}<Fold><small class="mode-note">{t("engines.transcribe_mode.smart_note")}</small></Fold>{/if}
+        {#if wordsOffered(e)}<Fold>
           <div class="words">
             <div class="words-row">
               <span>{t("engines.word_times")}</span>
@@ -427,7 +516,7 @@
         </Fold>{/if}
       </div>
     {/if}
-    {#if takesEffort(pick, services, r, chosen(r))}
+    {#if takesEffort(pick, services, e.role, chosen(e))}
       <span class="lab">{t("engines.effort")}</span>
       <div>
         <Select
@@ -437,44 +526,55 @@
         <small>{t("engines.effort_help")}</small>
       </div>
     {/if}
-    {#if shown[r]}
-      {@const c = shown[r]!}
-      <span></span>
-      <div class="result" role="status">
+    {#if shown[e.key] && (!isNew || !shown[e.key].ok)}
+      {@const c = shown[e.key]}
+      <Fold><div class="result" role="status">
         {#if c.ok}
           <ServiceAnswer tone="ok" text={t("engines.check_ok_in", { time: time(c) })} />
         {:else}
           <ServiceAnswer tone="bad" text={c.status ? t("engines.check_failed_status", { status: String(c.status) }) : t("engines.check_failed")} body={checkBody(c)} detail={c.detail} />
         {/if}
-      </div>
+      </div></Fold>
     {/if}
   </div>
 {/snippet}
 
-<Modal bind:open title={confirmDiscard ? t("common.discard_title") : confirmDelete ? t("engines.delete_title") : isNew ? t("engines.add_external") : t("engines.edit_title")} {beforeclose}>
-  {#if confirmDiscard}
-    <p>{t("engines.discard_body")}</p>
-  {:else if confirmDelete}
-    <p>{t("engines.delete_body", { name: initial?.label ?? "" })}</p>
+{#snippet entryRow(e: Entry)}
+  {@const st = statusOf(e)}
+  <div class="entry" data-entry={e.key}>
+    <div class="entry-h">
+      <button type="button" class="entry-t" aria-expanded={e.open} onclick={() => (e.open = !e.open)}>
+        <span class="chev" class:open={e.open}><Icon name="chevron-right" size={14} /></span>
+        <span class="entry-n"><b>{shownName(e)}</b>{#if summary(e)}<small>{summary(e)}</small>{/if}</span>
+      </button>
+      {#if st === "run"}<span class="st">{t("engines.entry_running")}</span>
+      {:else if st === "wait"}<span class="st">{t("engines.entry_waiting")}</span>
+      {:else if st === "ok"}<span class="st ok">{t("engines.entry_passed", { time: time(shown[e.key]) })}</span>
+      {:else if st === "bad"}<span class="st bad">{shown[e.key].status ? t("engines.entry_failed_status", { status: String(shown[e.key].status) }) : t("engines.entry_failed")}</span>{/if}
+      {#if !run}<button type="button" class="btn icon-btn x" aria-label={t("engines.entry_remove")} use:tip={t("engines.entry_remove")} onclick={() => dropEntry(e)}><Icon name="x" size={14} /></button>{/if}
+    </div>
+    {#if e.open}<Fold><div class="entry-b" inert={!!run}>{@render modelFields(e)}</div></Fold>{/if}
+  </div>
+{/snippet}
+
+{#snippet deleteBody()}
+  {#if initial}
     {#if isDefaultEngine}
+      <p>{t("engines.delete_body", { name: initial.label })}</p>
       <p>{t("engines.delete_is_default", { kind: t(`engines.group.${role}`) })}</p>
-    {:else if naming.length}
-      <p>{t("engines.delete_moves", { names: naming.map((p) => p.name).join(t("home.list_sep")) })}</p>
-      {#if templateDiffers}
-        <Choices
-          label={t("engines.delete_title")}
-          bind:value={moveTo}
-          options={[
-            { value: "default" as const, label: t("engines.delete_to_default"), help: t("engines.delete_to_default_help", { kind: t(`engines.group.${role}`), name: defaultName }) },
-            { value: "template" as const, label: t("engines.delete_to_template"), help: t("engines.delete_to_template_help") },
-          ]}
-        />
-      {:else}
-        <p>{t("engines.delete_to_default_help", { kind: t(`engines.group.${role}`), name: defaultName })}</p>
-      {/if}
+    {:else}
+      <RemovalNote engines={[initial]} {role} {presets} bind:moveTo />
     {/if}
-  {:else}
-    <div class="form">
+  {/if}
+{/snippet}
+{#snippet deleteActions()}
+  <button type="button" class="btn" onclick={() => (confirmDelete = false)} disabled={busy}>{t("common.cancel")}</button>
+  <button type="button" class="btn danger" onclick={remove} disabled={busy || isDefaultEngine}>{t("engines.delete")}</button>
+{/snippet}
+
+<Modal bind:this={dialog} bind:open size={isNew ? "lg" : "md"} grow={isNew} title={isNew ? t("engines.add_external") : t("engines.edit_title")} {beforeclose} {dirty} discardBody={t("engines.discard_body")}
+  question={confirmDelete ? { title: t("engines.delete_title"), no: () => { if (!busy) confirmDelete = false; }, body: deleteBody, actions: deleteActions } : null}>
+    {#if loaded}<div class="form" class:filled={isNew}>
       <Steps current={step} steps={[{ id: "connect", label: t("engines.step_connect") }, { id: "model", label: t("engines.step_model"), disabled: listed === null }]} onpick={(id) => (step = id as typeof step)} />
       {#if step === "connect"}
         {@const clouds = cloudFor(services, role)}
@@ -547,7 +647,7 @@
         {#if pick.kind === "cloud" && preset}
           <p class="cost"><Icon name="info" size={14} /><span>{t("engines.data_note", { name: preset.label })}{#if preset.terms_url} <button type="button" class="link" onclick={() => openServiceTermsPage(preset.id)}>{t("engines.data_terms")}</button>{/if}</span></p>
         {/if}
-        {#if probe && probe.state !== "ok"}<p class="probe {probe.state}" role="status">{#if probe.state === "bad"}<b>{t("engines.not_connected")}</b>{/if}{probe.text}</p>{/if}
+        {#if probe && probe.state !== "ok"}<Fold><p class="probe {probe.state}" role="status">{#if probe.state === "bad"}<b>{t("engines.not_connected")}</b>{/if}{probe.text}</p></Fold>{/if}
       {:else}
         <p class="status" role="status">
           {#if probe?.state === "wait"}
@@ -559,39 +659,82 @@
           {/if}
           <button type="button" class="btn quiet small" onclick={() => connect(false)} disabled={busy || probe?.state === "wait"}>{t("engines.reconnect")}</button>
         </p>
-        {@render modelGroup(role, isNew && servesOther(pick, services, role))}
-        {#if isNew && servesOther(pick, services, role)}
-          <div class="also">
-            <Switch bind:checked={alsoOn} label={t(`engines.also_add.${other}`)} onchange={disarm} />
-            <span><b>{t(`engines.also_add.${other}`)}</b><small>{t("engines.also_add_sub")}</small></span>
+        {#if !isNew}
+          {#each entries as e (e.key)}{@render modelFields(e)}{/each}
+        {:else}
+          <div class="adder">
+            {#if both}
+              <span class="lab add-as">{t("engines.add_as")}<InfoTip info={t("engines.add_as_info")} /></span>
+              <Segmented label={t("engines.add_as")} bind:value={addRole} options={(["asr", "llm"] as Role[]).map((r) => ({ value: r, label: t(`engines.role.${r}`) }))} />
+            {/if}
+            <div class="pick">
+              <Dropdown label={t("engines.add_model")} search={wantsSearch((listed ?? []).length, true)} bind:query={modelQuery} keepQuery disabled={!!run}>
+                {#snippet button()}<span class="ph">{t("engines.add_model")}</span>{/snippet}
+                {#snippet list(close)}
+                  {#each shownModels as m (m)}
+                    {@const n = addedOf(m)}
+                    {@const facts = modelFacts(m)}
+                    <MenuOption onclick={() => { close(); addEntry(m); }}>
+                      <span class="mline"><span class="mid">{m}</span>{#if n}<Tag>{t("engines.added_count", { n: String(n) })}</Tag>{/if}</span>
+                      {#if facts}<small class="facts">{facts}</small>{/if}
+                    </MenuOption>
+                  {/each}
+                  {#if !modelQuery.trim() || shownModels.length === 0}
+                    <MenuOption onclick={() => { close(); addEntry(null); }}>{t("engines.model_other")}</MenuOption>
+                  {/if}
+                {/snippet}
+              </Dropdown>
+            </div>
           </div>
-          {#if alsoOn}
-            <Fold>{@render modelGroup(other, true)}</Fold>
-          {/if}
+          <div class="list-h">
+            <span>{t("engines.to_add", { n: String(entries.length) })}</span>
+            {#if entries.length && !run}<button type="button" class="link" class:ask={clearArmed} onclick={clearAll}>{t(clearArmed ? "engines.remove_all_confirm" : "engines.remove_all")}</button>{/if}
+          </div>
+          <div class="entries">
+            <!-- Every part of the list slides, so the centred dialog grows and shrinks smoothly. -->
+            {#if entries.length === 0}
+              <Fold><p class="empty">{t("engines.to_add_empty")}</p></Fold>
+            {:else}<Fold>
+              {#each (both ? ["asr", "llm"] : [role]) as Role[] as r (r)}
+                {@const mine = entries.filter((e) => e.role === r)}
+                {#if mine.length}<Fold>
+                  {#if both}<p class="grp">{t(`engines.group.${r}`)}（{mine.length}）</p>{/if}
+                  {#each mine as e (e.key)}<Fold>{@render entryRow(e)}</Fold>{/each}
+                </Fold>{/if}
+              {/each}
+            </Fold>{/if}
+          </div>
         {/if}
-        {#if untested.length > 0}
+        {#if untested.length > 0 && !run}
           <p class="cost"><Icon name="info" size={14} /><span>{costText}</span></p>
         {/if}
       {/if}
-    </div>
-  {/if}
+    </div>{/if}
 
   {#snippet actions()}
-    {#if confirmDiscard}
-      <button type="button" class="btn" bind:this={keepButton} onclick={() => (confirmDiscard = false)}>{t("common.cancel")}</button>
-      <button type="button" class="btn danger" onclick={cancel}>{t("common.discard")}</button>
-    {:else if confirmDelete}
-      <button type="button" class="btn" bind:this={keepButton} onclick={() => (confirmDelete = false)}>{t("common.cancel")}</button>
-      <button type="button" class="btn danger" onclick={remove} disabled={busy || isDefaultEngine}>{t("engines.delete")}</button>
-    {:else if step === "connect"}
+    {#if step === "connect"}
       {#if probe?.state === "bad"}<button type="button" class="btn quiet lead" onclick={skipConnect}>{t("engines.continue_anyway")}</button>{/if}
       <button type="button" class="btn" onclick={cancel}>{t("common.cancel")}</button>
       <button type="button" class="btn primary" onclick={() => connect(true)} disabled={!canConnect || probe?.state === "wait"}>{t("engines.connect")}</button>
     {:else}
       {#if !isNew}<button type="button" class="btn quiet danger lead" onclick={askDelete} disabled={busy}>{t("engines.delete")}</button>{/if}
-      <button type="button" class="btn quiet" class:lead={isNew} onclick={() => { disarm(); step = "connect"; }} disabled={busy}><Icon name="chevron-left" size={14} />{t(isNew ? "engines.back" : "engines.change_connection")}</button>
-      <button type="button" class="btn" onclick={cancel}>{t("common.cancel")}</button>
-      <button type="button" class="btn primary" class:ask={armed} onclick={testAndSave} disabled={busy || !canSave}>{busy && untested.length > 0 ? t("engines.testing") : primaryText}</button>
+      {#if !run}<button type="button" class="btn quiet" class:lead={isNew} onclick={() => { disarm(); step = "connect"; }} disabled={busy}><Icon name="chevron-left" size={14} />{t(isNew ? "engines.back" : "engines.change_connection")}</button>{/if}
+      {#if run}
+        <div class="runline" role="status">
+          <b>{t("engines.batch_real", { done: String(Math.min(run.done + 1, run.total)), total: String(run.total) })}</b>
+          <span class="bar"><i style:width="{percent}%"></i></span>
+          {#if run.passed}<span class="ok">{t("engines.batch_passed", { n: String(run.passed) })}</span>{/if}
+          {#if run.failed}<span class="bad">{t("engines.batch_failed", { n: String(run.failed) })}</span>{/if}
+        </div>
+        <button type="button" class="btn" onclick={() => (stopping = true)}>{t("engines.batch_stop")}</button>
+      {:else if isNew && failedCount > 0 && ready.length > 0}
+        <button type="button" class="btn" onclick={cancel}>{t("common.cancel")}</button>
+        <button type="button" class="btn" class:ask={armed} onclick={testAndSave} disabled={busy || !canSave}>{armed ? primaryText : t("engines.retest_n", { n: String(untested.length) })}</button>
+        <button type="button" class="btn primary" onclick={() => save(ready)} disabled={busy}>{t("engines.add_passed_n", { n: String(ready.length) })}</button>
+      {:else}
+        <button type="button" class="btn" onclick={cancel}>{t("common.cancel")}</button>
+        <button type="button" class="btn primary" class:ask={armed} onclick={testAndSave} disabled={busy || !canSave}>{busy && untested.length > 0 ? t("engines.testing") : primaryText}</button>
+      {/if}
     {/if}
   {/snippet}
 </Modal>
@@ -633,9 +776,49 @@
   .hint { margin-left: auto; flex: none; color: var(--ink-3); font-size: var(--text-xs); }
   .typed { margin-top: 6px; }
   .none { margin: 0; padding: 12px; color: var(--ink-2); font-size: var(--text-sm); }
-  .also { display: flex; gap: 12px; align-items: flex-start; padding-top: 14px; border-top: 1px solid var(--line); }
-  .also b { display: block; font-size: var(--text-control); font-weight: 600; }
-  .also small { color: var(--ink-2); font-size: var(--text-xs); }
+  .adder { display: flex; align-items: center; gap: 10px; }
+  .add-as { display: inline-flex; align-items: center; gap: 4px; flex: none; color: var(--ink-2); font-size: var(--text-sm); white-space: nowrap; }
+  .pick { flex: 1; min-width: 0; }
+  .ph { flex: 1; min-width: 0; color: var(--ink-3); font-weight: 400; }
+  .mline { display: flex; align-items: center; gap: 8px; }
+  .mid { min-width: 0; font-family: var(--font-mono, ui-monospace, Menlo, monospace); font-size: var(--text-sm); overflow-wrap: anywhere; }
+  .facts { display: block; color: var(--ink-2); font-size: var(--text-xs); }
+  .list-h { display: flex; align-items: center; justify-content: space-between; margin: 2px 2px -6px; font-size: var(--text-xs); font-weight: 600; color: var(--ink-3); }
+  .list-h .link { margin: 0; font-size: var(--text-xs); font-weight: 500; }
+  .list-h .link.ask { color: var(--live); font-weight: 600; }
+  /* The adding form grows with its list up to the window's height; then only the list of engines scrolls. */
+  .form.filled { flex: 0 1 auto; min-height: 0; }
+  .filled .entries { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+  .entries { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .entries .empty { margin: 0; padding: 28px 16px; text-align: center; color: var(--ink-3); font-size: var(--text-sm); }
+  .grp { margin: 0; padding: 7px 14px; background: var(--sunken); border-top: 1px solid var(--line); font-size: var(--text-xs); font-weight: 600; color: var(--ink-2); }
+  .grp:first-child { border-top: 0; }
+  .entry { border-top: 1px solid var(--line); }
+  .entries :global(.fold:first-child > .entry), .grp + :global(.fold > .entry) { border-top: 0; }
+  .entries :global(.fold + .fold > .grp) { border-top: 1px solid var(--line); }
+  .entry-h { display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 4px; }
+  .entry-t { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 4px 6px; border: 0; border-radius: 8px; background: none; color: var(--ink); text-align: left; cursor: default; }
+  .entry-t:hover { background: var(--sunken); }
+  .chev { display: inline-flex; flex: none; color: var(--ink-3); transition: transform .2s; }
+  .chev.open { transform: rotate(90deg); }
+  @media (prefers-reduced-motion: reduce) { .chev { transition: none; } }
+  .entry-n { min-width: 0; }
+  .entry-n b { display: block; font-size: var(--text-sm); font-weight: 600; overflow-wrap: anywhere; }
+  .entry-n small { display: block; color: var(--ink-2); font-size: var(--text-xs); overflow-wrap: anywhere; }
+  .st { flex: none; font-size: var(--text-xs); color: var(--ink-3); white-space: nowrap; }
+  .st.ok { color: var(--ok); }
+  .st.bad { color: var(--live); }
+  .x { width: 28px; height: 28px; padding: 0; justify-content: center; color: var(--ink-3); border-color: transparent; background: none; }
+  .x:hover { color: var(--ink); }
+  .entry-b { padding: 4px 14px 14px 30px; }
+  .fixed { margin: 0; padding-top: 7px; font-family: var(--font-mono, ui-monospace, Menlo, monospace); font-size: var(--text-sm); overflow-wrap: anywhere; }
+  .runline { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; margin-right: auto; font-size: var(--text-sm); color: var(--ink-2); }
+  .runline b { color: var(--ink); font-weight: 600; white-space: nowrap; }
+  .runline .bar { flex: 1; min-width: 60px; max-width: 280px; height: 6px; border-radius: 3px; background: var(--sunken); overflow: hidden; }
+  .runline .bar i { display: block; height: 100%; border-radius: 3px; background: var(--accent); transition: width .2s; }
+  .runline .ok { color: var(--ok); white-space: nowrap; }
+  .runline .bad { color: var(--live); white-space: nowrap; }
+  .fields > :global(.fold) { grid-column: 2; }
   .result { margin: -6px 0 0; font-size: var(--text-sm); line-height: 1.45; overflow-wrap: anywhere; }
   .mode-note { display: block; margin-top: 8px; }
   .words { margin-top: 12px; }

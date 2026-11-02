@@ -15,7 +15,7 @@ Voice dictation for macOS: hold a key, speak, and the text is put into the appli
 
 - **Dictate anywhere**: hold a shortcut to speak, or press it twice for hands-free dictation; Esc cancels. Shortcuts can be modifier keys, combinations, keypad keys or mouse buttons. The text is pasted, typed, written through Accessibility, or only copied, set per application.
 - **Local engines**: speech recognition (whisper.cpp and llama.cpp speech models such as Breeze-ASR-25 and Qwen3-ASR) and text rewriting (Gemma 3, Qwen3 and other GGUF models) run on the Mac with Metal. Models are downloaded from a catalogue or imported from your own files. On macOS 26, Apple's dictation and Apple Intelligence can be used as engines too.
-- **Network engines**: any OpenAI-compatible service (Ollama, LM Studio, vLLM, a self-hosted server or a cloud API) can be added for recognition or rewriting.
+- **Network engines**: any OpenAI-compatible service (Ollama, LM Studio, vLLM, a self-hosted server or a cloud API) can be added for recognition or rewriting, several models of one service in one go, each checked with a real request before it is added.
 - **Profiles**: writing styles from templates (casual, formal, verbatim, polished, blank), chosen per application or per website, each with its own engines, prompt, dictionary use, Chinese script conversion (OpenCC) and optional translation.
 - **Dictionary**: terms and their misheard forms; corrections you make after a dictation are read back and turned into suggestions.
 - **History and statistics**: every dictation with its recording and the text of each processing stage, searchable and filterable; a dictation can be run again with another profile. Statistics cards and a shareable image of the figures.

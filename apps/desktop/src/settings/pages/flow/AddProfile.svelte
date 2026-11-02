@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick, untrack } from "svelte";
+  import { untrack } from "svelte";
   import { errorMessage, profilesAddPreset, setDefaultProfile, upsertProfile, type InstalledModel, type ManifestView, type PresetView, type ProviderConfig } from "../../../lib/api";
   import { t } from "../../../lib/i18n";
   import { freshName, withEngines } from "../../../lib/profileEdit";
@@ -8,6 +8,7 @@
   import { engineKind, type Installed } from "../../../lib/stages";
   import { config } from "../../../lib/store.svelte";
   import Icon from "../../../lib/ui/Icon.svelte";
+  import Fold from "../../../lib/ui/Fold.svelte";
   import Modal from "../../../lib/ui/Modal.svelte";
   import Row from "../../../lib/ui/Row.svelte";
   import Steps from "../../../lib/ui/Steps.svelte";
@@ -38,8 +39,6 @@
   let pickedAsr = $state<string | undefined>(undefined);
   let pickedLlm = $state<string | null | undefined>(undefined);
   let busy = $state(false);
-  let confirmDiscard = $state(false);
-  let keepButton: HTMLButtonElement | undefined = $state();
 
   const template = $derived(presets.find((p) => p.id === preset));
   const templateEngines = $derived({ asr: template?.suggested_asr ?? FOLLOW, llm: template?.suggested_llm ?? FOLLOW });
@@ -48,31 +47,28 @@
   const presetName = (id: string) => t(`profiles.preset.${id}`);
   const takenNames = () => (config.value?.profiles ?? []).map((p) => p.name);
   const stepAt = $derived(ORDER.indexOf(step));
-  const changed = $derived(stepAt > 0 || renamed || preset !== (presets[0]?.id ?? ""));
+  // What the profile would be: moving between the steps changes none of it.
+  const formState = () => JSON.stringify([preset, asr, llm, name.trim(), makeDefault]);
+  let pristine = $state<string | null>(null);
+  const dirty = $derived(pristine !== null && formState() !== pristine);
+  let dialog: { cancel: () => void } | undefined = $state();
 
   $effect.pre(() => {
     if (!open) return;
     untrack(() => {
       step = "template";
-      preset = presets[0]?.id ?? "";
-      name = preset ? freshName(presetName(preset), takenNames()) : "";
+      // No template is chosen yet: picking one, the first included, is the user's first change.
+      preset = "";
+      name = "";
       renamed = false;
       makeDefault = false;
       pickedAsr = undefined;
       pickedLlm = undefined;
-      confirmDiscard = false;
+      pristine = formState();
     });
   });
 
-  function beforeclose(): boolean {
-    if (busy) return false;
-    // Esc on the question answers no; the wizard stays as it was.
-    if (confirmDiscard) { confirmDiscard = false; return false; }
-    if (!changed) return true;
-    confirmDiscard = true;
-    tick().then(() => keepButton?.focus());
-    return false;
-  }
+  const beforeclose = (): boolean => !busy;
 
   function choosePreset(id: string) {
     preset = id;
@@ -124,12 +120,9 @@
   }
 </script>
 
-<Modal bind:open title={confirmDiscard ? t("common.discard_title") : t("flow.add")} {beforeclose}>
-  {#if confirmDiscard}
-    <p>{t("flow.add_discard_body")}</p>
-  {:else}
+<Modal bind:this={dialog} bind:open title={t("flow.add")} {beforeclose} {dirty} discardBody={t("flow.add_discard_body")}>
   <div class="wizard" class:busy inert={busy} aria-busy={busy}>
-    <Steps current={step} steps={[{ id: "template", label: t("flow.add_template") }, { id: "engines", label: t("flow.add_engines") }, { id: "name", label: t("flow.add_name") }]} onpick={(id) => (step = id as Step)} />
+    <Steps current={step} steps={[{ id: "template", label: t("flow.add_template") }, { id: "engines", label: t("flow.add_engines"), disabled: !preset }, { id: "name", label: t("flow.add_name"), disabled: !preset }]} onpick={(id) => (step = id as Step)} />
     {#if step === "template"}
       <div class="templates" role="radiogroup" aria-label={t("flow.add_template")}>
         {#each presets as p (p.id)}
@@ -147,7 +140,7 @@
             engines={choices("asr")} selected={asr} label={t("flow.asr_engines")} {manifest} {installed} {models} follow={follow("asr")}
             suggested={template?.suggested_asr ?? null} defaultId={defaultId("asr")} onpick={(id) => (pickedAsr = id ?? FOLLOW)}
           />
-          {#if undownloaded("asr", asr)}<p class="note warn">{t("flow.add_download_later")}</p>{/if}
+          {#if undownloaded("asr", asr)}<Fold><p class="note warn">{t("flow.add_download_later")}</p></Fold>{/if}
         </div>
         <div>
           <h3>{t("flow.llm_engines")}</h3>
@@ -157,8 +150,8 @@
             suggested={template?.suggested_llm ?? null} defaultId={defaultId("llm")} onpick={(id) => (pickedLlm = id)}
           />
           <!-- Every template has the rewrite stage, so turning it off here always differs from the template. -->
-          {#if llm === null}<p class="note">{t("flow.add_no_rewrite", { preset: presetName(preset) })}</p>{/if}
-          {#if undownloaded("llm", llm)}<p class="note warn">{t("flow.add_download_later")}</p>{/if}
+          {#if llm === null}<Fold><p class="note">{t("flow.add_no_rewrite", { preset: presetName(preset) })}</p></Fold>{/if}
+          {#if undownloaded("llm", llm)}<Fold><p class="note warn">{t("flow.add_download_later")}</p></Fold>{/if}
         </div>
       </div>
     {:else}
@@ -172,20 +165,14 @@
       </div>
     {/if}
   </div>
-  {/if}
   {#snippet actions()}
-    {#if confirmDiscard}
-      <button type="button" class="btn" bind:this={keepButton} onclick={() => (confirmDiscard = false)}>{t("common.cancel")}</button>
-      <button type="button" class="btn danger" onclick={() => (open = false)}>{t("common.discard")}</button>
-    {:else}
     {#if busy}<span class="adding" role="status">{t("profiles.adding")}</span>
     {:else if stepAt > 0}<button type="button" class="btn quiet lead" onclick={() => (step = ORDER[stepAt - 1])}><Icon name="chevron-left" size={14} />{t("engines.back")}</button>{/if}
-    <button type="button" class="btn" disabled={busy} onclick={() => (open = false)}>{t("common.cancel")}</button>
+    <button type="button" class="btn" disabled={busy} onclick={() => dialog?.cancel()}>{t("common.cancel")}</button>
     {#if step === "name"}
       <button type="button" class="btn primary" disabled={busy || !preset || !name.trim()} onclick={create}>{t("flow.add_create")}</button>
     {:else}
       <button type="button" class="btn primary" disabled={!preset} onclick={() => (step = ORDER[stepAt + 1])}>{t("flow.add_next")}</button>
-    {/if}
     {/if}
   {/snippet}
 </Modal>
