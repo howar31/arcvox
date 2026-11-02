@@ -88,6 +88,13 @@ describe("panel", () => {
     expect(panelView("locked", null, "", null, true)?.text).toBe(t("widget.locked"));
     expect(panelView("locked", null, "", null, false)).toBeNull();
   });
+  it("shows the text so far while recording, at full width through to the final text", () => {
+    expect(panelView("recording", null, "目前", null, false, true)).toEqual({ caption: "辨識原文", text: "目前", live: true, wide: true, actions: [], close: false });
+    expect(panelView("locked", null, "目前", null, true, true)?.live).toBe(true);
+    expect(panelView("processing", null, "原文", null, false, true)?.wide).toBe(true);
+    expect(panelView("processing", null, "原文", "整理後", false, true)?.wide).toBe(true);
+    expect(panelView("processing", null, "原文", null, false)?.wide).toBeUndefined();
+  });
   it("shows the final text taking the place of the recognised text, until the widget goes", () => {
     const view = { caption: "最終文字", rewrite: { from: "原文", to: "整理後" }, actions: [], close: false };
     expect(panelView("processing", null, "原文", "整理後", false)).toEqual(view);

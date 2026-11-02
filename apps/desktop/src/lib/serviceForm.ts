@@ -29,7 +29,7 @@ export function servesOther(pick: ServicePick, services: ServicePreset[], role: 
 }
 
 /** The way a speech model of the service goes when it has one of its own. */
-const modelRoute = (s: ServicePreset | undefined, model: string) => s?.asr_routes?.find((r) => r.models.includes(model));
+const modelRoute = (s: ServicePreset | undefined, model: string) => [...(s?.asr_routes ?? []), ...(s?.live_routes ?? [])].find((r) => r.models.includes(model));
 
 /** The modes the speech model offers, the default first; empty when it has none. */
 export function modesOf(pick: ServicePick, services: ServicePreset[], model: string): string[] {

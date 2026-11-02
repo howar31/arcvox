@@ -119,6 +119,7 @@ fn context(config: &Config, profile: Profile, request: &RunRequest) -> PipelineC
         recognised: Default::default(),
         asr_sample: request.asr_sample.clone(),
         term_hits: Default::default(),
+        live: Default::default(),
     }
 }
 

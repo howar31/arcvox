@@ -23,6 +23,29 @@ pub fn asr_prompt(sample: Option<&str>, terms: Option<String>) -> Option<String>
     }
 }
 
+/// What the speech engine is given besides the audio.
+pub fn asr_hint(
+    profile: &crate::config::Profile,
+    dictionary: &[crate::config::DictionaryEntry],
+    term_hits: &[crate::history::TermHits],
+    term_limit: TermLimit,
+    asr_sample: Option<&str>,
+) -> AsrHint {
+    let terms = if profile.asr_dictionary_hint {
+        asr_terms(
+            rank_for_hints(dictionary, term_hits, crate::history::now_unix()),
+            term_limit,
+        )
+    } else {
+        Vec::new()
+    };
+    AsrHint {
+        language: profile.language_hint.clone(),
+        prompt: asr_prompt(asr_sample, (!terms.is_empty()).then(|| terms.join(", "))),
+        terms,
+    }
+}
+
 pub struct AsrStep {
     provider: Arc<dyn AsrProvider>,
     term_limit: TermLimit,
@@ -61,30 +84,45 @@ impl Step for AsrStep {
         let audio = input.audio.ok_or_else(|| {
             StepError::fatal(ErrorCode::Internal, "asr step called without audio")
         })?;
-        let terms = if ctx.profile.asr_dictionary_hint {
-            asr_terms(
-                rank_for_hints(&ctx.dictionary, &ctx.term_hits, crate::history::now_unix()),
-                self.term_limit,
-            )
-        } else {
-            Vec::new()
+        let hint = asr_hint(
+            &ctx.profile,
+            &ctx.dictionary,
+            &ctx.term_hits,
+            self.term_limit,
+            ctx.asr_sample.as_deref(),
+        );
+        let live = ctx.live.lock().unwrap().take();
+        let streamed = match live {
+            Some(stream) => {
+                let wait = std::time::Duration::from_secs(ctx.general.asr_timeout_secs);
+                match tokio::time::timeout(wait, stream.finish()).await {
+                    Ok(Ok(t)) => Some(t),
+                    // The recording is whole; it goes again in one piece.
+                    Ok(Err(e)) => {
+                        tracing::warn!(code = ?e.code, error = %e.message, "live session failed, sending the recording again");
+                        None
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            "live session gave no final text in time, sending the recording again"
+                        );
+                        None
+                    }
+                }
+            }
+            None => None,
         };
-        let hint = AsrHint {
-            language: ctx.profile.language_hint.clone(),
-            prompt: asr_prompt(
-                ctx.asr_sample.as_deref(),
-                (!terms.is_empty()).then(|| terms.join(", ")),
-            ),
-            terms,
+        let t = match streamed {
+            Some(t) => t,
+            None => self
+                .provider
+                .transcribe(&audio, &hint)
+                .await
+                .map_err(|e| StepError {
+                    recoverable: false,
+                    ..StepError::from(e)
+                })?,
         };
-        let t = self
-            .provider
-            .transcribe(&audio, &hint)
-            .await
-            .map_err(|e| StepError {
-                recoverable: false,
-                ..StepError::from(e)
-            })?;
         let mut detail = serde_json::json!({
             "language": t.language,
             "chars": t.text.chars().count(),
@@ -392,5 +430,37 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::ProviderUnreachable);
         assert!(!err.recoverable);
+    }
+
+    fn clip_input() -> StepInput {
+        StepInput {
+            text: String::new(),
+            audio: Some(Arc::new(AudioClip {
+                samples: vec![0.0; 1600],
+                sample_rate: 16_000,
+            })),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_live_session_gives_the_text_and_a_failed_one_sends_the_recording_again() {
+        use crate::providers::live::{LiveInput, LiveStream};
+        let step = AsrStep::new(FakeAsr::ok("整段"), TermLimit::Count(10));
+        let ctx = test_context();
+
+        *ctx.live.lock().unwrap() = Some(LiveStream::spawn(|mut rx| async move {
+            while let Some(LiveInput::Audio(_)) = rx.recv().await {}
+            Ok(crate::types::Transcript {
+                text: "串流".into(),
+                ..Default::default()
+            })
+        }));
+        assert_eq!(step.run(clip_input(), &ctx).await.unwrap().text, "串流");
+        assert!(ctx.live.lock().unwrap().is_none());
+
+        *ctx.live.lock().unwrap() = Some(LiveStream::spawn(|_rx| async {
+            Err(ProviderError::new(ErrorCode::ProviderError, "closed"))
+        }));
+        assert_eq!(step.run(clip_input(), &ctx).await.unwrap().text, "整段");
     }
 }

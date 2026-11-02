@@ -61,6 +61,9 @@ pub struct Session {
     pub(crate) audio: Arc<Mutex<Vec<f32>>>,
     /// Samples kept at most; see `engine::MAX_UTTERANCE_SECS`.
     pub(crate) max_samples: usize,
+    /// The longest recording the speech engine takes in one session, for
+    /// an engine that takes the audio while it is recorded.
+    pub(crate) live_limit_secs: Option<u32>,
     pub(crate) cmd_tx: Mutex<Option<mpsc::UnboundedSender<SessionCmd>>>,
     pub(crate) events_tx: mpsc::Sender<Event>,
     pub(crate) events_rx: Mutex<Option<mpsc::Receiver<Event>>>,
@@ -79,6 +82,12 @@ impl Session {
 
     pub fn profile_id(&self) -> &ProfileId {
         &self.profile_id
+    }
+
+    /// The longest recording this session's speech engine takes, when it
+    /// has a limit of its own.
+    pub fn recording_limit_secs(&self) -> Option<u32> {
+        self.live_limit_secs
     }
 
     /// Appends 16 kHz mono f32 samples. Safe to call from the audio thread.

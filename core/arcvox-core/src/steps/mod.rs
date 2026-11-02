@@ -128,6 +128,10 @@ pub struct PipelineContext {
     /// How often each dictionary term was replaced, for choosing the hints
     /// when not all of them fit.
     pub term_hits: Arc<Vec<crate::history::TermHits>>,
+    /// The speech engine's session that took the audio while it was
+    /// recorded; the recognition step finishes it instead of sending the
+    /// recording again.
+    pub live: Arc<std::sync::Mutex<Option<crate::providers::live::LiveStream>>>,
 }
 
 #[async_trait]
@@ -149,5 +153,6 @@ pub(crate) fn test_context() -> PipelineContext {
         recognised: Default::default(),
         asr_sample: None,
         term_hits: Default::default(),
+        live: Default::default(),
     }
 }

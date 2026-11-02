@@ -7,6 +7,8 @@
 use std::ffi::{c_char, c_void};
 
 pub type ProgressFn = unsafe extern "C" fn(fraction: f64, user: *mut c_void);
+/// Gets the text so far of a live dictation, a string the bridge owns for the call.
+pub type LivePartialFn = unsafe extern "C" fn(text: *const c_char, user: *mut c_void);
 
 unsafe extern "C" {
     pub fn kw_apple_free(p: *mut c_char);
@@ -27,6 +29,22 @@ unsafe extern "C" {
         cancel: *const u8,
         out: *mut *mut c_char,
     ) -> i32;
+    /// Opens a live dictation; null on failure, with the code in `status`.
+    /// `partial` is called on the bridge's threads until finish or close returns.
+    pub fn kw_apple_live_open(
+        locale: *const c_char,
+        sample_rate: i32,
+        contextual_json: *const c_char,
+        partial: LivePartialFn,
+        user: *mut c_void,
+        status: *mut i32,
+    ) -> *mut c_void;
+    /// Does not block.
+    pub fn kw_apple_live_push(handle: *mut c_void, pcm: *const f32, len: usize);
+    /// Blocks until the final text; releases the handle.
+    pub fn kw_apple_live_finish(handle: *mut c_void, out: *mut *mut c_char) -> i32;
+    /// Stops the dictation; releases the handle.
+    pub fn kw_apple_live_close(handle: *mut c_void);
     pub fn kw_apple_fm_status() -> i32;
     /// `max_tokens` <= 0 leaves the length to the model; `out` receives a
     /// string owned by the bridge, released with `kw_apple_free`.

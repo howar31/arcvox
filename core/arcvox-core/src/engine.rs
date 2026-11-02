@@ -868,6 +868,8 @@ impl Engine {
         let wav_path = self.inner.recordings_dir().join(format!("{id}.wav"));
         let audio = Arc::new(Mutex::new(Vec::<f32>::new()));
         let flags = Arc::new(SessionFlags::default());
+        let live = self.inner.live_engine(&config, &profile);
+        let live_limit_secs = live.as_ref().and_then(|(p, _)| p.live_limit_secs());
 
         let _ = events_tx.try_send(Event::SessionStarted {
             session_id: id.clone(),
@@ -885,6 +887,7 @@ impl Engine {
             wav_path.clone(),
             events_tx.clone(),
             flags.clone(),
+            live,
         ));
 
         Session {
@@ -892,6 +895,7 @@ impl Engine {
             profile_id: profile.id.clone(),
             audio,
             max_samples: MAX_UTTERANCE_SAMPLES,
+            live_limit_secs,
             cmd_tx: Mutex::new(Some(cmd_tx)),
             events_tx,
             events_rx: Mutex::new(Some(events_rx)),
@@ -981,6 +985,7 @@ impl Engine {
             asr_sample: None,
             general: config.general.clone(),
             term_hits: self.inner.term_hits(),
+            live: Default::default(),
         };
         // Nobody listens to the step events of a rerun.
         let (tx, mut rx) = mpsc::channel(EVENT_BUFFER);
@@ -1275,6 +1280,45 @@ impl Inner {
 
     /// `Config::resolve_engines` with this engine's factories saying which
     /// engines can run.
+    /// The profile's speech engine when it takes the audio while it is
+    /// recorded, with how many dictionary terms it is given.
+    fn live_engine(
+        &self,
+        config: &crate::config::Config,
+        profile: &Profile,
+    ) -> Option<(Arc<dyn crate::providers::AsrProvider>, TermLimit)> {
+        if !profile
+            .steps
+            .iter()
+            .any(|s| matches!(s, crate::config::StepSpec::Asr) && !s.is_off())
+        {
+            return None;
+        }
+        let engines = self.resolve_engines(config, profile);
+        let cfg = config.provider(&engines.asr.id)?;
+        // Only network engines on a streaming route and the system's own
+        // engines can stream; a local model is not built here.
+        let candidate = match cfg.kind {
+            crate::config::ProviderKind::Http => self
+                .registry
+                .route(cfg)
+                .is_some_and(|r| r.asr == crate::models::services::Wire::Live),
+            crate::config::ProviderKind::Native => true,
+            crate::config::ProviderKind::Embedded => false,
+        };
+        if !candidate {
+            return None;
+        }
+        match self.registry.asr(cfg, &config.general) {
+            Ok(p) if p.streams() => Some((p, self.registry.term_limit(cfg))),
+            Ok(_) => None,
+            Err(e) => {
+                tracing::warn!(engine = %cfg.id, error = %e.message, "live engine could not be built");
+                None
+            }
+        }
+    }
+
     fn term_hits(&self) -> Arc<Vec<crate::history::TermHits>> {
         Arc::new(self.history.dictionary_hits().unwrap_or_default())
     }
@@ -1788,6 +1832,7 @@ async fn run_session(
     wav_path: PathBuf,
     tx: mpsc::Sender<Event>,
     flags: Arc<SessionFlags>,
+    live: Option<(Arc<dyn crate::providers::AsrProvider>, TermLimit)>,
 ) {
     let _in_flight = InFlight {
         inner: inner.clone(),
@@ -1797,9 +1842,38 @@ async fn run_session(
     let mut held: Option<HistoryId> = None;
     // The recording's file, written while the audio comes in.
     let mut journal: Option<crate::journal::Journal> = None;
+    // A speech engine that takes the audio while it is recorded.
+    let mut stream = live.and_then(|(provider, limit)| {
+        let config = inner.config.current();
+        let hint = crate::steps::asr::asr_hint(
+            &profile,
+            &config.dictionary,
+            &inner.term_hits(),
+            limit,
+            None,
+        );
+        let tx = tx.clone();
+        let stream = provider.open_live(
+            &hint,
+            Arc::new(move |text| {
+                let _ = tx.try_send(Event::Transcript {
+                    text,
+                    is_final: false,
+                    language: None,
+                });
+            }),
+        );
+        if stream.is_some() {
+            tracing::info!(session = %session_id, "speech streams to its engine while recording");
+        }
+        stream
+    });
     let range = loop {
         match cmd_rx.recv().await {
             Some(SessionCmd::Audio(chunk)) => {
+                if let Some(s) = &stream {
+                    s.push(&chunk);
+                }
                 if journal.is_none() && held.is_none() {
                     if let Some((id, j)) = start_journal(&inner, &profile, &req, &wav_path).await {
                         held = Some(id);
@@ -1900,6 +1974,7 @@ async fn run_session(
         recognised: Default::default(),
         asr_sample: None,
         term_hits: inner.term_hits(),
+        live: Arc::new(Mutex::new(stream.take())),
     };
 
     let engines = inner.resolve_engines(&config, &profile);

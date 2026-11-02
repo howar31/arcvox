@@ -1,9 +1,10 @@
 //! `AsrProvider` over Apple's on-device dictation.
 
-use std::ffi::{c_char, CStr, CString};
+use std::ffi::{c_char, c_void, CStr, CString};
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
+use arcvox_core::providers::live::{LiveInput, LiveStream, Partial};
 use arcvox_core::providers::{AsrHint, AsrProvider, ProviderError};
 use arcvox_core::types::{AudioClip, ErrorCode, Transcript};
 use arcvox_inference::{CancelFlag, CancelOnDrop};
@@ -119,8 +120,127 @@ fn map_code(code: i32, label: &str) -> ProviderError {
     }
 }
 
+/// Hands the text so far to the session's callback.
+unsafe extern "C" fn on_partial(text: *const c_char, user: *mut c_void) {
+    if text.is_null() || user.is_null() {
+        return;
+    }
+    // SAFETY: `user` is the `Partial` boxed in `live_session`, alive until
+    // finish or close has returned; `text` is a NUL-terminated string the
+    // bridge owns for this call.
+    let partial = unsafe { &*(user as *const Partial) };
+    let text = unsafe { CStr::from_ptr(text) }
+        .to_string_lossy()
+        .trim()
+        .to_string();
+    partial(text);
+}
+
+/// One live dictation on this blocking thread: opens it, feeds it the input
+/// as it comes, and ends it with the final text, or closes it when the input
+/// goes away.
+fn live_session(
+    locale: &str,
+    contextual: &str,
+    partial: Partial,
+    mut input: tokio::sync::mpsc::UnboundedReceiver<LiveInput>,
+) -> Result<String, i32> {
+    let loc = CString::new(locale.replace('\0', "")).expect("no interior NUL");
+    let ctx = CString::new(contextual.replace('\0', "")).expect("no interior NUL");
+    let user = Box::into_raw(Box::new(partial));
+    let mut status = 9;
+    // SAFETY: the strings outlive the call; `user` stays valid until it is
+    // freed below, after finish or close has returned.
+    let handle = unsafe {
+        ffi::kw_apple_live_open(
+            loc.as_ptr(),
+            arcvox_core::SAMPLE_RATE as i32,
+            ctx.as_ptr(),
+            on_partial,
+            user as *mut c_void,
+            &mut status,
+        )
+    };
+    let free_user = || {
+        // SAFETY: made by `Box::into_raw` above; the bridge no longer calls back.
+        drop(unsafe { Box::from_raw(user) });
+    };
+    if handle.is_null() {
+        free_user();
+        return Err(status);
+    }
+    let result = loop {
+        match input.blocking_recv() {
+            Some(LiveInput::Audio(samples)) => {
+                // SAFETY: the handle is open; the samples outlive the call.
+                unsafe { ffi::kw_apple_live_push(handle, samples.as_ptr(), samples.len()) };
+            }
+            Some(LiveInput::End) => {
+                let mut out: *mut c_char = std::ptr::null_mut();
+                // SAFETY: the handle is open and released by this call.
+                let code = unsafe { ffi::kw_apple_live_finish(handle, &mut out) };
+                let text = if out.is_null() {
+                    None
+                } else {
+                    // SAFETY: a non-null `out` is a string from the bridge, freed after the copy.
+                    let s = unsafe { CStr::from_ptr(out) }
+                        .to_string_lossy()
+                        .into_owned();
+                    unsafe { ffi::kw_apple_free(out) };
+                    Some(s)
+                };
+                break match (code, text) {
+                    (0, Some(t)) => Ok(t),
+                    (0, None) => Err(9),
+                    (c, _) => Err(c),
+                };
+            }
+            None => {
+                // SAFETY: the handle is open and released by this call.
+                unsafe { ffi::kw_apple_live_close(handle) };
+                break Err(8);
+            }
+        }
+    };
+    free_user();
+    result
+}
+
 #[async_trait]
 impl AsrProvider for AppleAsrProvider {
+    fn open_live(&self, hint: &AsrHint, partial: Partial) -> Option<LiveStream> {
+        let locale = self.locale_for(hint);
+        let contextual = contextual_json(&hint.terms);
+        let label = self.label.clone();
+        let language = hint.language.clone();
+        Some(LiveStream::spawn(move |input| async move {
+            // The bridge blocks its thread, so it must never run on the main thread.
+            let task = tokio::task::spawn_blocking(move || {
+                live_session(&locale, &contextual, partial, input)
+            });
+            // Waits through the whole recording; the recognition step bounds the wait after it.
+            let text = match task.await {
+                Ok(Ok(text)) => text,
+                Ok(Err(code)) => return Err(map_code(code, &label)),
+                Err(join) => {
+                    return Err(ProviderError::new(
+                        ErrorCode::InferenceFailed,
+                        format!("{label}: {join}"),
+                    ))
+                }
+            };
+            Ok(Transcript {
+                text: text.trim().to_string(),
+                language,
+                ..Default::default()
+            })
+        }))
+    }
+
+    fn streams(&self) -> bool {
+        true
+    }
+
     async fn transcribe(
         &self,
         audio: &AudioClip,

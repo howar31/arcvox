@@ -185,6 +185,14 @@
           "word_times": true
         }
       ],
+      "live_routes": [
+        {
+          "models": ["models/gemini-3.5-transcribe-live", "gemini-3.5-transcribe-live"],
+          "wire": "live",
+          "base_url": "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent",
+          "modes": ["verbatim", "smart"]
+        }
+      ],
       "llm": "chat"
     },
     {

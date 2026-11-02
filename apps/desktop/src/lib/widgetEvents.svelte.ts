@@ -15,6 +15,8 @@ export class WidgetFeed {
   open = $state(false);
   /** Recognised text, from the moment it is known until the widget goes. */
   transcript = $state("");
+  /** The transcript came while recording, from an engine that takes the audio as it is recorded. */
+  streamed = $state(false);
   /** The final text, once the processing is over. */
   refined = $state<string | null>(null);
   /** The step the processing is at, while it runs and has one the widget names. */
@@ -97,7 +99,7 @@ export class WidgetFeed {
         if (p.state === "recording" || p.state === "locked" || p.state === "processing") clearTimeout(waiting);
         if (p.state !== "idle" && p.state !== "placing" && p.state !== "moving") this.message = null;
         // The two texts stay through the insertion and the moment after it; a new dictation clears them.
-        if (p.state === "recording" || p.state === "locked" || p.state === "placing" || p.state === "moving") this.refined = null;
+        if (p.state === "recording" || p.state === "locked" || p.state === "placing" || p.state === "moving") { this.refined = null; this.streamed = false; }
         if (p.state !== "processing" && p.state !== "inserting" && this.refined === null) this.transcript = "";
         if (p.state !== "recording" && p.state !== "locked") this.peak = this.lastLevel = 0;
       }),
@@ -116,7 +118,11 @@ export class WidgetFeed {
       onWidgetEnter(() => { this.open = true; }),
       onWidgetHover((over) => { this.over = over; }),
       onWidgetLeave(() => { this.open = false; }),
-      onWidgetTranscript((p) => { this.transcript = p.text; this.refined = null; }),
+      onWidgetTranscript((p) => {
+        this.transcript = p.text;
+        this.refined = null;
+        if (this.state === "recording" || this.state === "locked") this.streamed = true;
+      }),
       onWidgetStep((p) => { const s = labelledStep(p.step); if (s) this.step = s; }),
       onWidgetRefined((p) => {
         if (!this.transcript) return;

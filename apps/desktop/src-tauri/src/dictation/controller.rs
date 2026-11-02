@@ -667,6 +667,11 @@ impl Controller {
                         let level = capture.push(rate, &mono);
                         capture.feed(session);
                         self.deps.ui.level(level.min(1.0));
+                        // A speech engine that takes the audio while it is
+                        // recorded may have a shorter limit of its own.
+                        let max = session
+                            .recording_limit_secs()
+                            .map_or(max, |limit| max.min(limit as f32));
                         if capture.secs() >= max || capture.paused() {
                             self.finish_recording();
                         }
@@ -783,6 +788,24 @@ impl Controller {
     }
 
     fn on_engine_event(&mut self, session_id: SessionId, event: Event) {
+        // The text so far, from an engine that takes the audio while it is recorded.
+        if let Event::Transcript {
+            text,
+            is_final: false,
+            ..
+        } = &event
+        {
+            let current = match &self.state {
+                State::Recording { session, .. } | State::Processing { session, .. } => {
+                    session.id() == &session_id
+                }
+                _ => false,
+            };
+            if current && self.settings.show_transcript {
+                self.deps.ui.transcript(text.clone());
+            }
+            return;
+        }
         let State::Processing { session, .. } = &self.state else {
             return;
         };

@@ -230,6 +230,169 @@ private func race(
     }
 }
 
+// A dictation that takes the audio while it is recorded. `kw_apple_live_open`
+// returns a handle (null on failure, with the status in `status`);
+// `kw_apple_live_push` appends samples without blocking; `kw_apple_live_finish`
+// blocks until the final text and releases the handle; `kw_apple_live_close`
+// stops the session and releases the handle. `partial` gets the text so far,
+// never after finish or close has returned.
+
+public typealias LivePartial = @convention(c) (UnsafePointer<CChar>, UnsafeMutableRawPointer?) -> Void
+
+@available(macOS 26, *)
+private final class LiveDictation: @unchecked Sendable {
+    let analyzer: SpeechAnalyzer
+    let continuation: AsyncStream<AnalyzerInput>.Continuation
+    let format: AVAudioFormat
+    let sampleRate: Double
+    let partial: LivePartial
+    nonisolated(unsafe) let user: UnsafeMutableRawPointer?
+    private let lock = NSLock()
+    private var active = true
+    private var finals = ""
+    private var pending = ""
+    var results: Task<Void, any Error>?
+
+    init(analyzer: SpeechAnalyzer, continuation: AsyncStream<AnalyzerInput>.Continuation,
+         format: AVAudioFormat, sampleRate: Double, partial: LivePartial, user: UnsafeMutableRawPointer?) {
+        self.analyzer = analyzer
+        self.continuation = continuation
+        self.format = format
+        self.sampleRate = sampleRate
+        self.partial = partial
+        self.user = user
+    }
+
+    /// A final result settles its part; a volatile one is the guess for the rest.
+    func take(_ text: String, isFinal: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        if isFinal {
+            finals += text
+            pending = ""
+        } else {
+            pending = text
+        }
+        guard active else { return }
+        let now = finals + pending
+        now.withCString { partial($0, user) }
+    }
+
+    /// Stops the callbacks and returns the text.
+    func end() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        active = false
+        return finals.isEmpty ? pending : finals
+    }
+}
+
+@_cdecl("kw_apple_live_open")
+public func kw_apple_live_open(
+    _ locale: UnsafePointer<CChar>,
+    _ sampleRate: Int32,
+    _ contextualJson: UnsafePointer<CChar>?,
+    _ partial: LivePartial,
+    _ user: UnsafeMutableRawPointer?,
+    _ status: UnsafeMutablePointer<Int32>
+) -> UnsafeMutableRawPointer? {
+    status.pointee = 3
+    guard #available(macOS 26, *) else { return nil }
+    guard sampleRate > 0 else {
+        status.pointee = 9
+        return nil
+    }
+    let id = String(cString: locale)
+    let strings = decodeStrings(contextualJson)
+    nonisolated(unsafe) let user = user
+    let opened = runBlocking { () async -> (Int32, LiveDictation?) in
+        do {
+            guard let loc = await DictationTranscriber.supportedLocale(equivalentTo: Locale(identifier: id)) else {
+                return (2, nil)
+            }
+            let transcriber = DictationTranscriber(locale: loc, preset: .progressiveLongDictation)
+            guard await AssetInventory.status(forModules: [transcriber]) == .installed else { return (1, nil) }
+            let analyzer = SpeechAnalyzer(modules: [transcriber])
+            if !strings.isEmpty {
+                let ctx = AnalysisContext()
+                ctx.contextualStrings = [.general: Array(strings.prefix(100))]
+                try await analyzer.setContext(ctx)
+            }
+            guard let fmt = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
+                return (9, nil)
+            }
+            let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
+            let live = LiveDictation(
+                analyzer: analyzer, continuation: continuation, format: fmt,
+                sampleRate: Double(sampleRate), partial: partial, user: user)
+            let finals = transcriber.results
+            live.results = Task {
+                for try await result in finals {
+                    live.take(String(result.text.characters), isFinal: result.isFinal)
+                }
+            }
+            try await analyzer.start(inputSequence: stream)
+            return (0, live)
+        } catch {
+            return (9, nil)
+        }
+    }
+    guard let (code, live) = opened, let live else {
+        status.pointee = opened?.0 ?? 9
+        return nil
+    }
+    status.pointee = code
+    return Unmanaged.passRetained(live).toOpaque()
+}
+
+@_cdecl("kw_apple_live_push")
+public func kw_apple_live_push(_ handle: UnsafeMutableRawPointer, _ pcm: UnsafePointer<Float>, _ len: Int) {
+    guard #available(macOS 26, *), len > 0 else { return }
+    let live = Unmanaged<LiveDictation>.fromOpaque(handle).takeUnretainedValue()
+    let samples = Array(UnsafeBufferPointer(start: pcm, count: len))
+    guard let buffer = convert(samples, sampleRate: live.sampleRate, to: live.format) else { return }
+    live.continuation.yield(AnalyzerInput(buffer: buffer))
+}
+
+@_cdecl("kw_apple_live_finish")
+public func kw_apple_live_finish(
+    _ handle: UnsafeMutableRawPointer,
+    _ out: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+) -> Int32 {
+    out.pointee = nil
+    guard #available(macOS 26, *) else { return 3 }
+    let live = Unmanaged<LiveDictation>.fromOpaque(handle).takeRetainedValue()
+    let code = runBlocking { () async -> Int32 in
+        live.continuation.finish()
+        do {
+            try await live.analyzer.finalizeAndFinishThroughEndOfInput()
+            // The last results arrive after the input is finished.
+            try await live.results?.value
+            return 0
+        } catch {
+            return 9
+        }
+    } ?? 9
+    let text = live.end()
+    if code != 0 {
+        live.results?.cancel()
+        Task { await live.analyzer.cancelAndFinishNow() }
+        return code
+    }
+    out.pointee = cString(text)
+    return out.pointee == nil ? 9 : 0
+}
+
+@_cdecl("kw_apple_live_close")
+public func kw_apple_live_close(_ handle: UnsafeMutableRawPointer) {
+    guard #available(macOS 26, *) else { return }
+    let live = Unmanaged<LiveDictation>.fromOpaque(handle).takeRetainedValue()
+    _ = live.end()
+    live.continuation.finish()
+    live.results?.cancel()
+    Task { await live.analyzer.cancelAndFinishNow() }
+}
+
 private enum Step: Sendable {
     case text(String)
     case inputDone

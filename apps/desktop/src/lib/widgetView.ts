@@ -104,6 +104,10 @@ export interface PanelView {
   title?: string;
   /** Running text without a title: the recognised text, a hint. */
   text?: string;
+  /** The text so far, while the recording goes on. */
+  live?: boolean;
+  /** At full width: the text came while recording, so the panel keeps the width it opened with. */
+  wide?: boolean;
   /** The recognised text and the final text it turned into. */
   rewrite?: { from: string; to: string };
   body?: string;
@@ -130,12 +134,15 @@ const TO_ENGINES = new Set(["widget.engine_unavailable", "widget.model_missing",
 
 /**
  * What the panel shows, or null when the widget needs no panel. `refined` is the final text once the
- * processing is over; `hint` is true while a hands-free dictation has just begun.
+ * processing is over; `hint` is true while a hands-free dictation has just begun; `streamed` is true when
+ * the text came while recording.
  */
-export function panelView(state: WidgetState, message: MessagePayload | null, transcript: string, refined: string | null, hint: boolean): PanelView | null {
+export function panelView(state: WidgetState, message: MessagePayload | null, transcript: string, refined: string | null, hint: boolean, streamed = false): PanelView | null {
   if (!message) {
-    if (transcript && refined !== null) return { caption: t("panel.final"), rewrite: { from: transcript, to: refined }, actions: [], close: false };
-    if (state === "processing" && transcript) return { caption: t("panel.recognised"), text: transcript, actions: [], close: false };
+    const wide = streamed ? { wide: true } : {};
+    if (transcript && refined !== null) return { caption: t("panel.final"), rewrite: { from: transcript, to: refined }, ...wide, actions: [], close: false };
+    if (state === "processing" && transcript) return { caption: t("panel.recognised"), text: transcript, ...wide, actions: [], close: false };
+    if ((state === "recording" || state === "locked") && transcript) return { caption: t("panel.recognised"), text: transcript, live: true, wide: true, actions: [], close: false };
     if (state === "locked" && hint) return { text: t("widget.locked"), actions: [], close: false };
     // Shown from the settings window to be positioned: the panel is where it will be, and says how the widget settles.
     if (state === "placing") return { title: t("panel.placing"), body: PLACING_HINTS.map((key) => t(key)).join("\n"), actions: [], close: false };

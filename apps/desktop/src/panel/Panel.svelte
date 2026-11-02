@@ -32,7 +32,7 @@
   const view = $derived.by(() => {
     void feed.language;
     void feed.scale;
-    return panelView(feed.state, feed.message, feed.transcript, feed.refined, feed.hint);
+    return panelView(feed.state, feed.message, feed.transcript, feed.refined, feed.hint, feed.streamed);
   });
   // What is drawn: the content, or the last content while the panel closes.
   let kept = $state<typeof view>(null);
@@ -76,6 +76,13 @@
     panelFit(r.width, r.height).catch(() => {});
   });
 
+  // The text so far keeps its newest line in view.
+  let textBox = $state<HTMLElement>();
+  $effect(() => {
+    void kept?.text;
+    if (kept?.live && textBox) textBox.scrollTop = textBox.scrollHeight;
+  });
+
   const LABELS: Record<PanelAction, string> = { copy: "widget.copy", copy_detail: "panel.copy_detail", open_engines: "panel.open_settings", open_history: "panel.open_history", open_permissions: "panel.open_permissions" };
 
   function run(action: PanelAction) {
@@ -95,7 +102,7 @@
 </script>
 
 {#if kept}
-  <div class="panel" class:open data-edge={edge} bind:this={box} style:width={held ? held.w + "px" : null} style:height={held ? held.h + "px" : null}>
+  <div class="panel" class:open class:wide={kept.wide} data-edge={edge} bind:this={box} style:width={held ? held.w + "px" : null} style:height={held ? held.h + "px" : null}>
     {#if kept.caption}<div class="caption">{kept.caption}</div>{/if}
     {#if kept.title}
       <div class="head">
@@ -103,7 +110,7 @@
         {#if kept.close}<button type="button" class="close" onclick={dismiss} aria-label={t("widget.dismiss")} title={t("widget.dismiss")}><Icon name="x" size={14 * feed.scale} /></button>{/if}
       </div>
     {/if}
-    {#if kept.text}<div class="text">{kept.text}</div>{/if}
+    {#if kept.text}<div class="text" class:live={kept.live} bind:this={textBox}>{kept.text}</div>{/if}
     {#if kept.rewrite}
       <div class="text">{#key pair}<Rewrite from={kept.rewrite.from} to={kept.rewrite.to} animate={!still.matches} ondone={() => { held = null; }} />{/key}</div>
     {/if}
@@ -117,7 +124,7 @@
     {/if}
   </div>
   {#if kept.rewrite}
-    <div class="panel ghost" bind:this={ghost} aria-hidden="true"><div class="caption">{kept.caption}</div><div class="text">{kept.rewrite.to}</div></div>
+    <div class="panel ghost" class:wide={kept.wide} bind:this={ghost} aria-hidden="true"><div class="caption">{kept.caption}</div><div class="text">{kept.rewrite.to}</div></div>
   {/if}
 {/if}
 
@@ -134,6 +141,9 @@
     .panel, .panel.open { transition: none; }
   }
   .ghost { visibility: hidden; pointer-events: none; }
+  /* The text so far: full width from its first word, so the panel only grows in height. */
+  .panel.wide { width: calc(372 * var(--u)); }
+  .text.live { color: var(--pill-ink-2); }
   .caption { font-size: calc(11 * var(--u)); color: var(--pill-ink-2); margin-bottom: calc(6 * var(--u)); }
   .head { display: flex; align-items: flex-start; gap: calc(12 * var(--u)); }
   .title { flex: 1; font-weight: 600; }

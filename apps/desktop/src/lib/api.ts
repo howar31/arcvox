@@ -22,13 +22,15 @@ export interface ProviderConfig {
   /** The speech engine asks when each word was said; the service then takes no dictionary terms. */
   word_times?: boolean;
 }
-export type Wire = "transcriptions" | "chat_audio" | "chat" | "interactions";
+export type Wire = "transcriptions" | "chat_audio" | "chat" | "interactions" | "live";
 export interface ModelRoute { models: string[]; wire: Wire; base_url: string; modes?: string[]; word_times?: boolean }
 export interface ServicePreset {
   id: string; label: string; kind: "cloud" | "local";
   base_url?: string | null; port?: number | null; path?: string | null;
   key_required: boolean; key_url?: string | null; terms_url?: string | null;
   asr?: Wire | null; llm?: Wire | null; asr_routes?: ModelRoute[];
+  /** Speech models that take the audio while it is recorded. */
+  live_routes?: ModelRoute[];
   suggested: { asr?: string | null; llm?: string | null };
 }
 export interface LocalService { id: string; label: string; base_url: string; running: boolean; models: string[] }

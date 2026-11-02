@@ -13,6 +13,7 @@ use crate::providers::factory::ProviderFactory;
 use crate::providers::http_asr::HttpAsrProvider;
 use crate::providers::http_llm::HttpLlmProvider;
 use crate::providers::interactions_asr::InteractionsAsrProvider;
+use crate::providers::live_asr::LiveAsrProvider;
 use crate::providers::{AsrProvider, LlmProvider, ProviderError};
 use crate::secrets::SecretStore;
 use crate::types::{ErrorCode, ProviderId};
@@ -154,7 +155,9 @@ impl ProviderRegistry {
             ProviderKind::Embedded => TermLimit::Bytes(PROMPT_TERM_BYTES),
             ProviderKind::Http => match self.route(cfg).map(|r| r.asr) {
                 Some(Wire::Interactions) if cfg.asks_word_times() => TermLimit::Count(0),
-                Some(Wire::Interactions | Wire::ChatAudio) => TermLimit::Count(LIST_TERMS),
+                Some(Wire::Interactions | Wire::ChatAudio | Wire::Live) => {
+                    TermLimit::Count(LIST_TERMS)
+                }
                 _ => TermLimit::Bytes(PROMPT_TERM_BYTES),
             },
         }
@@ -286,6 +289,16 @@ impl ProviderRegistry {
                 let model = cfg.model.clone().unwrap_or_default();
                 let timeout = Duration::from_secs(general.asr_timeout_secs);
                 match r.asr {
+                    Wire::Live => Arc::new(LiveAsrProvider::new(
+                        &r.asr_base,
+                        model,
+                        key.clone(),
+                        cfg.extra_headers.clone(),
+                        cfg.label.clone(),
+                        timeout,
+                        cfg.capabilities.hotwords,
+                        cfg.transcribe_mode.clone(),
+                    )),
                     Wire::Interactions => Arc::new(InteractionsAsrProvider::new(
                         self.client.clone(),
                         &r.asr_base,

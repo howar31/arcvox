@@ -13,6 +13,8 @@ pub mod http_asr;
 pub mod http_common;
 pub mod http_llm;
 pub mod interactions_asr;
+pub mod live;
+pub mod live_asr;
 pub mod probe;
 pub mod registry;
 
@@ -81,6 +83,23 @@ pub trait AsrProvider: Send + Sync {
         Ok(())
     }
     async fn unload(&self) {}
+
+    /// Opens a session that takes the audio while it is recorded, for an
+    /// engine that works that way; `partial` gets the text so far. Must be
+    /// called on a tokio runtime.
+    fn open_live(&self, _hint: &AsrHint, _partial: live::Partial) -> Option<live::LiveStream> {
+        None
+    }
+
+    /// Whether `open_live` opens a session.
+    fn streams(&self) -> bool {
+        false
+    }
+
+    /// The longest recording one session of a streaming engine takes.
+    fn live_limit_secs(&self) -> Option<u32> {
+        None
+    }
 }
 
 #[async_trait]

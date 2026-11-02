@@ -29,6 +29,10 @@ pub enum Wire {
     /// `POST {base}/interactions`, Gemini's own format. Only by model, through
     /// `ServicePreset::asr_routes`.
     Interactions,
+    /// A WebSocket session at `base` that takes the audio while it is
+    /// recorded (Gemini's Live API). Only by model, through
+    /// `ServicePreset::live_routes`.
+    Live,
 }
 
 /// Speech models of a service that take another way than the service's `asr`.
@@ -80,8 +84,20 @@ pub struct ServicePreset {
     /// How speech goes to the service; none when it does no speech recognition.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asr: Option<Wire>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "known_routes"
+    )]
     pub asr_routes: Vec<ModelRoute>,
+    /// Speech models that take the audio while it is recorded. A field of
+    /// their own, so builds that do not know this format skip them whole.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "known_routes"
+    )]
+    pub live_routes: Vec<ModelRoute>,
     /// How text goes to the service; none when it does no text rewriting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub llm: Option<Wire>,
@@ -111,12 +127,37 @@ impl ServicePreset {
         let base_ok = self
             .base()
             .is_some_and(|u| matches!(u.scheme(), "http" | "https"));
-        let wires_ok = !matches!(self.asr, Some(Wire::Chat | Wire::Interactions))
-            && self.asr_routes.iter().all(|r| r.wire != Wire::Chat)
+        let wires_ok = !matches!(self.asr, Some(Wire::Chat | Wire::Interactions | Wire::Live))
+            && self
+                .asr_routes
+                .iter()
+                .all(|r| !matches!(r.wire, Wire::Chat | Wire::Live))
+            && self.live_routes.iter().all(|r| r.wire == Wire::Live)
             && matches!(self.llm, None | Some(Wire::Chat))
             && (self.asr.is_some() || self.llm.is_some());
         id_ok && base_ok && wires_ok
     }
+
+    /// The route of a speech model of its own, if it has one.
+    pub fn model_route(&self, model: &str) -> Option<&ModelRoute> {
+        self.asr_routes
+            .iter()
+            .chain(&self.live_routes)
+            .find(|r| r.models.iter().any(|m| m == model))
+    }
+}
+
+/// Routes as listed, leaving out the ones this build cannot read (a format
+/// added later), so the rest of the service still works.
+fn known_routes<'de, D>(d: D) -> Result<Vec<ModelRoute>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Vec::<serde_json::Value>::deserialize(d)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|v| serde_json::from_value(v).ok())
+        .collect())
 }
 
 /// Finds a service by id: the catalogue in use first, then the one built
@@ -150,11 +191,7 @@ pub fn route(cfg: &ProviderConfig, lookup: Option<&dyn ServiceLookup>) -> Option
         .and_then(|id| lookup.and_then(|l| l.service(id)));
     if let Some(s) = found {
         if let Some(base) = s.base() {
-            let model = cfg.model.as_deref().unwrap_or_default();
-            let own = s
-                .asr_routes
-                .iter()
-                .find(|r| r.models.iter().any(|m| m == model));
+            let own = s.model_route(cfg.model.as_deref().unwrap_or_default());
             return Some(Route {
                 asr_base: own.map_or_else(|| base.clone(), |r| r.base_url.clone()),
                 base,
@@ -191,6 +228,26 @@ mod tests {
         fn services(&self) -> Vec<ServicePreset> {
             vec![self.0.clone()]
         }
+    }
+
+    #[test]
+    fn a_streaming_model_takes_its_live_route_and_unknown_routes_are_skipped() {
+        let gemini = preset(
+            r#"{"id":"gemini","label":"Gemini","kind":"cloud",
+                "base_url":"https://g.example/v1beta/openai/","asr":"chat_audio","llm":"chat",
+                "asr_routes":[{"models":["t"],"wire":"later_format","base_url":"https://g.example/x"},
+                              {"models":["u"],"wire":"interactions","base_url":"https://g.example/v1beta/"}],
+                "live_routes":[{"models":["models/l"],"wire":"live",
+                                "base_url":"wss://g.example/ws","modes":["verbatim","smart"]}]}"#,
+        );
+        assert!(gemini.valid());
+        assert_eq!(gemini.asr_routes.len(), 1);
+        let lookup = One(gemini);
+        let mut cfg = http(Some("gemini"), None);
+        cfg.model = Some("models/l".into());
+        let live = route(&cfg, Some(&lookup)).unwrap();
+        assert_eq!(live.asr, Wire::Live);
+        assert_eq!(live.asr_base.as_str(), "wss://g.example/ws");
     }
 
     #[test]
