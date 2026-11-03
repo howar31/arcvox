@@ -130,6 +130,15 @@ impl Params {
         self.raw.abort_callback_user_data = flag as *const _ as *mut c_void;
         self
     }
+
+    /// The flag given to `abort_flag`, null without one.
+    fn abort_flag_ptr(&self) -> *const std::sync::atomic::AtomicBool {
+        if self.raw.abort_callback.is_some() {
+            self.raw.abort_callback_user_data as *const _
+        } else {
+            std::ptr::null()
+        }
+    }
 }
 
 unsafe extern "C" fn abort_requested(data: *mut c_void) -> bool {
@@ -149,21 +158,26 @@ impl State<'_> {
         if samples.is_empty() {
             return Err("no samples".into());
         }
-        // SAFETY: valid context and state; the parameters' strings live in `params`.
+        let flag = params.abort_flag_ptr();
+        // SAFETY: valid context and state; the parameters' strings live in
+        // `params`, and so does the abort flag for the whole run.
         let r = unsafe {
-            sys::whisper_full_with_state(
-                self.ctx.ptr.as_ptr(),
-                self.ptr.as_ptr(),
-                params.raw,
-                samples.as_ptr(),
-                samples.len() as i32,
-            )
+            super::with_abort_flag(flag, || {
+                sys::whisper_full_with_state(
+                    self.ctx.ptr.as_ptr(),
+                    self.ptr.as_ptr(),
+                    params.raw,
+                    samples.as_ptr(),
+                    samples.len() as i32,
+                )
+            })
         };
         match r {
             0 => Ok(()),
-            -1 => Err("the spectrogram could not be computed".into()),
-            7 => Err("encoding failed".into()),
-            8 => Err("decoding failed".into()),
+            -2 => Err("the spectrogram could not be computed".into()),
+            -3 => Err("language detection failed".into()),
+            -6 => Err("encoding failed".into()),
+            -9..=-7 => Err("decoding failed".into()),
             n => Err(format!("decoding failed ({n})")),
         }
     }
