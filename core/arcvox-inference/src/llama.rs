@@ -1,21 +1,13 @@
 //! llama.cpp language model provider.
-use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use arcvox_core::providers::{LlmOptions, LlmProvider, ProviderError};
 use arcvox_core::types::{ChatMessage, ErrorCode};
 use async_trait::async_trait;
-use llama_cpp_2::context::params::LlamaContextParams;
-use llama_cpp_2::llama_backend::LlamaBackend;
-use llama_cpp_2::llama_batch::LlamaBatch;
-use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaModel};
-use llama_cpp_2::sampling::LlamaSampler;
-use llama_cpp_2::{send_logs_to_tracing, LogOptions};
-
 use crate::chat::{self, role_name};
+use crate::native::llama::{Batch, Context, Model, Sampler};
 use crate::{CancelFlag, CancelOnDrop};
 
 /// Context window used for every completion.
@@ -27,19 +19,9 @@ const TEMPLATE_MARGIN: usize = 64;
 const DEFAULT_MAX_TOKENS: u32 = 1024;
 const SEED: u32 = 1234;
 
-/// llama.cpp allows a single backend per process.
-pub(crate) fn backend() -> &'static LlamaBackend {
-    static BACKEND: OnceLock<LlamaBackend> = OnceLock::new();
-    BACKEND.get_or_init(|| {
-        // Routes llama.cpp and ggml logs to `tracing` instead of stderr.
-        send_logs_to_tracing(LogOptions::default());
-        LlamaBackend::init().expect("llama backend initialised once per process")
-    })
-}
-
 #[derive(Default)]
 struct SharedModel {
-    slot: Mutex<Option<Arc<LlamaModel>>>,
+    slot: Mutex<Option<Arc<Model>>>,
     /// Held for the whole load so concurrent callers never load the model twice,
     /// while `slot` stays free for `unload`.
     loading: Mutex<()>,
@@ -64,7 +46,7 @@ impl LlamaLlmProvider {
 
     /// Loads the model in a blocking task. Not bounded by the LLM timeout: a
     /// first load is not an inference stall.
-    async fn model(&self) -> Result<Arc<LlamaModel>, ProviderError> {
+    async fn model(&self) -> Result<Arc<Model>, ProviderError> {
         let loader = Loader {
             path: self.path.clone(),
             label: self.label.clone(),
@@ -88,7 +70,7 @@ struct Loader {
 
 impl Loader {
     /// Returns the loaded model, loading it on first use.
-    fn model(&self) -> Result<Arc<LlamaModel>, ProviderError> {
+    fn model(&self) -> Result<Arc<Model>, ProviderError> {
         let _loading = self.model.loading.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(m) = self
             .model
@@ -109,7 +91,7 @@ pub(crate) fn load_model(
     path: &Path,
     label: &str,
     use_gpu: bool,
-) -> Result<LlamaModel, ProviderError> {
+) -> Result<Model, ProviderError> {
     if !path.is_file() {
         return Err(ProviderError::new(
             ErrorCode::ModelMissing,
@@ -117,8 +99,7 @@ pub(crate) fn load_model(
         )
         .with_hint("download or import the model in Settings > Engines and models"));
     }
-    let params = LlamaModelParams::default().with_n_gpu_layers(if use_gpu { u32::MAX } else { 0 });
-    LlamaModel::load_from_file(backend(), path, &params).map_err(|e| {
+    Model::load(path, if use_gpu { u32::MAX } else { 0 }).map_err(|e| {
         ProviderError::new(
             ErrorCode::ModelCorrupt,
             format!("{label}: cannot load model ({e})"),
@@ -131,19 +112,19 @@ fn inference_failed(label: &str, e: impl std::fmt::Display) -> ProviderError {
     ProviderError::new(ErrorCode::InferenceFailed, format!("{label}: {e}"))
 }
 
-pub(crate) fn prompt(model: &LlamaModel, messages: &[ChatMessage]) -> String {
-    let Ok(tpl) = model.chat_template(None) else {
+pub(crate) fn prompt(model: &Model, messages: &[ChatMessage]) -> String {
+    let Some(tpl) = model.chat_template() else {
         return chat::chatml(messages);
     };
-    // Contents are NUL-free (see `generate`), so building a message cannot fail.
-    let msgs: Vec<LlamaChatMessage> = messages
+    // Contents are NUL-free (see `generate`), so rendering cannot fail on them.
+    let msgs: Vec<(&str, &str)> = messages
         .iter()
-        .filter_map(|m| LlamaChatMessage::new(role_name(m.role).into(), m.content.clone()).ok())
+        .map(|m| (role_name(m.role), m.content.as_str()))
         .collect();
     let rendered = model
         .apply_chat_template(&tpl, &msgs, true)
         .unwrap_or_else(|_| chat::chatml(messages));
-    without_thinking(&tpl.to_string().unwrap_or_default(), rendered)
+    without_thinking(&tpl, rendered)
 }
 
 /// The empty reasoning block a thinking model's template writes at the
@@ -163,7 +144,7 @@ fn without_thinking(template: &str, rendered: String) -> String {
 }
 
 fn generate(
-    model: &LlamaModel,
+    model: &Model,
     label: &str,
     messages: Vec<ChatMessage>,
     opts: &LlmOptions,
@@ -199,7 +180,7 @@ fn generate(
         .collect();
     let count = |s: &str| {
         model
-            .str_to_token(s, AddBos::Never)
+            .tokenize(s, false)
             .map(|t| t.len())
             .unwrap_or(s.len() / 2)
     };
@@ -209,7 +190,7 @@ fn generate(
     let messages = chat::fit_messages(messages, budget, count);
     let prompt = prompt(model, &messages);
     let tokens = model
-        .str_to_token(&prompt, AddBos::Always)
+        .tokenize(&prompt, true)
         .map_err(|e| inference_failed(label, e))?;
     if tokens.is_empty() || tokens.len() >= N_CTX as usize {
         return Err(inference_failed(
@@ -221,16 +202,10 @@ fn generate(
     let threads = std::thread::available_parallelism()
         .map(|n| n.get().min(4) as i32)
         .unwrap_or(4);
-    let ctx_params = LlamaContextParams::default()
-        .with_n_ctx(NonZeroU32::new(N_CTX))
-        .with_n_batch(N_BATCH as u32)
-        .with_n_threads(threads)
-        .with_n_threads_batch(threads);
-    let mut ctx = model
-        .new_context(backend(), ctx_params)
+    let mut ctx = Context::new(model, N_CTX, N_BATCH as u32, threads)
         .map_err(|e| inference_failed(label, e))?;
 
-    let mut batch = LlamaBatch::new(N_BATCH, 1);
+    let mut batch = Batch::new(N_BATCH, 1);
     let last = tokens.len() - 1;
     for (start, chunk) in (0..).step_by(N_BATCH).zip(tokens.chunks(N_BATCH)) {
         stop()?;
@@ -245,11 +220,11 @@ fn generate(
             .map_err(|e| inference_failed(label, e))?;
     }
 
-    let mut sampler = LlamaSampler::chain_simple([
-        LlamaSampler::penalties(model.n_vocab(), 64, 1.1, 0.0, 0.0),
-        LlamaSampler::top_p(0.9, 1),
-        LlamaSampler::temp(opts.temperature),
-        LlamaSampler::dist(SEED),
+    let mut sampler = Sampler::chain([
+        Sampler::penalties(model.n_vocab(), 64, 1.1, 0.0, 0.0),
+        Sampler::top_p(0.9, 1),
+        Sampler::temp(opts.temperature),
+        Sampler::dist(SEED),
     ]);
     let mut decoder = encoding_rs::UTF_8.new_decoder();
     let mut out = String::new();
@@ -258,11 +233,11 @@ fn generate(
         stop()?;
         // `sample` also accepts the token into the sampler chain.
         let token = sampler.sample(&ctx, batch.n_tokens() - 1);
-        if model.is_eog_token(token) {
+        if model.is_eog(token) {
             return Ok(out);
         }
         let piece = model
-            .token_to_piece(token, &mut decoder, true, None)
+            .token_piece(token, &mut decoder, true)
             .map_err(|e| inference_failed(label, e))?;
         out.push_str(&piece);
         if pos + 1 == end {

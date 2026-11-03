@@ -7,16 +7,15 @@ description = "Arcvox in-process speech and language model providers"
 
 [features]
 default = []
-metal = ["whisper-rs/metal", "llama-cpp-2/metal"]
-vulkan = ["whisper-rs/vulkan", "llama-cpp-2/vulkan"]
-cuda = ["whisper-rs/cuda", "llama-cpp-2/cuda"]
+metal = ["arcvox-ggml-sys/metal"]
+vulkan = ["arcvox-ggml-sys/vulkan"]
+cuda = ["arcvox-ggml-sys/cuda"]
 # The quality measurement command (`arcvox-eval`).
 cli = ["reqwest", "serde_json"]
 
 [dependencies]
 arcvox-core = { path = "../arcvox-core" }
-whisper-rs = { version = "=0.16.0", features = ["tracing_backend"] }
-llama-cpp-2 = { version = "=0.1.157", features = ["mtmd"] }
+arcvox-ggml-sys = { path = "../arcvox-ggml-sys" }
 encoding_rs = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 async-trait = "0.1"

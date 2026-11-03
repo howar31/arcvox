@@ -1,23 +1,20 @@
 //! whisper.cpp speech recognition provider.
-use std::ffi::c_void;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use arcvox_core::providers::{AsrHint, AsrProvider, ProviderError};
 use arcvox_core::segments::join_segments;
 use arcvox_core::types::{AudioClip, ErrorCode, Transcript, TranscriptSegment, TranscriptToken};
 use async_trait::async_trait;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
-
+use crate::native::whisper::{lang_str, Params, Whisper};
 use crate::{lang, CancelFlag, CancelOnDrop};
 
 #[derive(Default)]
 struct SharedContext {
-    slot: Mutex<Option<Arc<WhisperContext>>>,
+    slot: Mutex<Option<Arc<Whisper>>>,
     /// Held for the whole load so concurrent callers never load the model twice,
     /// while `slot` stays free for `unload`.
     loading: Mutex<()>,
@@ -33,9 +30,6 @@ pub struct WhisperAsrProvider {
 
 impl WhisperAsrProvider {
     pub fn new(path: PathBuf, label: String, timeout: Duration, use_gpu: bool) -> Self {
-        // Routes whisper.cpp and ggml logs to `tracing` instead of stderr.
-        static LOG_HOOKS: Once = Once::new();
-        LOG_HOOKS.call_once(whisper_rs::install_logging_hooks);
         Self {
             path,
             label,
@@ -56,7 +50,7 @@ impl WhisperAsrProvider {
 
     /// Loads the model in a blocking task. Not bounded by the ASR timeout: the
     /// abort flag cannot stop a load, and a first load is not an inference stall.
-    async fn context(&self) -> Result<Arc<WhisperContext>, ProviderError> {
+    async fn context(&self) -> Result<Arc<Whisper>, ProviderError> {
         let loader = self.loader();
         match tokio::task::spawn_blocking(move || loader.context()).await {
             Ok(r) => r,
@@ -78,7 +72,7 @@ struct Loader {
 
 impl Loader {
     /// Returns the loaded context, loading it on first use.
-    fn context(&self) -> Result<Arc<WhisperContext>, ProviderError> {
+    fn context(&self) -> Result<Arc<Whisper>, ProviderError> {
         let _loading = self.ctx.loading.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(ctx) = self
             .ctx
@@ -95,7 +89,7 @@ impl Loader {
     }
 }
 
-fn load_context(path: &Path, label: &str, use_gpu: bool) -> Result<WhisperContext, ProviderError> {
+fn load_context(path: &Path, label: &str, use_gpu: bool) -> Result<Whisper, ProviderError> {
     if !path.is_file() {
         return Err(ProviderError::new(
             ErrorCode::ModelMissing,
@@ -110,13 +104,10 @@ fn load_context(path: &Path, label: &str, use_gpu: bool) -> Result<WhisperContex
         )
         .with_hint("re-download or re-import the model in Settings > Engines and models")
     })?;
-    let mut params = WhisperContextParameters::default();
-    params.use_gpu(use_gpu);
-    params.flash_attn(use_gpu);
-    WhisperContext::new_with_params(path, params).map_err(|e| {
+    Whisper::load(path, use_gpu, use_gpu).map_err(|e| {
         ProviderError::new(
             ErrorCode::ModelCorrupt,
-            format!("{label}: cannot load model ({e:?})"),
+            format!("{label}: cannot load model ({e})"),
         )
         .with_hint("re-download or re-import the model in Settings > Engines and models")
     })
@@ -169,77 +160,60 @@ fn check_header(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-unsafe extern "C" fn abort_requested(data: *mut c_void) -> bool {
-    // SAFETY: `data` is the AtomicBool pointer installed in `run`.
-    unsafe { (*(data as *const AtomicBool)).load(Ordering::SeqCst) }
-}
-
 fn run(
-    ctx: &WhisperContext,
+    ctx: &Whisper,
     samples: &[f32],
     lang: Option<&'static str>,
     prompt: Option<&str>,
     abort: CancelFlag,
 ) -> Result<Transcript, String> {
-    let mut state = ctx.create_state().map_err(|e| format!("{e:?}"))?;
-    let mut p = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-    p.set_language(lang);
+    let mut state = ctx.state()?;
+    let mut p = Params::greedy(1);
+    p.language(lang);
     if lang.is_none() {
-        p.set_detect_language(true);
+        p.detect_language(true);
     }
     if let Some(pr) = prompt {
-        // whisper.cpp takes a C string; interior NUL bytes would panic in the binding.
-        p.set_initial_prompt(&pr.replace('\0', ""));
+        p.initial_prompt(pr);
     }
-    p.set_print_progress(false);
-    p.set_print_special(false);
-    p.set_print_realtime(false);
-    p.set_print_timestamps(false);
-    p.set_suppress_blank(true);
-    p.set_no_speech_thold(0.6);
-    p.set_n_threads(
-        std::thread::available_parallelism()
-            .map(|n| n.get().min(4) as i32)
-            .unwrap_or(4),
-    );
-    // set_abort_callback_safe in whisper-rs 0.16 casts the boxed closure to the
-    // wrong type, so the flag is wired through the raw callback instead.
-    // SAFETY: the pointer targets the AtomicBool owned by `abort`, which lives
-    // until this function returns, after `state.full` has finished.
-    unsafe {
-        p.set_abort_callback(Some(abort_requested));
-        p.set_abort_callback_user_data(Arc::as_ptr(&abort.0) as *mut c_void);
-    }
-    state.full(p, samples).map_err(|e| format!("{e:?}"))?;
+    p.quiet()
+        .suppress_blank(true)
+        .no_speech_thold(0.6)
+        .n_threads(
+            std::thread::available_parallelism()
+                .map(|n| n.get().min(4) as i32)
+                .unwrap_or(4),
+        )
+        // `abort` lives until this function returns, after `full` has finished.
+        .abort_flag(&abort.0);
+    state.full(&p, samples)?;
     let mut segments = Vec::new();
-    for seg in state.as_iter() {
-        let mut tokens = Vec::with_capacity(seg.n_tokens() as usize);
-        for i in 0..seg.n_tokens() {
-            let Some(tok) = seg.get_token(i) else { break };
-            let text = tok.to_str_lossy().map_err(|e| format!("{e:?}"))?;
+    for i in 0..state.n_segments() {
+        let n = state.n_tokens(i);
+        let mut tokens = Vec::with_capacity(n.max(0) as usize);
+        for t in 0..n {
+            let text = state.token_text(i, t);
             // Special tokens (segment start, timestamps) carry no speech.
             if text.starts_with("[_") && text.ends_with(']') {
                 continue;
             }
             tokens.push(TranscriptToken {
-                text: text.into_owned(),
-                p: tok.token_probability(),
+                text,
+                p: state.token_p(i, t),
             });
         }
+        let (t0, t1) = state.segment_times(i);
         segments.push(TranscriptSegment {
-            text: seg
-                .to_str_lossy()
-                .map_err(|e| format!("{e:?}"))?
-                .into_owned(),
+            text: state.segment_text(i),
             // whisper.cpp reports centiseconds.
-            start_ms: u32::try_from(seg.start_timestamp().max(0) * 10).unwrap_or(u32::MAX),
-            end_ms: u32::try_from(seg.end_timestamp().max(0) * 10).unwrap_or(u32::MAX),
-            no_speech: seg.no_speech_probability(),
+            start_ms: u32::try_from(t0.max(0) * 10).unwrap_or(u32::MAX),
+            end_ms: u32::try_from(t1.max(0) * 10).unwrap_or(u32::MAX),
+            no_speech: state.segment_no_speech(i),
             tokens,
         });
     }
     let (text, _) = join_segments(&segments);
-    let language = whisper_rs::get_lang_str(state.full_lang_id_from_state()).map(str::to_string);
+    let language = lang_str(state.lang_id()).map(str::to_string);
     Ok(Transcript {
         text,
         language,

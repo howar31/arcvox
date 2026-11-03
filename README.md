@@ -42,7 +42,7 @@ npm ci
 npx tauri build
 ```
 
-`core/` holds the Rust core (`arcvox-core`) and the local inference crate (`arcvox-inference`); `apps/desktop/` holds the Tauri app.
+`core/` holds the Rust core (`arcvox-core`), the local inference crate (`arcvox-inference`) and the bindings to the bundled llama.cpp and whisper.cpp sources (`arcvox-ggml-sys`); `apps/desktop/` holds the Tauri app.
 
 ## Support
 
