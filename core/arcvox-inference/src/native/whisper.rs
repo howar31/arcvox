@@ -143,7 +143,9 @@ impl Params {
 
 unsafe extern "C" fn abort_requested(data: *mut c_void) -> bool {
     // SAFETY: `data` is the AtomicBool set in `Params::abort_flag`, alive for the run.
-    unsafe { (*(data as *const std::sync::atomic::AtomicBool)).load(std::sync::atomic::Ordering::SeqCst) }
+    unsafe {
+        (*(data as *const std::sync::atomic::AtomicBool)).load(std::sync::atomic::Ordering::SeqCst)
+    }
 }
 
 /// One run's decoding state and its results.

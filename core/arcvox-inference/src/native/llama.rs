@@ -132,7 +132,11 @@ impl Model {
             return None;
         }
         // SAFETY: non-null, NUL-terminated.
-        Some(unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned())
+        Some(
+            unsafe { std::ffi::CStr::from_ptr(p) }
+                .to_string_lossy()
+                .into_owned(),
+        )
     }
 
     /// Renders `messages` (role, content) with `template`; `add_assistant`
@@ -261,7 +265,13 @@ impl Batch {
         self.raw.n_tokens
     }
 
-    pub fn add(&mut self, token: Token, pos: i32, seq_ids: &[i32], logits: bool) -> Result<(), String> {
+    pub fn add(
+        &mut self,
+        token: Token,
+        pos: i32,
+        seq_ids: &[i32],
+        logits: bool,
+    ) -> Result<(), String> {
         let i = self.raw.n_tokens as usize;
         if i >= self.capacity {
             return Err(format!("the batch holds {} tokens", self.capacity));
@@ -325,7 +335,9 @@ impl Sampler {
 
     pub fn penalties(n_vocab: i32, last_n: i32, repeat: f32, freq: f32, present: f32) -> Self {
         // SAFETY: plain values.
-        Self::wrap(unsafe { sys::llama_sampler_init_penalties(n_vocab, last_n, repeat, freq, present) })
+        Self::wrap(unsafe {
+            sys::llama_sampler_init_penalties(n_vocab, last_n, repeat, freq, present)
+        })
     }
 
     pub fn top_p(p: f32, min_keep: usize) -> Self {

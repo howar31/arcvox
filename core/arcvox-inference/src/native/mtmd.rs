@@ -26,7 +26,12 @@ unsafe impl Send for Mtmd {}
 unsafe impl Sync for Mtmd {}
 
 impl Mtmd {
-    pub fn init(encoder: &Path, model: &Model, use_gpu: bool, n_threads: i32) -> Result<Self, String> {
+    pub fn init(
+        encoder: &Path,
+        model: &Model,
+        use_gpu: bool,
+        n_threads: i32,
+    ) -> Result<Self, String> {
         let path = CString::new(encoder.to_string_lossy().as_bytes()).map_err(|e| e.to_string())?;
         // SAFETY: default parameters from the library; the path and the model
         // outlive the call (the model also outlives the context).

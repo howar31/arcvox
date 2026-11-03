@@ -3,12 +3,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use arcvox_core::providers::{LlmOptions, LlmProvider, ProviderError};
-use arcvox_core::types::{ChatMessage, ErrorCode};
-use async_trait::async_trait;
 use crate::chat::{self, role_name};
 use crate::native::llama::{Batch, Context, Model, Sampler};
 use crate::{CancelFlag, CancelOnDrop};
+use arcvox_core::providers::{LlmOptions, LlmProvider, ProviderError};
+use arcvox_core::types::{ChatMessage, ErrorCode};
+use async_trait::async_trait;
 
 /// Context window used for every completion.
 pub const N_CTX: u32 = 4096;
@@ -87,11 +87,7 @@ impl Loader {
     }
 }
 
-pub(crate) fn load_model(
-    path: &Path,
-    label: &str,
-    use_gpu: bool,
-) -> Result<Model, ProviderError> {
+pub(crate) fn load_model(path: &Path, label: &str, use_gpu: bool) -> Result<Model, ProviderError> {
     if !path.is_file() {
         return Err(ProviderError::new(
             ErrorCode::ModelMissing,
